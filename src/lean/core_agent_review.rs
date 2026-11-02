@@ -45,7 +45,7 @@ fn run_review_queue(core: Arc<Core>, conversation: String, cancel: Arc<AtomicBoo
 
 fn next_review_role(core: &Core, conversation: &str, cancel: &AtomicBool) -> Option<&'static str> {
     let mut jobs = core.agent_reviews.lock().expect("agent reviews mutex");
-    let role = [PLAN_VERIFIER, AUDITOR].into_iter().find(|role| {
+    let role = [PLAN_REVIEWER, AUDITOR].into_iter().find(|role| {
         core.store
             .pending_mail(conversation, role)
             .is_ok_and(|mail| !mail.is_empty())

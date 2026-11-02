@@ -40,7 +40,7 @@ fn fixture_for(dependent: bool) -> (tempfile::TempDir, Store, String, String, Ve
             true,
         )
         .unwrap();
-    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","goal":"Inspect A","kind":"analysis","requirement_ids":["r"],"criterion_ids":["r.accept"],"verifier":{"focus":"Check A"}}),json!({"id":"b","title":"B","goal":"Inspect B","kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"requirement_ids":["r"],"verifier":{"focus":"Check B"}})]).unwrap();
+    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","goal":"Inspect A","kind":"analysis","requirement_ids":["r"],"criterion_ids":["r.accept"],"reviewer":{"focus":"Check A"}}),json!({"id":"b","title":"B","goal":"Inspect B","kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"requirement_ids":["r"],"reviewer":{"focus":"Check B"}})]).unwrap();
     store
         .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
@@ -67,6 +67,7 @@ fn a_reworded_approved_task_takes_its_new_contract_and_keeps_its_result() {
         tasks: vec![specs[0].clone()],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "reword", &revision)
@@ -108,6 +109,7 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
         tasks: vec![specs[0].clone()],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     let (request, fresh) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -191,6 +193,7 @@ fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
         tasks: vec![],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -249,6 +252,7 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
         tasks: vec![],
         retire: vec!["a".into()],
         redo: vec![],
+        replacements: Default::default(),
     };
     let specs = revision.merge(&baseline).unwrap();
     let (request, _) = store
@@ -276,6 +280,7 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
         tasks: vec![cycle],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
         ..revision
     };
     assert!(revision.merge(&baseline).is_err());
@@ -293,6 +298,7 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
         tasks: vec![task.clone()],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     let error = revision.merge(&baseline).unwrap_err().to_string();
     assert!(error.contains("nothing is pasted"), "{error}");
@@ -305,8 +311,8 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
 }
 
 #[test]
-fn changed_dependency_inputs_discard_partial_commit_references_but_keep_history() {
-    for state in ["working", "verifying", "waiting", "failed"] {
+fn changed_dependency_inputs_preserve_partial_commits_and_request_reassessment() {
+    for state in ["working", "reviewing", "waiting", "failed"] {
         let (_dir, store, conversation, _, mut tasks) = fixture_for(true);
         tasks[1].round = 1;
         tasks[1].status = state.into();
@@ -320,7 +326,9 @@ fn changed_dependency_inputs_discard_partial_commit_references_but_keep_history(
         let fresh = store.task_by_id(&tasks[1].id).unwrap().unwrap();
         assert_eq!(fresh.input_generation, tasks[1].input_generation + 1);
         assert_eq!(fresh.status, "queued");
-        assert!(fresh.base.is_none() && fresh.result.is_none());
+        assert_eq!(fresh.base.as_deref(), Some("old-base"));
+        assert_eq!(fresh.result.as_deref(), Some("old-partial-result"));
+        assert_eq!(fresh.feedback.as_ref().unwrap()["resume_role"], "reviewer");
         let archived = store.task_round(&tasks[1].id, 1).unwrap();
         assert_eq!(archived["base"], "old-base");
         assert_eq!(archived["result"], "old-partial-result");
@@ -344,6 +352,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         tasks: vec![],
         retire: vec!["b".into()],
         redo: vec![],
+        replacements: Default::default(),
     };
     let specs = revision.merge(&tasks).unwrap();
     let (request, _) = store
@@ -396,6 +405,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         tasks: vec![replacement],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     let specs = next.merge(&baseline).unwrap();
     let (request, _) = store
@@ -497,7 +507,7 @@ fn an_accepted_plan_keeps_approved_tasks_whose_contracts_did_not_change() {
         .unwrap();
     let text = notice.payload["text"].as_str().unwrap().to_owned();
     assert!(text.contains("kept the approved results of a"), "{text}");
-    assert!(text.contains("b run again"), "{text}");
+    assert!(text.contains("b (contract fields changed)"), "{text}");
 
     // Kept again, the result still names the task that produced it.
     std::thread::sleep(std::time::Duration::from_millis(3));
@@ -543,9 +553,11 @@ fn approved_work_answered_other_requirements_runs_again() {
         .into_iter()
         .rfind(|e| e.kind == "notice")
         .unwrap();
-    assert_eq!(
-        notice.payload["text"],
-        "a run again: the requirements changed since their approval"
+    assert!(
+        notice.payload["text"]
+            .as_str()
+            .unwrap()
+            .contains("retained for compatibility review")
     );
 }
 
@@ -570,7 +582,7 @@ fn changed_requirements_recheck_the_original_report_without_repeating_the_worker
     let task = store.task_by_id(&second[0].id).unwrap().unwrap();
     assert_eq!(task.status, "queued");
     assert!(task.verdict.is_none());
-    assert_eq!(task.feedback.as_ref().unwrap()["resume_role"], "verifier");
+    assert_eq!(task.feedback.as_ref().unwrap()["resume_role"], "reviewer");
     assert_eq!(
         store.completed_task_output(&task).unwrap()["report"],
         "All sixteen findings and evidence"
@@ -587,7 +599,7 @@ fn changed_requirements_recheck_the_original_report_without_repeating_the_worker
 }
 
 #[test]
-fn a_changed_scoped_source_invalidates_an_otherwise_matching_report() {
+fn a_changed_project_input_outside_legacy_scope_invalidates_a_report() {
     let (directory, store, conversation, run, mut first) = fixture();
     let project = directory.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -609,7 +621,7 @@ fn a_changed_scoped_source_invalidates_an_otherwise_matching_report() {
         )
         .unwrap();
     store.queue_plan(&conversation, &first[0].plan_id).unwrap();
-    first[0].spec["scope"] = json!(["input.txt"]);
+    first[0].spec["scope"] = json!(["different-file.txt"]);
     first[0].status = "approved".into();
     first[0].report = Some("Existing source was inspected".into());
     store.update_task(&first[0]).unwrap();
@@ -621,15 +633,27 @@ fn a_changed_scoped_source_invalidates_an_otherwise_matching_report() {
         )
         .unwrap();
     std::fs::write(project.join("input.txt"), "changed source").unwrap();
-    let second = store
-        .add_plan(&conversation, &[first[0].spec.clone()])
-        .unwrap();
+    let mut current_spec = first[0].spec.clone();
+    current_spec.as_object_mut().unwrap().remove("scope");
+    let second = store.add_plan(&conversation, &[current_spec]).unwrap();
     store
         .link_plan_run(&conversation, &second[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &second[0].plan_id).unwrap();
     let task = store.task_by_id(&second[0].id).unwrap().unwrap();
     assert_eq!(task.status, "queued");
-    assert!(task.feedback.is_none());
+    assert_eq!(task.feedback.as_ref().unwrap()["resume_role"], "reviewer");
+    let events = store.events_since(&conversation, 0, 1000).unwrap();
+    assert!(events.iter().any(|e| {
+        e.kind == "task_reassessment_required"
+            && e.payload["changed_paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "input.txt")
+    }));
     assert_eq!(crate::lean::git::head(&project).unwrap(), revision);
 }
+
+#[path = "plan_revision/continuations.rs"]
+mod continuations;

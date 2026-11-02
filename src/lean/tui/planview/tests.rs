@@ -276,3 +276,125 @@ fn review_sends_the_drafts_only_when_there_are_some() {
         }
     );
 }
+
+fn graph_view() -> View {
+    let mut view = view_of(
+        "# Plan\nOpis 👩‍💻 e\u{301}\n\n### 1. First [t1]\n- **Task**: `t1`\n- **Goal**: First goal\n\n### 2. Second [t2]\n- **Task**: `t2`\n\n## Notes\nKeep this note",
+    );
+    view.tasks = vec![
+        task_in("t1", "First", "approved"),
+        task_in("t2", "Second", "proposed"),
+    ];
+    view.tasks[1].depends_on = vec!["t1".into()];
+    view
+}
+
+#[test]
+fn split_plan_keeps_prose_and_comment_anchors_and_draws_dependency_edges() {
+    let mut view = graph_view();
+    view.comments.insert(1, comment(1, "draft", 12));
+    let mut plan = PlanView::new("p".into());
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(true, false)))
+        .unwrap();
+    assert!(plan.doc_area.right() < plan.graph_area.x);
+    let text = screen(&term).join("\n");
+    assert!(text.contains("Description (v)"));
+    assert!(text.contains("Opis 👩‍💻") && text.contains("e\u{301}"));
+    assert!(text.contains("Title t1"));
+    assert!(text.contains("Title t2"));
+    assert!(text.contains('▼'), "the dependency has an arrow: {text}");
+    assert!(!text.contains("**Task**"));
+    assert!(!text.contains("### 1."));
+    let prose = plan.description_lines(&view);
+    let note_index = prose
+        .iter()
+        .position(|line| line.text == "Keep this note")
+        .unwrap();
+    assert_eq!(prose[note_index].number, 12);
+    plan.cursor = note_index;
+    assert!(matches!(
+        press(&mut plan, &view, KeyCode::Char('c')),
+        PlanAction::CommentLine { line: 12, .. }
+    ));
+    assert_eq!(
+        press(&mut plan, &view, KeyCode::Char('D')),
+        PlanAction::ToggleResolveComment {
+            id: 1,
+            next_status: "deleted".into()
+        }
+    );
+    press(&mut plan, &view, KeyCode::Char('v'));
+    press(&mut plan, &view, KeyCode::Right);
+    assert_eq!(plan.graph_selected, 1);
+    assert!(matches!(
+        press(&mut plan, &view, KeyCode::Char('c')),
+        PlanAction::CommentLine { line: 8, .. }
+    ));
+    press(&mut plan, &view, KeyCode::Left);
+    assert_eq!(plan.graph_selected, 0);
+    assert_eq!(
+        plan.cursor, note_index,
+        "graph navigation preserves the prose cursor"
+    );
+}
+
+#[test]
+fn graph_pan_survives_redraw_and_selecting_a_task_reveals_it() {
+    let mut view = graph_view();
+    for index in 3..20 {
+        let mut task = task_in(&format!("t{index}"), "", "proposed");
+        task.depends_on = vec![format!("t{}", index - 1)];
+        view.tasks.push(task);
+    }
+    let mut plan = PlanView::new("p".into());
+    let mut term = Terminal::new(TestBackend::new(100, 26)).unwrap();
+    let draw = |plan: &mut PlanView, term: &mut Terminal<TestBackend>| {
+        term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(true, false)))
+            .unwrap();
+    };
+    draw(&mut plan, &mut term);
+    press(&mut plan, &view, KeyCode::Char('v'));
+    plan.key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &view);
+    draw(&mut plan, &mut term);
+    assert_eq!(plan.graph_offset.1, 3);
+    assert_eq!(plan.graph_offset.0, 0);
+    draw(&mut plan, &mut term);
+    assert_eq!(plan.graph_offset.1, 3);
+    assert_eq!(plan.graph_offset.0, 0);
+    press(&mut plan, &view, KeyCode::End);
+    draw(&mut plan, &mut term);
+    assert!(screen(&term).join("\n").contains("Title t19"));
+    assert!(plan.graph_offset.1 > 3);
+    assert_eq!(plan.graph_offset.0, 0);
+    let (rect, index) = plan.task_rects.last().copied().unwrap();
+    plan.mouse_click(rect.x, rect.y, &view);
+    assert_eq!(plan.graph_selected, index);
+    assert!(plan.graph_focused);
+    plan.mouse_click(plan.doc_area.x, plan.doc_area.y, &view);
+    assert!(!plan.graph_focused);
+}
+
+#[test]
+fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
+    let view = graph_view();
+    let mut plan = PlanView::new("p".into());
+    for (width, height) in [(140, 30), (40, 24), (20, 9), (12, 5), (2, 2), (1, 1)] {
+        let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
+        term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(false, true)))
+            .unwrap();
+        for cell in &term.backend().buffer().content {
+            assert!(cell.symbol().is_ascii());
+            assert_eq!(cell.fg, ratatui::style::Color::Reset);
+            assert_eq!(cell.bg, ratatui::style::Color::Reset);
+        }
+        if width == 40 {
+            assert!(plan.doc_area.bottom() <= plan.graph_area.y);
+        }
+        if width <= 12 {
+            assert!(plan.task_rects.is_empty());
+            assert_eq!(plan.graph_area, Rect::default());
+            assert_eq!(plan.button_rects, [Rect::default(); 4]);
+        }
+    }
+}

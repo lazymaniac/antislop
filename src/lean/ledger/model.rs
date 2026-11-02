@@ -108,7 +108,7 @@ pub struct EntrySpec {
     #[serde(default)]
     pub implementation_owners: Vec<String>,
     #[serde(default)]
-    pub verification_owners: Vec<String>,
+    pub review_owners: Vec<String>,
     #[serde(default)]
     pub criteria: Vec<Criterion>,
     #[serde(default)]
@@ -203,7 +203,7 @@ pub struct Evidence {
     pub id: String,
     pub run_id: String,
     pub proposal: EvidenceProposal,
-    pub verifier_turn: String,
+    pub reviewer_turn: String,
     pub assessment: String,
     pub approved: bool,
 }

@@ -6,22 +6,37 @@ use super::super::*;
 pub(super) fn add_edges(view: &View, graph: &mut Graph, extra_agents: &[&str]) {
     add_role_edges(graph, extra_agents);
     add_mail_edges(view, graph);
+    // Resolve long report routes once per layout, rather than checking
+    // every card again on each animation frame.
+    let nodes = graph
+        .nodes
+        .iter()
+        .map(|node| (node.key.as_str(), node))
+        .collect();
+    let routes: Vec<_> = graph
+        .edges
+        .iter()
+        .map(|edge| graph.edge_path(edge, &nodes))
+        .collect();
+    for (edge, path) in graph.edges.iter_mut().zip(routes) {
+        edge.path = path;
+    }
 }
 
 fn add_role_edges(graph: &mut Graph, extra_agents: &[&str]) {
     push_edge(
         graph,
-        PLAN_VERIFIER.into(),
+        PLAN_REVIEWER.into(),
         ORCHESTRATOR.into(),
-        Kind::Verifies,
-        Some("V".into()),
+        Kind::Reviews,
+        Some("R".into()),
     );
     push_edge(
         graph,
         AUDITOR.into(),
         ORCHESTRATOR.into(),
-        Kind::Verifies,
-        Some("V".into()),
+        Kind::Reviews,
+        Some("R".into()),
     );
     for &key in extra_agents {
         push_edge(

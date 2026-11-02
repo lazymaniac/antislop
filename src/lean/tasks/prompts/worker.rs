@@ -105,14 +105,13 @@ fn worker_prompt_opening(
          the project's files is always allowed, also through shell commands that only \
          read; no wording of the task (such as \"no commands\" or \"use only received \
          sources\") takes that away.\n\n\
-         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\n{}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          ",
         task.title,
         task.id,
         work_kind_name(task.kind),
         task.goal,
-        scope_text(&task.scope),
-        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
+        super::instructions::FILESYSTEM_GUIDANCE,
         change_rules
     )
 }
@@ -127,20 +126,26 @@ fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
          partial work.\n\n\
          End with a complete report of your result: what you did or found and the evidence, \
          and a short summary of what you delivered; tasks that depend on this one see only \
-         that summary and can read your full report through read_dependency_result. Do not restate the task or dependency data or paste file \
-         contents; the independent verifier checks the report against the files. \
-         Explicit artifact outputs declared in your contract are retained for the verifier, \
+         that summary and can read your full report through read_dependency_result. For amendments, \
+         first read dependency=self and its report_history: use result_ref for earlier input generations \
+         and retain the original report/evidence rather than claiming it disappeared. Historical reports \
+         are context, not proof of current acceptance. Record actual raw command/measurement output with \
+         record_evidence before complete when raw evidence is required or too large for the report. \
+         The runtime attaches immutable MCP references automatically; reviewers use read_evidence. \
+         Retain older evidence by passing its ids in complete.evidence. Do not restate the task or dependency data or paste file \
+         contents; the independent reviewer checks the report against the files. \
+         Explicit artifact outputs declared in your contract are retained for the reviewer, \
          including reports under .antislop/. Other files under paths git ignores (such as \
-         .antislop/ or target/) are not part of your result and never reach the verifier: put each command you rely on and the \
+         .antislop/ or target/) are not part of your result and never reach the reviewer: put each command you rely on and the \
          part of its output that shows the result in the report itself, and do not point \
-         the verifier to such files."
+         the reviewer to such files. Files alone are not MCP evidence: use record_evidence for required raw outputs."
     )
 }
 
-/// What the independent verifier will check, so the worker meets it up front.
+/// What the independent reviewer will check, so the worker meets it up front.
 fn worker_checks(task: &TaskContract) -> String {
     format!(
-        "Your verifier will check:\n{}\n{}\n",
+        "Your reviewer will check:\n{}\n{}\n",
         obligations_text(&obligations(task)),
         risks_note(task)
     )
@@ -148,9 +153,9 @@ fn worker_checks(task: &TaskContract) -> String {
 
 fn worker_change_rules(task: &TaskContract) -> &'static str {
     if task.writes {
-        "Work only in this allocated worktree and the assigned task scope. Do not commit; the runtime records changes. Ask the orchestrator before any change outside the contract.\n\n"
+        "Work only in this allocated worktree, within the task goal and user constraints. Do not commit; the runtime records changes. Ask the orchestrator before any change outside the contract.\n\n"
     } else if task.kind == WorkKind::Context {
-        "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, since the verifier cannot rerun it.\n\n"
+        "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, since the reviewer cannot rerun it.\n\n"
     } else {
         "Work read-only; do not modify anything.\n\n"
     }
@@ -187,7 +192,7 @@ pub fn worker_resume(findings: &[Value]) -> String {
             .into()
     } else {
         format!(
-            "The task was resumed. Your verifier's open findings:\n{}\n\nCheck the \
+            "The task was resumed. Your reviewer's open findings:\n{}\n\nCheck the \
              current state of the files, address them and give your complete \
              updated report.",
             findings_text(findings)
@@ -223,7 +228,7 @@ pub fn needs_user_action(error: &str) -> bool {
 
 pub fn worker_followup(findings: &[Value]) -> String {
     format!(
-        "Your verifier found problems:\n{}\n\nAddress them and give your complete \
+        "Your reviewer found problems:\n{}\n\nAddress them and give your complete \
          updated report: for each finding what you changed and the evidence, without \
          restating the task or pasting file contents. {}",
         findings_text(findings),
@@ -231,7 +236,7 @@ pub fn worker_followup(findings: &[Value]) -> String {
     )
 }
 
-/// How a verifier finds a writer's changes: the commit range, not the diff.
+/// How a reviewer finds a writer's changes: the commit range, not the diff.
 pub fn changes_text(base: &str, result: &str, stat: &str) -> String {
     format!(
         "The worker's changes are recorded as commits in this repository. \

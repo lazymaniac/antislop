@@ -15,6 +15,9 @@ pub struct PlanRevision {
     /// task whose contract changes only in wording keeps its result.
     #[serde(default)]
     pub redo: Vec<String>,
+    /// New task id -> unfinished task id whose work it continues.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub replacements: std::collections::BTreeMap<String, String>,
 }
 
 impl PlanRevision {
@@ -22,9 +25,40 @@ impl PlanRevision {
         require_revision_reason(self)?;
         let mut specs = baseline_specs(baseline)?;
         self.validate_retire_and_redo(&specs)?;
+        for (new, old) in &self.replacements {
+            crate::require(
+                self.retire.contains(old)
+                    && self.tasks.iter().any(|t| &t.id == new)
+                    && !baseline.iter().any(|t| t.spec["id"] == *new),
+                "replacements: each new task must replace a retired existing task using a fresh id",
+            )?;
+            crate::require(
+                !baseline
+                    .iter()
+                    .any(|t| t.spec["id"] == *old && t.status == "approved"),
+                "replacements: completed tasks cannot be replaced; add a dependent task",
+            )?;
+        }
+        let unique = self
+            .replacements
+            .values()
+            .collect::<std::collections::BTreeSet<_>>();
+        crate::require(
+            unique.len() == self.replacements.len(),
+            "replacements: a task can have only one successor",
+        )?;
         remove_retired(&mut specs, self);
         self.merge_updates(&mut specs, baseline)?;
-        order_graph(specs)
+        for spec in &mut specs {
+            for dependency in &mut spec.depends_on {
+                if let Some((successor, _)) =
+                    self.replacements.iter().find(|(_, old)| *old == dependency)
+                {
+                    *dependency = successor.clone();
+                }
+            }
+        }
+        order_graph(crate::lean::tasks::refresh_existing_options(specs))
     }
 
     fn validate_retire_and_redo(&self, specs: &[TaskContract]) -> Result<()> {

@@ -1,7 +1,5 @@
 use super::super::*;
 
-type InFlightWriters = HashMap<String, Vec<String>>;
-
 const PLAN_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(super) fn run(core: &Arc<Core>, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
@@ -24,7 +22,6 @@ struct Scheduler<'a> {
 #[derive(Default)]
 struct Reservations {
     tasks: std::collections::HashSet<String>,
-    writers: InFlightWriters,
 }
 
 impl Reservations {
@@ -32,27 +29,12 @@ impl Reservations {
         self.tasks.contains(id)
     }
 
-    fn can_reserve(&self, task: &Task) -> bool {
-        if !task.spec["writes"].as_bool().unwrap_or(false) {
-            return true;
-        }
-        let scope = task_scope(task);
-        !self
-            .writers
-            .values()
-            .any(|active| tasks::scopes_overlap(&scope, active))
-    }
-
-    fn reserve(&mut self, task: &Task, id: &str) {
+    fn reserve(&mut self, id: &str) {
         self.tasks.insert(id.to_owned());
-        if task.spec["writes"].as_bool().unwrap_or(false) {
-            self.writers.insert(id.to_owned(), task_scope(task));
-        }
     }
 
     fn release(&mut self, id: &str) {
         self.tasks.remove(id);
-        self.writers.remove(id);
     }
 
     fn len(&self) -> usize {
@@ -62,10 +44,6 @@ impl Reservations {
     fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
-}
-
-fn task_scope(task: &Task) -> Vec<String> {
-    serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default()
 }
 
 impl<'a> Scheduler<'a> {
@@ -181,10 +159,10 @@ impl<'a> Scheduler<'a> {
     ) where
         'a: 'scope,
     {
-        if self.at_capacity() || !self.reservations.can_reserve(task) {
+        if self.at_capacity() {
             return;
         }
-        self.reservations.reserve(task, &id);
+        self.reservations.reserve(&id);
         self.spawn_task(scope, task.clone(), id);
     }
 
@@ -301,45 +279,17 @@ fn restart_agent(core: &Arc<Core>, conversation: &str, task: &Task) {
 mod tests {
     use super::*;
 
-    fn task(id: &str, writes: bool, scope: &[&str]) -> Task {
-        Task {
-            input_generation: 0,
-            id: id.into(),
-            plan_id: "plan".into(),
-            spec: json!({"id":id,"writes":writes,"scope":scope}),
-            status: status::QUEUED.into(),
-            round: 0,
-            report: None,
-            verdict: None,
-            base: None,
-            result: None,
-            feedback: None,
-            freshness_token: None,
-            checks: None,
-        }
-    }
-
     #[test]
-    fn writer_reservations_block_overlapping_writers_but_not_readers() {
+    fn reservations_track_independent_tasks_and_release_them() {
         let mut reservations = Reservations::default();
-        let writer = task("writer", true, &["src/lean"]);
-        reservations.reserve(&writer, "writer");
-
-        assert!(!reservations.can_reserve(&task("overlap", true, &["src/lean/core.rs"])));
-        assert!(reservations.can_reserve(&task("disjoint", true, &["tests"])));
-        assert!(reservations.can_reserve(&task("reader", false, &["src/lean/core.rs"])));
-        assert_eq!(reservations.len(), 1);
-    }
-
-    #[test]
-    fn releasing_a_task_also_releases_its_writer_scope() {
-        let mut reservations = Reservations::default();
-        reservations.reserve(&task("writer", true, &["src/lean"]), "writer");
-
-        reservations.release("writer");
-
-        assert_eq!(reservations.len(), 0);
-        assert!(!reservations.contains("writer"));
-        assert!(reservations.can_reserve(&task("next", true, &["src/lean/core.rs"])));
+        reservations.reserve("first-writer");
+        reservations.reserve("second-writer");
+        assert_eq!(reservations.len(), 2);
+        assert!(reservations.contains("first-writer"));
+        reservations.release("first-writer");
+        assert!(!reservations.contains("first-writer"));
+        assert!(reservations.contains("second-writer"));
+        reservations.release("second-writer");
+        assert!(reservations.is_empty());
     }
 }

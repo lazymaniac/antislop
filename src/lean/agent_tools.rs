@@ -7,7 +7,9 @@ use serde_json::Value;
 
 mod controls;
 mod dependencies;
+mod evidence;
 mod questions;
+mod references;
 mod results;
 
 /// The tasks of `submit_plan` or `revise_plan`, with an error that names the
@@ -47,6 +49,9 @@ impl Core {
     ) -> Result<Value> {
         self.require_open_agent_turn(conversation, role, turn)?;
         match tool {
+            "record_evidence" | "read_evidence" => {
+                self.evidence_tool(conversation, role, turn, tool, args)
+            }
             "read_dependency_result" => self.read_dependency_result(conversation, role, turn, args),
             "ask" | "wait_for_answer" => self.question_tool(conversation, role, turn, tool, args),
             "complete" | "select" | "review" | "report_blocker" if task_role(role).is_some() => {
@@ -76,8 +81,9 @@ impl Core {
         tool: &str,
         args: &Value,
     ) -> Result<Value> {
-        let result = turn_result::task_tool_result(tool, args)?;
-        self.record_task_result(conversation, role, turn, result)
+        let mut result = turn_result::task_tool_result(tool, args)?;
+        let evidence = self.completion_evidence(conversation, role, turn, args, &mut result)?;
+        self.record_task_result_with_evidence(conversation, role, turn, result, &evidence)
     }
 }
 

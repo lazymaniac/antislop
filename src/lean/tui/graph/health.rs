@@ -37,7 +37,7 @@ impl Health {
 pub fn health(view: &View, key: &str) -> Health {
     match task_card(view, key) {
         Some((task, Role::Worker)) => worker_health(view, task),
-        Some((task, Role::Verifier)) => verifier_health(view, task),
+        Some((task, Role::Reviewer)) => reviewer_health(view, task),
         Some((task, Role::Pair)) => task_health(view, task),
         None if key.contains(':') => Health::Idle,
         None => admin_health(view, key),
@@ -54,7 +54,7 @@ fn agent_flags(view: &View, key: &str) -> (bool, bool) {
     })
 }
 
-/// The worker is done once its round is handed to the verifier.
+/// The worker is done once its round is handed to the reviewer.
 fn worker_health(view: &View, task: &TaskRow) -> Health {
     let (running, problem) = agent_flags(view, &format!("worker:{}", task.id));
     if problem
@@ -71,14 +71,14 @@ fn worker_health(view: &View, task: &TaskRow) -> Health {
     match task.status.as_str() {
         "waiting" => Health::Waiting,
         "working" => Health::Working,
-        "approved" | "verifying" => Health::Done,
+        "approved" | "reviewing" => Health::Done,
         _ => Health::Idle,
     }
 }
 
-/// The verifier waits for the worker until a round reaches it.
-fn verifier_health(view: &View, task: &TaskRow) -> Health {
-    let (running, problem) = agent_flags(view, &format!("verifier:{}", task.id));
+/// The reviewer waits for the worker until a round reaches it.
+fn reviewer_health(view: &View, task: &TaskRow) -> Health {
+    let (running, problem) = agent_flags(view, &format!("reviewer:{}", task.id));
     if problem || matches!(task.status.as_str(), "failed" | "needs_user") {
         return Health::Problem;
     }
@@ -86,7 +86,7 @@ fn verifier_health(view: &View, task: &TaskRow) -> Health {
         return Health::Working;
     }
     match task.status.as_str() {
-        "verifying" => Health::Working,
+        "reviewing" => Health::Working,
         "approved" => Health::Done,
         _ => Health::Idle,
     }
@@ -103,7 +103,7 @@ fn task_health(view: &View, task: &TaskRow) -> Health {
     match task.status.as_str() {
         "waiting" => Health::Waiting,
         "approved" => Health::Done,
-        "working" | "verifying" => Health::Working,
+        "working" | "reviewing" => Health::Working,
         _ => Health::Idle,
     }
 }
@@ -112,7 +112,7 @@ fn task_problem(view: &View, task: &TaskRow, id: &str) -> bool {
     matches!(
         task.status.as_str(),
         "failed" | "coordinating" | "needs_user"
-    ) || ["worker", "verifier"].iter().any(|role| {
+    ) || ["worker", "reviewer"].iter().any(|role| {
         view.agents
             .get(&format!("{role}:{id}"))
             .is_some_and(|agent| agent.activity.starts_with('✗') || agent.activity.starts_with('⚠'))
@@ -120,7 +120,7 @@ fn task_problem(view: &View, task: &TaskRow, id: &str) -> bool {
 }
 
 fn task_running(view: &View, id: &str) -> bool {
-    ["worker", "verifier"].iter().any(|role| {
+    ["worker", "reviewer"].iter().any(|role| {
         view.agents
             .get(&format!("{role}:{id}"))
             .is_some_and(|agent| agent.running)
@@ -146,7 +146,7 @@ fn admin_health(view: &View, key: &str) -> Health {
 }
 
 /// The CLI that runs this card's agent; on a shared options card the
-/// verifier's while it checks, else the worker's, else whichever ran before.
+/// reviewer's while it checks, else the worker's, else whichever ran before.
 pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
     let provider = |key: &str| {
         view.agents
@@ -155,16 +155,16 @@ pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
             .filter(|provider| !provider.is_empty())
     };
     match task_card(view, key) {
-        Some((_, Role::Worker | Role::Verifier)) => return provider(key),
+        Some((_, Role::Worker | Role::Reviewer)) => return provider(key),
         None if key.contains(':') => return None,
         _ => {}
     }
     if let Some((_, id)) = key.split_once(':') {
         let task = view.tasks.iter().find(|task| task.id == id)?;
-        let (first, second) = if task.status == "verifying" {
-            ("verifier", "worker")
+        let (first, second) = if task.status == "reviewing" {
+            ("reviewer", "worker")
         } else {
-            ("worker", "verifier")
+            ("worker", "reviewer")
         };
         return provider(&format!("{first}:{id}")).or_else(|| provider(&format!("{second}:{id}")));
     }
@@ -178,7 +178,7 @@ pub(super) fn providers_of<'a>(view: &'a View, key: &str) -> Vec<&'a str> {
         return provider_of(view, key).into_iter().collect();
     };
     let id = task.id.as_str();
-    ["worker", "verifier"]
+    ["worker", "reviewer"]
         .iter()
         .filter_map(|role| view.agents.get(&format!("{role}:{id}")))
         .map(|agent| agent.provider.trim())
@@ -202,7 +202,7 @@ pub fn providers(view: &View) -> Vec<String> {
 pub(super) fn describe(view: &View, key: &str) -> String {
     match task_card(view, key) {
         Some((task, Role::Worker | Role::Pair)) => taskinfo::worker_status(task),
-        Some((task, Role::Verifier)) => taskinfo::verifier_status(task),
+        Some((task, Role::Reviewer)) => taskinfo::reviewer_status(task),
         None if key.contains(':') => "?".into(),
         None => describe_agent(view, key),
     }
@@ -239,12 +239,13 @@ fn requirements_label(round: Option<&str>, activity: &str) -> String {
     let Some(index) = round.and_then(requirements_round) else {
         return activity.to_owned();
     };
-    format!(
-        "r{}/{} {} · {activity}",
-        index + 1,
-        REQUIREMENTS_ROUNDS.len(),
-        REQUIREMENTS_ROUNDS[index].trim_start_matches("requirements-")
-    )
+    let phase = match index {
+        0 => "extracting",
+        1 => "checking extraction",
+        2 => "comparing options",
+        _ => "checking options",
+    };
+    format!("{phase} · {activity}")
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {
@@ -253,7 +254,7 @@ pub fn mark(status: &str) -> (&'static str, Color) {
         "coordinating" | "needs_user" | "waiting" => ("!", super::super::theme::ayu::YELLOW),
         "failed" => ("✗", super::super::theme::ayu::RED),
         "skipped" | "cancelled" | "revised" => ("–", super::super::theme::ayu::DIM),
-        "working" | "verifying" => ("●", super::super::theme::ayu::BLUE),
+        "working" | "reviewing" => ("●", super::super::theme::ayu::BLUE),
         _ => ("○", super::super::theme::ayu::DIM),
     }
 }

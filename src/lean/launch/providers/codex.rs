@@ -18,7 +18,7 @@ fn append_codex_settings(command: &mut CommandBuilder, spec: &Spec, gateway: &Ga
         // A prompt to update would hold an unattended turn.
         "check_for_update_on_startup=false".to_owned(),
         "approval_policy=\"never\"".to_owned(),
-        // A CLI's own subagents would be a team nobody verifies.
+        // A CLI's own subagents would be a team nobody reviews.
         "features.multi_agent=false".to_owned(),
         format!("{prefix}.url={}", toml_string(gateway.url())),
         format!("{prefix}.bearer_token_env_var={}", toml_string(TOKEN_ENV)),

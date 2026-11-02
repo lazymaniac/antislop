@@ -1,11 +1,11 @@
-//! A draft the plan verifier sent back is corrected in the turn it reaches;
+//! A draft the plan reviewer sent back is corrected in the turn it reaches;
 //! the turn cannot end as if it had been.
 use super::*;
 use rusqlite::OptionalExtension;
 
 impl Core {
     /// Refuses `finish_turn` while this orchestrator turn was handed a draft
-    /// the plan verifier sent back and neither resubmitted it (submit_plan
+    /// the plan reviewer sent back and neither resubmitted it (submit_plan
     /// ends the turn itself) nor asked the planner to redraft it. Without
     /// this, a turn whose correction was rejected could end claiming it was
     /// sent, and nothing would pick the draft up again.
@@ -29,14 +29,14 @@ impl Core {
         let uncorrected = self.has_uncorrected_review_draft(conversation, upto as u64)?;
         require(
             !uncorrected,
-            "the plan verifier sent the draft back and it is not corrected yet; finish_turn cannot end this turn. Submit the complete corrected plan with submit_plan (it ends the turn), call request_replan for the planner to redraft it, or ask_user for a decision you need",
+            "the plan reviewer sent the draft back and it is not corrected yet; finish_turn cannot end this turn. Submit the complete corrected plan with submit_plan (it ends the turn), call request_replan for the planner to redraft it, or ask_user for a decision you need",
         )
     }
 
     fn has_uncorrected_review_draft(&self, conversation: &str, upto: u64) -> Result<bool> {
         let answered = self.store.last_orchestration_answered(conversation)?;
         let asked = self.asked_since(conversation, answered, upto)?;
-        let sent_back = asked.iter().any(|message| message.author == PLAN_VERIFIER);
+        let sent_back = asked.iter().any(|message| message.author == PLAN_REVIEWER);
         let has_redraft = !self
             .store
             .messages_by(conversation, REPLAN, answered)?
@@ -66,7 +66,7 @@ mod tests {
             .unwrap()
             .id;
         let task =
-            json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}});
+            json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}});
         let plan = core.store.add_plan(&id, &[task]).unwrap()[0]
             .plan_id
             .clone();
@@ -75,7 +75,7 @@ mod tests {
             .unwrap();
         let findings = core
             .store
-            .add_message(&id, PLAN_VERIFIER, "Add the test files to the scope.")
+            .add_message(&id, PLAN_REVIEWER, "Add the test files to the scope.")
             .unwrap();
         let turn = core
             .store
@@ -113,7 +113,7 @@ mod tests {
             .unwrap()
             .id;
         let task =
-            json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}});
+            json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}});
         let plan = core.store.add_plan(&id, &[task]).unwrap()[0]
             .plan_id
             .clone();

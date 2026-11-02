@@ -29,7 +29,7 @@ fn append_gateway_config(command: &mut CommandBuilder, gateway: &Gateway) {
 
 fn append_permission_policy(command: &mut CommandBuilder, spec: &Spec, read_only: bool) {
     // Plan mode refuses MCP tools, so read-only is the default mode without
-    // any editing tool. A CLI's own subagents would be a team nobody verifies.
+    // any editing tool. A CLI's own subagents would be a team nobody reviews.
     let mut allowed: Vec<String> = crate::lean::mcp::TOOLS
         .iter()
         .map(|tool| format!("mcp__{SERVER}__{tool}"))

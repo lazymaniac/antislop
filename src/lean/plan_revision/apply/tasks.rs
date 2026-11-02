@@ -1,7 +1,7 @@
 use super::*;
 
 impl RevisionApply<'_> {
-    pub(super) fn verify_lease(
+    pub(super) fn review_lease(
         &self,
         tx: &rusqlite::Transaction<'_>,
         lease: &RevisionLease<'_>,
@@ -24,7 +24,7 @@ impl RevisionApply<'_> {
 
     pub(super) fn update_removed_tasks(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
         for old in self.baseline {
-            verify_task_snapshot(tx, old)?;
+            review_task_snapshot(tx, old)?;
             if self.affected.contains(&old.id) {
                 invalidate_task_questions(tx, &old.id)?;
             }
@@ -94,9 +94,30 @@ fn save_task_row(
     reworded: bool,
 ) -> Result<()> {
     match old {
-        Some(_) if apply.affected.contains(id) => reset_affected_task(tx, id, position, encoded)?,
+        Some(_) if apply.affected.contains(id) => reset_affected_task(
+            tx,
+            apply,
+            old.expect("existing task"),
+            id,
+            position,
+            encoded,
+        )?,
         Some(_) => update_preserved_task(tx, id, position, encoded, reworded)?,
-        None => insert_revision_task(tx, apply, id, position, encoded)?,
+        None => {
+            insert_revision_task(tx, apply, id, position, encoded)?;
+            if let Some(source) = apply.revision.replacements.get(
+                serde_json::from_str::<Value>(encoded)?["id"]
+                    .as_str()
+                    .unwrap_or_default(),
+            ) {
+                let old = apply
+                    .baseline
+                    .iter()
+                    .find(|t| t.spec["id"] == *source)
+                    .ok_or_else(|| Error::Invalid("replacement source disappeared".into()))?;
+                Store::retain_work(tx, old, id, 0, "replacement continues unfinished work")?;
+            }
+        }
     }
     Ok(())
 }
@@ -146,7 +167,7 @@ pub(super) fn validate_revision_coverage(
     crate::lean::ledger::validate_criterion_coverage(entries, &covered)
 }
 
-fn verify_task_snapshot(tx: &rusqlite::Transaction<'_>, old: &Task) -> Result<()> {
+fn review_task_snapshot(tx: &rusqlite::Transaction<'_>, old: &Task) -> Result<()> {
     let generation = tx.query_row(
         "SELECT coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)",
         [&old.id],
@@ -184,11 +205,32 @@ fn retire_task(tx: &rusqlite::Transaction<'_>, task_id: &str) -> Result<()> {
 
 fn reset_affected_task(
     tx: &rusqlite::Transaction<'_>,
+    apply: &RevisionApply<'_>,
+    old: &Task,
     id: &str,
     position: i64,
     encoded: &str,
 ) -> Result<()> {
-    tx.execute("UPDATE tasks SET spec=?2,position=?3,status='queued',verdict=NULL,feedback=NULL,base=NULL,result=NULL WHERE id=?1", params![id, encoded, position])?;
+    Store::retain_work(
+        tx,
+        old,
+        id,
+        old.input_generation + 1,
+        if apply
+            .revision
+            .redo
+            .iter()
+            .any(|name| old.spec["id"] == *name)
+        {
+            "explicit redo; preserve checkpoint and reassess"
+        } else {
+            "contract or dependency changed; assess existing work first"
+        },
+    )?;
+    tx.execute(
+        "UPDATE tasks SET spec=?2,position=?3,status='queued',verdict=NULL WHERE id=?1",
+        params![id, encoded, position],
+    )?;
     tx.execute(
         "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
         [id],

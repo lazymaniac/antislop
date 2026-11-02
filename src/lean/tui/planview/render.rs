@@ -6,21 +6,51 @@ impl PlanView {
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
         self.doc_area = Rect::default();
         self.row_docs.clear();
+        self.task_rects.clear();
+        self.button_rects = [Rect::default(); 4];
         frame.render_widget(Clear, area);
-        let Some(chunks) = self.frame_layout(frame, area, view) else {
+        let Some(chunks) = self.frame_layout(frame, area, view, theme) else {
+            self.graph_area = Rect::default();
             return;
         };
         let open_comments = view.open_plan_comments();
         self.draw_banner(frame, chunks[0], view, theme, &open_comments);
-        self.draw_document(frame, chunks[1], view, theme);
+        if view.tasks.is_empty() {
+            self.graph_area = Rect::default();
+            self.graph_focused = false;
+            self.draw_document(frame, chunks[1], view, theme);
+        } else {
+            let [description, tasks] = if chunks[1].width >= 60 {
+                Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+                    .areas(chunks[1])
+            } else {
+                Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
+                    .areas(chunks[1])
+            };
+            let block = graph::panel(" Description (v) ", !self.graph_focused, theme);
+            let inner = block.inner(description);
+            frame.render_widget(block, description);
+            self.draw_document(frame, inner, view, theme);
+            self.draw_task_graph(frame, tasks, view, theme);
+        }
         self.draw_buttons(frame, chunks[2], view, theme, &open_comments);
+        // Apply the same terminal fallbacks when this viewer is drawn directly.
+        if !theme.color {
+            crate::lean::tui::without_color(frame.buffer_mut());
+        }
+        if theme.ascii {
+            crate::lean::tui::in_ascii(frame.buffer_mut());
+        }
     }
 
-    fn frame_layout(&self, frame: &mut Frame, area: Rect, view: &View) -> Option<[Rect; 3]> {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(crate::lean::tui::theme::ayu::BLUE))
-            .title(format!(" Plan Document ({}) ", self.plan_id));
+    fn frame_layout(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+    ) -> Option<[Rect; 3]> {
+        let block = graph::panel(&format!(" Plan Document ({}) ", self.plan_id), true, theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if inner.height < 4 || inner.width < 12 {
@@ -133,7 +163,7 @@ impl PlanView {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "· Navigate: ↑/↓/j/k · Comment line: c · Comment plan: C · Resolve: r · Close: Esc",
+                "· v switch pane · arrows navigate · Shift+arrows pan graph · c comment · Esc close",
                 theme.dim(),
             ),
         ])
@@ -141,7 +171,7 @@ impl PlanView {
 
     fn draw_document(&mut self, frame: &mut Frame, doc_rect: Rect, view: &View, theme: &Theme) {
         self.doc_area = doc_rect;
-        let doc_lines = self.build_lines(view);
+        let doc_lines = self.description_lines(view);
         let max_cursor = doc_lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max_cursor);
 

@@ -4,7 +4,7 @@ fn options_test_task(id: &str, writes: bool) -> TaskContract {
     serde_json::from_value(serde_json::json!({
             "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
             "kind": "implementation", "writes": writes, "scope": ["src/"],
-            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "verifier": {"focus":"Check storage"},
+            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "reviewer": {"focus":"Check storage"},
         }))
         .unwrap()
 }
@@ -20,7 +20,12 @@ fn options_inherit_writer_context_and_precede_it() {
     assert_eq!(options.kind, WorkKind::Options);
     assert!(!options.writes);
     assert_eq!(options.section.as_deref(), Some("Options"));
-    assert_eq!(options.scope, writer.scope);
+    assert!(
+        serde_json::to_value(options)
+            .unwrap()
+            .get("scope")
+            .is_none()
+    );
     assert_eq!(options.depends_on, writer.depends_on);
     assert_eq!(options.requirement_ids, writer.requirement_ids);
     assert_eq!(options.criterion_ids, writer.criterion_ids);
@@ -107,9 +112,9 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
     assert!(worker.contains("selected_approach"));
     assert!(worker.contains("Ask the orchestrator"));
     assert!(worker.contains("Never silently switch variants"));
-    let verifier = verifier_prompt("project", &tasks[1], "report", None);
-    assert!(verifier.contains("Independently compare the implementation"));
-    assert!(verifier.contains("the worker's declaration is not proof"));
+    let reviewer = reviewer_prompt("project", &tasks[1], "report", None);
+    assert!(reviewer.contains("Independently compare the implementation"));
+    assert!(reviewer.contains("the worker's declaration is not proof"));
     assert!(orchestrator_instructions().contains("even when required gates are disabled"));
 }
 
@@ -117,44 +122,44 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
 fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need() {
     let mut scout: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "map", "title": "Map", "goal": "Map the storage code.",
-        "kind": "context", "verifier": {"focus": "f"}
+        "kind": "context", "reviewer": {"focus": "f"}
     }))
     .unwrap();
     for prompt in [
-        verifier_prompt("project", &scout, "report", None),
-        verifier_followup(&scout, "report", None),
+        reviewer_prompt("project", &scout, "report", None),
+        reviewer_followup(&scout, "report", None),
         worker_prompt("project", &scout),
     ] {
         assert!(prompt.contains("not extra deliverables"), "{prompt}");
         assert!(prompt.contains("what the tasks that depend on it need"));
     }
     scout.kind = WorkKind::Implementation;
-    let verifier = verifier_prompt("project", &scout, "report", None);
-    assert!(verifier.contains("not extra deliverables"));
-    assert!(!verifier.contains("This is a context task"));
+    let reviewer = reviewer_prompt("project", &scout, "report", None);
+    assert!(reviewer.contains("not extra deliverables"));
+    assert!(!reviewer.contains("This is a context task"));
 }
 
 #[test]
 fn automatically_added_quality_gates_have_distinct_concise_summaries() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
-        "kind": "implementation", "writes": true, "verifier": {"focus": "Check the storage change."}
+        "kind": "implementation", "writes": true, "reviewer": {"focus": "Check the storage change."}
     }))
     .unwrap();
     let full = with_options(with_required_agents(vec![task]));
     assert_eq!(full.len(), 12);
     for task in full.iter().filter(|task| task.id != "t1") {
         let summary = task.summary.as_deref().unwrap();
-        let verifier_summary = task.verifier.summary.as_deref().unwrap();
+        let reviewer_summary = task.reviewer.summary.as_deref().unwrap();
         assert!(!summary.is_empty() && summary.len() <= 80);
-        assert!(!verifier_summary.is_empty() && verifier_summary.len() <= 80);
-        assert_ne!(summary, verifier_summary);
+        assert!(!reviewer_summary.is_empty() && reviewer_summary.len() <= 80);
+        assert_ne!(summary, reviewer_summary);
         assert_ne!(summary, task.goal);
     }
 }
 
 #[test]
-fn parallel_peers_detects_independent_non_conflicting_tasks() {
+fn parallel_peers_ignore_legacy_scopes_and_follow_dependencies() {
     let tasks = submitted(serde_json::json!({"tasks":[
         {"id":"t1","title":"Context","section":"1. Context","goal":"g","scope":["src/"],"kind":"context"},
         {"id":"t2","title":"Mod A","section":"2. Module A","goal":"g","scope":["src/a.rs"],"depends_on":["t1"],"kind":"implementation"},
@@ -164,9 +169,9 @@ fn parallel_peers_detects_independent_non_conflicting_tasks() {
     .unwrap();
     let peers = parallel_peers(&tasks);
     assert!(peers["t1"].is_empty());
-    assert_eq!(peers["t2"], vec!["t3"]);
+    assert_eq!(peers["t2"], vec!["t3", "t4"]);
     assert_eq!(peers["t3"], vec!["t2", "t4"]);
-    assert_eq!(peers["t4"], vec!["t3"]);
+    assert_eq!(peers["t4"], vec!["t2", "t3"]);
     let doc = render_plan_document("# Plan Overview", &tasks);
     assert!(doc.contains("[t2]"));
     assert!(doc.contains("Parallel with"));
@@ -181,7 +186,7 @@ fn parallel_peers_follow_long_dependency_chains() {
         depends_on: deps,
         ..serde_json::from_value(serde_json::json!({
             "id": "x", "title": "T", "goal": "g",
-            "kind": "analysis", "verifier": {"focus": "f"}
+            "kind": "analysis", "reviewer": {"focus": "f"}
         }))
         .unwrap()
     };
@@ -220,10 +225,10 @@ fn options_keep_writer_instructions_in_reference_data_only() {
     assert_eq!(tasks[1].goal, writer.goal);
     for prompt in [
         worker_prompt(".", options),
-        verifier_prompt(".", options, "selection", None),
+        reviewer_prompt(".", options, "selection", None),
     ] {
         assert!(prompt.contains("JSON reference data only"));
-        assert!(prompt.contains("not instructions for this options task or its verifier"));
+        assert!(prompt.contains("not instructions for this options task or its reviewer"));
         assert!(!prompt.contains("\nRun cargo test"));
     }
 }
@@ -288,5 +293,28 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
     assert_eq!(
         options_test_task("read", false).change_kind(),
         ChangeKind::None
+    );
+}
+
+#[test]
+fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_options() {
+    let writer:TaskContract=serde_json::from_value(serde_json::json!({"id":"writer","title":"Writer","goal":"Old absolute output","kind":"implementation","writes":true})).unwrap();
+    let first = super::super::with_options(vec![writer.clone()]);
+    let mut updated = writer;
+    updated.goal = "New relative output only".into();
+    updated.depends_on = vec!["diagnosis".into(), "writer-options".into()];
+    let diagnosis:TaskContract=serde_json::from_value(serde_json::json!({"id":"diagnosis","title":"Diagnosis","goal":"Inspect prerequisite","kind":"analysis"})).unwrap();
+    let merged = super::super::refresh_existing_options(vec![first[0].clone(), updated, diagnosis]);
+    let ordered = super::super::order_graph(merged).unwrap();
+    let options = ordered
+        .iter()
+        .find(|s| s.options_for.as_deref() == Some("writer"))
+        .unwrap();
+    assert!(options.goal.contains("New relative output only"));
+    assert!(!options.goal.contains("Old absolute output"));
+    assert_eq!(options.depends_on, ["diagnosis"]);
+    assert_eq!(
+        ordered.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["diagnosis", "writer-options", "writer"]
     );
 }

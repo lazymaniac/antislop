@@ -21,7 +21,7 @@ prompt = prompt.split("\nCurrent task contracts for plan ",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
             "writes": writes, "scope": ["."], "kind": "implementation" if writes else "analysis",
-            "verifier": {"focus": "f"}}
+            "reviewer": {"focus": "f"}}
 plans = {
   "chain": [task("t1", "Fail"), task("t2", "Second", ["t1"]), task("t3", "Third", ["t2"])],
   "first": [task("a1", "First plan")],
@@ -43,7 +43,7 @@ last = os.path.join(os.path.dirname(sys.argv[0]), "last-plan")
 if name:
     with open(last, "w") as f:
         f.write(name)
-elif "Regenerate the task plan from the verified ledger" in prompt and os.path.exists(last):
+elif "Regenerate the task plan from the reviewed ledger" in prompt and os.path.exists(last):
     name = open(last).read()
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
 if "Tasks need coordination while the rest of the plan keeps running" in prompt:
@@ -73,35 +73,35 @@ here = os.path.dirname(sys.argv[0])
 with open(os.path.join(here, "agy.log"), "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\n")
 worker = "Task: Fail" in prompt or "was interrupted" in prompt
-if worker and "You verify" not in prompt and "You audit" not in prompt \
+if worker and "You review" not in prompt and "You audit" not in prompt \
         and not os.path.exists(os.path.join(here, "logged-in")):
     print("Error: not logged in, run `agy login`", file=sys.stderr)
     sys.exit(1)
-if "Task: Write file" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+if "Task: Write file" in prompt and "You review" not in prompt and "You audit" not in prompt:
     if os.path.exists(os.path.join(here, "concurrent-user-edit")):
         with open(os.path.join(here, "project", "hello.txt"), "w") as primary:
             primary.write("user edit\n")
     with open("hello.txt", "w") as f:
         f.write("from worker\n")
 # A slow worker that finishes once the orchestrator has heard of the stopped task.
-if "Task: Slow" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+if "Task: Slow" in prompt and "You review" not in prompt and "You audit" not in prompt:
     import time
     deadline = time.time() + 30
     while time.time() < deadline and not os.path.exists(os.path.join(here, "told-while-running")):
         time.sleep(0.05)
     if os.path.exists(os.path.join(here, "told-while-running")):
         open(os.path.join(here, "slow-saw-report"), "w").close()
-if worker and "You verify" not in prompt and "You audit" not in prompt:
+if worker and "You review" not in prompt and "You audit" not in prompt:
     open(os.path.join(here, "fail-ran"), "w").close()
 # A worker that finishes once the failed task has run again.
-if "Task: Patient" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+if "Task: Patient" in prompt and "You review" not in prompt and "You audit" not in prompt:
     import time
     deadline = time.time() + 30
     while time.time() < deadline and not os.path.exists(os.path.join(here, "fail-ran")):
         time.sleep(0.05)
     if os.path.exists(os.path.join(here, "fail-ran")):
         open(os.path.join(here, "patient-saw-rerun"), "w").close()
-if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+if "Task: Manual fix" in prompt and "You review" not in prompt and "You audit" not in prompt:
     with open("hello.txt", "w") as f:
         f.write("from worker manual\n")
 def cover(answer):
@@ -113,13 +113,13 @@ def cover(answer):
     data = json.loads(body.split("```")[0])
     data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
     return head + "```verdict\n" + json.dumps(data) + "\n```"
-REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify", "account again for your obligations")
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You review", "account again for your obligations")
 answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
 if "Automatic integration conflict" in prompt:
     answer = "```integration_question\nKeep the concurrent user edit or apply the worker change?\n```"
 answer = cover(answer)
-# A verifier that rejects the same obligation every round.
-if "Task: Stubborn" in prompt and "You verify" in prompt:
+# A reviewer that rejects the same obligation every round.
+if "Task: Stubborn" in prompt and "You review" in prompt:
     answer = cover("```verdict\n" + json.dumps({"approved": False, "findings": [
         {"check": "goal", "id": "x", "severity": "medium", "issue": "still incomplete", "where": "README"}]}) + "\n```")
     head, body = answer.rsplit("```verdict", 1)
@@ -304,7 +304,7 @@ fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
         .unwrap()
         .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
-                      "verifier": {"focus": "f"}});
+                      "reviewer": {"focus": "f"}});
     let mut second = spec.clone();
     second["id"] = json!("t2");
     second["depends_on"] = json!(["t1"]);
@@ -340,7 +340,7 @@ fn autonomous_plan_without_requirements_cannot_resume() {
         .unwrap()
         .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
-                      "verifier": {"focus": "f"}});
+                      "reviewer": {"focus": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
         .queue_plan(&conversation, &tasks[0].plan_id)
@@ -391,7 +391,7 @@ fn test_freshness_token_staleness_and_rejection() {
         "goal": "g",
         "kind": "analysis",
         "scope": ["README"],
-        "verifier": {"focus": "f"}
+        "reviewer": {"focus": "f"}
     });
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
@@ -421,6 +421,21 @@ fn test_freshness_token_staleness_and_rejection() {
     assert_ne!(
         token1, token2,
         "freshness token must change when working tree is dirty"
+    );
+
+    // Task freshness observes the whole project, ignoring historical path hints.
+    std::fs::write(project.join("other-input.txt"), "first input\n").unwrap();
+    let token3 = core
+        .task_freshness_token(&conversation, plan, task_id)
+        .unwrap();
+    assert_ne!(token2, token3);
+    std::fs::write(project.join("other-input.txt"), "second input\n").unwrap();
+    let token4 = core
+        .task_freshness_token(&conversation, plan, task_id)
+        .unwrap();
+    assert_ne!(
+        token3, token4,
+        "content changes matter even with identical Git status"
     );
 
     // 4. Stale token rejection with zero side-effects
@@ -485,14 +500,14 @@ fn test_blocked_task_prevents_premature_audit() {
 
     assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
-    // Verify no audit event was emitted
+    // Review no audit event was emitted
     let events = core.store.events_since(&conversation, 0, 1000).unwrap();
     assert!(
         !events.iter().any(|e| e.kind == "plan_audit"),
         "blocked task must not trigger plan audit"
     );
 
-    // Verify messages do not contain plan audit / report
+    // Review messages do not contain plan audit / report
     let messages = core.store.messages_after(&conversation, 0).unwrap();
     assert!(
         !messages
@@ -679,7 +694,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             conversation: conversation.clone(),
             plan: plan.clone(),
             task: w1_id.clone(),
-            action: RecoveryAction::VerifyManualSnapshot,
+            action: RecoveryAction::ReviewManualSnapshot,
             consent_files: Some(vec!["hello.txt".into()]),
             freshness_token: token,
             message: None,
@@ -752,7 +767,7 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
 }
 
 #[test]
-fn test_recover_task_verify_manual_snapshot() {
+fn test_recover_task_review_manual_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
@@ -778,7 +793,7 @@ fn test_recover_task_verify_manual_snapshot() {
             conversation: conversation.clone(),
             plan: plan.clone(),
             task: tasks[0].id.clone(),
-            action: RecoveryAction::VerifyManualSnapshot,
+            action: RecoveryAction::ReviewManualSnapshot,
             consent_files: None,
             freshness_token: token,
             message: None,
@@ -789,7 +804,7 @@ fn test_recover_task_verify_manual_snapshot() {
     let updated = core.task_unscoped(&plan, &tasks[0].id).unwrap();
     assert_eq!(updated.status, "approved");
 
-    // Commit policy applies to manually verified work, too.
+    // Commit policy applies to manually reviewed work, too.
     let head_after = git(&project, &["rev-parse", "HEAD"]);
     assert_ne!(head_before, head_after);
     assert_eq!(
@@ -797,7 +812,7 @@ fn test_recover_task_verify_manual_snapshot() {
         "manual user fix"
     );
 
-    // Verify task result points to the snapshot commit
+    // Review task result points to the snapshot commit
     assert!(updated.result.is_some());
     let snap_commit = updated.result.unwrap();
     assert_ne!(snap_commit, head_after);
@@ -864,8 +879,8 @@ fn test_mechanical_audit_gate_prevents_false_success() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
-    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
+    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "reviewer": {"focus": "f"}});
+    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "reviewer": {"focus": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
     let plan = &tasks[0].plan_id;
 
@@ -951,7 +966,7 @@ answer = cover(answer)"#,
             conversation: conversation.clone(),
             plan: plan.clone(),
             task: task.id.clone(),
-            action: RecoveryAction::VerifyManualSnapshot,
+            action: RecoveryAction::ReviewManualSnapshot,
             consent_files: None,
             freshness_token: token,
             message: None,
@@ -987,7 +1002,7 @@ fn a_running_agent_can_be_restarted_without_blocking_the_task() {
         &script,
         source.replace(
             "worker = \"Task: Fail\" in prompt or \"was interrupted\" in prompt",
-            r#"if "Task: First plan" in prompt and "You verify" not in prompt:
+            r#"if "Task: First plan" in prompt and "You review" not in prompt:
     marker = os.path.join(here, "restart-started")
     if not os.path.exists(marker):
         open(marker, "w").close()
@@ -1022,7 +1037,7 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
     let mut review_turns = Vec::new();
     for role in [
         "requirements-extraction-analyst",
-        "requirements-extraction-verifier",
+        "requirements-extraction-reviewer",
     ] {
         let turn = core
             .store
@@ -1065,7 +1080,7 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
             &[json!({
                 "id": "a1", "title": "First plan", "goal": "Check restart", "kind": "analysis",
                 "scope": ["README"], "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
-                "verifier": {"focus": "Check restart"}
+                "reviewer": {"focus": "Check restart"}
             })],
         )
         .unwrap();

@@ -18,7 +18,7 @@ impl Content {
     pub(super) fn new(view: &View, key: &str, width: u16, limit: u16, folded: bool) -> Self {
         let inner = usize::from(width.saturating_sub(4));
         let mut rows = Vec::new();
-        if let Some(text) = verifier_text(view, key) {
+        if let Some(text) = reviewer_text(view, key) {
             rows.push((Tone::Status, text));
         }
         if folded {
@@ -88,7 +88,7 @@ pub(super) fn pair_finished(task: &TaskRow, role: Role) -> bool {
         )
 }
 
-pub(super) fn verifier_text(view: &View, key: &str) -> Option<String> {
+pub(super) fn reviewer_text(view: &View, key: &str) -> Option<String> {
     let (task, role) = task_card(view, key)?;
     if pair_finished(task, role) {
         return None;
@@ -100,10 +100,10 @@ pub(super) fn verifier_text(view: &View, key: &str) -> Option<String> {
     match (role, coverage) {
         (Role::Pair, coverage) => Some(format!(
             "V: {}{}",
-            taskinfo::verifier_status(task),
+            taskinfo::reviewer_status(task),
             coverage.map_or_default(|coverage| format!(" · {coverage}"))
         )),
-        (Role::Verifier, Some(coverage)) => Some(format!("coverage {coverage}")),
+        (Role::Reviewer, Some(coverage)) => Some(format!("coverage {coverage}")),
         _ => None,
     }
 }
@@ -112,8 +112,8 @@ fn branch(view: &View, key: &str) -> Option<String> {
     let agent = match task_card(view, key) {
         Some((task, Role::Pair)) => format!(
             "{}:{}",
-            if task.status == "verifying" {
-                "verifier"
+            if task.status == "reviewing" {
+                "reviewer"
             } else {
                 "worker"
             },

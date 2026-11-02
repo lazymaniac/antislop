@@ -61,9 +61,9 @@ fn describe_message(payload: &Value) -> Option<String> {
     if payload["author"] == "runtime" {
         return Some("· task results handed to orchestrator".into());
     }
-    if payload["author"] == "plan-verifier" {
+    if payload["author"] == "plan-reviewer" {
         return Some(format!(
-            "\nplan verifier sent the plan back:\n{}\n",
+            "\nplan reviewer sent the plan back:\n{}\n",
             value(payload, "text")
         ));
     }
@@ -78,7 +78,7 @@ fn describe_message(payload: &Value) -> Option<String> {
 }
 
 fn describe_plan(payload: &Value) -> String {
-    let mut lines = review_lines("plan verifier", &payload["review"]);
+    let mut lines = review_lines("plan reviewer", &payload["review"]);
     lines.insert(0, format!("Plan:\n{}", plan_tasks(payload)));
     lines.push(plan_status(payload));
     lines.join("\n")
@@ -153,7 +153,7 @@ fn describe_task(payload: &Value) -> String {
     )
 }
 
-/// What a reviewer (plan verifier, auditor) concluded, for the user.
+/// What a reviewer (plan reviewer, auditor) concluded, for the user.
 pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
     if review.is_null() {
         return vec![];

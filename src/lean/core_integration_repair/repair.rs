@@ -85,7 +85,7 @@ impl<'a> Repair<'a> {
 
     fn apply_repair_report(&mut self, report: String) -> Result<()> {
         self.persist_repair(report)?;
-        self.queue_verification()
+        self.queue_review()
     }
 
     fn wait_for_repair_input(&mut self, request: String, checkpoint: String) -> Result<()> {
@@ -123,7 +123,7 @@ impl<'a> Repair<'a> {
              Inspect git diff {} {} and git diff {} {}, plus the relevant files and tests. \
              Combine both intentions, preserving current local user edits and the task's behavior. \
              Edit only task paths in this worktree; never modify the primary working tree or another \
-             worktree. The runtime will use {} as the new base and independently verify your \
+             worktree. The runtime will use {} as the new base and independently review your \
              repaired result before landing. Do not merge unrelated snapshot paths into your result.\n\
              Resolve mechanical conflicts yourself. If the versions represent an unclear product or \
              behavior choice, do not guess or silently pick ours/theirs. Use ask with the conflicting intentions and alternatives, and end with wait_for_answer when the decision remains pending. Otherwise resolve the \
@@ -207,17 +207,17 @@ impl<'a> Repair<'a> {
         self.core.store.update_task(self.task)
     }
 
-    fn queue_verification(&mut self) -> Result<()> {
-        let verifier = format!("verifier:{}", self.task.id);
+    fn queue_review(&mut self) -> Result<()> {
+        let reviewer = format!("reviewer:{}", self.task.id);
         self.core.store.add_mail(
             self.conversation,
-            &verifier,
+            &reviewer,
             &Mail {
                 id: 0,
                 sender: RUNTIME.into(),
-                recipient: verifier.clone(),
+                recipient: reviewer.clone(),
                 kind: "agent_work".into(),
-                text: self.verification_prompt(),
+                text: self.review_prompt(),
                 created_ms: 0,
                 delivered_turn: None,
                 delivered_ms: None,
@@ -228,9 +228,9 @@ impl<'a> Repair<'a> {
             .set_status(self.conversation, self.task, status::QUEUED)
     }
 
-    fn verification_prompt(&self) -> String {
+    fn review_prompt(&self) -> String {
         format!(
-            "Verify the conflict resolution independently. Compare original task delta: git diff {} {}; concurrent project edits: git diff {} {}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If the repair leaves a behavior choice unresolved, ask the orchestrator.",
+            "Review the conflict resolution independently. Compare original task delta: git diff {} {}; concurrent project edits: git diff {} {}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If the repair leaves a behavior choice unresolved, ask the orchestrator.",
             self.base,
             self.change,
             self.base,

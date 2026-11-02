@@ -121,7 +121,7 @@ impl Core {
                 let (findings, evidence) = self.submitted_audit(conversation, args)?;
                 TurnResult::Audit { findings, evidence }
             }
-            "submit_audit_review" if role == "requirements-audit-verifier" => {
+            "submit_audit_review" if role == "requirements-audit-reviewer" => {
                 let (note, assessments) = self.submitted_audit_review(conversation, args)?;
                 TurnResult::AuditReview { note, assessments }
             }
@@ -173,6 +173,10 @@ impl Core {
                 tasks,
                 retire: serde_json::from_value(args["retire"].clone())
                     .map_err(|error| Error::Invalid(format!("retire: {error}")))?,
+                replacements: serde_json::from_value(
+                    args.get("replacements").cloned().unwrap_or(json!({})),
+                )
+                .map_err(|error| Error::Invalid(format!("replacements: {error}")))?,
                 redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(json!([])))
                     .map_err(|error| Error::Invalid(format!("redo: {error}")))?,
             },

@@ -28,7 +28,7 @@ pub(crate) fn require_new_outputs(project: &Path, outputs: &[String]) -> Result<
     Ok(())
 }
 
-/// Reject edits/deletions of existing files before verification, even inside
+/// Reject edits/deletions of existing files before review, even inside
 /// the isolated writer checkout. Check against the original task base.
 pub(crate) fn require_added_files(
     project: &Path,

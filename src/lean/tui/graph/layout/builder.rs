@@ -81,9 +81,9 @@ fn extra_agents(view: &View) -> Vec<&str> {
         .keys()
         .map(String::as_str)
         .filter(|key| {
-            !matches!(*key, PLAN_VERIFIER | ORCHESTRATOR | AUDITOR)
+            !matches!(*key, PLAN_REVIEWER | ORCHESTRATOR | AUDITOR)
                 && !key.starts_with("worker:")
-                && !key.starts_with("verifier:")
+                && !key.starts_with("reviewer:")
         })
         .filter(|key| requirements_round(key).is_none() || Some(*key) == first_round)
         .collect();
@@ -94,11 +94,12 @@ fn extra_agents(view: &View) -> Vec<&str> {
 fn admin_agents<'a>(view: &View, extra: &[&'a str], builder: &Graph) -> Vec<(&'a str, bool)> {
     let visible = |key| scope_matches(view, &builder.scope, key);
     let mut agents = vec![
-        (PLAN_VERIFIER, visible(PLAN_VERIFIER)),
+        (PLAN_REVIEWER, visible(PLAN_REVIEWER)),
         (ORCHESTRATOR, visible(ORCHESTRATOR)),
         (AUDITOR, visible(AUDITOR)),
     ];
     agents.extend(extra.iter().map(|&key| (key, visible(key))));
+    agents.sort_by_key(|(key, _)| (workflow_stage(key), *key));
     agents
 }
 
@@ -115,7 +116,7 @@ fn task_matches(view: &View, key: &str, query: &str) -> bool {
             .as_ref()
             .is_some_and(|text| text.to_lowercase().contains(query))
         || task
-            .verifier_summary
+            .reviewer_summary
             .as_ref()
             .is_some_and(|text| text.to_lowercase().contains(query))
         || task
@@ -129,7 +130,7 @@ fn task_fields_match(task: &super::super::super::view::TaskRow, query: &str) -> 
         task.title.to_lowercase(),
         task.status.to_lowercase(),
         taskinfo::worker_status(task).to_lowercase(),
-        taskinfo::verifier_status(task).to_lowercase(),
+        taskinfo::reviewer_status(task).to_lowercase(),
         task.goal.to_lowercase(),
         task.focus.to_lowercase(),
     ]
@@ -174,5 +175,6 @@ fn set_graph_bounds(graph: &mut Graph) {
         (right.max(r), bottom.max(b))
     });
     graph.width = right + GAP_X;
-    graph.height = graph.height.max(bottom);
+    // Keep the row below the final cards available for report links.
+    graph.height = graph.height.max(bottom.saturating_add(1));
 }

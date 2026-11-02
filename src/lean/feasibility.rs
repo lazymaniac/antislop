@@ -12,7 +12,7 @@ use crate::lean::tasks::TaskContract;
 pub enum Severity {
     /// The plan cannot work as written; it goes back before review.
     Block,
-    /// Probably wrong, but a phrase can mislead; the plan verifier decides.
+    /// Probably wrong, but a phrase can mislead; the plan reviewer decides.
     Advise,
 }
 
@@ -89,7 +89,6 @@ pub fn check(specs: &[TaskContract]) -> Vec<Finding> {
     let descendants = descendants(specs);
     let mut findings = Vec::new();
     for spec in specs {
-        scope_escape(spec, &mut findings);
         read_only_writer(spec, &mut findings);
         asks_to_execute(spec, &mut findings);
         if let Some(detail) = forbids_reading(spec) {
@@ -111,25 +110,6 @@ fn finding(spec: &TaskContract, rule: &'static str, severity: Severity, detail: 
         rule,
         severity,
         detail,
-    }
-}
-
-/// A writer works in its own worktree; a scope outside the project is
-/// outside what it may change.
-fn scope_escape(spec: &TaskContract, out: &mut Vec<Finding>) {
-    if !spec.writes {
-        return;
-    }
-    for path in &spec.scope {
-        let escapes = path.starts_with('/') || path.split('/').any(|part| part == "..");
-        if escapes {
-            out.push(finding(
-                spec,
-                "writer-scope-outside-project",
-                Severity::Block,
-                format!("writes but its scope {path:?} lies outside the project worktree. Scope covers project data and outputs; installed toolchain executables do not need scope entries. Select an existing tool with its executable path or per-process environment while keeping writes inside the worktree"),
-            ));
-        }
     }
 }
 
@@ -266,7 +246,7 @@ pub fn message(findings: &[&Finding]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean::tasks::VerifierSpec;
+    use crate::lean::tasks::ReviewerSpec;
 
     fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskContract {
         TaskContract {
@@ -282,12 +262,11 @@ mod tests {
             goal: "Read the code and report".into(),
             summary: None,
             section: None,
-            scope: vec!["src".into()],
             writes,
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
             covers: Vec::new(),
-            verifier: VerifierSpec::default(),
+            reviewer: ReviewerSpec::default(),
         }
     }
 
@@ -302,18 +281,6 @@ mod tests {
             task("t2", WorkKind::Implementation, true, &["t1"]),
         ];
         assert!(check(&plan).is_empty());
-    }
-
-    #[test]
-    fn a_writer_cannot_be_scoped_outside_the_project() {
-        for path in ["/etc", "../sibling", "src/../../x"] {
-            let mut writer = task("t1", WorkKind::Implementation, true, &[]);
-            writer.scope = vec![path.into()];
-            assert_eq!(rules(&[writer]), ["writer-scope-outside-project"], "{path}");
-        }
-        let mut reader = task("t1", WorkKind::Context, false, &[]);
-        reader.scope = vec!["../service".into()];
-        assert!(check(&[reader]).is_empty());
     }
 
     #[test]

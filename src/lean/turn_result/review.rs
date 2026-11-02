@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json;
 
 /// One problem a reviewer found, as the `review` tool takes it. A task
-/// verifier names the check it belongs to; a plan, audit or code reviewer has
+/// reviewer names the check it belongs to; a plan, audit or code reviewer has
 /// no checks.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,7 +57,7 @@ fn selection_tool(args: &serde_json::Value) -> Result<TurnResult> {
     })
 }
 
-/// A verifier's review with the verdict the runtime derives from it: approved
+/// A reviewer's review with the verdict the runtime derives from it: approved
 /// when every check is ok or n/a and no finding blocks; each finding gets an
 /// id stable across rounds, from its check and location.
 fn review(report: String, args: &serde_json::Value) -> Result<TurnResult> {

@@ -208,7 +208,7 @@ impl Details {
         width: usize,
         theme: &Theme,
     ) -> bool {
-        let Some(key) = document_key(self.tab) else {
+        let Some(key) = document_key(&self.key, self.tab) else {
             return false;
         };
         let Some(document) = self.documents.get(key) else {

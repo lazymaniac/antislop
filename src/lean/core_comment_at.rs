@@ -109,7 +109,7 @@ impl Core {
     }
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
-    /// Pausing starts no new plan work (worker, verifier and audit turns):
+    /// Pausing starts no new plan work (worker, reviewer and audit turns):
     /// turns already running finish, the orchestrator still answers, and
     /// everything waiting goes on when the user continues. It survives a
     /// restart.

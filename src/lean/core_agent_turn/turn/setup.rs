@@ -5,7 +5,7 @@ pub(super) fn wait_until_resumed(
     setup: &TurnSetup<'_>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    if ORCHESTRATION_ROLES.contains(&setup.role.as_str()) || setup.role == PLAN_VERIFIER {
+    if ORCHESTRATION_ROLES.contains(&setup.role.as_str()) || setup.role == PLAN_REVIEWER {
         return Ok(());
     }
     while !cancel.load(Ordering::SeqCst) && core.store.paused(setup.conversation)? {

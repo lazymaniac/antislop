@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn a_verifier_owes_the_goal_the_assigned_criteria_and_the_kind_catalog_only() {
+fn a_reviewer_owes_the_goal_the_assigned_criteria_and_the_kind_catalog_only() {
     let mut task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis",
-        "verifier": {"focus": "f", "risks": ["units"], "risk_ids": ["R001"]}
+        "reviewer": {"focus": "f", "risks": ["units"], "risk_ids": ["R001"]}
     }))
     .unwrap();
     task.criterion_ids = vec!["REQ-1.1".into()];
@@ -205,17 +205,17 @@ fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
 }
 
 #[test]
-fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
+fn a_reviewer_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "w", "title": "Writer", "goal": "Do it", "kind": "implementation",
-        "verifier": {"focus": "f"}
+        "reviewer": {"focus": "f"}
     }))
     .unwrap();
     let earlier = vec![
         serde_json::json!({"id": "goal:aaaa1111", "check": "goal", "severity": "medium", "issue": "map omits a file", "where": "x"}),
         serde_json::json!({"id": "goal:low00000", "check": "goal", "severity": "low", "issue": "typo", "where": "y"}),
     ];
-    let prompt = verifier_turn_prompt("/p", &task, "report", None, false, "", &earlier);
+    let prompt = reviewer_turn_prompt("/p", &task, "report", None, false, "", &earlier);
     assert!(prompt.contains("- goal:aaaa1111 [goal, medium] map omits a file"));
     assert!(!prompt.contains("goal:low00000"));
     assert!(prompt.contains("List in resolved"));
@@ -224,44 +224,44 @@ fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     assert!(prompt.contains(
         "list every violation, each with its location and size, in one finding; never give examples"
     ));
-    let first = verifier_turn_prompt("/p", &task, "report", None, true, "", &[]);
+    let first = reviewer_turn_prompt("/p", &task, "report", None, true, "", &[]);
     assert!(!first.contains("List in resolved"));
 }
 
 #[test]
-fn an_options_verifier_leaves_the_writers_tests_and_validation_to_the_writer() {
+fn an_options_reviewer_leaves_the_writers_tests_and_validation_to_the_writer() {
     let options: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "w-options", "title": "Options for W", "goal": "g", "kind": "options",
-        "options_for": "w", "verifier": {"focus": "f"}
+        "options_for": "w", "reviewer": {"focus": "f"}
     }))
     .unwrap();
     let writer: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "w", "title": "W", "goal": "g", "kind": "implementation", "writes": true,
-        "verifier": {"focus": "f"}
+        "reviewer": {"focus": "f"}
     }))
     .unwrap();
     for prompt in [
-        verifier_prompt("/p", &options, "report", None),
-        verifier_followup(&options, "report", None),
+        reviewer_prompt("/p", &options, "report", None),
+        reviewer_followup(&options, "report", None),
     ] {
-        assert!(prompt.contains(SELECTION_VERIFICATION), "{prompt}");
+        assert!(prompt.contains(SELECTION_REVIEW), "{prompt}");
     }
-    assert!(!verifier_prompt("/p", &writer, "report", None).contains(SELECTION_VERIFICATION));
+    assert!(!reviewer_prompt("/p", &writer, "report", None).contains(SELECTION_REVIEW));
 }
 
 #[test]
-fn a_report_verifier_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
+fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "audit", "title": "Audit", "goal": "g", "kind": "performance",
-        "verifier": {"focus": "f"}
+        "reviewer": {"focus": "f"}
     }))
     .unwrap();
     for prompt in [
-        verifier_prompt("/p", &audit, "report", None),
-        verifier_followup(&audit, "report", None),
+        reviewer_prompt("/p", &audit, "report", None),
+        reviewer_followup(&audit, "report", None),
     ] {
-        assert!(prompt.contains(REPORT_VERIFICATION), "{prompt}");
-        assert!(!prompt.contains(SELECTION_VERIFICATION), "{prompt}");
+        assert!(prompt.contains(REPORT_REVIEW), "{prompt}");
+        assert!(!prompt.contains(SELECTION_REVIEW), "{prompt}");
     }
 }
 
@@ -269,19 +269,19 @@ fn a_report_verifier_names_every_concrete_gap_at_once_and_accepts_stated_residua
 fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "audit", "title": "Audit", "goal": "g", "kind": "security",
-        "verifier": {"focus": "f"}
+        "reviewer": {"focus": "f"}
     }))
     .unwrap();
     let earlier =
         [serde_json::json!({"id": "f1", "check": "R1", "severity": "medium", "issue": "x"})];
     for fresh in [true, false] {
-        let first = verifier_turn_prompt("/p", &audit, "report", None, fresh, "", &[]);
+        let first = reviewer_turn_prompt("/p", &audit, "report", None, fresh, "", &[]);
         assert!(!first.contains(REPORT_RECHECK), "{first}");
-        let later = verifier_turn_prompt("/p", &audit, "report", None, fresh, "", &earlier);
+        let later = reviewer_turn_prompt("/p", &audit, "report", None, fresh, "", &earlier);
         assert!(later.contains(REPORT_RECHECK), "{later}");
     }
     let mut writer = audit.clone();
     writer.writes = true;
-    let prompt = verifier_turn_prompt("/p", &writer, "report", None, false, "", &earlier);
+    let prompt = reviewer_turn_prompt("/p", &writer, "report", None, false, "", &earlier);
     assert!(!prompt.contains(REPORT_RECHECK), "{prompt}");
 }

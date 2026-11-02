@@ -62,7 +62,7 @@ impl Outcome {
 pub mod action {
     pub const INTEGRATE_WITH_CONSENT: &str = "integrate_with_consent";
     pub const KEEP_ON_BRANCH: &str = "keep_on_branch";
-    pub const VERIFY_MANUAL_SNAPSHOT: &str = "verify_manual_snapshot";
+    pub const REVIEW_MANUAL_SNAPSHOT: &str = "review_manual_snapshot";
     pub const RETRY_WITH_GUIDANCE: &str = "retry_with_guidance";
     pub const RESTART_AGENT: &str = "restart_agent";
     pub const CANCEL_TASK: &str = "cancel_task";

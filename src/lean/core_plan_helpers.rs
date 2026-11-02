@@ -29,7 +29,7 @@ pub(super) fn finalize_plan(
 
 /// What a plan that changes code lacks of the agents the pool makes required
 /// before the change (the gates after it are added by the runtime): told to
-/// the plan verifier, who rejects the plan for it.
+/// the plan reviewer, who rejects the plan for it.
 pub(super) fn planning_gaps(specs: &[TaskContract]) -> Option<String> {
     if !specs.iter().any(|spec| spec.changes_code()) {
         return None;

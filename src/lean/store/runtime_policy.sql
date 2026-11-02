@@ -29,3 +29,15 @@ CREATE TABLE IF NOT EXISTS task_artifact_inputs(
     task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL, path TEXT NOT NULL,
     source_task TEXT REFERENCES tasks(id), source_generation INTEGER, source_commit TEXT,
     PRIMARY KEY(task_id,generation,path));
+CREATE TABLE IF NOT EXISTS agent_evidence(
+ id TEXT PRIMARY KEY, turn_id TEXT NOT NULL REFERENCES turns(id), label TEXT NOT NULL,
+ bytes INTEGER NOT NULL CHECK(bytes>0 AND bytes<=262144), sha256 TEXT NOT NULL,
+ UNIQUE(turn_id,label));
+CREATE TABLE IF NOT EXISTS result_evidence(
+ turn_id TEXT NOT NULL REFERENCES agent_results(turn_id), evidence_id TEXT NOT NULL REFERENCES agent_evidence(id),
+ PRIMARY KEY(turn_id,evidence_id));
+CREATE INDEX IF NOT EXISTS result_evidence_by_record ON result_evidence(evidence_id);
+CREATE TABLE IF NOT EXISTS task_resume_results(
+ task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL,
+ source_task TEXT NOT NULL REFERENCES tasks(id), result_turn TEXT REFERENCES agent_results(turn_id),
+ PRIMARY KEY(task_id,generation));

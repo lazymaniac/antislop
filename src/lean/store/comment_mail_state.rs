@@ -220,7 +220,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT m.recipient,MAX(m.id),t.id,t.plan_id FROM mail m LEFT JOIN tasks t
-             ON t.conversation_id=m.conversation_id AND m.recipient IN ('worker:' || t.id,'verifier:' || t.id,'code-review:' || t.id)
+             ON t.conversation_id=m.conversation_id AND m.recipient IN ('worker:' || t.id,'reviewer:' || t.id,'code-review:' || t.id)
              WHERE m.conversation_id=?1 AND m.delivered_turn IS NULL AND m.kind!='copy'
              GROUP BY m.recipient ORDER BY MIN(m.id)")?;
         Ok(statement

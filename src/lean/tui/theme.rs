@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn theme_tones_and_glyphs() {
         assert_eq!(tone("running"), Tone::Active);
-        assert_eq!(tone("verified"), Tone::Done);
+        assert_eq!(tone("reviewed"), Tone::Done);
         assert_eq!(tone("failed"), Tone::Failed);
         assert_eq!(tone("paused"), Tone::Waiting);
         assert_eq!(tone("queued"), Tone::Queued);
@@ -89,10 +89,10 @@ mod role_tests {
                 glyphs.waiting,
                 glyphs.problem,
                 glyphs.orchestrator,
-                glyphs.plan_verifier,
+                glyphs.plan_reviewer,
                 glyphs.auditor,
                 glyphs.worker,
-                glyphs.verifier,
+                glyphs.reviewer,
             ];
             for icon in icons.iter().chain(glyphs.spinner) {
                 assert_eq!(icon.width(), 1, "{icon}");
@@ -108,10 +108,10 @@ mod role_tests {
         assert_eq!(theme.spinner(0), theme.spinner(frames));
         let keys = [
             "orchestrator",
-            "plan_verifier",
+            "plan_reviewer",
             "auditor",
             "worker:t1",
-            "verifier:t1",
+            "reviewer:t1",
         ];
         let icons: std::collections::BTreeSet<_> =
             keys.iter().map(|key| theme.role_icon(key)).collect();

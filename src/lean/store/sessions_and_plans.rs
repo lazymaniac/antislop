@@ -1,5 +1,4 @@
 use super::*;
-use crate::lean::tasks::TaskContract;
 
 #[path = "sessions_and_plans/carry.rs"]
 mod carry;
@@ -39,7 +38,7 @@ impl Store {
         Ok(())
     }
 
-    /// Forgets the CLI sessions of a task’s worker and verifier turns.
+    /// Forgets the CLI sessions of a task’s worker and reviewer turns.
     pub fn forget_task_sessions(&self, task: &str) -> Result<()> {
         self.db().execute(
             "UPDATE turns SET session_id=NULL WHERE session_id IS NOT NULL AND id IN
@@ -113,7 +112,7 @@ impl Store {
         self.refresh_answer_waits(conversation)?;
         Ok(self.db().execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
-               AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','verifying'))
+               AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','reviewing'))
                AND NOT EXISTS(SELECT 1 FROM agent_questions q WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
                AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)
                AND NOT EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id JOIN run_contexts r ON r.turn_id=t.id JOIN provider_blocks b ON b.provider=t.provider AND b.profile=r.profile WHERE s.task_id=tasks.id)",
@@ -242,34 +241,13 @@ fn proposed_task_count(
 }
 
 fn authorize_plan(tx: &rusqlite::Transaction<'_>, conversation: &str, plan_id: &str) -> Result<()> {
-    let contracts = plan_contracts(tx, plan_id)?;
-    let scope = plan_scope(&contracts, false);
-    let write_scope = plan_scope(&contracts, true);
+    // Keep the existing schema and acceptance marker readable across restarts.
+    // Legacy path columns no longer define task filesystem permissions.
     tx.execute(
-        "INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,?3,?4)",
-        params![plan_id, conversation, serde_json::to_string(&scope)?, serde_json::to_string(&write_scope)?],
+        "INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,'[]','[]')",
+        params![plan_id, conversation],
     )?;
     Ok(())
-}
-
-fn plan_contracts(tx: &rusqlite::Transaction<'_>, plan: &str) -> Result<Vec<TaskContract>> {
-    tx.prepare("SELECT spec FROM tasks WHERE plan_id=?1")?
-        .query_map([plan], |row| row.get::<_, String>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .iter()
-        .map(|spec| serde_json::from_str(spec).map_err(Into::into))
-        .collect()
-}
-
-fn plan_scope(contracts: &[TaskContract], writers_only: bool) -> Vec<String> {
-    let mut paths = std::collections::BTreeSet::new();
-    for task in contracts.iter().filter(|task| !writers_only || task.writes) {
-        if task.scope.is_empty() {
-            paths.insert(".".to_owned());
-        }
-        paths.extend(task.scope.iter().cloned());
-    }
-    paths.into_iter().collect()
 }
 
 fn advance_workflow(

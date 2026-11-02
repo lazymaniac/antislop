@@ -14,11 +14,11 @@ impl View {
         let diff = key
             .strip_prefix("worker:")
             .map(|task| format!("diff:{task}"));
-        let verifier = key
+        let reviewer = key
             .strip_prefix("worker:")
-            .map(|task| format!("verifier:{task}"));
+            .map(|task| format!("reviewer:{task}"));
         let checks = key
-            .strip_prefix("verifier:")
+            .strip_prefix("reviewer:")
             .or_else(|| key.strip_prefix("worker:"))
             .map(|task| format!("check:{task}:"));
         self.comments
@@ -27,7 +27,7 @@ impl View {
             .filter(|comment| comment.status != "deleted")
             .filter(|comment| {
                 comment.target == key
-                    || verifier
+                    || reviewer
                         .as_ref()
                         .is_some_and(|target| comment.target == *target)
                     || checks
@@ -100,7 +100,7 @@ fn task_progress(tasks: &[TaskRow]) -> Vec<String> {
     tasks
         .iter()
         .filter_map(|task| match task.status.as_str() {
-            "working" | "verifying" => {
+            "working" | "reviewing" => {
                 let activity = if task.activity.is_empty() {
                     "…".into()
                 } else {
@@ -119,7 +119,7 @@ fn task_progress(tasks: &[TaskRow]) -> Vec<String> {
 }
 
 fn agent_progress(view: &View) -> Vec<String> {
-    [crate::lean::PLANNER, PLAN_VERIFIER, AUDITOR]
+    [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR]
         .into_iter()
         .filter_map(|key| {
             view.agents.get(key).filter(|agent| agent.running).map(|_| {

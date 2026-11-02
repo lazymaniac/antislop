@@ -1,13 +1,13 @@
 use super::*;
 
 impl Graph {
-    /// The card of `key`; a verifier sharing its worker's card finds that.
+    /// The card of `key`; a reviewer sharing its worker's card finds that.
     pub fn node(&self, key: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| node.key == key).or_else(|| {
-            let (id, verifier) = crate::lean::task_role(key)?;
+            let (id, reviewer) = crate::lean::task_role(key)?;
             self.nodes
                 .iter()
-                .find(|node| verifier && node.key.strip_prefix("worker:") == Some(id))
+                .find(|node| reviewer && node.key.strip_prefix("worker:") == Some(id))
         })
     }
 
@@ -18,7 +18,7 @@ impl Graph {
 
     /// Where an edge runs, if both its ends are shown: its own path when
     /// the layout laid one, else a route between its two cards.
-    pub(super) fn edge_path(
+    pub(in crate::lean::tui::graph) fn edge_path(
         &self,
         edge: &Edge,
         nodes: &HashMap<&str, &Node>,
@@ -37,7 +37,41 @@ impl Graph {
         }
         let from = nodes.get(edge.from.as_str())?;
         let to = nodes.get(edge.to.as_str())?;
-        Some(Self::route(from, to))
+        let path = Self::route(from, to);
+        if nodes
+            .values()
+            .filter(|node| node.visible)
+            .any(|node| Self::route_intersects_card(&path, node))
+        {
+            // Long review/report links can span task rows. Leave each row
+            // below its tallest card, then use the empty left margin.
+            let row_bottom = |row| {
+                nodes
+                    .values()
+                    .filter(|node| node.visible && node.y == row)
+                    .map(|node| node.y + node.height)
+                    .max()
+                    .unwrap_or(row)
+            };
+            let left = nodes
+                .values()
+                .filter(|node| node.visible)
+                .map(|node| node.x)
+                .min()
+                .unwrap_or(MARGIN)
+                .saturating_sub(1);
+            let fx = from.x + from.width / 2;
+            let tx = to.x + to.width / 2;
+            return Some(vec![
+                (fx, from.y + from.height),
+                (fx, row_bottom(from.y)),
+                (left, row_bottom(from.y)),
+                (left, row_bottom(to.y)),
+                (tx, row_bottom(to.y)),
+                (tx, to.y + to.height),
+            ]);
+        }
+        Some(path)
     }
 
     /// The nearest node from `key` in a direction (dx, dy), each -1, 0 or 1.

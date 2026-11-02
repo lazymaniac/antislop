@@ -80,7 +80,7 @@ fn append_worker_report(
         .task
         .as_ref()
         .and_then(|task| task["report"].as_str())
-        .filter(|_| this.tab != crate::lean::tui::details::VERIFIER)
+        .filter(|_| this.tab != crate::lean::tui::details::REVIEWER)
     else {
         return;
     };

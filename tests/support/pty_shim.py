@@ -339,7 +339,7 @@ def task_result(text, prompt):
         if reply.get("state") != "answered":
             return "wait_for_answer", {"note": pending.group(1).strip()}
         text = text[: pending.start()] + "Answer: " + (reply.get("answer") or "") + text[pending.end() :]
-    if "Task role: verifier" in prompt:
+    if "Task role: reviewer" in prompt:
         found = re.search(r"```verdict\s*(?:JSON\s*)?(.*?)```", text, re.S)
         verdict = json.loads(found.group(1)) if found else {"approved": True, "findings": []}
         return "review", review_args(text, verdict, prompt)

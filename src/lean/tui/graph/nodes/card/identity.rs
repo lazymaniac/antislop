@@ -20,7 +20,7 @@ impl Card<'_> {
         .add_modifier(Modifier::BOLD);
         let name = match self.role {
             Some(Role::Worker) => "worker".to_owned(),
-            Some(Role::Verifier) => "verifier".to_owned(),
+            Some(Role::Reviewer) => "reviewer".to_owned(),
             Some(Role::Pair) => "options".to_owned(),
             None => node_name(&self.node.key),
         };
@@ -92,23 +92,13 @@ impl Card<'_> {
             }
             return description;
         }
-        let round = self
-            .task
+        if requirements_round(&self.node.key).is_some() {
+            return describe(self.view, &self.node.key);
+        }
+        self.task
             .map(|task| task.round)
             .filter(|round| *round > 0)
-            .or_else(|| {
-                let members = card_members(self.view, &self.node.key);
-                current_round(self.view, &members)
-                    .and_then(requirements_round)
-                    .map(|index| index as u64 + 1)
-            })
-            .or_else(|| {
-                self.view
-                    .agents
-                    .get(&self.node.key)
-                    .map(|agent| u64::from(agent.turns) + 1)
-            });
-        round.map_or_default(|round| format!("round {round}"))
+            .map_or_else(|| "working".into(), |round| format!("round {round}"))
     }
 
     fn pair_finished(&self) -> bool {

@@ -6,7 +6,7 @@ fn task(writes: bool) -> TaskContract {
     serde_json::from_value(json!({
         "id": "writer", "title": "Writer", "goal": "Implement chosen variant",
         "kind": "implementation", "writes": writes, "depends_on": ["shared"],
-        "verifier": {"focus": "Check selection"}
+        "reviewer": {"focus": "Check selection"}
     }))
     .unwrap()
 }
@@ -56,7 +56,7 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
 }
 
 #[test]
-fn options_delivery_and_missing_choice_obligation_survive_verifier_followups() {
+fn options_delivery_and_missing_choice_obligation_survive_reviewer_followups() {
     let task = task(true);
     for report in [
         "Selected: A",
@@ -67,10 +67,10 @@ fn options_delivery_and_missing_choice_obligation_survive_verifier_followups() {
         let upstream = tasks::upstream_note(&[("shared", "Shared options", report)]);
         // New rounds use full instructions; compatible turns within one round use continuation.
         for (path, fresh) in [
-            ("verifier-fresh-round", true),
-            ("verifier-same-round-followup", false),
+            ("reviewer-fresh-round", true),
+            ("reviewer-same-round-followup", false),
         ] {
-            let prompt = tasks::verifier_turn_prompt(
+            let prompt = tasks::reviewer_turn_prompt(
                 "project",
                 &task,
                 "Worker claims A",
@@ -100,9 +100,9 @@ fn read_only_continuations_preserve_access_without_writer_binding() {
         Some("Apply the scoped user instruction."),
         "",
     );
-    let verifier = tasks::verifier_turn_prompt("project", &task, "report", None, false, "", &[]);
+    let reviewer = tasks::reviewer_turn_prompt("project", &task, "report", None, false, "", &[]);
     assert!(!worker.contains("options report is binding"));
-    assert!(!verifier.contains("Independently verify requirements"));
+    assert!(!reviewer.contains("Independently review requirements"));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
     let context = |kind: &str| -> TaskContract {
         serde_json::from_value(json!({
             "id": "scout", "title": "Scout", "goal": "Map the project",
-            "kind": kind, "writes": false, "verifier": {"focus": "Check the map"}
+            "kind": kind, "writes": false, "reviewer": {"focus": "Check the map"}
         }))
         .unwrap()
     };
@@ -122,9 +122,9 @@ fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
 }
 
 #[test]
-fn verifiers_never_block_on_path_or_revision_mismatches() {
+fn reviewers_never_block_on_path_or_revision_mismatches() {
     let task = task(false);
-    let prompt = tasks::verifier_prompt("project", &task, "report", None);
+    let prompt = tasks::reviewer_prompt("project", &task, "report", None);
     assert!(
         prompt.contains("path or changed-file mismatches alone are never blocking findings"),
         "{prompt}"

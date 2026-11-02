@@ -73,7 +73,7 @@ fn effort_levels_reach_the_cli() {
 }
 
 #[test]
-fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
+fn the_example_routes_every_kind_to_a_worker_and_a_reviewer() {
     let text = include_str!("../../examples/antislop.toml");
     let config = Config::from_toml(text).unwrap();
     for kind in config
@@ -85,8 +85,8 @@ fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
             config.resolve(*kind, RoleKind::Executor).unwrap().work_kind,
             *kind
         );
-        let verifier = config.resolve(*kind, RoleKind::Verifier).unwrap();
-        assert_eq!(verifier.role, RoleKind::Verifier);
+        let reviewer = config.resolve(*kind, RoleKind::Reviewer).unwrap();
+        assert_eq!(reviewer.role, RoleKind::Reviewer);
     }
     let orchestrator = config
         .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
@@ -96,7 +96,7 @@ fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
 }
 
 #[test]
-fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
+fn profile_command_supports_platform_launchers_for_workers_and_reviewers() {
     let text = include_str!("../../examples/antislop.toml")
         .replace(
             "[profiles.execution]\nprovider = \"agy\"",
@@ -121,13 +121,13 @@ fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
     assert_eq!(worker.args, vec!["launch", "codex"]);
     assert_eq!(worker.native_effort.as_deref(), Some("high"));
 
-    let verifier = config
-        .resolve(WorkKind::Implementation, RoleKind::Verifier)
+    let reviewer = config
+        .resolve(WorkKind::Implementation, RoleKind::Reviewer)
         .unwrap();
-    assert_eq!(verifier.provider, ProviderKind::Codex);
-    assert_eq!(verifier.binary, PathBuf::from("ollama"));
-    assert_eq!(verifier.args, vec!["launch", "codex"]);
-    assert_eq!(verifier.native_effort.as_deref(), Some("medium"));
+    assert_eq!(reviewer.provider, ProviderKind::Codex);
+    assert_eq!(reviewer.binary, PathBuf::from("ollama"));
+    assert_eq!(reviewer.args, vec!["launch", "codex"]);
+    assert_eq!(reviewer.native_effort.as_deref(), Some("medium"));
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
     config.orchestrator.profile = "shared".into();
     for route in config.routing.values_mut() {
         route.executor = "shared".into();
-        route.verifier = "shared".into();
+        route.reviewer = "shared".into();
     }
     config.validate().unwrap();
     for kind in config.routing.keys().copied() {
@@ -208,7 +208,7 @@ fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
         } else {
             RoleKind::Executor
         };
-        for role in [worker_role, RoleKind::Verifier] {
+        for role in [worker_role, RoleKind::Reviewer] {
             let resolved = config.resolve(kind, role).unwrap();
             assert_eq!(resolved.profile, "shared");
             assert_eq!(resolved.work_kind, kind);
@@ -234,7 +234,7 @@ fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
     );
     assert!(
         config
-            .resolve(WorkKind::Context, RoleKind::Verifier)
+            .resolve(WorkKind::Context, RoleKind::Reviewer)
             .is_err()
     );
 }
@@ -247,7 +247,7 @@ fn assignments_still_require_existing_profiles_and_consistent_orchestration() {
     assert!(config.validate().is_err());
 
     let mut config = original.clone();
-    config.routing.get_mut(&WorkKind::Context).unwrap().verifier = "missing".into();
+    config.routing.get_mut(&WorkKind::Context).unwrap().reviewer = "missing".into();
     assert!(config.validate().is_err());
 
     let mut config = original;
@@ -406,7 +406,7 @@ fn load_and_resolve_preserve_file_error_context_and_role_selection() {
     );
     assert_ne!(
         loaded
-            .resolve(WorkKind::Implementation, RoleKind::Verifier)
+            .resolve(WorkKind::Implementation, RoleKind::Reviewer)
             .unwrap()
             .profile,
         "execution"
@@ -414,4 +414,12 @@ fn load_and_resolve_preserve_file_error_context_and_role_selection() {
 
     let error = Config::load(Path::new("examples/missing-config-test.toml"));
     assert!(matches!(error, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound));
+}
+
+#[test]
+fn previous_configuration_schema_is_rejected_after_role_rename() {
+    let source = include_str!("../../examples/antislop.toml")
+        .replace("schema_version = 3", "schema_version = 2");
+    let error = Config::from_toml(&source).unwrap_err().to_string();
+    assert!(error.contains("schema_version = 3"), "{error}");
 }

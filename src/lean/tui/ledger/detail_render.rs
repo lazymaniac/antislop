@@ -61,7 +61,7 @@ impl LedgerView {
         else {
             push_section(
                 &mut lines,
-                "Verification evidence",
+                "Review evidence",
                 "Press Enter to load independent checks.",
                 theme,
                 width,
@@ -71,8 +71,8 @@ impl LedgerView {
         if evidence.is_empty() {
             push_section(
                 &mut lines,
-                "Verification evidence",
-                "No independent evidence yet. Approval of requirements does not verify implementation.",
+                "Review evidence",
+                "No independent evidence yet. Approval of requirements does not review implementation.",
                 theme,
                 width,
             );

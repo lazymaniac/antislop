@@ -1,10 +1,10 @@
 use super::*;
 
+pub(in crate::lean) mod reviewer_setup;
 pub(in crate::lean) mod task_execution;
-pub(in crate::lean) mod verifier_setup;
 
 impl Core {
-    /// Runs the task-specific worker and verifier lifecycle.
+    /// Runs the task-specific worker and reviewer lifecycle.
     pub(in crate::lean) fn run_task(
         self: &Arc<Self>,
         conversation: &str,

@@ -2,20 +2,35 @@ use super::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) fn results(details: &mut Details, view: &View, records: &mut Vec<Rc<DetailRecord>>) {
+    if details.task_id().is_none() {
+        if details.key == crate::lean::PLANNER
+            && details.selected_round.is_none()
+            && details.fetch_error.is_none()
+            && !details.fetch_in_flight
+        {
+            super::plan::plan(details, view, records);
+            return;
+        }
+        agent_results(details, view, records);
+        return;
+    }
     let task = details
         .task_id()
         .and_then(|id| view.tasks.iter().find(|task| task.id == id));
-    match (&details.task, task, details.key.starts_with("verifier:")) {
-        (_, None, _) => records.push(record(vec![(dim(), "Task workers and verifiers have results; plan verifier and auditor results are in Overview. [no historical result data]".into())], " ")),
+    match (&details.task, task, details.key.starts_with("reviewer:")) {
+        (_, None, _) => records.push(record(
+            vec![(dim(), "No stored results for this task.".into())],
+            " ",
+        )),
         (None, Some(_), _) => records.push(record(vec![(dim(), "Loading…".into())], " ")),
-        (Some(stored), Some(_), true) => records.push(verifier_result(&stored["verdict"])),
+        (Some(stored), Some(_), true) => records.push(reviewer_result(&stored["verdict"])),
         (Some(stored), Some(_), false) => worker_results(stored, records),
     }
 }
 
-fn verifier_result(verdict: &Value) -> Rc<DetailRecord> {
+fn reviewer_result(verdict: &Value) -> Rc<DetailRecord> {
     if verdict.is_null() {
-        return record(vec![(dim(), "Verifier has not evaluated the task yet (verdict will appear after verification). [no historical verdict data]".into())], " ");
+        return record(vec![(dim(), "Reviewer has not evaluated the task yet (verdict will appear after review). [no historical verdict data]".into())], " ");
     }
     let mut lines = crate::lean::cli::review_lines("verdict", verdict)
         .into_iter()
@@ -28,10 +43,10 @@ fn verifier_result(verdict: &Value) -> Rc<DetailRecord> {
 fn append_findings(lines: &mut Vec<(Style, String)>, verdict: &Value) {
     match verdict["findings"].as_array() {
         Some(findings) if findings.is_empty() => lines.push(plain(
-            "Findings: no issues (verifier approved the task without notes).".into(),
+            "Findings: no issues (reviewer approved the task without notes).".into(),
         )),
         Some(findings) => {
-            lines.push(label("Verifier findings"));
+            lines.push(label("Reviewer findings"));
             lines.extend(findings.iter().map(finding_line));
         }
         None => lines.push((dim(), "Findings: [no historical findings data]".into())),
@@ -101,16 +116,43 @@ fn label(text: &str) -> (Style, String) {
     )
 }
 
+fn agent_results(details: &Details, view: &View, records: &mut Vec<Rc<DetailRecord>>) {
+    let text = if let Some(error) = &details.fetch_error {
+        format!("Could not load results: {error}")
+    } else if details.fetch_in_flight && details.task.is_none() {
+        "Loading results…".into()
+    } else if details.selected_round.is_none()
+        && let Some(review) = view
+            .reviews
+            .get(&details.key)
+            .filter(|review| !review.is_empty())
+    {
+        review.join("\n")
+    } else if view
+        .agents
+        .get(&details.key)
+        .is_some_and(|agent| agent.running)
+    {
+        "Working. Results will appear when this agent submits them.".into()
+    } else {
+        "No submitted results available for this turn.".into()
+    };
+    records.push(record(
+        text.lines().map(|line| plain(line.to_owned())).collect(),
+        "\n",
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
-    fn worker_report_keeps_paragraphs_and_excludes_verifier_findings() {
+    fn worker_report_keeps_paragraphs_and_excludes_reviewer_findings() {
         let stored = json!({
             "report":"First paragraph.\n\n- café 👩‍👩‍👧‍👦\n- Second item",
-            "verdict":{"findings":[{"severity":"high","issue":"Verifier-only finding"}]}
+            "verdict":{"findings":[{"severity":"high","issue":"Reviewer-only finding"}]}
         });
         let mut records = Vec::new();
         worker_results(&stored, &mut records);
@@ -121,6 +163,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("First paragraph.\n\n- café 👩‍👩‍👧‍👦\n- Second item"));
-        assert!(!text.contains("Verifier-only finding") && !text.contains("Evidence"));
+        assert!(!text.contains("Reviewer-only finding") && !text.contains("Evidence"));
     }
 }

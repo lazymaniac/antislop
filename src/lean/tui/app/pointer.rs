@@ -32,6 +32,7 @@ impl App {
                 ),
                 &self.view,
             );
+            return;
         } else if let Some(diff) = &mut self.diff {
             diff.key(if down { KeyCode::Down } else { KeyCode::Up });
             return;

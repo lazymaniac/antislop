@@ -92,7 +92,10 @@ impl Core {
         conversation: &str,
         asked: &[store::Message],
     ) -> Result<Option<String>> {
-        if !asked.iter().any(|message| message.author == REPLAN) {
+        if !asked
+            .iter()
+            .any(|message| matches!(message.author.as_str(), REPLAN | PLAN_REVIEWER))
+        {
             return Ok(None);
         }
         let graph = self.store.latest_plan(conversation)?;
@@ -117,6 +120,12 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let (text, plan) = super::turn_result::TurnResult::plan_answer(answer);
+        if plan.is_none() {
+            record_planner_result(&self.store, context.conversation, false)?;
+            self.store
+                .add_message(context.conversation, PLANNER_BLOCKER, &text)?;
+            return Ok(());
+        }
         let plan = self.planner_submitted_plan(context.conversation, plan);
         record_planner_result(&self.store, context.conversation, plan.is_ok())?;
         self.store
@@ -208,7 +217,7 @@ fn record_planner_result(store: &Store, conversation: &str, valid: bool) -> Resu
 
 impl Core {
     /// A planner ends its turn without a plan only to report what blocks it,
-    /// once submit_plan refused a plan of this turn; otherwise a planner that
+    /// once submit_plan or the plan reviewer refused its plan; otherwise a planner that
     /// skipped the plan would stop the session until the user writes again.
     pub(in crate::lean) fn require_refused_plan(
         &self,
@@ -220,9 +229,19 @@ impl Core {
             rusqlite::params![conversation, turn],
             |row| row.get(0),
         )?;
+        let upto: i64 = self.store.db().query_row(
+            "SELECT upto_message FROM turns WHERE id=?1 AND conversation_id=?2",
+            rusqlite::params![turn, conversation],
+            |row| row.get(0),
+        )?;
+        let answered = self.store.last_orchestration_answered(conversation)?;
+        let reviewed = self
+            .asked_since(conversation, answered, upto as u64)?
+            .iter()
+            .any(|message| message.author == PLAN_REVIEWER);
         require(
-            refused > 0,
-            "submit the plan with submit_plan; finish_turn only reports a blocker after submit_plan refused a plan of this turn and you cannot correct what it names",
+            refused > 0 || reviewed,
+            "submit the plan with submit_plan; finish_turn only reports a blocker after submit_plan or the plan reviewer refused a plan and you cannot correct what it names",
         )
     }
 
@@ -277,7 +296,7 @@ mod tests {
     use crate::config::Config;
 
     fn task() -> serde_json::Value {
-        json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}})
+        json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}})
     }
 
     #[test]
@@ -310,6 +329,92 @@ mod tests {
             .unwrap();
         core.agent_tool(&id, PLANNER, &turn.id, "finish_turn", &blocker)
             .unwrap();
+    }
+
+    #[test]
+    fn reviewer_findings_return_the_draft_to_the_planner_and_blockers_go_to_orchestration() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let id = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let request = core.store.add_message(&id, "user", "Inspect").unwrap();
+        core.store
+            .interview_summary(&id, "Inspect", request.seq)
+            .unwrap();
+        assert!(core.store.finish_interview(&id).unwrap());
+        let plan = core.store.add_plan(&id, &[task()]).unwrap()[0]
+            .plan_id
+            .clone();
+        core.store
+            .set_plan_status(&plan, status::PROPOSED, status::REVISED)
+            .unwrap();
+        let draft = core
+            .store
+            .start_turn(&id, PLANNER, "codex", request.seq, None)
+            .unwrap();
+        core.store
+            .finish_turn(&draft.id, TurnStatus::Done, None)
+            .unwrap();
+        let findings = core
+            .store
+            .add_message(&id, PLAN_REVIEWER, "The correction needs a user decision")
+            .unwrap();
+        let upto = core.unanswered(&id).unwrap().unwrap();
+        assert_eq!(upto, findings.seq);
+        assert!(core.planner_owns_turn(&id, upto).unwrap());
+        let comment = core
+            .store
+            .add_message(&id, "user", &format!("{COMMENT_PREFIX}1] Add detail"))
+            .unwrap();
+        assert_eq!(
+            core.unanswered(&id).unwrap(),
+            Some(findings.seq),
+            "a queued comment must not consume reviewer findings"
+        );
+        assert!(!core.planner_owns_turn(&id, comment.seq).unwrap());
+        let context = core.planner_turn_context(&id, upto).unwrap();
+        let prompt = planner_prompt(&context, true);
+        assert!(prompt.contains("The correction needs a user decision"));
+        assert!(prompt.contains("task contracts"));
+        assert!(context.replaced.as_ref().unwrap().contains("t1"));
+        let turn = core
+            .store
+            .start_turn(&id, PLANNER, "codex", upto, None)
+            .unwrap();
+        core.agent_tool(
+            &id,
+            PLANNER,
+            &turn.id,
+            "finish_turn",
+            &json!({"text": "A user decision is needed"}),
+        )
+        .unwrap();
+        core.store
+            .finish_turn(&turn.id, TurnStatus::Done, None)
+            .unwrap();
+        let answer = "A user decision is needed";
+        core.handle_planner_answer(&context, answer, &AtomicBool::new(false))
+            .unwrap();
+        let comment_turn = core
+            .store
+            .start_turn(&id, COMMENT_ORCHESTRATOR, "codex", comment.seq, None)
+            .unwrap();
+        core.store
+            .finish_turn(&comment_turn.id, TurnStatus::Done, None)
+            .unwrap();
+        let next = core.unanswered(&id).unwrap().expect("blocker is queued");
+        assert!(!core.planner_owns_turn(&id, next).unwrap());
+        assert_eq!(
+            core.store
+                .messages_by(&id, PLANNER_BLOCKER, 0)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

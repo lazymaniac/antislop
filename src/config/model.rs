@@ -37,7 +37,7 @@ pub enum WorkKind {
     Refactoring, // Improves code structure while preserving existing behavior.
     StaticAnalysis, // Runs configured linters and analyzers and investigates their findings.
     TestDesign, // Defines test scenarios covering requirements, likely failures, and interacting inputs.
-    Testing,    // Implements and runs tests that verify behavior through meaningful assertions.
+    Testing,    // Implements and runs tests that review behavior through meaningful assertions.
     Security,   // Assesses relevant threats and investigates security vulnerabilities and fixes.
     Performance, // Measures performance against a baseline and evaluates optimizations.
     Integration, // Checks that combined changes build, pass checks, and work across module boundaries.
@@ -65,7 +65,7 @@ impl WorkKind {
 #[serde(rename_all = "snake_case")]
 pub enum RoleKind {
     Executor,
-    Verifier,
+    Reviewer,
     Orchestrator,
     /// Drafts the first plan from the agreed requirements.
     Planner,
@@ -148,7 +148,7 @@ pub struct Profile {
 #[serde(deny_unknown_fields)]
 pub struct RoleRouting {
     pub executor: String,
-    pub verifier: String,
+    pub reviewer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

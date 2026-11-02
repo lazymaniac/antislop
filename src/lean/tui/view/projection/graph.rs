@@ -43,8 +43,6 @@ fn refresh_parallel_tasks(view: &mut View) {
         .map(|row| crate::lean::tasks::PeerNode {
             id: &row.id,
             depends_on: &row.depends_on,
-            writes: row.writes,
-            scope: &row.scope,
         })
         .collect::<Vec<_>>();
     let peers = crate::lean::tasks::peers_of(&nodes);

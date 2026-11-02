@@ -34,7 +34,7 @@ pub fn fixture_conversation(
 
 /// Keep file-writing fixtures from executing their writer branch during
 /// the newly inserted read-only options turns. Dedicated options integration
-/// tests supply their own comparison and verifier oracle instead.
+/// tests supply their own comparison and reviewer oracle instead.
 #[allow(dead_code)]
 pub fn install_task_options_protocol(path: &std::path::Path) {
     let source = std::fs::read_to_string(path).unwrap();
@@ -42,7 +42,7 @@ pub fn install_task_options_protocol(path: &std::path::Path) {
 if _lr.search(r'^Task: Options for ', prompt, _lr.M):
     if 'You are a worker' in prompt:
         _ledger_emit('Variants: direct fixture change; unnecessary abstraction. Criteria: satisfy the fixture contract with minimal changes. Selected: direct fixture change. Implement only the requested file change.')
-    if 'You verify' in prompt:
+    if 'You review' in prompt:
         ids = _lr.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, _lr.M)
         _ledger_emit(_ledger_block('verdict', {'approved': True, 'findings': [], 'coverage': {i: {'status': 'ok', 'note': 'fixture comparison checked'} for i in ids}}))
 "#;

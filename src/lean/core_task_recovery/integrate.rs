@@ -63,26 +63,17 @@ fn validate_consent(work: &RecoveryWork, changed: &[String]) -> Result<()> {
         return Ok(());
     };
     for file in consent {
-        validate_consent_file(work, file, changed)?;
+        validate_consent_file(file, changed)?;
     }
     Ok(())
 }
 
-fn validate_consent_file(work: &RecoveryWork, file: &str, changed: &[String]) -> Result<()> {
+fn validate_consent_file(file: &str, changed: &[String]) -> Result<()> {
     require(
         changed.contains(&file.to_string()),
         &format!("consent file '{file}' is not in changed files"),
     )?;
-    let in_scope = work.spec.scope.is_empty()
-        || work
-            .spec
-            .scope
-            .iter()
-            .any(|s| s == "." || s.is_empty() || file.starts_with(s) || s == file);
-    require(
-        in_scope,
-        &format!("consent file '{file}' is outside task scope"),
-    )
+    Ok(())
 }
 
 fn integrate_changes(

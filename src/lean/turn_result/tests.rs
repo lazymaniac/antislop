@@ -12,7 +12,7 @@ mod tests {
     }
 
     #[test]
-    fn a_verifier_is_shown_the_recorded_selection() {
+    fn a_reviewer_is_shown_the_recorded_selection() {
         let selection = Selection {
             alternatives: vec![],
             selected: "A".into(),

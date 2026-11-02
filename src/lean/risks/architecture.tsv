@@ -18,4 +18,4 @@ R248	architecture	A component's public interface lets callers bypass its invaria
 R249	architecture	Stable domain rules depend on volatile implementation details.	Check that dependencies point from providers, transport, and storage towards domain rules, not the reverse.
 R250	architecture	Module boundaries split a cohesive responsibility across components.	Take a representative rule change and count the modules that must change together.
 R251	architecture	A failure in one component disables unrelated capabilities.	Trace what becomes unavailable when each component fails and compare it with what must keep working.
-R252	architecture	Domain rules cannot be verified without the full runtime or live external services.	Check that component contracts can be verified with controlled dependencies, and that any required live integration is justified.
+R252	architecture	Domain rules cannot be reviewed without the full runtime or live external services.	Check that component contracts can be reviewed with controlled dependencies, and that any required live integration is justified.

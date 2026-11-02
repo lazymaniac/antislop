@@ -82,7 +82,10 @@ impl LedgerView {
         self.scroll = 0;
         self.detail = None;
         self.source = None;
-        self.notice = Some("Changes saved. Approved analyst proposals resume verification and planning automatically.".into());
+        self.notice = Some(
+            "Changes saved. Approved analyst proposals resume review and planning automatically."
+                .into(),
+        );
         self.preview = None;
         self.update_saved_draft(&value);
         self.proposed_change = None;

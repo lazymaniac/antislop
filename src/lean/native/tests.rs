@@ -141,7 +141,7 @@ fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
     };
     let session = core
         .native
-        .prepare_scoped(&core, "g", "verifier", &spec, "")
+        .prepare_scoped(&core, "g", "reviewer", &spec, "")
         .unwrap();
     let settings = session._settings.as_ref().unwrap().path();
     assert!(settings.exists());

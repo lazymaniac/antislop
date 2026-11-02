@@ -17,8 +17,20 @@ impl Core {
         turn: &str,
         result: TurnResult,
     ) -> Result<Value> {
+        self.record_task_result_with_evidence(conversation, role, turn, result, &[])
+    }
+
+    pub(super) fn record_task_result_with_evidence(
+        &self,
+        conversation: &str,
+        role: &str,
+        turn: &str,
+        result: TurnResult,
+        evidence: &[store::EvidenceReference],
+    ) -> Result<Value> {
         self.validate_agent_result(conversation, role, turn, &result)?;
-        self.store.save_turn_result(turn, &result)?;
+        self.store
+            .save_turn_result_with_evidence(turn, &result, evidence)?;
         // A turn that ends without waiting leaves no one to take an answer.
         if !matches!(result, TurnResult::NeedsInput { .. }) {
             self.store.invalidate_open_questions(turn)?;
@@ -117,14 +129,14 @@ impl Core {
         turn: &str,
         result: &TurnResult,
     ) -> Result<()> {
-        if let Some((id, verifier)) = task_role(role) {
+        if let Some((id, reviewer)) = task_role(role) {
             let task = self
                 .store
                 .task_by_id(id)?
                 .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
             self.store.assert_task_inputs(&task)?;
             let spec: TaskContract = serde_json::from_value(task.spec)?;
-            result.validate_task(&spec, verifier)?;
+            result.validate_task(&spec, reviewer)?;
         }
         if let TurnResult::NeedsInput { request, .. } = result {
             let question = self

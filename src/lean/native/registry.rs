@@ -46,7 +46,7 @@ impl Registry {
             spec.resume.is_some(),
             "the provider has not reported this session's identifier yet",
         )?;
-        verify_execution(core, &turn_id, role, round, &signature)?;
+        review_execution(core, &turn_id, role, round, &signature)?;
         let scope = turn_scope(core, &turn_id)?
             .map(|(task, round)| {
                 format!(
@@ -281,7 +281,7 @@ fn restored_agent_spec(
     }
 }
 
-fn verify_execution(
+fn review_execution(
     core: &Core,
     turn: &str,
     role: &str,

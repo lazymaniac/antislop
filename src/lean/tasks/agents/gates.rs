@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) struct GatePlan {
     prerequisites: Vec<String>,
-    scope: Vec<String>,
     prior_gates: Vec<String>,
     refactoring: Option<String>,
     ids: BTreeSet<String>,
@@ -28,7 +27,6 @@ impl GatePlan {
             } else {
                 writer_ids(tasks)
             },
-            scope: writer_scope(&upstream),
             prior_gates: Vec::new(),
             refactoring: None,
             ids: tasks.iter().map(|task| task.id.clone()).collect(),
@@ -48,7 +46,6 @@ impl GatePlan {
             agent,
             id,
             dependencies,
-            &self.scope,
             &self.requirement_ids,
             &self.criterion_ids,
             description,
@@ -100,20 +97,6 @@ fn writer_ids(tasks: &[TaskContract]) -> Vec<String> {
         .collect()
 }
 
-fn writer_scope(tasks: &[TaskContract]) -> Vec<String> {
-    let mut scope = Vec::new();
-    for path in tasks
-        .iter()
-        .filter(|task| task.changes_code())
-        .flat_map(|task| &task.scope)
-    {
-        if !scope.contains(path) {
-            scope.push(path.clone());
-        }
-    }
-    scope
-}
-
 fn union_ids(
     tasks: &[TaskContract],
     select: impl Fn(&TaskContract) -> &Vec<String>,
@@ -128,15 +111,15 @@ fn union_ids(
 
 struct GateDescription {
     summary: &'static str,
-    verifier_summary: &'static str,
+    reviewer_summary: &'static str,
     audit: bool,
 }
 
 fn gate_description(agent: &PredefinedAgent) -> GateDescription {
-    let (summary, verifier_summary) = gate_summaries(agent);
+    let (summary, reviewer_summary) = gate_summaries(agent);
     GateDescription {
         summary,
-        verifier_summary,
+        reviewer_summary,
         audit: is_audit(agent.kind),
     }
 }
@@ -145,27 +128,27 @@ fn gate_summaries(agent: &PredefinedAgent) -> (&'static str, &'static str) {
     match agent.kind {
         WorkKind::StaticAnalysis => (
             "Check formatting, compilation and lint warnings.",
-            "Verify that all static checks passed without warnings.",
+            "Review that all static checks passed without warnings.",
         ),
         WorkKind::Testing => (
             "Run regression tests and exercise relevant edge cases.",
-            "Verify test results and coverage of the changed behavior.",
+            "Review test results and coverage of the changed behavior.",
         ),
         WorkKind::Integration => (
             "Check the combined change against every requirement.",
-            "Verify integration results and delivery of all requirements.",
+            "Review integration results and delivery of all requirements.",
         ),
         WorkKind::Refactoring => (
             "Simplify the touched code without changing its behavior.",
-            "Verify behavior is preserved and the structure really improved.",
+            "Review behavior is preserved and the structure really improved.",
         ),
         WorkKind::Security => (
             "Audit the changed code paths for security problems.",
-            "Verify the audit examined the real code paths and backs each finding.",
+            "Review the audit examined the real code paths and backs each finding.",
         ),
         WorkKind::Performance => (
             "Audit the changed code paths for performance problems.",
-            "Verify the audit examined the real code paths and backs each finding.",
+            "Review the audit examined the real code paths and backs each finding.",
         ),
         _ => (agent.title, agent.focus),
     }
@@ -179,7 +162,6 @@ fn gate_task(
     agent: &PredefinedAgent,
     id: String,
     depends_on: Vec<String>,
-    scope: &[String],
     requirement_ids: &[String],
     criterion_ids: &[String],
     description: GateDescription,
@@ -197,13 +179,12 @@ fn gate_task(
         summary: Some(description.summary.to_owned()),
         goal: gate_goal(agent.focus, description.audit),
         section: Some("Quality Gates".to_owned()),
-        scope: scope.to_vec(),
         writes: !description.audit,
         depends_on,
         kind: agent.kind,
         covers: Vec::new(),
-        verifier: VerifierSpec {
-            summary: Some(description.verifier_summary.to_owned()),
+        reviewer: ReviewerSpec {
+            summary: Some(description.reviewer_summary.to_owned()),
         },
     }
 }

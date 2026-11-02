@@ -103,7 +103,7 @@ fn extraction_entry(
         depends_on: entry.depends_on,
         mandatory: entry.mandatory,
         implementation_owners: Vec::new(),
-        verification_owners: Vec::new(),
+        review_owners: Vec::new(),
         criteria: entry.criteria,
         task_ids: entry.task_ids,
         position,

@@ -1,5 +1,5 @@
 use super::super::super::*;
-use super::super::verifier_setup;
+use super::super::reviewer_setup;
 
 pub(super) struct ReviewRound<'a> {
     pub core: &'a Arc<Core>,
@@ -10,7 +10,7 @@ pub(super) struct ReviewRound<'a> {
     pub workdir: &'a Path,
     pub add_dirs: &'a [PathBuf],
     pub upstream: &'a str,
-    pub verifier: &'a str,
+    pub reviewer: &'a str,
     pub round: u32,
     pub findings: &'a [serde_json::Value],
     pub report: &'a str,
@@ -47,7 +47,7 @@ pub(super) fn run(mut input: ReviewRound<'_>) -> Result<Option<Verdict>> {
     let Some(answer) = answer else {
         input
             .core
-            .stop_task(input.conversation, input.task, input.verifier, input.cancel)?;
+            .stop_task(input.conversation, input.task, input.reviewer, input.cancel)?;
         return Ok(None);
     };
     parse_verdict(
@@ -62,15 +62,15 @@ pub(super) fn run(mut input: ReviewRound<'_>) -> Result<Option<Verdict>> {
 fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
     input
         .core
-        .set_status(input.conversation, input.task, status::VERIFYING)?;
-    let setup = verifier_setup::build(
+        .set_status(input.conversation, input.task, status::REVIEWING)?;
+    let setup = reviewer_setup::build(
         input.conversation,
         input.task,
-        input.verifier.to_owned(),
+        input.reviewer.to_owned(),
         input
             .core
             .config_snapshot()
-            .resolve(input.spec.kind, RoleKind::Verifier),
+            .resolve(input.spec.kind, RoleKind::Reviewer),
         input.workdir,
         input.add_dirs.to_vec(),
     );
@@ -94,7 +94,7 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
 
 fn run_review_turn(input: ReviewTurn<'_>) -> Result<Option<String>> {
     input.core.turn(input.setup, input.cancel, |first, _| {
-        let prompt = tasks::verifier_turn_prompt(
+        let prompt = tasks::reviewer_turn_prompt(
             &input.reviewdir.to_string_lossy(),
             input.spec,
             input.report,
@@ -125,7 +125,7 @@ fn parse_verdict(
             core.wait_for_question(conversation, task, &request, true)?;
             Ok(None)
         }
-        _ => Err(Error::Invalid("verifier did not submit a review".into())),
+        _ => Err(Error::Invalid("reviewer did not submit a review".into())),
     }
 }
 

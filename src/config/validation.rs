@@ -5,8 +5,8 @@ use crate::{Error, Result, require};
 
 pub(super) fn validate(config: &Config) -> Result<()> {
     require(
-        config.schema_version == 2,
-        "schema_version is unsupported; set schema_version = 2",
+        config.schema_version == 3,
+        "schema_version is unsupported; set schema_version = 3",
     )?;
     require(
         config.policy.max_parallel > 0,
@@ -142,7 +142,7 @@ fn validate_routing(config: &Config) -> Result<()> {
     require(
         config.routing.contains_key(&WorkKind::Options),
         "routing.options is required even when policy.required_gates = false; \
-             add an options route with executor and verifier profiles",
+             add an options route with executor and reviewer profiles",
     )?;
     require(
         config.routing.contains_key(&WorkKind::Planning),
@@ -154,7 +154,7 @@ fn validate_routing(config: &Config) -> Result<()> {
 fn validate_routes(config: &Config) -> Result<()> {
     for (kind, route) in &config.routing {
         validate_orchestration_route(config, *kind, &route.executor)?;
-        validate_route_profiles(config, *kind, &route.executor, &route.verifier)?;
+        validate_route_profiles(config, *kind, &route.executor, &route.reviewer)?;
     }
     Ok(())
 }
@@ -173,11 +173,11 @@ fn validate_route_profiles(
     config: &Config,
     kind: WorkKind,
     executor: &str,
-    verifier: &str,
+    reviewer: &str,
 ) -> Result<()> {
     let kind = crate::lean::tasks::work_kind_name(kind);
     require_profile(config, &format!("routing.{kind}.executor"), executor)?;
-    require_profile(config, &format!("routing.{kind}.verifier"), verifier)
+    require_profile(config, &format!("routing.{kind}.reviewer"), reviewer)
 }
 
 fn require_gate_routes(config: &Config) -> Result<()> {

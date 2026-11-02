@@ -51,8 +51,8 @@ impl Theme {
         let g = self.glyphs();
         match key.split_once(':').map_or(key, |(role, _)| role) {
             "worker" => g.worker,
-            "verifier" => g.verifier,
-            "plan_verifier" | "plan-verifier" => g.plan_verifier,
+            "reviewer" => g.reviewer,
+            "plan_reviewer" | "plan-reviewer" => g.plan_reviewer,
             "auditor" => g.auditor,
             _ => g.orchestrator,
         }
@@ -62,9 +62,9 @@ impl Theme {
     pub fn role_accent(&self, key: &str, kind: &str) -> Style {
         let role = key.split_once(':').map_or(key, |(role, _)| role);
         let color = match role {
-            "plan_verifier" | "plan-verifier" => ayu::PURPLE,
+            "plan_reviewer" | "plan-reviewer" => ayu::PURPLE,
             "auditor" => ayu::CYAN,
-            "worker" | "verifier" => {
+            "worker" | "reviewer" => {
                 let base = match kind {
                     "analysis" => ayu::BLUE,
                     "implementation" => ayu::GREEN,
@@ -73,13 +73,13 @@ impl Theme {
                     "integration" => ayu::PINK,
                     _ => ayu::CYAN,
                 };
-                // A verifier shares its worker's hue, dimmed below.
+                // A reviewer shares its worker's hue, dimmed below.
                 base
             }
             _ => ayu::PURPLE,
         };
         let style = self.pick(fg(color), Style::default());
-        if role == "verifier" {
+        if role == "reviewer" {
             style.add_modifier(Modifier::DIM)
         } else {
             style
@@ -211,7 +211,7 @@ impl Theme {
 
     pub fn edge(&self, kind: &str) -> Style {
         let color = match kind {
-            "verifies" | "verified by" => ayu::GREEN,
+            "reviews" | "reviewed by" => ayu::GREEN,
             "depends_on" | "depends on" => ayu::YELLOW,
             "communicates_with" | "communicates with" => ayu::PURPLE,
             _ => ayu::DIM,

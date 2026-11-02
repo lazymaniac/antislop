@@ -11,10 +11,10 @@ fn parse_mail_address(address: &str) -> (&str, &str) {
         (id, CODE_REVIEW)
     } else if let Some(id) = address.strip_suffix("/review") {
         (id, CODE_REVIEW)
-    } else if let Some(id) = address.strip_suffix("/verifier") {
-        (id, "verifier")
-    } else if let Some(id) = address.strip_prefix("verifier:") {
-        (id, "verifier")
+    } else if let Some(id) = address.strip_suffix("/reviewer") {
+        (id, "reviewer")
+    } else if let Some(id) = address.strip_prefix("reviewer:") {
+        (id, "reviewer")
     } else {
         (address.strip_prefix("worker:").unwrap_or(address), "worker")
     }

@@ -260,7 +260,7 @@ fn a_restart_releases_the_views_and_branches_of_settled_tasks_only() {
         .unwrap()
         .id;
     let task =
-        |id: &str| json!({"id":id,"title":id,"goal":"g","kind":"context","verifier":{"focus":"f"}});
+        |id: &str| json!({"id":id,"title":id,"goal":"g","kind":"context","reviewer":{"focus":"f"}});
     let mut tasks = store
         .add_plan(&conversation, &[task("old"), task("open")])
         .unwrap();

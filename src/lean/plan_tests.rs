@@ -7,10 +7,10 @@ fn test_tempdir() -> tempfile::TempDir {
 }
 
 #[test]
-fn task_role_recognizes_only_explicit_worker_and_verifier_addresses() {
+fn task_role_recognizes_only_explicit_worker_and_reviewer_addresses() {
     assert_eq!(task_role("worker:task-1"), Some(("task-1", false)));
-    assert_eq!(task_role("verifier:task-1"), Some(("task-1", true)));
-    for key in ["task-1", "orchestrator", "reviewer:task-1"] {
+    assert_eq!(task_role("reviewer:task-1"), Some(("task-1", true)));
+    for key in ["task-1", "orchestrator", "review:task-1"] {
         assert_eq!(task_role(key), None, "unexpected task role for {key:?}");
     }
 }
@@ -20,7 +20,7 @@ fn finalization_leaves_out_options_when_local_options_are_off() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
         "kind": "implementation", "writes": true, "scope": ["src/"],
-        "verifier": {"focus": "Check change"}
+        "reviewer": {"focus": "Check change"}
     }))
     .unwrap();
     for required_gates in [false, true] {
@@ -48,7 +48,7 @@ fn finalization_adds_options_with_and_without_required_gates() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
         "kind": "implementation", "writes": true, "scope": ["src/"],
-        "verifier": {"focus": "Check change"}
+        "reviewer": {"focus": "Check change"}
     }))
     .unwrap();
     for required_gates in [false, true] {
@@ -99,7 +99,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     .map(|(id, deps)| {
         json!({
             "id": id, "title": id, "goal": "test", "kind": "implementation",
-            "writes": true, "depends_on": deps, "verifier": {"focus": "inspect diff"}
+            "writes": true, "depends_on": deps, "reviewer": {"focus": "inspect diff"}
         })
     })
     .collect();
@@ -227,7 +227,7 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
         .map(|(id, deps)| {
             json!({
                 "id": id, "title": id, "goal": "test", "kind": "implementation",
-                "writes": true, "depends_on": deps, "verifier": {"focus": "inspect diff"}
+                "writes": true, "depends_on": deps, "reviewer": {"focus": "inspect diff"}
             })
         })
         .collect();
@@ -404,7 +404,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
         {"id":"writer", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
         {"id":"tests-a", "title":"Test A", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
         {"id":"tests-b", "title":"Test B", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
-        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "kind":"integration", "depends_on":["verification-testing"]},
+        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "kind":"integration", "depends_on":["review-testing"]},
         {"id":"final-report", "title":"Report", "goal":"Report checks", "kind":"analysis", "depends_on":["integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
@@ -433,7 +433,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     assert!(
         !final_plan
             .iter()
-            .any(|task| task.id == "integration-gate" || task.id == "verification-testing")
+            .any(|task| task.id == "integration-gate" || task.id == "review-testing")
     );
     assert_eq!(
         final_plan,
@@ -444,7 +444,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
 #[test]
 fn a_gate_alias_cannot_hide_a_self_dependency() {
     let submitted = json!([
-        {"id":"tests", "title":"Test", "goal":"Run tests", "kind":"testing", "depends_on":["verification-testing"]}
+        {"id":"tests", "title":"Test", "goal":"Run tests", "kind":"testing", "depends_on":["review-testing"]}
     ]);
     let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");

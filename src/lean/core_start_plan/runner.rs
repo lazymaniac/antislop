@@ -197,7 +197,7 @@ impl Core {
         }
     }
 
-    /// The first plan is drafted by the planner; every other turn is the orchestrator's.
+    /// The planner drafts and corrects plans; other turns belong to the orchestrator.
     fn next_orchestration_turn(
         self: &Arc<Self>,
         conversation: &str,

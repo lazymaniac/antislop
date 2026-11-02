@@ -1,4 +1,4 @@
-//! The task dashboard of a worker or verifier: the Overview's second face
+//! The task dashboard of a worker or reviewer: the Overview's second face
 //! (`m`), beside the live terminals. A hero strip says where the task stands
 //! at a glance; below it, cards (Now, Goal, Checks, Findings, …) hold the
 //! detail. Up/Down move between cards, Enter folds or expands one, so a long

@@ -11,7 +11,7 @@ impl Core {
     pub(in crate::lean::ledger::runtime) fn requirements_turn(
         self: &Arc<Self>,
         scope: RequirementsTurnScope<'_>,
-        verifier: bool,
+        reviewer: bool,
         prompt: String,
         cancel: &AtomicBool,
     ) -> Result<(String, String)> {
@@ -28,9 +28,9 @@ impl Core {
                 "audit plan does not belong to this conversation and run",
             )?;
         }
-        self.publish_requirements_progress(conversation, phase, verifier)?;
-        let role = requirements_role(phase, verifier);
-        let mut setup = self.requirements_turn_setup(conversation, &role, phase, verifier)?;
+        self.publish_requirements_progress(conversation, phase, reviewer)?;
+        let role = requirements_role(phase, reviewer);
+        let mut setup = self.requirements_turn_setup(conversation, &role, phase, reviewer)?;
         setup.plan_id = plan_id.map(str::to_owned);
         let (source_ids, revision) = self.requirements_turn_metadata(conversation, run_id)?;
         let context = self.ledger_context(conversation, run_id)?;
@@ -61,9 +61,9 @@ impl Core {
         &self,
         conversation: &str,
         phase: &str,
-        verifier: bool,
+        reviewer: bool,
     ) -> Result<()> {
-        let text = match (phase, verifier) {
+        let text = match (phase, reviewer) {
             ("extraction", false) => {
                 "Preparing requirements from the interview and source documents."
             }
@@ -71,7 +71,7 @@ impl Core {
             ("options", false) => "Comparing implementation alternatives.",
             ("options", true) => "Checking the solution comparison independently.",
             (_, false) => "Auditing the integrated implementation against requirements.",
-            (_, true) => "Verifying the implementation audit independently.",
+            (_, true) => "Reviewing the implementation audit independently.",
         };
         self.store.append_event(
             conversation,
@@ -88,10 +88,10 @@ impl Core {
         conversation: &'a str,
         role: &str,
         phase: &str,
-        verifier: bool,
+        reviewer: bool,
     ) -> Result<TurnSetup<'a>> {
-        let role_kind = if verifier {
-            RoleKind::Verifier
+        let role_kind = if reviewer {
+            RoleKind::Reviewer
         } else {
             RoleKind::Executor
         };
@@ -149,9 +149,9 @@ impl Core {
     }
 }
 
-fn requirements_role(phase: &str, verifier: bool) -> String {
+fn requirements_role(phase: &str, reviewer: bool) -> String {
     format!(
         "requirements-{phase}-{}",
-        if verifier { "verifier" } else { "analyst" }
+        if reviewer { "reviewer" } else { "analyst" }
     )
 }

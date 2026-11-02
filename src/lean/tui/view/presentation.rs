@@ -51,10 +51,10 @@ fn compound_target_name(rest: &str, label: &str, fallback: &str) -> String {
 pub fn agent_name(key: &str) -> String {
     match key.split_once(':') {
         Some(("worker", id)) => format!("{id} worker"),
-        Some(("verifier", id)) => format!("{id} verifier"),
+        Some(("reviewer", id)) => format!("{id} reviewer"),
         _ => match key {
             ORCHESTRATOR => "orchestrator".into(),
-            PLAN_VERIFIER => "plan verifier".into(),
+            PLAN_REVIEWER => "plan reviewer".into(),
             AUDITOR => "auditor".into(),
             "conversation" => "conversation".into(),
             other => other.into(),
@@ -67,7 +67,7 @@ pub fn status_label(status: &str) -> &str {
         "proposed" => "proposed",
         "queued" => "queued",
         "working" => "working",
-        "verifying" => "verifying",
+        "reviewing" => "reviewing",
         "approved" => "approved",
         "coordinating" => "awaiting orchestrator",
         "needs_user" => "needs decision",

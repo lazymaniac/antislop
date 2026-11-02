@@ -69,6 +69,17 @@ impl Store {
         }).optional()?)
     }
 
+    pub(in crate::lean) fn recover_artifact_input(
+        &self,
+        task: &Task,
+        path: &str,
+        receipt: &ArtifactReceipt,
+    ) -> Result<Option<ArtifactReceipt>> {
+        self.db().execute("UPDATE task_artifact_inputs SET source_task=?4,source_generation=?5,source_commit=?6 WHERE task_id=?1 AND generation=?2 AND path=?3 AND source_task IS NULL",params![task.id,task.input_generation,path,receipt.task,receipt.generation,receipt.commit])?;
+        self.artifact_input(task, path)?
+            .ok_or_else(|| Error::Invalid("artifact input disappeared".into()))
+    }
+
     pub(in crate::lean) fn freeze_artifact_input(
         &self,
         task: &Task,

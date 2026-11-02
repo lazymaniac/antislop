@@ -73,7 +73,7 @@ mod tests {
             "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
                 "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
                 "parent": null, "task_ids": [], "implementation_owners": [],
-                "verification_owners": [],
+                "review_owners": [],
                 "source": {"source_id": "s1", "start": 0, "end": 7},
                 "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
                     "integration": false}]}
@@ -86,7 +86,7 @@ mod tests {
             }))
             .unwrap()
         };
-        // The plan verifier sent the first plan back; its task never ran.
+        // The plan reviewer sent the first plan back; its task never ran.
         let tasks = [task("old", "revised", 0), task("new", "approved", 1)];
         let item = AuditEvidence {
             criterion_id: "R1.1".into(),
@@ -106,7 +106,7 @@ mod tests {
             "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
                 "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
                 "parent": null, "task_ids": [], "implementation_owners": [],
-                "verification_owners": [],
+                "review_owners": [],
                 "source": {"source_id": "s1", "start": 0, "end": 7},
                 "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
                     "integration": false}]}

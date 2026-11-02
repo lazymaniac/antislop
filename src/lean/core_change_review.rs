@@ -3,7 +3,7 @@ use super::*;
 
 impl Core {
     /// Reviews a writer's change on the user's request, with the task's
-    /// verifier profile in a session of its own. The findings go to the
+    /// reviewer profile in a session of its own. The findings go to the
     /// orchestrator; the review never changes the task's status.
     pub fn review_change(self: &Arc<Self>, conversation: &str, plan: &str, id: &str) -> Result<()> {
         let work = self.prepare_code_review(conversation, plan, id)?;
@@ -220,7 +220,7 @@ fn review_turn_setup<'a>(core: &Core, work: &'a CodeReview) -> TurnSetup<'a> {
         role: format!("{CODE_REVIEW}:{}", work.task_id),
         profile: core
             .config_snapshot()
-            .resolve(work.spec.kind, RoleKind::Verifier),
+            .resolve(work.spec.kind, RoleKind::Reviewer),
         cwd: work.dir.clone(),
         add_dirs: vec![],
         access: agent::Access::ReadOnly,

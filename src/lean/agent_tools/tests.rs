@@ -233,6 +233,7 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         tasks: vec![],
         retire: vec![],
         redo: vec![],
+        replacements: Default::default(),
     };
     assert!(
         core.submit_revision(&foreign, "foreign-key", revision)
@@ -313,3 +314,5 @@ fn answered_questions_return_their_answer_on_wait_and_are_not_asked_again() {
 mod dependencies;
 
 mod blockers;
+
+mod result_evidence;

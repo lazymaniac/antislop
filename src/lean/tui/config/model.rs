@@ -217,7 +217,7 @@ impl ConfigEditor {
     }
 
     pub(super) fn parse_draft(&mut self) -> Option<Value> {
-        let mut root = serde_json::json!({"schema_version": 2, "profiles": {}, "providers": {}, "routing": {}});
+        let mut root = serde_json::json!({"schema_version": 3, "profiles": {}, "providers": {}, "routing": {}});
         let mut invalid = false;
         for field in &mut self.fields {
             field.error = None;

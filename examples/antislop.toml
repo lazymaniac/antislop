@@ -1,10 +1,10 @@
-# Example: Codex orchestrates; Antigravity (agy) works and verifies.
+# Example: Codex orchestrates; Antigravity (agy) works and reviews.
 # Copy to your project as antislop.toml and adjust binaries and models.
 # Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
-# and a verifier profile; every verifier gets its own session.
-schema_version = 2
+# and a reviewer profile; every reviewer gets its own session.
+schema_version = 3
 
-# Every writer uses an isolated Git worktree. Verified changes are integrated
+# Every writer uses an isolated Git worktree. Reviewed changes are integrated
 # through the runtime; direct writes in the primary checkout are unsupported.
 
 # supervised: you accept every plan. autonomous: a checked plan runs on its own.
@@ -37,7 +37,7 @@ binary = "agy"
 # [providers.claude]
 # binary = "claude"
 
-# To use OpenCode via oMLX, configure this provider and set worker/verifier
+# To use OpenCode via oMLX, configure this provider and set worker/reviewer
 # profile providers to "opencode". Pin --model to avoid
 # the launcher's interactive model picker; -- forwards the remaining CLI flags.
 # [providers.opencode]
@@ -50,7 +50,7 @@ binary = "agy"
 # profiles for each work kind; [orchestrator].profile selects the conversation
 # orchestrator. These assignments also determine the role for each turn;
 # profiles do not repeat work kinds or roles.
-# The split below lets you tune analysis, execution and verification separately,
+# The split below lets you tune analysis, execution and review separately,
 # even when several profiles use the same provider, model and effort.
 # Set model in each profile, not in [providers.*]. Uncomment a model line below
 # to select it explicitly. Without model, Antislop sends no model override and
@@ -63,7 +63,7 @@ binary = "agy"
 #   the CLI's current mapping; a full ID such as claude-sonnet-5-5 pins a version.
 # - Antigravity: run agy models and copy a slug from the first column.
 #
-# Model examples verified against provider documentation on 2026-10-21:
+# Model examples reviewed against provider documentation on 2026-10-21:
 # https://learn.chatgpt.com/docs/models
 # https://code.claude.com/docs/en/model-config
 # https://antigravity.google/docs/cli/headless/
@@ -80,7 +80,7 @@ effort = "high"
 # reasoning: worker settings for understanding and deciding: context gathering,
 # requirements, comparing options, planning, architecture, dependencies,
 # security/performance analysis and general analysis. This is an executor role:
-# it produces the task's result, which is then checked by a separate verifier.
+# it produces the task's result, which is then checked by a separate reviewer.
 [profiles.reasoning]
 provider = "agy"
 # model = "gemini-4-argon-high"
@@ -96,12 +96,12 @@ provider = "agy"
 # model = "gemini-3.8-flash-high"
 effort = "high"
 
-# review: verifier settings for checking plans and task results against their
-# goals, risks and required checks. Verifiers run read-only and approve the
-# result or return findings for correction. Each verification uses its own
+# review: reviewer settings for checking plans and task results against their
+# goals, risks and required checks. Reviewers run read-only and approve the
+# result or return findings for correction. Each review uses its own
 # session, separate from the worker, even if both profiles use the same model.
-# This example routes every work kind to review, including plan verification
-# through [routing.orchestration].verifier.
+# This example routes every work kind to review, including plan review
+# through [routing.orchestration].reviewer.
 # To use Claude for review, enable [providers.claude] above and replace this
 # profile's provider/model with either pair:
 # provider = "claude"
@@ -115,137 +115,137 @@ effort = "medium"
 
 # Routing maps a task's kind to profile names from [profiles.*]:
 # - executor selects the worker that produces the result or changes files.
-# - verifier selects the independent reviewer that checks that result and
+# - reviewer selects the independent reviewer that checks that result and
 #   approves it or returns findings for correction. It runs read-only in its
-#   own session, even when executor and verifier name the same profile.
+#   own session, even when executor and reviewer name the same profile.
 # Values are profile names, not CLI names: executor = "reasoning" uses
 # [profiles.reasoning], including its provider, model and effort.
 # In this example, reasoning handles analysis/decisions, execution handles
-# deliverables/checks, and review verifies every kind. Each assignment can be
-# changed independently, e.g. verifier = "execution" reuses that profile's
-# settings for a verifier turn; it does not give the verifier write access.
+# deliverables/checks, and review reviews every kind. Each assignment can be
+# changed independently, e.g. reviewer = "execution" reuses that profile's
+# settings for a reviewer turn; it does not give the reviewer write access.
 #
 # The orchestrator chooses task kinds in its plan. These tables select settings
 # when such tasks run; they do not create tasks or impose the order listed here.
-# Work kind also selects the domain-specific verifier checklist described below.
+# Work kind also selects the domain-specific reviewer checklist described below.
 
 # context: Read relevant code/docs and identify contracts, conventions and unknowns.
-# Reviewer checks: Verify that claims come from files read and that important context is covered.
+# Reviewer checks: Review that claims come from files read and that important context is covered.
 [routing.context]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # requirements: Extract requirements, constraints and acceptance criteria from the request.
-# Reviewer checks: Verify completeness, qualifiers and any conflicting requirements.
+# Reviewer checks: Review completeness, qualifiers and any conflicting requirements.
 [routing.requirements]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # options: Compare feasible solutions and justify the choice against the requirements.
-# Reviewer checks: Verify that alternatives face the same criteria and evidence supports the choice.
+# Reviewer checks: Review that alternatives face the same criteria and evidence supports the choice.
 [routing.options]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # planning: Break work into tasks with clear goals, dependencies and completion criteria.
-# Reviewer checks: Verify requirement coverage, dependency order and explicit handling of unknowns.
+# Reviewer checks: Review requirement coverage, dependency order and explicit handling of unknowns.
 # The planner drafts every plan with this executor profile; tasks of kind
 # planning use it too. The orchestrator profile revises the plan afterwards.
 [routing.planning]
 executor = "orchestrator"
-verifier = "review"
+reviewer = "review"
 
 # architecture: Design module boundaries, interfaces and data flow within the existing project.
-# Reviewer checks: Verify fit with existing conventions and that every added layer is necessary.
+# Reviewer checks: Review fit with existing conventions and that every added layer is necessary.
 [routing.architecture]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # dependencies: Evaluate libraries, versions and licensing obligations for dependencies.
-# Reviewer checks: Verify maintenance, existing alternatives and licenses of the actual dependency graph.
+# Reviewer checks: Review maintenance, existing alternatives and licenses of the actual dependency graph.
 [routing.dependencies]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # implementation: Implement the requested behavior and leave touched code in good shape.
-# Reviewer checks: Verify requirements, edge cases, conventions and meaningful tests of the change.
+# Reviewer checks: Review requirements, edge cases, conventions and meaningful tests of the change.
 [routing.implementation]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # refactoring: Improve existing code structure while preserving its behavior.
-# Reviewer checks: Verify behavior preservation and concrete simplification rather than cosmetic edits.
+# Reviewer checks: Review behavior preservation and concrete simplification rather than cosmetic edits.
 [routing.refactoring]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # static_analysis: Run project linters, compiler checks and other static analyzers.
-# Reviewer checks: Verify actual runs and warnings, including findings hidden by exit code 0 or suppressions.
+# Reviewer checks: Review actual runs and warnings, including findings hidden by exit code 0 or suppressions.
 [routing.static_analysis]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # test_design: Design scenarios and assertions from requirements and likely failures.
-# Reviewer checks: Verify edge cases and combinations of inputs that can interact.
+# Reviewer checks: Review edge cases and combinations of inputs that can interact.
 [routing.test_design]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # testing: Implement/run tests of the real code paths and reproduce regressions.
-# Reviewer checks: Verify observed results and assertions that would fail on the targeted defect.
+# Reviewer checks: Review observed results and assertions that would fail on the targeted defect.
 [routing.testing]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # security: Examine trust boundaries, relevant threats and security weaknesses.
-# Reviewer checks: Verify findings are reproducible and fixes close the issue without new exposure.
+# Reviewer checks: Review findings are reproducible and fixes close the issue without new exposure.
 [routing.security]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # performance: Investigate runtime/memory costs and measure proposed optimizations.
-# Reviewer checks: Verify representative benchmarks, a comparable baseline and unchanged behavior.
+# Reviewer checks: Review representative benchmarks, a comparable baseline and unchanged behavior.
 [routing.performance]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # integration: Check combined changes together across module boundaries and project checks.
-# Reviewer checks: Verify the whole result builds, contracts agree and regressions are covered.
+# Reviewer checks: Review the whole result builds, contracts agree and regressions are covered.
 [routing.integration]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # research: Investigate external facts, tools or approaches using relevant sources.
-# Reviewer checks: Verify sources exist, support each claim and are current enough for the question.
+# Reviewer checks: Review sources exist, support each claim and are current enough for the question.
 [routing.research]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # writing: Produce documentation, explanations or other requested written material.
-# Reviewer checks: Verify factual accuracy, consistency and compliance with the brief.
+# Reviewer checks: Review factual accuracy, consistency and compliance with the brief.
 [routing.writing]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 # analysis: Analyze data, behavior or a problem and present supported conclusions.
-# Reviewer checks: Verify assumptions, independently recompute results and check reproducibility.
+# Reviewer checks: Review assumptions, independently recompute results and check reproducibility.
 [routing.analysis]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 
 # delivery: Prepare the handoff: results, usage instructions, limitations and open risks.
-# Reviewer checks: Verify the report matches completed work and its instructions work.
+# Reviewer checks: Review the report matches completed work and its instructions work.
 [routing.delivery]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 [orchestrator]
 profile = "orchestrator"
 
 # orchestration: Coordinate the conversation/team and propose the overall task plan.
-# Reviewer checks: Verify plan coverage, dependency order and checkable task goals.
-# Special case: executor must match [orchestrator].profile. The verifier
+# Reviewer checks: Review plan coverage, dependency order and checkable task goals.
+# Special case: executor must match [orchestrator].profile. The reviewer
 # profile selects the separate plan reviewer; this is not an ordinary worker task.
 [routing.orchestration]
 executor = "orchestrator"
-verifier = "review"
+reviewer = "review"

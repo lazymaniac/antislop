@@ -17,7 +17,7 @@ prompt = sys.argv[-1]
 if "SESSION PHASE: INTERVIEW." in prompt:
     answer = "```requirements\nGoal, scope and acceptance: inspect the requested fixture.\n```"
 elif "propose" in prompt or "SESSION PHASE: planning" in prompt:
-    answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"verifier\": {\"focus\": \"f\"}}]}\n```"
+    answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"reviewer\": {\"focus\": \"f\"}}]}\n```"
 else:
     answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
@@ -140,7 +140,7 @@ impl DaemonGuard {
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
         let socket_path = antislop::lean::daemon::socket(&self.state);
         let mut stream = UnixStream::connect(&socket_path).unwrap();
-        let mut bytes = serde_json::to_vec(&json!({"protocol":3,"request":json_payload})).unwrap();
+        let mut bytes = serde_json::to_vec(&json!({"protocol":4,"request":json_payload})).unwrap();
         bytes.push(b'\n');
         stream.write_all(&bytes).unwrap();
         let mut reader = BufReader::new(stream);
@@ -337,13 +337,13 @@ fn test_message_addressing_validation_and_mail_queue() {
         }))
         .unwrap();
 
-    // 1b. Valid explicit addressing to plan-verifier
+    // 1b. Valid explicit addressing to plan-reviewer
     daemon
         .call_raw(&json!({
             "op": "send",
             "conversation": conv_id,
-            "text": "addressed to verifier",
-            "to": "plan-verifier"
+            "text": "addressed to reviewer",
+            "to": "plan-reviewer"
         }))
         .unwrap();
 
@@ -372,7 +372,7 @@ fn test_message_addressing_validation_and_mail_queue() {
         "error was: {err_broadcast}"
     );
 
-    // 4. Verify mail_rejected events were produced in event log
+    // 4. Review mail_rejected events were produced in event log
     let hist = daemon
         .call_raw(&json!({
             "op": "history",
@@ -500,7 +500,7 @@ fn test_sessions_structured_data() {
 }
 
 #[test]
-fn test_scope_hash_verification_and_stale_scope_rejection() {
+fn test_scope_hash_review_and_stale_scope_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
@@ -770,7 +770,7 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
         "error must be stale_scope, got: {stale_err}"
     );
 
-    // 4. Verify ZERO side effects: conversation was not cancelled, events remain intact
+    // 4. Review ZERO side effects: conversation was not cancelled, events remain intact
     let convs_after = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
     assert_eq!(convs_after[0]["id"], conv_id);
     assert_eq!(
@@ -1208,7 +1208,7 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
         let mut line = String::new();
         BufReader::new(&stream).read_line(&mut line).unwrap();
         let request: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["protocol"], 3);
+        assert_eq!(request["protocol"], 4);
         assert_eq!(request["request"]["op"], "task_checks");
         writeln!(stream, "{}", json!({"error":"incompatible protocol"})).unwrap();
     });

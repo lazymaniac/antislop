@@ -29,7 +29,7 @@ struct AuditScope {
 
 struct AuditTurns {
     producer: String,
-    verifier: String,
+    reviewer: String,
 }
 
 impl Core {
@@ -44,8 +44,8 @@ impl Core {
             return Ok(vec!["integrity error: plan has no requirements run".into()]);
         };
         let (proposal, producer) = self.produce_audit(conversation, &scope, cancel)?;
-        let (review, verifier) = self.verify_audit(conversation, &scope, &proposal, cancel)?;
-        let turns = AuditTurns { producer, verifier };
+        let (review, reviewer) = self.review_audit(conversation, &scope, &proposal, cancel)?;
+        let turns = AuditTurns { producer, reviewer };
         self.finish_audit(conversation, plan, &scope, &proposal, &review, &turns)
     }
 
@@ -89,7 +89,7 @@ impl Core {
         Ok((proposal, producer))
     }
 
-    fn verify_audit(
+    fn review_audit(
         self: &Arc<Self>,
         conversation: &str,
         scope: &AuditScope,
@@ -97,7 +97,7 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<(Review, String)> {
         let prompt = review_prompt(scope, proposal, &audit_tasks(&self.store, &scope.tasks)?)?;
-        let (answer, verifier) = self.requirements_turn(
+        let (answer, reviewer) = self.requirements_turn(
             RequirementsTurnScope {
                 conversation,
                 run_id: &scope.run_id,
@@ -116,7 +116,7 @@ impl Core {
             note,
             assessments,
         };
-        Ok((review, verifier))
+        Ok((review, reviewer))
     }
 
     fn finish_audit(
@@ -130,14 +130,14 @@ impl Core {
     ) -> Result<Vec<String>> {
         let _integration = self.integrating.lock().expect("integration mutex");
         self.check_audit_scope(conversation, scope)?;
-        self.save_audit_evidence(conversation, scope, proposal, review, &turns.verifier)?;
+        self.save_audit_evidence(conversation, scope, proposal, review, &turns.reviewer)?;
         self.save_audit_review(
             conversation,
             scope,
             proposal,
             &turns.producer,
             review,
-            &turns.verifier,
+            &turns.reviewer,
         )?;
         self.complete_audit(conversation, plan, scope)
     }
@@ -159,15 +159,15 @@ impl Core {
         scope: &AuditScope,
         proposal: &Audit,
         review: &Review,
-        verifier: &str,
+        reviewer: &str,
     ) -> Result<()> {
         for assessment in &review.assessments {
             require(
                 proposal.evidence.contains(&assessment.evidence),
-                "verifier assessed evidence not proposed by this audit",
+                "reviewer assessed evidence not proposed by this audit",
             )?;
             self.store
-                .add_ledger_evidence(conversation, &scope.run_id, verifier, assessment)?;
+                .add_ledger_evidence(conversation, &scope.run_id, reviewer, assessment)?;
         }
         Ok(())
     }
@@ -179,7 +179,7 @@ impl Core {
         proposal: &Audit,
         producer: &str,
         review: &Review,
-        verifier: &str,
+        reviewer: &str,
     ) -> Result<()> {
         self.store.record_ledger_review(
             conversation,
@@ -187,7 +187,7 @@ impl Core {
             scope.revision,
             "audit",
             producer,
-            verifier,
+            reviewer,
             &scope.fingerprint,
             proposal.approved && review.approved,
             &review.note,
@@ -222,7 +222,7 @@ impl Core {
 
 fn audit_prompt(tasks: &[serde_json::Value], sources: &str) -> Result<String> {
     Ok(format!(
-        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Tasks of the plan: {}. Summaries are abridged. Read each relevant approved task's full result with read_dependency_result(dependency=result_id), following its cursor to the end. A text-only analysis is delivered in that result; do not require a repository file for it. Verify code and file artifacts in the integrated tree; a worker report alone does not prove code was integrated or checks passed.\n\nSubmit the audit with submit_audit: findings for each problem (severity, issue, where; critical, high and medium reject), and evidence for each acceptance criterion you checked (criterion_id, the task_id that delivered it, and result: the concrete checks you made and what you observed, never just done). Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree; the runtime records which tree you audited. Full sources:\n{}",
+        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Tasks of the plan: {}. Summaries are abridged. Read each relevant approved task's full result with read_dependency_result(dependency=result_id), following its cursor to the end. A text-only analysis is delivered in that result; do not require a repository file for it. Review code and file artifacts in the integrated tree; a worker report alone does not prove code was integrated or checks passed.\n\nSubmit the audit with submit_audit: findings for each problem (severity, issue, where; critical, high and medium reject), and evidence for each acceptance criterion you checked (criterion_id, the task_id that delivered it, and result: the concrete checks you made and what you observed, never just done). Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree; the runtime records which tree you audited. Full sources:\n{}",
         serde_json::to_string(tasks)?,
         sources,
     ))
@@ -276,7 +276,7 @@ fn review_prompt(
         })
         .collect::<Vec<_>>();
     Ok(format!(
-        "Verify this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce or check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Task results (summaries are abridged): {}. Independently read relevant full results with read_dependency_result(dependency=result_id), following every page. Text-only deliverables live in these results; they need not exist as files. Reports do not replace verification of integrated code or file artifacts. Analyst findings: {}.\nProposed evidence (assess each by its id):\n{}\n\nSubmit your review with submit_audit_review: a note on coverage and gaps, and one assessment per proposed evidence id (approved, and a note of what you observed). Full sources:\n{}",
+        "Review this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce or check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Task results (summaries are abridged): {}. Independently read relevant full results with read_dependency_result(dependency=result_id), following every page. Text-only deliverables live in these results; they need not exist as files. Reports do not replace review of integrated code or file artifacts. Analyst findings: {}.\nProposed evidence (assess each by its id):\n{}\n\nSubmit your review with submit_audit_review: a note on coverage and gaps, and one assessment per proposed evidence id (approved, and a note of what you observed). Full sources:\n{}",
         serde_json::to_string(tasks)?,
         serde_json::to_string(&proposal.findings)?,
         serde_json::to_string(&evidence)?,

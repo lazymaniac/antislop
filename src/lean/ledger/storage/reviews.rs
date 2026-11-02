@@ -8,7 +8,7 @@ struct LedgerReview<'a> {
     revision: i64,
     kind: &'a str,
     producer: &'a str,
-    verifier: &'a str,
+    reviewer: &'a str,
     fingerprint: &'a str,
     approved: bool,
     note: &'a str,
@@ -44,7 +44,7 @@ fn validate_review_session(
         "unknown ledger review kind",
     )?;
     require(!review.note.trim().is_empty(), "review needs an assessment")?;
-    independent(tx, review.producer, review.verifier)?;
+    independent(tx, review.producer, review.reviewer)?;
     require(
         review_turns_bound(tx, review)?,
         "review sessions are not bound to this run revision and phase",
@@ -52,7 +52,7 @@ fn validate_review_session(
 }
 
 fn review_turns_bound(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_turns p JOIN ledger_turns v ON p.run_id=v.run_id WHERE p.turn_id=?1 AND v.turn_id=?2 AND p.run_id=?3 AND v.spec_revision=?4 AND p.phase=?5 AND v.phase=?5)", params![review.producer,review.verifier,review.run_id,review.revision,review.kind], |row| row.get(0))?)
+    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_turns p JOIN ledger_turns v ON p.run_id=v.run_id WHERE p.turn_id=?1 AND v.turn_id=?2 AND p.run_id=?3 AND v.spec_revision=?4 AND p.phase=?5 AND v.phase=?5)", params![review.producer,review.reviewer,review.run_id,review.revision,review.kind], |row| row.get(0))?)
 }
 
 fn validate_review_coverage(
@@ -65,15 +65,15 @@ fn validate_review_coverage(
         "source set changed during review; repeat against all sources",
     )?;
     let (producer_conversation, producer_role) = review_producer(tx, review.producer)?;
-    let verifier_role: String = tx.query_row(
+    let reviewer_role: String = tx.query_row(
         "SELECT role FROM turns WHERE id=?1",
-        [review.verifier],
+        [review.reviewer],
         |row| row.get(0),
     )?;
     require(
         producer_conversation == review.conversation
             && producer_role == format!("requirements-{}-analyst", review.kind)
-            && verifier_role == format!("requirements-{}-verifier", review.kind),
+            && reviewer_role == format!("requirements-{}-reviewer", review.kind),
         "review author is not authorized for this run and phase",
     )
 }
@@ -82,7 +82,7 @@ fn review_sources_uncovered(
     tx: &rusqlite::Transaction<'_>,
     review: &LedgerReview<'_>,
 ) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND (NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?2 AND c.source_id=s.id) OR NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?3 AND c.source_id=s.id)))", params![review.run_id,review.producer,review.verifier], |row| row.get(0))?)
+    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND (NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?2 AND c.source_id=s.id) OR NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?3 AND c.source_id=s.id)))", params![review.run_id,review.producer,review.reviewer], |row| row.get(0))?)
 }
 
 fn review_producer(tx: &rusqlite::Transaction<'_>, producer: &str) -> Result<(String, String)> {
@@ -94,7 +94,7 @@ fn review_producer(tx: &rusqlite::Transaction<'_>, producer: &str) -> Result<(St
 }
 
 fn insert_review(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<()> {
-    tx.execute("INSERT INTO ledger_reviews(run_id,spec_revision,kind,producer_turn,verifier_turn,fingerprint,approved,note,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![review.run_id,review.revision,review.kind,review.producer,review.verifier,review.fingerprint,review.approved,review.note,now_ms()])?;
+    tx.execute("INSERT INTO ledger_reviews(run_id,spec_revision,kind,producer_turn,reviewer_turn,fingerprint,approved,note,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![review.run_id,review.revision,review.kind,review.producer,review.reviewer,review.fingerprint,review.approved,review.note,now_ms()])?;
     Ok(())
 }
 
@@ -166,7 +166,7 @@ impl Store {
         revision: i64,
         kind: &str,
         producer: &str,
-        verifier: &str,
+        reviewer: &str,
         fingerprint: &str,
         approved: bool,
         note: &str,
@@ -179,7 +179,7 @@ impl Store {
             revision,
             kind,
             producer,
-            verifier,
+            reviewer,
             fingerprint,
             approved,
             note,
@@ -188,7 +188,7 @@ impl Store {
         tx.commit().map_err(Into::into)
     }
     /// Records the analyst's extraction as accepted for the current revision.
-    /// The producer turn stands in for the verifier: it is bound to every source.
+    /// The producer turn stands in for the reviewer: it is bound to every source.
     pub fn accept_extraction(
         &self,
         conversation: &str,
@@ -205,7 +205,7 @@ impl Store {
     pub fn extraction_current(&self, conversation: &str, run_id: &str) -> Result<bool> {
         let db = self.db();
         let r = run(&db, conversation, run_id)?;
-        Ok(db.query_row("SELECT approved FROM ledger_reviews WHERE run_id=?1 AND spec_revision=?2 AND kind='extraction' AND NOT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=ledger_reviews.verifier_turn AND c.source_id=s.id)) ORDER BY created_ms DESC,rowid DESC LIMIT 1",params![run_id,r.spec_revision],|r|r.get(0)).optional()?.unwrap_or(false))
+        Ok(db.query_row("SELECT approved FROM ledger_reviews WHERE run_id=?1 AND spec_revision=?2 AND kind='extraction' AND NOT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=ledger_reviews.reviewer_turn AND c.source_id=s.id)) ORDER BY created_ms DESC,rowid DESC LIMIT 1",params![run_id,r.spec_revision],|r|r.get(0)).optional()?.unwrap_or(false))
     }
 }
 
@@ -234,7 +234,7 @@ fn record_extraction_acceptance(
         revision,
         kind: "extraction",
         producer,
-        verifier: producer,
+        reviewer: producer,
         fingerprint: "",
         approved: true,
         note: "Accepted without a separate source-coverage review.",

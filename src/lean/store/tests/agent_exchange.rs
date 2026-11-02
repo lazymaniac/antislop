@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, Store, String, Task, Turn) {
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap()
         .id;
-    let mut task = store.add_plan(&conversation,&[json!({"id":"local","title":"Local change","goal":"Expose an API","kind":"implementation","outputs":["api"],"verifier":{"focus":"Inspect API"}})]).unwrap().remove(0);
+    let mut task = store.add_plan(&conversation,&[json!({"id":"local","title":"Local change","goal":"Expose an API","kind":"implementation","outputs":["api"],"reviewer":{"focus":"Inspect API"}})]).unwrap().remove(0);
     task.round = 1;
     task.status = "working".into();
     store.update_task(&task).unwrap();
@@ -139,7 +139,7 @@ fn a_restart_resumes_a_cli_wait_but_not_a_task_waiting_for_its_answer() {
 #[test]
 fn the_accepted_plan_is_the_latest_one_the_user_accepted() {
     let (_dir, store, conversation, _, _) = fixture();
-    let spec = json!({"id":"next","title":"Next","goal":"Go on","kind":"analysis","verifier":{"focus":"Check"}});
+    let spec = json!({"id":"next","title":"Next","goal":"Go on","kind":"analysis","reviewer":{"focus":"Check"}});
     let first = store
         .add_plan(&conversation, std::slice::from_ref(&spec))
         .unwrap()[0]
@@ -258,7 +258,7 @@ fn checkpoint_and_reply_are_safe_in_either_order() {
         let request = store
             .ask_agent_question(&conversation, &turn.id, "api", "Which API?")
             .unwrap();
-        task.feedback = Some(json!({"waiting_request":request,"resume_role":"verifier"}));
+        task.feedback = Some(json!({"waiting_request":request,"resume_role":"reviewer"}));
         store.update_task(&task).unwrap();
         if answer_first {
             store
@@ -274,7 +274,7 @@ fn checkpoint_and_reply_are_safe_in_either_order() {
         }
         let resumed = store.task_by_id(&task.id).unwrap().unwrap();
         assert_eq!(resumed.status, "queued");
-        assert_eq!(resumed.feedback.unwrap()["resume_role"], "verifier");
+        assert_eq!(resumed.feedback.unwrap()["resume_role"], "reviewer");
     }
 }
 
@@ -326,7 +326,7 @@ fn acknowledged_worker_result_is_reused_after_interruption() {
     assert_eq!(recovered.status, "queued");
     assert_eq!(
         recovered.feedback.as_ref().unwrap()["resume_role"],
-        "verifier"
+        "reviewer"
     );
     assert_eq!(
         store.completed_task_output(&recovered).unwrap()["report"],
@@ -440,7 +440,7 @@ fn a_closing_task_also_receives_the_summaries_of_earlier_checks() {
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap()
         .id;
-    let task = |id: &str, kind: &str, depends: &[&str]| json!({"id":id,"title":id,"goal":"g","kind":kind,"depends_on":depends,"verifier":{"focus":"f"}});
+    let task = |id: &str, kind: &str, depends: &[&str]| json!({"id":id,"title":id,"goal":"g","kind":kind,"depends_on":depends,"reviewer":{"focus":"f"}});
     let tasks = store
         .add_plan(
             &conversation,

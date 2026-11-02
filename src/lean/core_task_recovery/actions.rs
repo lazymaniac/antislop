@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     match &work.req.action {
         RecoveryAction::IntegrateWithConsent => integrate::apply(core, work),
-        RecoveryAction::VerifyManualSnapshot => manual::apply(core, work),
+        RecoveryAction::ReviewManualSnapshot => manual::apply(core, work),
         RecoveryAction::KeepOnBranch => keep_branch(core, work),
         RecoveryAction::RetryWithGuidance => retry(core, work),
         RecoveryAction::RestartAgent => restart(core, work),
@@ -73,7 +73,7 @@ fn unblock_user_retry(core: &Core, work: &RecoveryWork) -> Result<()> {
         core.store.db().execute(
             "DELETE FROM provider_blocks WHERE (provider,profile) IN (
                 SELECT t.provider,r.profile FROM turns t JOIN run_contexts r ON r.turn_id=t.id
-                WHERE t.conversation_id=?1 AND t.role IN ('worker:'||?2,'verifier:'||?2))",
+                WHERE t.conversation_id=?1 AND t.role IN ('worker:'||?2,'reviewer:'||?2))",
             rusqlite::params![work.req.conversation, work.task.id],
         )?;
     }

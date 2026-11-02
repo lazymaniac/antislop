@@ -1026,7 +1026,7 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     let conversation = store.create_conversation("proj").unwrap();
     let specs = [
         json!({"id": "t1", "title": "x", "goal": "g", "writes": true,
-        "kind": "implementation", "verifier": {"focus": "f"}}),
+        "kind": "implementation", "reviewer": {"focus": "f"}}),
     ];
     let mut task = store.add_plan(&conversation.id, &specs).unwrap().remove(0);
 

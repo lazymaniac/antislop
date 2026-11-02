@@ -118,7 +118,7 @@ fn plan_history_status(tasks: &[Task]) -> String {
         "approved".to_string()
     } else if tasks
         .iter()
-        .any(|t| t.status == "working" || t.status == "verifying" || t.status == "queued")
+        .any(|t| t.status == "working" || t.status == "reviewing" || t.status == "queued")
     {
         "active".to_string()
     } else if tasks.iter().all(|t| t.status == "proposed") {

@@ -67,37 +67,37 @@ impl TurnResult {
         }
     }
 
-    pub fn validate_task(&self, spec: &TaskContract, verifier: bool) -> Result<()> {
+    pub fn validate_task(&self, spec: &TaskContract, reviewer: bool) -> Result<()> {
         require(
             serde_json::to_vec(self)?.len() <= 256 * 1024,
             "result exceeds 256 KiB; keep the report compact and reference task artifacts",
         )?;
-        self.validate_task_shape(spec, verifier)
+        self.validate_task_shape(spec, reviewer)
     }
 
-    fn validate_task_shape(&self, spec: &TaskContract, verifier: bool) -> Result<()> {
+    fn validate_task_shape(&self, spec: &TaskContract, reviewer: bool) -> Result<()> {
         match self {
             Self::Completed {
                 summary,
                 report,
                 selection,
-            } if !verifier => validate_completion(summary, report, selection.as_ref(), spec),
+            } if !reviewer => validate_completion(summary, report, selection.as_ref(), spec),
             Self::Blocked {
                 report,
                 resume_condition,
-            } if !verifier && spec.kind == crate::config::WorkKind::Options => {
+            } if !reviewer && spec.kind == crate::config::WorkKind::Options => {
                 require(!report.trim().is_empty(), "report: required")?;
                 require(
                     !resume_condition.trim().is_empty(),
                     "resume_condition: required",
                 )
             }
-            Self::Review { report, verdict } if verifier => validate_review(report, verdict, spec),
+            Self::Review { report, verdict } if reviewer => validate_review(report, verdict, spec),
             Self::NeedsInput {
                 request,
                 checkpoint,
             } => validate_waiting(request, checkpoint),
-            _ => invalid_task_result(verifier),
+            _ => invalid_task_result(reviewer),
         }
     }
 
@@ -224,9 +224,9 @@ fn validate_waiting(request: &str, checkpoint: &str) -> Result<()> {
     )
 }
 
-fn invalid_task_result(verifier: bool) -> Result<()> {
-    let message = if verifier {
-        "a verifier ends its turn with review or wait_for_answer"
+fn invalid_task_result(reviewer: bool) -> Result<()> {
+    let message = if reviewer {
+        "a reviewer ends its turn with review or wait_for_answer"
     } else {
         "a worker ends its turn with complete (select or report_blocker for an options task) or wait_for_answer"
     };

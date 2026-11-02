@@ -66,7 +66,7 @@ pub fn build_identity(executable: &Path) -> Result<String> {
     )))
 }
 
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = 4;
 
 pub(crate) use protocol::RequestEnvelope;
 
@@ -319,9 +319,11 @@ mod live_config_tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
-        // Simulate a crashed writer: its descriptor closes without Drop cleanup.
+        // Release the crashed writer's lock without Drop cleanup. Parallel
+        // tests can fork and briefly inherit the descriptor before exec.
         let temporary = active.temporary.clone();
         let lease = std::mem::replace(&mut active.lease, std::fs::File::open(&target).unwrap());
+        lease.unlock().unwrap();
         drop(lease);
         assert_eq!(cleanup_config_temporaries(&target).unwrap(), 1);
         assert!(!temporary.exists());

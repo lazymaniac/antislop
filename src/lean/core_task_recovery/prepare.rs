@@ -39,7 +39,7 @@ fn validate_request(req: &TaskRecoveryRequest, task: &Task, token: &str) -> Resu
 
 fn allowed_status(action: &RecoveryAction, status: &str) -> bool {
     is_running_action(action)
-        && matches!(status, status::QUEUED | status::WORKING | status::VERIFYING)
+        && matches!(status, status::QUEUED | status::WORKING | status::REVIEWING)
         || matches!(
             status,
             status::COORDINATING

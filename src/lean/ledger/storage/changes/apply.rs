@@ -168,7 +168,7 @@ fn insert_entry_relations(
         ("task", entry.task_ids.clone()),
         ("qualifier", entry.qualifiers.clone()),
         ("implementer", entry.implementation_owners.clone()),
-        ("verifier", entry.verification_owners.clone()),
+        ("reviewer", entry.review_owners.clone()),
     ];
     for (kind, values) in relations {
         for value in values {
@@ -183,6 +183,19 @@ fn insert_entry_relations(
 
 pub(super) fn mark_affected_tasks(tx: &rusqlite::Transaction<'_>, tasks: &[String]) -> Result<()> {
     for task in tasks {
+        let generation: i64 = tx.query_row(
+            "SELECT generation FROM task_inputs WHERE task_id=?1",
+            [task],
+            |r| r.get(0),
+        )?;
+        Store::retain_work_from_ids(
+            tx,
+            task,
+            generation,
+            task,
+            generation + 1,
+            "requirements changed; assess retained work",
+        )?;
         tx.execute(
             "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
             [task],

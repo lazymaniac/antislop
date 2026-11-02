@@ -159,7 +159,7 @@ fn save_task_round(
 
 fn continue_prior_round(transaction: &rusqlite::Transaction<'_>, task: &Task) -> Result<()> {
     transaction.execute(
-        "UPDATE task_rounds SET status='continued' WHERE task_id=?1 AND round=(SELECT round FROM tasks WHERE id=?1) AND round<?2 AND status IN ('working','verifying','queued')",
+        "UPDATE task_rounds SET status='continued' WHERE task_id=?1 AND round=(SELECT round FROM tasks WHERE id=?1) AND round<?2 AND status IN ('working','reviewing','queued')",
         params![task.id, task.round],
     )?;
     Ok(())

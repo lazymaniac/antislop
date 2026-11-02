@@ -51,8 +51,8 @@ pub(in crate::lean) fn checked_plan(
 }
 
 impl Core {
-    /// Stores the plan and has it checked. A plan the verifier sends back
-    /// goes back to the orchestrator while review confirms progress; otherwise it
+    /// Stores the plan and has it checked. A plan the reviewer sends back
+    /// goes back to the planner while review confirms progress; otherwise it
     /// is shown to the user with the verdict, and in autonomous mode a checked
     /// plan starts at once.
     pub(in crate::lean) fn propose(

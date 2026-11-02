@@ -107,7 +107,7 @@ pub(super) fn section_state(ids: &[String], tasks: &[TaskRow]) -> SectionState {
         SectionState::Done
     } else if statuses
         .iter()
-        .any(|s| matches!(*s, "working" | "verifying"))
+        .any(|s| matches!(*s, "working" | "reviewing"))
     {
         SectionState::Working
     } else {

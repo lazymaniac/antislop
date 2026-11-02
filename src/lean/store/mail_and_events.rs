@@ -10,7 +10,7 @@ impl Store {
         let mut statement = db.prepare(
             "SELECT DISTINCT t.conversation_id,t.plan_id FROM tasks t JOIN mail m
              ON m.conversation_id=t.conversation_id
-             AND m.recipient IN ('worker:' || t.id, 'verifier:' || t.id, 'code-review:' || t.id)
+             AND m.recipient IN ('worker:' || t.id, 'reviewer:' || t.id, 'code-review:' || t.id)
              WHERE m.delivered_turn IS NULL",
         )?;
         Ok(statement

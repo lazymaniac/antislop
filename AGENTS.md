@@ -9,16 +9,16 @@ This document specifies the rules, design constraints, and engineering practices
 - **Rust Edition & Channel**: Edition `2024`, Rust `1.98.1` (`rust-toolchain.toml`).
 - **Formatting**: Always format code using standard Rust formatting:
   ```sh
-  cargo fmt --check
+  cargo.sh fmt --check
   ```
 - **Linting & Warnings**: Zero tolerance for compiler or clippy errors:
   ```sh
-  cargo clippy --all-targets -- -D warnings
+  cargo.sh clippy --all-targets -- -D warnings
   ```
 - **Review**: Run `cargo check` and targeted tests before concluding changes:
   ```sh
-  cargo test --test lean_core
-  cargo test --test lean_tui
+  cargo.sh test --test lean_core
+  cargo.sh test --test lean_tui
   ```
 
 ---
@@ -72,8 +72,8 @@ Hologram project map: exact files, signatures, fields, and retained call paths. 
 
 ```
 # hologram ·.rs
-· C/R/I{fields} E{values} · f(args):Ret > calls · -=private · *=helper/fixture · ×0=unused · ~N=lines · p{a,b}s=pas,pbs · +N=more · :T=supers · Self=own type
-scripts/cargo.sh
+· C/R/I{fields} E{values} · f(args):Ret > calls · -=private · *=helper/fixture · ×0=unused · ~N=lines · p{a,b}s=pas,pbs · :T=supers · Self=own type
+cargo.sh
  cargo.sh(C) ×0
 src
  config
@@ -113,7 +113,7 @@ src
    clip(text,limit):String
    clip_tail(text,limit):String
    persisted_error(text):String > redact_error,flatten
-   redact_error(text,secrets):String > collect,redact_word,clip
+   redact_error(text,secrets):String > redact_word,clip
    = OUTPUT=2000
   agent.rs
    codex_sandbox(read_only):&'static str
@@ -206,7 +206,7 @@ src
   core_config_snapshot
    - {live,plan}_status
   core_feedback_helpers
-   event_files(files):Vec<String> > collect
+   event_files(files):Vec<String>
    land(task,outcome,source,detail,commit,on_branch,files) > current_feedback,integration_record
    note(task,text)
    review_json(review):serde_json::Value
@@ -283,7 +283,7 @@ src
    acceptance
     ensure_accepted_plan(core,conversation,plan):Result<()> > db,unaccepted_plan_error
    review
-    affected_tasks(baseline,specs,redo):BTreeSet<String> > changed_tasks,collect,as_str
+    affected_tasks(baseline,specs,redo):BTreeSet<String> > changed_tasks,as_str
     ReviewContext(C{conversation,revision,baseline,specs,cancel,project})
     - ApprovedRevisionWork,RevisionBarrier,contract_changed,reworded_only,previous_specs
     - RevisionBarrier: drop
@@ -581,7 +581,7 @@ src
   feasibility
    check(specs):Vec<Finding> > descendants,read_only_writer,asks_to_execute,forbids_reading,finding,waits_for_descendant
    forbids_reading(spec):Option<String>
-   message(findings):String > collect
+   message(findings):String
    Finding(C{task,rule,severity,detail})
    Severity(E{Block,Advise})
    - requested
@@ -613,12 +613,12 @@ src
    changes
     changed_files(dir,base,result):Result<Vec<String>> > changed_paths
     diff_stat(dir,base,result):Result<String>
-    matching_paths(dir,left,right,paths):Result<Vec<String>> > collect,changed_paths
+    matching_paths(dir,left,right,paths):Result<Vec<String>> > changed_paths
     patch(dir,base,rev):Result<String>
     squash(worktree,base,message):Result<String> > commit_subject
     - parse_changed_paths
    integration/files
-    blobs(dir,rev,files):Result<HashMap<String,String>> > collect
+    blobs(dir,rev,files):Result<HashMap<String,String>>
     unchanged_since(project,rev,files):Result<bool> > blobs,all
     write_files(project,rev,files):Result<()> > blobs
    integration.rs
@@ -636,7 +636,7 @@ src
     integrated_fingerprint(project):Result<String> > snapshot
     snapshot(dir,message):Result<String> > snapshot_with_artifacts
     snapshot_with_artifacts(dir,outputs,message):Result<String> > artifact_files,commit_subject,{absolute,snapshot}_index,write_snapshot
-    uncommitted(dir):Result<Vec<String>> > git,collect
+    uncommitted(dir):Result<Vec<String>> > git
     - staged_paths_clean,commit_only_paths
    untracked
     deliver_untracked(project,base,change):Result<Integration> ~55 > changed_files,all,git,ensure_parents
@@ -644,7 +644,7 @@ src
     require_new_outputs(project,outputs):Result<()>
    worktree
     add_worktree(project,path,branch,base):Result<()> > require_worktree_branch,git
-    branches(project,prefix):Result<Vec<String>> > collect
+    branches(project,prefix):Result<Vec<String>>
     combine(project,scratch,onto,changes):Result<String> > {remove,add}_worktree,apply_changes
     commit_all(worktree,message):Result<String> > commit_subject,git,head
     common_base(dir,left,right):Result<String>
@@ -747,7 +747,7 @@ src
     compliance/audit_conversion
      audit_proposal(findings,submitted,entries,scope,producer):Result<Audit> > bind_audit_evidence,Audit,audit_approves
      bind_assessment(assessment,evidence):Result<Assessment> > evidence_id,Assessment
-     bind_assessments(submitted,evidence):Result<Vec<Assessment>> > collect,bind_assessment
+     bind_assessments(submitted,evidence):Result<Vec<Assessment>> > bind_assessment
      bind_audit_evidence(item,entries,tasks,fingerprint,producer):Result<EvidenceProposal> > resolve_evidence
      decode_audit(answer):Result<(Vec<serde_json::Value>,Vec<AuditEvidence>)> > TurnResult.decode
      decode_audit_review(answer):Result<(String,Vec<AuditAssessment>)> > TurnResult.decode
@@ -767,7 +767,7 @@ src
       audit_approves(findings):bool > as_str
       audited_tasks(tasks):impl DoubleEndedIterator<Item = &crate::lean::store::Task>
       evidence_id(index):String
-      plain_findings(value):Result<Vec<serde_json::Value>> > collect,require
+      plain_findings(value):Result<Vec<serde_json::Value>> > require
       resolve_evidence(item,entries,tasks):Result<EvidenceProposal> ~44 > evidence_{entry,task},as_str,audited_tasks,require,EvidenceProposal
       AuditAssessment(C{evidence,approved,note})
       AuditEvidence(C{{criterion,task}_id,result,artifact})
@@ -780,7 +780,7 @@ src
      carry_unaffected_inputs(tx,change,versions,affected):Result<()> > as_str
      emit_change(tx,change,result,versions):Result<()> > event
      mark_affected_tasks(tx,tasks):Result<()> > retain_work_from_ids
-     persist_entries(tx,change,before,state,revision):Result<Vec<serde_json::Value>> > collect,persist_entry
+     persist_entries(tx,change,before,state,revision):Result<Vec<serde_json::Value>> > persist_entry
      resume_if_approved(tx,change,user):Result<()> > enqueue_requirements_resume
      save_decision(tx,change,result,author,request_hash):Result<()>
      saved_decision(tx,change,request_hash):Result<Option<ChangeResult>> > require
@@ -788,19 +788,19 @@ src
     changes.rs
      - {existing,persist}_proposal
     entries
-     entries(db,run,revision):Result<Vec<LedgerEntry>> > entry_rows,collect,entry_from_row
+     entries(db,run,revision):Result<Vec<LedgerEntry>> > entry_{rows,from_row}
      EntryRow(C{id,version,revision,source_id,start,end,interpretation,mandatory,position,disposition})
      - EntryRelations,entry_{spec,relations},source_text_for_span,entry_{criteria,constraints}
     evidence
      queries
       audit_missing(store,run,revision,fingerprint):Result<bool> > db
-      build_ledger_page(run,entries,offset,requested):LedgerPage > LedgerPage,collect
+      build_ledger_page(run,entries,offset,requested):LedgerPage > LedgerPage
       entry_gaps(entries):Vec<String>
       extraction_gap(store,conversation,run):Result<Vec<String>> > extraction_current
-      filter_ledger_entries(entries,query,linked):Vec<LedgerEntry> > collect,matches_ledger_filter
+      filter_ledger_entries(entries,query,linked):Vec<LedgerEntry> > matches_ledger_filter
       linked_entry_ids(store,query):Result<Option<HashSet<String>>> > db
      status
-      enforce_dependency_statuses(entries) > collect,dependency_dependents,demote_unreviewed_parents
+      enforce_dependency_statuses(entries) > dependency_dependents,demote_unreviewed_parents
       set_ledger_statuses(entries,tasks,evidence,fingerprint):Result<()> > LedgerStatusIndex.build
       - LedgerStatusIndex,LinkedTasks,EvidenceApproval,linked_task_index,current_{approved_tasks,evidence_index},evidence_key,
         {disposition,linked,choose_linked,empty_linked}_status
@@ -821,10 +821,10 @@ src
       validate_change(db,change,state,user):Result<LedgerDiff> > validate_change_scope,entries,existing_specs,apply_entry_changes,make_diff
       - altered_entries,validate_entry_{change,authority}
      graph
-      checked_graph(all):Result<()> > collect,as_str,require,validate_entry
+      checked_graph(all):Result<()> > as_str,require,validate_entry
       - validate_{criteria,relations,composite_requirement,entry_cycle}
      impact
-      impact(db,run,changed,before,all):Result<Vec<String>> > collect,impacted_entries,reach_of,tasks_for_entries,expand_dependent_tasks
+      impact(db,run,changed,before,all):Result<Vec<String>> > impacted_entries,reach_of,tasks_for_entries,expand_dependent_tasks
       same_meaning(old,new):bool
       - Reach,task_is_reached,plan_task_rows
    storage.rs
@@ -890,7 +890,7 @@ src
     allowed_tools(role):Vec<&'static str> > {task,orchestrator}_tools,plain_reviewer
     scoped_tool_list(role,contract):Vec<Value> > scoped_tools,tool_list,as_str
     scoped_tools(role,contract):Vec<&'static str> > allowed_tools
-    tool_list(role):Vec<Value> > collect,allowed_tools,tool_json
+    tool_list(role):Vec<Value> > allowed_tools,tool_json
     - {tool,turn,plan,control}_contract
    transport
     bridge():Result<()> > forward
@@ -936,15 +936,15 @@ src
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > address,require,dispatch_addressed
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     resume_agent_reviews(&Arc<Self>,conversation) > register_agent_review,spawn_agent_review_worker
-    turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
+    turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute,finish.finish
     artifact_inputs(task,spec):Result<Inputs> ~52 > dependency_tasks,completed_task_result,require,artifact_source,{recover,freeze}_artifact_input
-    artifact_commits(task,spec):Result<BTreeMap<String,String>> > collect,artifact_inputs
+    artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
     prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
     validate_artifact_delta(task,spec,worktree):Result<()> > artifact_commits
     deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~45 > artifact_{commits,receipt},validate_change_paths,record_artifact_delivery,ArtifactReceipt
     review_change(&Arc<Self>,conversation,plan,id):Result<()> > prepare_code_review
     review_change_scoped(&Arc<Self>,conversation,plan,id,scope_hash):Result<()> ×0 > diff_scope_hash,require,review_change
-    open_plan_comments(conversation,plan_id):Result<Vec<Comment>> > collect
+    open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
     accept_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > open_plan_comments,start_plan
     reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     reject_plan_scoped(&Arc<Self>,conversation,plan_id,reason,scope_hash):Result<()> ×0 > plan_scope_hash,reject_plan
@@ -971,7 +971,7 @@ src
     conversation_scope_hash(conversation):Result<String> > latest_event_seq,paused,is_idle
     plan_scope_hash(_conversation,plan_id):Result<String> > plan_run
     diff_scope_hash(conversation,plan,id):Result<String> > task_unscoped,change
-    conversations():Result<Vec<ConversationSummary>> > collect,conversation_summary
+    conversations():Result<Vec<ConversationSummary>> > conversation_summary
     sessions(conversation):Result<Vec<store::SessionInfo>>
     history(conversation,after,limit):Result<store::HistoryPage> > history_page
     comment(&Arc<Self>,conversation,target,text):Result<Comment> > comment_scoped
@@ -1030,11 +1030,11 @@ src
     announce_task(conversation,task,reason) > task_scope_hash
     set_status(conversation,task,status):Result<()> > stop
     stop(conversation,task,status,reason):Result<()> > record_stop_reason,update_task,record_stop_progress,queue_worktree_cleanup,announce_task
-    unanswered(conversation):Result<Option<u64>> > last_orchestration_{turn,answered},collect,messages_after
-    asked_since(conversation,answered,upto):Result<Vec<Message>> > collect,messages_after
+    unanswered(conversation):Result<Option<u64>> > last_orchestration_{turn,answered},messages_after
+    asked_since(conversation,answered,upto):Result<Vec<Message>> > messages_after
     planner_owns_turn(conversation,upto):Result<bool> > last_orchestration_answered,asked_since,includes_comment,awaiting_first_plan,includes_replan
     unblock_dependent_tasks(conversation,{plan,approved_task}_id):Result<()> > refresh_answer_waits,tasks_to_unblock,{update,announce}_task
-    check_comments(conversation,plan,spec_id):String > collect
+    check_comments(conversation,plan,spec_id):String
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
     start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > start_plan_with_scope_lock
@@ -1065,8 +1065,8 @@ src
     mail_address_task(conversation,plan,address):Result<Option<(Task,String)>> > parse_mail_address,task_by_id,plan_conversation
     new_handoff(id,round,cwd,task):Result<RoundHandoff> > handoff_seed,base_handoff
     add_handoff_requirements(task,spec,handoff):Result<()> > plan_{conversation,run},ledger_entries
-    add_handoff_comments(task,handoff):Result<()> > plan_conversation,collect,spec_target
-    add_protected_paths(_task,spec,handoff):Result<()> > collect
+    add_handoff_comments(task,handoff):Result<()> > plan_conversation,spec_target
+    add_protected_paths(_task,spec,handoff):Result<()>
     round_interruptions(id,round):Result<Vec<RoundInterruption>> > db,RoundInterruption
     recover_previous_rounds(id,round,cwd,handoff):Result<()> > handoff_rounds,merge_round_{result,report}
     matching_round_session(conversation,role,provider,task,round,profile,cwd,add_dirs,access):Result<Option<String>> > scoped_turn,session_for_context
@@ -1100,7 +1100,7 @@ src
    registry/history_view
     restore_view_directory(core,context):Result<()> > turn_scope,task_by_id,plan_conversation,task_path_component,worktree_directory,queue_worktree_cleanup
    registry.rs
-    Registry: reap_idle():Result<()>; restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,pin_worktree,prepare_scoped; retire_directory(path):Result<bool> > try_lock; shutdown():Result<()> > store; prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > session_signature; get(conversation,role):Result<Option<Arc<Session>>>; claimed():Vec<String> > collect
+    Registry: reap_idle():Result<()>; restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,pin_worktree,prepare_scoped; retire_directory(path):Result<bool> > try_lock; shutdown():Result<()> > store; prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > session_signature; get(conversation,role):Result<Option<Arc<Session>>>; claimed():Vec<String>
     - recorded_round,validate_profile,restored_agent_spec
    session
     Session: start(core,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop; check_active(idle):Result<()> > check_alive; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_protocol_observer(observer):Result<()>
@@ -1141,7 +1141,7 @@ src
   progress
    blocks(finding):bool
    fixed_earlier(earlier,verdict):bool > blocks,as_str
-   open_obligations(verdict):BTreeSet<String> > collect,is_open,blocks,as_str
+   open_obligations(verdict):BTreeSet<String> > is_open,blocks,as_str
    Progress(C{previous})
     record(open):bool
     record_round(open,fixed_earlier):bool > record
@@ -1151,7 +1151,7 @@ src
    Projects(C{file})
     from_env():Result<Self>
     at(dir):Self
-    list():Vec<PathBuf> > collect,read
+    list():Vec<PathBuf> > read
     remember(project):Result<()> > read,truncate
    - Stored
   risks
@@ -1229,7 +1229,7 @@ src
      carry_approved(tx,conversation,plan_id):Result<Option<String>> > source_plan,rows,carry_{plan_tasks,notice}
      - dependencies_are_current,source_changes,same_contract,carry
     recovery
-     insert_proposed_tasks(tx,conversation,plan_id,specs,now):Result<Vec<Task>> > collect,insert_proposed_task
+     insert_proposed_tasks(tx,conversation,plan_id,specs,now):Result<Vec<Task>> > insert_proposed_task
      record_turn_interruptions(tx):Result<()> > running_turn_rows,record_turn_interruption
      running_orchestrators(tx):Result<Vec<String>>
      unfinished_plans(tx):Result<Vec<(String,String)>>
@@ -1270,7 +1270,7 @@ src
     task_rounds(task):Result<Vec<Value>> > db,{stored,add_historical}_rounds,add_current_round
     task_round(task,round):Result<Value> > task_round_with_references
     task_round_with_references(task,round,references):Result<Value> > round_record_or_current,hydrate_round_fields,attach_round_execution
-    handoff_rounds(task,through):Result<Vec<(u32,Value)>> > load_handoff_round_rows,db,collect,shape_handoff_round
+    handoff_rounds(task,through):Result<Vec<(u32,Value)>> > load_handoff_round_rows,db,shape_handoff_round
     completed_worker_report(task,round):Result<Option<(u32,String)>> > db
     handoff_field(value,json):Result<Value>
     initialize_history(connection):Result<()>
@@ -1306,10 +1306,10 @@ src
     latest_run(conversation):Result<Option<Run>> > run
     plan_run(plan):Result<Option<String>> > db
     link_plan_run(conversation,plan,run_id):Result<()> > run,require,all,plan,task_in_plan
-    execution_decision_ids(conversation):Result<Vec<String>> > db,collect,flatten
+    execution_decision_ids(conversation):Result<Vec<String>> > db,flatten
     register_message_source(conversation,run_id,message):Result<Source> > run,{message,save}_source
-    register_document_source(conversation,run_id,text,state):Result<Source> > run,write_source_artifact,save_source
-    ledger_sources(conversation,run_id):Result<Vec<Source>> > run
+    register_document_source(conversation,run_id,text,state):Result<Source> > run,write_source_artifact,Source,save_source
+    ledger_sources(conversation,run_id):Result<Vec<Source>> > run,Source
     ledger_source_text(conversation,run_id,source,state):Result<String> > run,source_text
     reject_ledger_proposal(conversation,run_id,id,hash,comment):Result<()> > require,db,load_rejection,review_rejection_retry,validate_proposal_state,persist_rejection
     has_pending_ledger_proposal(run_id):Result<bool> > db
@@ -1320,7 +1320,7 @@ src
     task_has_ledger_inputs(task):Result<bool> > db
     set_run_completion(conversation,run_id,revision,complete):Result<()> > run,require
     applied_ledger_change(change):Result<Option<ChangeResult>> > db,require
-    list_runs(conversation):Result<Vec<Run>> > conversation,collect,run
+    list_runs(conversation):Result<Vec<Run>> > conversation,run
     latest_ledger_proposal(conversation,run_id):Result<serde_json::Value> > run,saved_proposal_diff,require
     check_analyst_author(change,turn):Result<()> > run,require
     run_tasks(conversation,run_id):Result<Vec<crate::lean::store::Task>> > run,plan
@@ -1343,7 +1343,7 @@ src
     park_task_for_question(task,request):Result<String> > db
     answer_agent_with_disposition(conversation,request,answer,disposition,target):Result<Value> ~57 > answer_agent_question,refresh_answer_waits,agent_question
     refresh_answer_waits(conversation):Result<()> > db
-    artifact_output_history(task):Result<Vec<String>> > db,flatten,collect
+    artifact_output_history(task):Result<Vec<String>> > db,flatten
     artifact_receipt(conversation,path):Result<Option<ArtifactReceipt>> > db,ArtifactReceipt
     record_artifact_delivery(conversation,path,receipt):Result<()> > db
     artifact_input(task,path):Result<Option<Option<ArtifactReceipt>>> > db,ArtifactReceipt
@@ -1428,12 +1428,12 @@ src
     dependency_inputs(plan,spec):Result<Vec<crate::lean::tasks::DependencyReport>> > {direct_dependency,earlier_check,selected_approach}_reports
     last_plan_that_ran(conversation,except):Result<Option<Vec<Task>>> > plan
     last_plan_with_approvals(conversation,except):Result<Vec<Task>> ×0 > plan
-    approved_task_history(conversation):Result<Vec<Task>> > collect,task_by_id
-    plan_specs(plan):Result<Vec<Value>> > db,collect
+    approved_task_history(conversation):Result<Vec<Task>> > task_by_id
+    plan_specs(plan):Result<Vec<Value>> > db
     task_summary(task):Result<String> > completed_task_output
     completed_task_output(task):Result<Value> > completed_task_result
     completed_task_result(task):Result<(String,Value)> ~46 > plan_conversation,retained_result_ref,as_str,task_by_id
-    plan(plan_id):Result<Vec<Task>> > db,collect,plan_task_rows,decode_plan_task
+    plan(plan_id):Result<Vec<Task>> > db,plan_task_rows,decode_plan_task
     checks(task,round):Result<Vec<Value>> > db
     reserve_revision_job(conversation,key,revision):Result<(String,bool)> > db,resume_revision_job,require_no_review,insert_revision_job
     revision_job(id):Result<Value> > db
@@ -1497,21 +1497,21 @@ src
   tasks
    agents/gates
     GatePlan(C{prerequisites,prior_gates,refactoring,ids,{requirement,criterion}_ids,ordered})
-     new(tasks,ordered):Self > collect,upstream_tasks,{writer,union}_ids
+     new(tasks,ordered):Self > upstream_tasks,{writer,union}_ids
      next():Option<TaskContract> > remove,reserve_task_id,dependencies,gate_{description,task}
     - GateDescription,gate_summaries,is_audit,gate_goal
    agents.rs
-    missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > collect,is_gate_kind
+    missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > is_gate_kind
     refresh_existing_options(tasks):Vec<TaskContract> > options_task
-    resolve_gate_dependencies(tasks) > collect,expand_gate_dependencies
-    with_options(tasks):Vec<TaskContract> > collect,options_task
+    resolve_gate_dependencies(tasks) > expand_gate_dependencies
+    with_options(tasks):Vec<TaskContract> > options_task
     with_required_agents(tasks):Vec<TaskContract> > resolve_gate_dependencies,missing_quality_agents,GatePlan.new,order_graph
-    without_options(tasks):Vec<TaskContract> > collect
+    without_options(tasks):Vec<TaskContract>
     PredefinedAgent(C{id,kind,title,focus,required_for_code_changes})
     = PREDEFINED_AGENT_POOL,GATE_KINDS
     - options_goal
    artifact_outputs
-    validate_artifact_output(output):Result<()> ~58 > collect,all,json_report_path
+    validate_artifact_output(output):Result<()> ~58 > all,json_report_path
    bounds
     bound(text,limit):String > bound_cut
     bound_cut(text,limit):(String,bool) > grapheme_prefix_end,overflow_cluster
@@ -1522,7 +1522,7 @@ src
     report_effect(report):(String,bool) > bound_cut
    feedback
     counted_status(entry):&'static str > as_str
-    coverage(verdict,obligations):Value > obligation_counts,unknown_ids,collect,bound,coverage_value
+    coverage(verdict,obligations):Value > obligation_counts,unknown_ids,bound,coverage_value
     feedback_is_current(feedback,round):bool
     recovery_outcome(action):Option<&'static str>
     resets_card(action):bool
@@ -1534,9 +1534,9 @@ src
       REVIEW_MANUAL_SNAPSHOT="review_manual_snapshot",RETRY_WITH_GUIDANCE="retry_with_guidance",
       RESTART_AGENT="restart_agent",CANCEL_TASK="cancel_task",UNBLOCK="unblock"
    graph
-    depends_transitively(tasks,from,target):bool > collect
+    depends_transitively(tasks,from,target):bool
     parallel_peers(tasks):std::collections::HashMap<String,Vec<String>> > PeerNode,peers_of
-    peers_of(nodes):std::collections::HashMap<String,Vec<String>> > peer_index,dependency_reachability,collect,peer_ids
+    peers_of(nodes):std::collections::HashMap<String,Vec<String>> > peer_index,dependency_reachability,peer_ids
     render_plan_document(markdown,tasks):String > parallel_peers,plan_document_start,append_plan_task
     work_kind_name(kind):&'static str
     PeerNode(C{id,depends_on})
@@ -1564,7 +1564,7 @@ src
      plan_rejected(findings):String
      plan_review_followup(request,plan):String
      plan_review_prompt(project,request,plan):String
-     plan_revision_review_prompt(project,request,plan,baseline,approved,reason,initial):String > collect,plan_review_{prompt,followup}
+     plan_revision_review_prompt(project,request,plan,baseline,approved,reason,initial):String > plan_review_{prompt,followup}
      ApprovedWork(C{kept,redone})
      - plan_{text,entry},listed
     requirements
@@ -1582,7 +1582,7 @@ src
     worker
      changes_text(base,result,stat):String
      dependency_metadata(text):String
-     dependency_reports_note(reports):String > collect,as_str,upstream_note
+     dependency_reports_note(reports):String > as_str,upstream_note
      needs_user_action(error):bool
      upstream_note(done):String > dependency_{marker,header}
      worker_followup(findings):String
@@ -1592,12 +1592,12 @@ src
      DependencyReport(C{id,title,report})
      - worker_{prompt_opening,prompt_closing,checks,change_rules}
    validation
-    check_comments_text(comments):String > collect
-    obligations(task):Vec<(String,String)> > collect,for_kind
+    check_comments_text(comments):String
+    obligations(task):Vec<(String,String)> > for_kind
     obligations_text(obligations):String
     risks_note(task):String
     settle(verdict,obligations,read_only) > unaccounted,append_{missing_finding,unsettled_findings}
-    unaccounted(verdict,obligations):Vec<&'a (String,String)> > collect,counted_status
+    unaccounted(verdict,obligations):Vec<&'a (String,String)> > counted_status
     CheckUpdate(C{id,status,note})
     = GOAL_CHECK="goal"
     - {append_unsettled,has_severe_check}_finding
@@ -1703,7 +1703,7 @@ src
      insert_str(s) > clamp_cursor
      backspace():bool > clamp_cursor
      delete():bool > clamp_cursor
-     delete_word_back() > clamp_cursor,collect,all
+     delete_word_back() > clamp_cursor,all
      delete_to_start() > clamp_cursor
      delete_to_end() > clamp_cursor
      move_up(width) > {clamp,visual}_cursor
@@ -1715,7 +1715,7 @@ src
      on_last_row(width):bool > visual_{cursor,line_count}
      move_left() > clamp_cursor
      move_right() > clamp_cursor
-     move_word_left() > clamp_cursor,collect,skip_trailing_whitespace,trailing_word_start
+     move_word_left() > clamp_cursor,skip_trailing_whitespace,trailing_word_start
      move_word_right() > clamp_cursor,all
      move_home() > clamp_cursor
      move_end() > clamp_cursor
@@ -1735,7 +1735,7 @@ src
     draft
      - {locate,write}_field
     model
-     kind_names():Result<Vec<String>,String> > collect
+     kind_names():Result<Vec<String>,String>
      toml_value(value):Result<toml_edit::Value,String>
      ConfigEditor(C{fields,selected,path,status,pending,visible,conflict,reload_requested,base_source,baseline,adding})
       source():Option<String> > {parse,validate,emit}_draft
@@ -1743,7 +1743,7 @@ src
       key(key) > {addition,structural}_key,edit_selected
       new(source,path):crate::Result<Self>
       flatten(path,value):Result<(),String> > flatten_table,push_field
-      inputs():BTreeMap<Vec<String>,String> > collect
+      inputs():BTreeMap<Vec<String>,String>
       is_dirty():bool > inputs
       from_reply(value):Result<Self,String>
       refresh(fresh) > is_dirty
@@ -1830,9 +1830,9 @@ src
       restore_current_tab() > overview
       records(view):Vec<Rc<DetailRecord>> > requirements,overview,comments.comments,checks,results
       fetch_failed(error):bool
-      load_task(task) > as_str,collect
+      load_task(task) > as_str
       new(key):Self > Details,tabs_for
-      comments(view):Vec<&'a super::view::Comment> > as_str,collect
+      comments(view):Vec<&'a super::view::Comment> > as_str
       selected_comment(view):Option<u64> > flatten,comments
       selected_check():Option<String> > check_rows
       check_count():usize > check_rows
@@ -1843,7 +1843,7 @@ src
       - check_summary,token_chip,findings_section,
         draw_{overview_screen,split_overview,single_overview,dashboard_screen,footer_hint,detail_block,document,document_result,document_page,records,native_panel,composer_panel,composer_status,composer_input}
      LayoutCache(C{records,query,width,lines})
-      update(records,query,width):&[Line<'static>] > all,collect,render_records
+      update(records,query,width):&[Line<'static>] > all,render_records
     presentation
      details_footer_hint(tab,width):&'static str > is_overview,{overview,checks,comments,content}_hint
      details_footer_hint_for(key,tab,width):String > details_footer_hint
@@ -1870,7 +1870,7 @@ src
       results(details,view,records) > plan,agent_results,reviewer_result,worker_results
       - append_findings,finding_line,artifact_record,short_hash,report_record,plain,label
      review
-      review(details,view,records) > collect
+      review(details,view,records)
     records.rs
      - record,plain
    details.rs
@@ -1890,7 +1890,7 @@ src
       - file_{row,marker}
      lines
       diff_rows(input):(Vec<Line<'static>>,usize) > diff_file_prefix,append_diff_lines
-      file_comments(view,target):Vec<&'a Comment> > collect
+      file_comments(view,target):Vec<&'a Comment>
       scroll_to_cursor(scroll,cursor,row_count,height):usize
       DiffRows(C{file,comments,task,file_{index,count},compact,selected_line,on_files,width})
       - file_title,append_comments,comment_{line,target},diff_{line,style,text,number}
@@ -1954,7 +1954,7 @@ src
       path(points,style) > segment
       glyph(cell):&str
       show(buffer,area,left,top) > get_cell
-      lines():Vec<String> > collect
+      lines():Vec<String>
       - horizontal,vertical,{row,column}_visible
      Cell(C{lines,ch,style})
     card_content
@@ -1971,7 +1971,7 @@ src
       only(index):Self
       toggle(index) > flag
       shown(index):bool
-      name():String > collect,shown
+      name():String > shown
       shows(edge,selected):bool
       - default
      Scope(C{query,states,providers})
@@ -1981,15 +1981,15 @@ src
      activity_line(view,key):Option<String> > task_{card,activity}
      card_lines(view,key,width,max):Vec<String> > card_text,node_name,fit_lines
      effect_lines(view,key,width,max):Vec<String> > flatten,fit_lines
-     fit_lines(text,width,max):Vec<String> > collect
+     fit_lines(text,width,max):Vec<String>
      - task_{card_text,fallback}
     health.rs
      describe(view,key):String > task_card,{worker,reviewer}_status,describe_agent
      health(view,key):Health > task_card,{worker,reviewer,task,admin}_health
      mark(status):(&'static str,Color)
      provider_of(view,key):Option<&'a str> > task_card,card_members,current_round
-     providers(view):Vec<String> > collect
-     providers_of(view,key):Vec<&'a str> > collect,provider_of,as_str
+     providers(view):Vec<String>
+     providers_of(view,key):Vec<&'a str> > provider_of,as_str
      Health(E{Idle,Working,Waiting,Problem,Done})
       name():&'static str
      = ALL
@@ -2002,22 +2002,22 @@ src
        matches_query(key):bool > scope_matches
       - task_{matches,fields_match},query_matches
      edges
-      add_edges(view,graph,extra_agents) > {add_role,add_mail}_edges,collect,as_str
+      add_edges(view,graph,extra_agents) > {add_role,add_mail}_edges,as_str
       - aggregate_mail,push_edge
      units
       build
        card_height(builder,key,folded):u16 > height
        layers(builder,units):Vec<u16> > {status,dependency}_layers
        measure(builder,units,rows):Vec<Placed> > unit_width,member_keys,card_height,Placed
-       member_keys(view,unit):Vec<String> > collect,is_pair
+       member_keys(view,unit):Vec<String> > is_pair
        rows(builder,units,layers):Vec<Vec<usize>> > ordered_rows
        unit_width(size,unit):u16 > cards
        units(builder):Vec<Unit> > options_of,unit_skeleton,populate_units
        - member_tasks,folded,append_layer_rows,sort_by_parent_position,wrap_layer,push_wrapped_unit
       links
        gap_height(lines,tight):u16
-       gap_lanes(links,placed,rows):Vec<Vec<usize>> > collect
-       links(units,placed):Vec<Link> > collect,implied,model.rs:Link,assign_lanes
+       gap_lanes(links,placed,rows):Vec<Vec<usize>>
+       links(units,placed):Vec<Link> > implied,model.rs:Link,assign_lanes
        - long_links
       model
        Link(C{from,to,lane})
@@ -2025,7 +2025,7 @@ src
        Tops(C{admin,units,gaps,bottom})
        Unit(C{task,options,parents,visible,folded})
       placement
-       admin_rows(builder):Vec<Vec<&'a str>> > collect,is_final_review
+       admin_rows(builder):Vec<Vec<&'a str>> > is_final_review
        admin_width(size,row):u16
        center_rows(placed,left,room)
        room(builder,placed,admin,left):u16 > admin_width
@@ -2060,8 +2060,8 @@ src
      draw_node(view,canvas,node,selected,theme,tick) > draw
     plan
      PlanGraph(C{nodes,width,height})
-      new(tasks,viewport_width):Self ~80 > collect,as_str
-      render(tasks,canvas,selected,theme) > collect,as_str,accent,Theme.dim,draw_card
+      new(tasks,viewport_width):Self ~80 > as_str
+      render(tasks,canvas,selected,theme) > as_str,accent,Theme.dim,draw_card
    graph.rs
     card_key(view,key):String > requirements_round,task_card
     Frame(C{key,task,x,y,width,height,visible})
@@ -2070,13 +2070,13 @@ src
      new_with_options(view,filter_query,collapsed,grouping):Self > Scope
      new_with_viewport(view,scope,collapsed,grouping,viewport):Self
      render(view,canvas,relations,selected) > render_with,Theme.new
-     render_with(view,canvas,relations,selected,theme,tick) > collect,as_str,card_key,render_{frames,edges,nodes}
+     render_with(view,canvas,relations,selected,theme,tick) > as_str,card_key,render_{frames,edges,nodes}
      node(key):Option<&Node>
      frame(group):Option<&Frame>
      edge_path(edge,nodes):Option<Vec<(u16,u16)>> ~51 > frame,shown,as_str
      neighbour(key,dx,dy):Option<String> > node
      route(from,to):Vec<(u16,u16)>
-     edge_routes(relations):Vec<EdgeRoute<'_>> > collect,shows,edge_path
+     edge_routes(relations):Vec<EdgeRoute<'_>> > shows,edge_path
      route_intersects_card(path,node):bool
      - arrow,draw_frame,draw_frame_{border,title},render_{edge,edge_label},route_{same_column,same_row,between_rows}
     GroupingMode(E{Dependency,Status})
@@ -2122,7 +2122,7 @@ src
    layout/lines
     compute_visual_lines(text,width):Vec<VisualLineInfo> > paragraph_end,wrap_paragraph,empty_line
     visual_text_lines(text,width):Vec<String> > compute_visual_lines,visual_text_lines_from_layout
-    visual_text_lines_from_layout(text,lines):Vec<String> > collect
+    visual_text_lines_from_layout(text,lines):Vec<String>
     VisualLineInfo(C{{start,end}_byte,chars,width})
     - LineBuilder
     - LineBuilder: new,append_{word,grapheme},finish
@@ -2134,7 +2134,7 @@ src
     app.rs
      - route_{navigation,create,apply,reject,record,detail,source},proposal_request,pending_run,capture_prepared_draft
     comparison/matching
-     changed_graphemes(before,after):(Vec<bool>,Vec<bool>) > collect,token_offsets,TokenAlignment,GraphemeChanges,mark_common_tokens
+     changed_graphemes(before,after):(Vec<bool>,Vec<bool>) > token_offsets,TokenAlignment,GraphemeChanges,mark_common_tokens
      lcs_pairs(a,b,ai,bi,out) > append_lcs_edges,lcs_split
      - lcs_{row,row_step},mark_word_{pairs,pair},mark_token_gap
     comparison.rs
@@ -2156,7 +2156,7 @@ src
      - append_criterion
     form
      Form(C{base,revision,fields,field,operation_id})
-      new(spec,revision):Self > collect,form_values,with_text
+      new(spec,revision):Self > form_values,with_text
       spec():crate::Result<EntrySpec> > update_{identity_and_text,links,policy}
       - field_{text,ids}
      FormField(E{Id,Interpretation,Qualifiers,Criteria,Parent,Dependencies,{Implementation,Review}Owners,Tasks,Disposition,Reason,Source,Mandatory,Position})
@@ -2191,7 +2191,7 @@ src
       draw_review(frame,rows,theme) > draw_{rejection,preview},style,selected,Theme.{error,dim},sanitize
       new():Self
       request(conversation):Request > LedgerQuery
-      filtered():Vec<&LedgerEntry> > collect,all
+      filtered():Vec<&LedgerEntry> > all
       selected_entry():Option<&LedgerEntry> > filtered
       form_mut():Option<&mut Form>
       paste(text) > insert_str,form_mut
@@ -2248,7 +2248,7 @@ src
      = SELECTION_HELP,COMMANDS
     help
      Help(E{Chat,Graph,Details,Diff,Comment,Picker})
-      lines_for_width(inner):Vec<String> > collect,lines,help_line
+      lines_for_width(inner):Vec<String> > lines,help_line
       max_scroll(area):usize > lines_for_width
       draw(frame) > draw_scroll
       draw_scroll(frame,scroll) > {help,lines_for}_width,draw_help_box
@@ -2275,12 +2275,12 @@ src
      - KeyState,{line,whole_plan}_comment
      - PlanView: move_{cursor,button},selected_comments,{delete,toggle}_comment,activate
     document/build
-     PlanView: build_lines(view):Vec<DocLine> > raw_document,DocumentBuilder.new; description_lines(view):Vec<DocLine> > build_lines; selected_line_number(view):Option<usize> > selected_task_line,description_lines; line_comments(view,line_no):Vec<&'a Comment> > collect
+     PlanView: build_lines(view):Vec<DocLine> > raw_document,DocumentBuilder.new; description_lines(view):Vec<DocLine> > build_lines; selected_line_number(view):Option<usize> > selected_task_line,description_lines; line_comments(view,line_no):Vec<&'a Comment>
      - DocumentBuilder
      - DocumentBuilder: build,add_line,update_section,add_empty_document
     document.rs
-     section_state(ids,tasks):SectionState > collect,as_str,all
-     section_tasks(heading,tasks):Vec<String> > collect,named
+     section_state(ids,tasks):SectionState > as_str,all
+     section_tasks(heading,tasks):Vec<String> > named
      synthesize_document(tasks):String > append_task_section
      - append_task_{heading,facts},{dependency,parallel}_label
     graph
@@ -2305,7 +2305,7 @@ src
     PlanAction(E{None,Close,Accept,Reject,CommentLine,CommentWholePlan,SubmitReview,ToggleResolveComment})
     PlanView(C{plan_id,cursor,scroll,button,button_rects,doc_area,row_docs,confirm_accept,tick,graph_{focused,selected,offset,area},task_rects,graph_reveal,task_scroll})
      new(plan_id):Self
-     whole_plan_comments(view):Vec<&'a Comment> > collect,as_str
+     whole_plan_comments(view):Vec<&'a Comment> > as_str
     SectionState(E{Open,Working,Problem,Done})
     = GUTTER=7
     - VisualRow
@@ -2564,7 +2564,7 @@ src
     reviewer_status(row):String > round_shown,as_str
     round_shown(round):Option<String>
     task_activity(view,row):Option<String> > {reviewer,worker}_activity
-    waiting_on(view,row):Vec<&'a str> > collect,as_str
+    waiting_on(view,row):Vec<&'a str> > as_str
     with_provider(state,provider):String
     worker_activity(view,row):Option<String> > doing,waiting_on,cause
     worker_state(view,row):String > worker_status,waiting_on,cause
@@ -2623,7 +2623,7 @@ src
       purple():Style ×0 > pick,fg
       warning():Style > pick,fg
       error():Style > pick,fg
-      clean(text):String > sanitize,collect
+      clean(text):String > sanitize
       fit(text,width):String > glyphs
      Tone(E{Active,Queued,Done,Failed,Waiting})
      = UNICODE,ASCII,BG,PANEL,LINE,RAISED,SELECTION,FG,TITLE,DIM,FAINT,BLUE,GREEN,YELLOW,ORANGE,RED,PURPLE,CYAN,GOLD,PINK
@@ -2651,12 +2651,12 @@ src
      - drop
    view
     comments
-     View: check_comments(task,check):Vec<&Comment> > collect; comments_on(key):Vec<&Comment> > collect; stale(comment):bool; review(key,review) > review_word,agent_name; progress():Vec<String> > {initial,task,agent,waiting}_progress
+     View: check_comments(task,check):Vec<&Comment>; comments_on(key):Vec<&Comment>; stale(comment):bool; review(key,review) > review_word,agent_name; progress():Vec<String> > {initial,task,agent,waiting}_progress
     conversation/progress
      is_running(status):bool
      progress_line(view,id,title,was,now,reason):Option<(String,crate::lean::tui::theme::Tone)> > progress_status
     conversation.rs
-     View: comment_state(id):&str > as_str; comment_error(id):Option<&str>; comment_activity():Option<String> > collect; orchestrator_activity():Option<String> > comment_activity; push(style,text) > Entry; plan_proposed():bool > all; stage():Stage > workflow_stage,plan_proposed,is_running,stage_after_activity; draft_plan_comments():Vec<&Comment> > open_plan_comments; open_plan_comments():Vec<&Comment> > collect; plan_resumable():bool > all; agent_key(role):String; mail_key(name):String; report_progress(id,title,was,now,reason) > {progress,append_progress}_line; system_card(title,text,tone) > push; advance_messages(from,to); row_of(key):Option<&mut TaskRow>
+     View: comment_state(id):&str > as_str; comment_error(id):Option<&str>; comment_activity():Option<String>; orchestrator_activity():Option<String> > comment_activity; push(style,text) > Entry; plan_proposed():bool > all; stage():Stage > workflow_stage,plan_proposed,is_running,stage_after_activity; draft_plan_comments():Vec<&Comment> > open_plan_comments; open_plan_comments():Vec<&Comment>; plan_resumable():bool > all; agent_key(role):String; mail_key(name):String; report_progress(id,title,was,now,reason) > {progress,append_progress}_line; system_card(title,text,tone) > push; advance_messages(from,to); row_of(key):Option<&mut TaskRow>
      - View: has_started
     header/footer
      main_footer_hint(focus,plan_{proposed,resumable},notice,width):String > truncate,plan_hint,{chat,graph}_footer
@@ -2799,7 +2799,7 @@ src
     interviewing():bool
     planning():bool
  lib
-  hash(bytes):String > collect
+  hash(bytes):String
   id():String
   require(condition,message):Result<()>
   Error(E{Invalid,Io,Json,Sql})
@@ -2927,24 +2927,11 @@ src
    mod:*tempdir,assert_test_socket,trust,install_probe_cli
    options_cli.py
    record_options_checks.py:*inputs,execute,main
-  size_check
-   check.py:*ok,main
   support
    fixture_cli:*interactive
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-tools
- size_check/checker: run()
- size_check/classify: implies_test(m):Result<bool,String>;eval(m,e):Result<bool,String>;collect_atoms(m,a):Result<(),String> +4
- size_check/inventory: collect_module_graph(...);module_paths(...);reachable_references(...) +7
- size_check/runner: inventory(...);run();source_class(path,source_root,references):SourceClass +1
- size_check/scan: scan_source(src,production,external_crates,results);scan_file(path,display_path,production,external_crates,results)
- size_check/source: Source.test_only_lines(ast):Vec<bool>;Source.new(path,fs_path,text):Self;Source.production_line_count(ast):usize +7
- size_check/walker_core: Walker.callable(attrs,ident,start,end,test_attr);Walker.attrs(attrs):bool;Walker.cfg_attr_errors(attr) +4
- size_check/walker_macros: Walker.visit_macro_definition(item):bool;Walker.inspect_expression_macro(call,name);Walker.inspect_include(call,name) +1
- size_check/walker_modules: Walker.visit_external_module(item);Walker.visit_inline_module(item);Walker.report_module_candidates(item,explicit,paths)
- size_check/walker_visit
-· 120,423 LOC · input 1,054,693 · output 42,820 tokens · state 8db13152db55
+· 118,538 LOC · input 1,037,505 · output 42,345 tokens · state 80b41ba95e89
 ```
 <!-- hologram:end -->

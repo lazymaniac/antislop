@@ -12,7 +12,7 @@ pub(super) const LABELS: [&str; 14] = [
     "Parent ID",
     "Dependency IDs (comma separated)",
     "Implementation owners",
-    "Verification owners",
+    "Review owners",
     "Task IDs",
     "Disposition (active/superseded_by_user)",
     "Reason for change",

@@ -73,7 +73,7 @@ impl Store {
     pub(in crate::lean) fn approved_task_history(&self, conversation: &str) -> Result<Vec<Task>> {
         let ids = {
             let db = self.db();
-            let mut query = db.prepare("SELECT id FROM (SELECT id,created_ms,position,row_number() OVER(PARTITION BY json_extract(spec,'$.id') ORDER BY created_ms DESC,rowid DESC) AS rank FROM tasks WHERE conversation_id=?1 AND status='approved') WHERE rank=1 ORDER BY created_ms DESC,position")?;
+            let mut query = db.prepare("SELECT id FROM (SELECT id,created_ms,position,row_number() OVER(PARTITION BY json_extract(spec,'$.id') ORDER BY created_ms DESC,rowid DESC) AS rank FROM tasks WHERE conversation_id=?1 AND (status='approved' OR (status='stale' AND report IS NOT NULL))) WHERE rank=1 ORDER BY created_ms DESC,position")?;
             query
                 .query_map([conversation], |r| r.get::<_, String>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?
@@ -140,6 +140,13 @@ impl Store {
             let text: Option<String> = self.db().query_row("SELECT r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation=?3 AND json_extract(r.result,'$.type')='completed' AND t.role='worker:'||?1 ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",params![current.id,current.round,current.input_generation], |r|r.get(0)).optional()?;
             if let Some(text) = text {
                 return Ok((current.id, serde_json::from_str(&text)?));
+            }
+            if let Some(reference) = self.retained_result_ref(&current)? {
+                let (text,producer):(String,String) = self.db().query_row(
+                    "SELECT r.result,s.task_id FROM agent_results r JOIN turn_scopes s ON s.turn_id=r.turn_id WHERE r.turn_id=?1",
+                    [reference],|r|Ok((r.get(0)?,r.get(1)?)),
+                )?;
+                return Ok((producer, serde_json::from_str(&text)?));
             }
             let recorded: Option<String> = self.db().query_row("SELECT producer_task_id FROM task_result_sources WHERE task_id=?1 AND generation=?2",params![current.id,current.input_generation],|r|r.get(0)).optional()?;
             if let Some(source) = recorded.as_deref().or_else(|| {
@@ -237,7 +244,7 @@ impl Store {
             .transpose()
     }
 
-    /// Records how far a verifier is with one check of a round: `checking`
+    /// Records how far a reviewer is with one check of a round: `checking`
     /// while it works on it, `settled` with its status and evidence. A check
     /// already settled does not go back to `checking`; a note stays unless a
     /// new one replaces it. Returns whether the row changed.

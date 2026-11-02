@@ -8,7 +8,7 @@ pub(super) struct PlannerPrompt<'a> {
     pub(super) first: bool,
     pub(super) requirements: &'a str,
     pub(super) asked: &'a [Message],
-    /// The task contracts of the plan the orchestrator asked to replace.
+    /// The task contracts of the plan to replace or correct.
     pub(super) replaced: Option<&'a str>,
     /// The approved tasks of the plan that ran, which a new plan may keep.
     pub(super) keepable: Option<&'a str>,
@@ -27,13 +27,13 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         ));
     }
     prompt.push_str(&format!(
-        "\nSESSION PHASE: planning. Collected requirements:\n{}\nDraft the complete plan for review. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted. If submit_plan refuses the plan and you cannot correct what it names, because the instructions demand what it refuses, end the turn with finish_turn naming the blocker instead of waiting.\n\n",
+        "\nSESSION PHASE: planning. Collected requirements:\n{}\nDraft the complete plan for review. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted. Address plan reviewer findings yourself and resubmit the complete corrected plan. If submit_plan or the plan reviewer refuses the plan and you cannot resolve it within the agreed requirements, end the turn with finish_turn naming the blocker and the decision needed; the orchestrator receives it.\n\n",
         context.requirements
     ));
     prompt.push_str(&format_messages(context.asked));
     if let Some(contracts) = context.replaced {
         prompt.push_str(&format!(
-            "\n\nThe orchestrator asked for a new plan; its reason is above. The plan to replace has these task contracts:\n{contracts}\nSubmit the complete replacement plan, not a patch; the runtime reviews it like any new plan.\n"
+            "\n\nThe plan to replace or correct has these task contracts; the replan reason or reviewer findings are above:\n{contracts}\nSubmit the complete replacement plan, not a patch; the runtime reviews it like any new plan.\n"
         ));
     }
     if let Some(keepable) = context.keepable {

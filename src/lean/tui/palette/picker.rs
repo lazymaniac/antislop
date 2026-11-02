@@ -24,7 +24,7 @@ fn agent_items(view: &View) -> Vec<(String, Action)> {
             let label = task
                 .map(|(role, task)| {
                     let role = if task.kind == "options" {
-                        "worker verifier"
+                        "worker reviewer"
                     } else {
                         role
                     };
@@ -76,8 +76,8 @@ fn recipient_items(view: &View) -> Vec<(String, Action)> {
             Action::Address("all".into()),
         ),
         (
-            "plan-verifier · plan verifier".into(),
-            Action::Address("plan-verifier".into()),
+            "plan-reviewer · plan reviewer".into(),
+            Action::Address("plan-reviewer".into()),
         ),
         (
             "auditor · final auditor".into(),
@@ -101,8 +101,8 @@ fn append_task_recipients(items: &mut Vec<(String, Action)>, task: &super::super
         Action::Address(format!("worker:{}", task.id)),
     ));
     items.push((
-        format!("verifier:{} · task verifier {}", task.id, task.title),
-        Action::Address(format!("verifier:{}", task.id)),
+        format!("reviewer:{} · task reviewer {}", task.id, task.title),
+        Action::Address(format!("reviewer:{}", task.id)),
     ));
 }
 

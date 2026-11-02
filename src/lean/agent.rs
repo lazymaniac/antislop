@@ -15,7 +15,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
-    /// Orchestrator, verifiers and analysis: may read anything, must not edit.
+    /// Orchestrator, reviewers and analysis: may read anything, must not edit.
     ReadOnly,
     /// A worker in its own worktree.
     Write,
@@ -29,7 +29,7 @@ pub struct Spec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub cwd: PathBuf,
-    /// Further scope the orchestrator named, e.g. a service this project calls.
+    /// Additional directories explicitly provided by the runtime.
     pub add_dirs: Vec<PathBuf>,
     pub access: Access,
     /// The CLI's own session/conversation ID from an earlier turn.
@@ -91,7 +91,7 @@ fn is_original_cli(pid: i32, started_ms: i64, provider: &str) -> bool {
 }
 
 fn terminate_group(pid: i32) -> bool {
-    // SAFETY: signals the process group verified above.
+    // SAFETY: signals the process group reviewed above.
     unsafe { libc::kill(-pid, libc::SIGTERM) };
     for _ in 0..30 {
         // SAFETY: signal 0 only checks that the group still exists.

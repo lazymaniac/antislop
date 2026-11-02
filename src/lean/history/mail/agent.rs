@@ -66,7 +66,7 @@ fn validate_task_recipient(
     id: &str,
 ) -> Result<String> {
     crate::require(
-        matches!(role, "worker" | "verifier") && uuid::Uuid::parse_str(id).is_ok(),
+        matches!(role, "worker" | "reviewer") && uuid::Uuid::parse_str(id).is_ok(),
         "recipient must use a task UUID and an explicit role",
     )?;
     let (conversation, plan, round, status): (String, String, u32, String) = tx.query_row(
@@ -107,7 +107,7 @@ fn validate_role_recipient(tx: &rusqlite::Transaction<'_>, request: &AgentMessag
     crate::require(
         matches!(
             request.recipient.as_str(),
-            "orchestrator" | "auditor" | "plan-verifier"
+            "orchestrator" | "auditor" | "plan-reviewer"
         ),
         "unknown agent role",
     )?;
@@ -244,7 +244,7 @@ fn queue_agent_task(tx: &rusqlite::Transaction<'_>, task: &str, worker: bool) ->
         "UPDATE tasks SET status='queued',verdict=NULL,feedback=NULL,
         base=CASE WHEN status='approved' AND ?2 THEN NULL ELSE base END,
         result=CASE WHEN status='approved' AND ?2 THEN NULL ELSE result END
-        WHERE id=?1 AND status NOT IN ('working','verifying','queued','proposed','stale')",
+        WHERE id=?1 AND status NOT IN ('working','reviewing','queued','proposed','stale')",
         params![task, worker],
     )?;
     Ok(())

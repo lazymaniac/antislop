@@ -146,7 +146,7 @@ fn report_integration(view: &mut View, title: &str, detail: &str, approved: bool
         meta: if approved {
             "approved".into()
         } else {
-            "verification".into()
+            "review".into()
         },
         text: detail.to_owned(),
         tone: if approved {

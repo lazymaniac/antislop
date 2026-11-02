@@ -44,8 +44,8 @@ fn commit_manual_fixes(work: &RecoveryWork, fixed: &[String]) -> Result<(Outcome
 
 fn approval_notice(snapshot: &str, commit: Option<&str>) -> String {
     match commit {
-        Some(commit) => format!("manual fixes verified and committed as {commit}"),
-        None => format!("manual fixes verified and applied on snapshot {snapshot}"),
+        Some(commit) => format!("manual fixes reviewed and committed as {commit}"),
+        None => format!("manual fixes reviewed and applied on snapshot {snapshot}"),
     }
 }
 
@@ -69,7 +69,7 @@ pub(super) fn reject(
 ) -> Result<()> {
     work.task.status = status::NEEDS_USER.into();
     let findings = tasks::findings_text(&review.verdict.findings);
-    let notice = format!("manual fix verification found open issues:\n{findings}");
+    let notice = format!("manual fix review found open issues:\n{findings}");
     append_findings(&mut work.task, &findings);
     land(
         &mut work.task,
@@ -87,7 +87,7 @@ pub(super) fn reject(
 
 fn append_findings(task: &mut Task, findings: &str) {
     task.report = Some(format!(
-        "{}\n\n[manual fix verification]\n{findings}",
+        "{}\n\n[manual fix review]\n{findings}",
         task.report.as_deref().unwrap_or("")
     ));
 }
@@ -113,7 +113,7 @@ fn manual_event(
     findings: Option<&str>,
 ) -> Result<()> {
     let mut payload = json!({ "actor": work.actor, "task": work.task.id,
-        "action": tasks::action::VERIFY_MANUAL_SNAPSHOT, "status": work.task.status,
+        "action": tasks::action::REVIEW_MANUAL_SNAPSHOT, "status": work.task.status,
         "detail": tasks::bound(notice, tasks::DETAIL_LIMIT) });
     if findings.is_some() {
         payload["findings"] = json!(work.task.verdict.as_ref().map(|v| &v["findings"]));

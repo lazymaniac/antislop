@@ -15,14 +15,14 @@ else:
     worker = 'You are a worker' in prompt or previous.startswith('worker:')
     task = re.search(r'Task id: ([^\n]+)', prompt) if worker else re.search(r'Task: ([^\n]+)', prompt)
     task = task.group(1) if task else previous.split(':', 1)[-1]
-    session = ('worker:' if worker else 'verifier:') + task
+    session = ('worker:' if worker else 'reviewer:') + task
     counter_name = re.sub(r'[^A-Za-z0-9_-]', '_', session)
     count_file = os.path.join(root, counter_name + '-count')
     count = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, 'w').write(str(count))
     record_call({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})
     if task == 'w' and count == 1:
-        if scenario == ('resume-worker' if worker else 'resume-verifier'):
+        if scenario == ('resume-worker' if worker else 'resume-reviewer'):
             print(json.dumps({'event':'init','conversation_id':session}), flush=True)
             print('login required: deliberate lifecycle fixture interruption', file=sys.stderr)
             sys.exit(1)
@@ -49,7 +49,7 @@ else:
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']
     else:
         # A deterministic oracle for these fixtures only. Real semantic assessment
-        # of a contradiction or departure belongs to the real verifier.
+        # of a contradiction or departure belongs to the real reviewer.
         files = {path:open(path).read() for path in glob.glob('result-*.txt')}
         actual = list(files.values())
         required = open('required-format.txt').read().strip()
@@ -62,7 +62,7 @@ else:
             if isinstance(local, dict) and isinstance(local.get('variant'), dict):
                 selected = local['variant']['id']
         approved = not actual or all(value == selected and value == required for value in actual)
-        record_call({'verified':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})
+        record_call({'reviewed':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})
         ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':approved,'findings':[] if approved else [{'severity':'high','issue':'Implementation B contradicts Selected: A without evidence'}], 'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
 if os.path.basename(sys.argv[0]) == 'codex':

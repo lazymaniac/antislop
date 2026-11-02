@@ -12,7 +12,7 @@ pub struct AuditEvidence {
     pub artifact: Option<String>,
 }
 
-/// The audit verifier's assessment of one proposed piece of evidence, by
+/// The audit reviewer's assessment of one proposed piece of evidence, by
 /// the id the runtime gave it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -127,7 +127,7 @@ pub(crate) fn plain_findings(value: &serde_json::Value) -> Result<Vec<serde_json
 }
 
 /// The run's tasks an audit may cite, oldest plan first: plans the plan
-/// verifier sent back never ran.
+/// reviewer sent back never ran.
 pub(crate) fn audited_tasks(
     tasks: &[crate::lean::store::Task],
 ) -> impl DoubleEndedIterator<Item = &crate::lean::store::Task> {

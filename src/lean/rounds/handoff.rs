@@ -88,16 +88,7 @@ impl Core {
         if !spec.writes {
             return Ok(());
         }
-        handoff.protected_paths = git::uncommitted(&handoff.primary)?
-            .into_iter()
-            .filter(|path| {
-                spec.scope.is_empty()
-                    || spec
-                        .scope
-                        .iter()
-                        .any(|scope| scope == "." || Path::new(path).starts_with(scope))
-            })
-            .collect();
+        handoff.protected_paths = git::uncommitted(&handoff.primary)?.into_iter().collect();
         handoff.protected_paths.sort();
         handoff.protected_paths.dedup();
         Ok(())
@@ -112,7 +103,7 @@ impl Core {
         let mut query = db.prepare(
             "SELECT s.round,t.role,t.status,t.error FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
              WHERE s.task_id=?1 AND s.round=(SELECT max(round) FROM turn_scopes WHERE task_id=?1 AND round<?2)
-             AND t.role IN ('worker:'||?1,'verifier:'||?1) AND t.status IN ('failed','interrupted','cancelled')
+             AND t.role IN ('worker:'||?1,'reviewer:'||?1) AND t.status IN ('failed','interrupted','cancelled')
              AND t.rowid=(SELECT max(n.rowid) FROM turns n JOIN turn_scopes ns ON ns.turn_id=n.id WHERE ns.task_id=s.task_id AND ns.round=s.round AND n.role=t.role)
              ORDER BY t.role",
         )?;

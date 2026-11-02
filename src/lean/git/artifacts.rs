@@ -1,7 +1,7 @@
 use super::*;
 
 /// Only named regular documents bypass ignore rules in an isolated worktree.
-/// Other ignored runtime files must never enter its checkpoint or verifier view.
+/// Other ignored runtime files must never enter its checkpoint or reviewer view.
 pub(crate) fn commit_artifacts(
     worktree: &Path,
     outputs: &[String],

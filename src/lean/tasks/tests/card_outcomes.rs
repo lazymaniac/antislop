@@ -38,7 +38,7 @@ fn restarting_actions_are_named_once_for_both_layers() {
     for action in [
         action::INTEGRATE_WITH_CONSENT,
         action::KEEP_ON_BRANCH,
-        action::VERIFY_MANUAL_SNAPSHOT,
+        action::REVIEW_MANUAL_SNAPSHOT,
         action::CANCEL_TASK,
         "anything-else",
     ] {

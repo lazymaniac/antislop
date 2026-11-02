@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS ledger_criteria(
  PRIMARY KEY(run_id,entry_id,version,id), FOREIGN KEY(run_id,entry_id,version) REFERENCES ledger_versions(run_id,entry_id,version));
 CREATE TABLE IF NOT EXISTS ledger_relations(
  run_id TEXT NOT NULL, entry_id TEXT NOT NULL, version INTEGER NOT NULL,
- kind TEXT NOT NULL CHECK(kind IN ('qualifier','parent','dependency','task','implementer','verifier')), target TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('qualifier','parent','dependency','task','implementer','reviewer')), target TEXT NOT NULL,
  PRIMARY KEY(run_id,entry_id,version,kind,target), FOREIGN KEY(run_id,entry_id,version) REFERENCES ledger_versions(run_id,entry_id,version));
 CREATE INDEX IF NOT EXISTS ledger_dependents ON ledger_relations(run_id,kind,target);
 CREATE TABLE IF NOT EXISTS ledger_decisions(
@@ -36,13 +36,13 @@ CREATE TABLE IF NOT EXISTS task_ledger_inputs(
 CREATE TABLE IF NOT EXISTS ledger_evidence(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), entry_id TEXT NOT NULL, entry_version INTEGER NOT NULL,
  criterion_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL, attempt INTEGER NOT NULL,
- producer_turn TEXT NOT NULL REFERENCES turns(id), verifier_turn TEXT NOT NULL REFERENCES turns(id),
+ producer_turn TEXT NOT NULL REFERENCES turns(id), reviewer_turn TEXT NOT NULL REFERENCES turns(id),
  result TEXT NOT NULL, artifact TEXT, fingerprint TEXT NOT NULL, assessment TEXT NOT NULL, approved INTEGER NOT NULL,
  created_ms INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS evidence_by_criterion ON ledger_evidence(run_id,entry_id,entry_version,criterion_id);
 CREATE TABLE IF NOT EXISTS ledger_reviews(
  run_id TEXT NOT NULL REFERENCES runs(id), spec_revision INTEGER NOT NULL, kind TEXT NOT NULL,
- producer_turn TEXT NOT NULL REFERENCES turns(id), verifier_turn TEXT NOT NULL REFERENCES turns(id),
+ producer_turn TEXT NOT NULL REFERENCES turns(id), reviewer_turn TEXT NOT NULL REFERENCES turns(id),
  fingerprint TEXT NOT NULL, approved INTEGER NOT NULL, note TEXT NOT NULL, created_ms INTEGER NOT NULL,
  id INTEGER PRIMARY KEY AUTOINCREMENT);
 CREATE TABLE IF NOT EXISTS ledger_turns(

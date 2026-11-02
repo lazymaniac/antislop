@@ -88,7 +88,7 @@ impl Core {
     ) -> Result<bool> {
         let pending = [
             format!("worker:{}", task.id),
-            format!("verifier:{}", task.id),
+            format!("reviewer:{}", task.id),
         ]
         .iter()
         .map(|role| self.store.pending_mail(conversation, role))
@@ -111,14 +111,14 @@ impl Core {
         conversation: &str,
         task: &mut Task,
         request: &str,
-        verifier: bool,
+        reviewer: bool,
     ) -> Result<()> {
         task.verdict = None;
         let feedback = task
             .feedback
             .get_or_insert_with(|| json!({"round":task.round}));
         feedback["waiting_request"] = json!(request);
-        feedback["resume_role"] = json!(if verifier { "verifier" } else { "worker" });
+        feedback["resume_role"] = json!(if reviewer { "reviewer" } else { "worker" });
         feedback["reason"] = json!("awaiting orchestrator or user answer");
         self.store.update_task(task)?;
         task.status = self.store.park_task_for_question(task, request)?;

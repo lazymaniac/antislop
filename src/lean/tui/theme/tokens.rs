@@ -23,10 +23,10 @@ pub struct Glyphs {
     pub waiting: &'static str,
     pub problem: &'static str,
     pub orchestrator: &'static str,
-    pub plan_verifier: &'static str,
+    pub plan_reviewer: &'static str,
     pub auditor: &'static str,
     pub worker: &'static str,
-    pub verifier: &'static str,
+    pub reviewer: &'static str,
     /// Frames of the busy indicator, advanced by the UI tick.
     pub spinner: &'static [&'static str],
     /// Junctions indexed by a N=1, S=2, E=4, W=8 mask.
@@ -56,10 +56,10 @@ pub const UNICODE: Glyphs = Glyphs {
     waiting: "‖",
     problem: "✕",
     orchestrator: "◆",
-    plan_verifier: "◇",
+    plan_reviewer: "◇",
     auditor: "≡",
     worker: "▸",
-    verifier: "◈",
+    reviewer: "◈",
     spinner: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     junctions: [
         " ", "│", "│", "│", "─", "╰", "╭", "├", "─", "╯", "╮", "┤", "─", "┴", "┬", "┼",
@@ -89,10 +89,10 @@ pub const ASCII: Glyphs = Glyphs {
     waiting: "=",
     problem: "x",
     orchestrator: "O",
-    plan_verifier: "P",
+    plan_reviewer: "P",
     auditor: "A",
     worker: ">",
-    verifier: "V",
+    reviewer: "R",
     spinner: &["|", "/", "-", "\\"],
     junctions: [
         " ", "|", "|", "|", "-", "+", "+", "+", "-", "+", "+", "+", "-", "+", "+", "+",
@@ -110,20 +110,15 @@ pub enum Tone {
 
 pub fn tone(status: &str) -> Tone {
     match status {
-        "running" | "verifying" | "working" | "starting" | "sent" | "delivered" | "replied" => {
+        "running" | "reviewing" | "working" | "starting" | "sent" | "delivered" | "replied" => {
             Tone::Active
         }
-        "verified" | "completed" | "approved" | "accepted" | "merged" | "applied" => Tone::Done,
+        "reviewed" | "completed" | "approved" | "accepted" | "merged" | "applied" => Tone::Done,
         "failed" | "blocked" | "rejected" | "cancelled" | "changes_requested" | "error" => {
             Tone::Failed
         }
-        "paused"
-        | "waiting"
-        | "waiting_agent"
-        | "awaiting_verification"
-        | "coordinating"
-        | "needs_user"
-        | "pending_unknown" => Tone::Waiting,
+        "paused" | "waiting" | "waiting_agent" | "awaiting_review" | "coordinating"
+        | "needs_user" | "pending_unknown" => Tone::Waiting,
         _ => Tone::Queued,
     }
 }

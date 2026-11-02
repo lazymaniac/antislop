@@ -85,7 +85,7 @@ struct TabStrip<'a> {
 impl<'a> TabStrip<'a> {
     fn new(key: &'a str, active_tab: usize) -> Self {
         let agent = match key.split_once(':') {
-            Some(("worker" | "verifier", id)) => format!(" {id} "),
+            Some(("worker" | "reviewer", id)) => format!(" {id} "),
             _ => format!(" {} ", agent_name(key)),
         };
         let visible = tabs_for(key);

@@ -55,8 +55,8 @@ impl Config {
         })
     }
 
-    /// Resolve exact role/work assignments. A verifier always requires its own
-    /// session even when executor and verifier deliberately use the same CLI.
+    /// Resolve exact role/work assignments. A reviewer always requires its own
+    /// session even when executor and reviewer deliberately use the same CLI.
     pub fn resolve(&self, work_kind: WorkKind, role: RoleKind) -> Result<ResolvedProfile> {
         self.validate()?;
         let name = self.profile_name(work_kind, role)?;
@@ -94,7 +94,7 @@ impl Config {
     fn selected_profile(&self, work_kind: WorkKind, role: RoleKind) -> Result<&str> {
         match role {
             RoleKind::Orchestrator => self.orchestrator_profile(work_kind),
-            RoleKind::Executor | RoleKind::Verifier | RoleKind::Planner => {
+            RoleKind::Executor | RoleKind::Reviewer | RoleKind::Planner => {
                 self.routed_profile(work_kind, role)
             }
         }
@@ -118,8 +118,8 @@ impl Config {
                 "no explicit route for requested work; provider fallback is forbidden".into(),
             )
         })?;
-        Ok(if role == RoleKind::Verifier {
-            &route.verifier
+        Ok(if role == RoleKind::Reviewer {
+            &route.reviewer
         } else {
             &route.executor
         })

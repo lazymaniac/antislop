@@ -56,7 +56,7 @@ fn dispatch_to_plan(
     if recipient == "all" {
         return dispatch_broadcast(core, conversation, body, plan);
     }
-    if matches!(recipient, PLAN_VERIFIER | AUDITOR) {
+    if matches!(recipient, PLAN_REVIEWER | AUDITOR) {
         return dispatch_reviewer(core, conversation, recipient, body, plan);
     }
     let Some((task, role)) = core.mail_address_task(conversation, plan, recipient)? else {

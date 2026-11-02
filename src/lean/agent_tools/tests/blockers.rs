@@ -84,10 +84,10 @@ fn options_blocker_ends_the_turn_without_approving_or_releasing_dependents() {
 fn blockers_require_an_options_worker_and_a_concrete_resume_condition() {
     let (_directory, core, conversation) = core();
     let tasks = options_tasks(&core, &conversation);
-    for (task, verifier) in [(&tasks[0], true), (&tasks[1], false)] {
+    for (task, reviewer) in [(&tasks[0], true), (&tasks[1], false)] {
         let role = format!(
             "{}:{}",
-            if verifier { "verifier" } else { "worker" },
+            if reviewer { "reviewer" } else { "worker" },
             task.id
         );
         let turn = core
@@ -105,8 +105,8 @@ fn blockers_require_an_options_worker_and_a_concrete_resume_condition() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains(if verifier {
-                "a verifier ends"
+            error.contains(if reviewer {
+                "a reviewer ends"
             } else {
                 "a worker ends"
             }),

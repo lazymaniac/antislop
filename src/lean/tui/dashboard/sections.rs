@@ -182,8 +182,8 @@ fn append_goal_sections(theme: &Theme, width: usize, row: &TaskRow, out: &mut Ve
     ));
     if !row.focus.trim().is_empty() {
         out.push(text_section(
-            "verify",
-            "Verification",
+            "review",
+            "Review",
             para(theme, &row.focus, width, theme.text()),
             6,
         ));
@@ -205,7 +205,7 @@ fn append_risk_scope(context: &SectionContext<'_>, out: &mut Vec<Section>) {
     }
     let scope = scope::lines(details, view, theme, *width, row);
     if !scope.is_empty() {
-        out.push(text_section("scope", "Scope & dependencies", scope, 8));
+        out.push(text_section("scope", "Dependencies", scope, 8));
     }
 }
 
@@ -266,10 +266,10 @@ fn risks_section(theme: &Theme, width: usize, row: &TaskRow, checks: &[CheckRow]
 }
 
 fn filter_tab_sections(tab: usize, sections: &mut Vec<Section>) {
-    let verifier = tab == super::super::details::VERIFIER;
+    let reviewer = tab == super::super::details::REVIEWER;
     sections.retain(|section| match section.id {
-        "goal" | "scope" => !verifier,
-        "verify" | "risks" | "checks" | "findings" => verifier,
+        "goal" | "scope" => !reviewer,
+        "review" | "risks" | "checks" | "findings" => reviewer,
         _ => true,
     });
 }

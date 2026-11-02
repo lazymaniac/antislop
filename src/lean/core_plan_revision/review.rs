@@ -43,7 +43,7 @@ impl Core {
         let review = self
             .review(
                 context.conversation,
-                PLAN_VERIFIER,
+                PLAN_REVIEWER,
                 Some(&context.revision.plan),
                 &context.project,
                 context.cancel,
@@ -88,6 +88,7 @@ impl Core {
         self.wait_for_affected_tasks(&affected, context.cancel)?;
         let _graph = self.graph_updates.lock().expect("graph update mutex");
         let _integration = self.integrating.lock().expect("integration mutex");
+        self.checkpoint_revision_work(&affected)?;
         self.store.apply_plan_revision(
             context.conversation,
             context.revision,
@@ -98,6 +99,33 @@ impl Core {
         )?;
         for id in affected {
             self.queue_worktree_cleanup(&id);
+        }
+        Ok(())
+    }
+
+    fn checkpoint_revision_work(&self, affected: &BTreeSet<String>) -> Result<()> {
+        for id in affected {
+            let Some(mut task) = self.store.task_by_id(id)? else {
+                continue;
+            };
+            let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
+            let path = crate::lean::core_path_helpers::worktree_path(&self.state, &task)?;
+            if spec.writes && path.exists() {
+                if task.base.is_none() {
+                    task.base = Some(git::head(&path)?);
+                }
+                task.result = Some(if spec.change_kind() == tasks::ChangeKind::Artifact {
+                    git::commit_artifacts(
+                        &path,
+                        &spec.outputs,
+                        "Checkpoint before contract revision",
+                        false,
+                    )?
+                } else {
+                    git::commit_all(&path, "Checkpoint before contract revision")?
+                });
+                self.store.update_task(&task)?;
+            }
         }
         Ok(())
     }
@@ -141,11 +169,18 @@ struct ApprovedRevisionWork {
 }
 
 fn approved_work(baseline: &[Task], affected: &BTreeSet<String>) -> ApprovedRevisionWork {
-    let (redone, kept) = baseline
+    let (redone, kept): (Vec<_>, Vec<_>) = baseline
         .iter()
         .filter(|task| task.status == status::APPROVED)
-        .filter_map(|task| task.spec["id"].as_str().map(str::to_owned))
-        .partition(|id| affected.contains(id));
+        .partition(|task| affected.contains(&task.id));
+    let names = |tasks: Vec<&Task>| {
+        tasks
+            .into_iter()
+            .filter_map(|task| task.spec["id"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let redone = names(redone);
+    let kept = names(kept);
     ApprovedRevisionWork { kept, redone }
 }
 
@@ -200,10 +235,9 @@ fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
     };
     let mut new = new.clone();
     new.title = old.title.clone();
-    new.goal = old.goal.clone();
     new.summary = old.summary.clone();
     new.section = old.section.clone();
-    new.verifier = old.verifier.clone();
+    new.reviewer = old.reviewer.clone();
     new.covers = old.covers.clone();
     new == old
 }
@@ -269,6 +303,7 @@ mod tests {
             tasks: vec![],
             retire: vec![],
             redo: vec![],
+            replacements: Default::default(),
         };
         for attempt in 0..5 {
             for severity in ["low", "medium", "high", "critical"] {
@@ -300,5 +335,49 @@ mod tests {
             coverage: serde_json::Map::new(),
         };
         core.require_revision_review(&revision, &approved).unwrap();
+    }
+    #[test]
+    fn revision_checkpoints_unreported_work_without_changing_the_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("source"), "original").unwrap();
+        let base = git::commit_all(&project, "base").unwrap();
+        let index = std::fs::read(project.join(".git/index")).unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        let task=core.store.add_plan(&conversation.id,&[json!({"id":"work","title":"Work","goal":"Change source","kind":"implementation","writes":true})]).unwrap().remove(0);
+        let path = crate::lean::core_path_helpers::worktree_path(&core.state, &task).unwrap();
+        let branch = crate::lean::core_path_helpers::worktree_branch(&core.state, &task).unwrap();
+        git::add_worktree(&project, &path, &branch, &base).unwrap();
+        std::fs::write(path.join("source"), "unfinished changes").unwrap();
+        core.checkpoint_revision_work(&BTreeSet::from([task.id.clone()]))
+            .unwrap();
+        let saved = core.store.task_by_id(&task.id).unwrap().unwrap();
+        assert_eq!(saved.base.as_deref(), Some(base.as_str()));
+        assert_eq!(
+            git::changed_files(&project, &base, saved.result.as_ref().unwrap()).unwrap(),
+            ["source"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("source")).unwrap(),
+            "original"
+        );
+        assert_eq!(git::head(&project).unwrap(), base);
+        assert_eq!(std::fs::read(project.join(".git/index")).unwrap(), index);
     }
 }

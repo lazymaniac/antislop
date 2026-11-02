@@ -198,7 +198,7 @@ fn user_changes_or_a_competing_delivery_invalidate_the_frozen_artifact_version()
 }
 
 #[test]
-fn another_conversation_or_a_task_without_the_artifact_dependency_cannot_adopt_it() {
+fn receipt_allows_same_conversation_without_an_old_edge_but_denies_foreign_conversations() {
     let f = fixture("report.md", false);
     for foreign in [false, true] {
         let conversation = if foreign {
@@ -219,7 +219,8 @@ fn another_conversation_or_a_task_without_the_artifact_dependency_cannot_adopt_i
             .add_plan(&conversation, &[serde_json::to_value(&spec).unwrap()])
             .unwrap()
             .remove(0);
-        assert!(writer_worktree(&f.core, &mut task, &spec, &f.project).is_err());
+        let result = writer_worktree(&f.core, &mut task, &spec, &f.project);
+        assert_eq!(result.is_err(), foreign);
         assert_eq!(
             std::fs::read_to_string(f.project.join("report.md")).unwrap(),
             "old report"
@@ -247,5 +248,105 @@ fn legacy_provenance_never_adopts_a_user_document_from_the_starting_snapshot() {
     assert_eq!(
         std::fs::read_to_string(f.project.join("user.md")).unwrap(),
         "user document"
+    );
+}
+
+#[test]
+fn a_previously_unknown_owned_report_can_be_recovered_without_a_dependency_edge() {
+    for legacy in [false, true] {
+        let mut f = fixture("report.md", legacy);
+        f.specs[1].depends_on.clear();
+        f.core
+            .store
+            .freeze_artifact_input(&f.tasks[1], "report.md", None)
+            .unwrap();
+        let mut task = f.tasks[1].clone();
+        let path = writer_worktree(&f.core, &mut task, &f.specs[1], &f.project)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path.join("report.md")).unwrap(),
+            "old report"
+        );
+        assert!(
+            f.core
+                .store
+                .artifact_input(&task, "report.md")
+                .unwrap()
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(git::head(&f.project).unwrap(), f.head);
+        assert_eq!(
+            std::fs::read(f.project.join(".git/index")).unwrap(),
+            f.index
+        );
+    }
+}
+
+#[test]
+fn recovered_ownership_never_adopts_user_edits_or_symlink_targets() {
+    use std::os::unix::fs::symlink;
+    for link in [false, true] {
+        let mut f = fixture("report.md", false);
+        f.specs[1].depends_on.clear();
+        f.core
+            .store
+            .freeze_artifact_input(&f.tasks[1], "report.md", None)
+            .unwrap();
+        if link {
+            std::fs::remove_file(f.project.join("report.md")).unwrap();
+            symlink("user.md", f.project.join("report.md")).unwrap();
+        } else {
+            std::fs::write(f.project.join("report.md"), "user correction").unwrap();
+        }
+        let mut task = f.tasks[1].clone();
+        assert!(writer_worktree(&f.core, &mut task, &f.specs[1], &f.project).is_err());
+        assert!(
+            f.core
+                .store
+                .artifact_input(&task, "report.md")
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.project.join("user.md")).unwrap(),
+            "user document"
+        );
+        assert_eq!(git::head(&f.project).unwrap(), f.head);
+        assert_eq!(
+            std::fs::read(f.project.join(".git/index")).unwrap(),
+            f.index
+        );
+    }
+}
+
+#[test]
+fn continuation_keeps_integrated_work_and_new_upstream_changes() {
+    let mut f = fixture("report.md", false);
+    std::fs::write(f.project.join("source"), "new upstream content").unwrap();
+    f.tasks[1].base = f.tasks[0].base.clone();
+    f.tasks[1].result = f.tasks[0].result.clone();
+    f.tasks[1].feedback = Some(json!({"continuation_review":true,"resume_role":"reviewer"}));
+    let path = writer_worktree(&f.core, &mut f.tasks[1], &f.specs[1], &f.project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("source")).unwrap(),
+        "new upstream content"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("report.md")).unwrap(),
+        "old report"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.project.join("report.md")).unwrap(),
+        "old report"
+    );
+    assert_eq!(git::head(&f.project).unwrap(), f.head);
+    assert_eq!(
+        std::fs::read(f.project.join(".git/index")).unwrap(),
+        f.index
     );
 }

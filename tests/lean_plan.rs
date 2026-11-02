@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 const CALLS: &str = "calls.jsonl";
 
 #[test]
-fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round() {
+fn a_reviewer_started_after_a_live_update_uses_the_new_profile_in_the_same_round() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let gate = dir.path().join("release-worker");
@@ -32,12 +32,12 @@ fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round
         std::thread::sleep(Duration::from_millis(10));
     }
     let mut updated = initial;
-    updated.profiles.get_mut("review").unwrap().model = Some("live-verifier-model".into());
+    updated.profiles.get_mut("review").unwrap().model = Some("live-reviewer-model".into());
     core.replace_config(updated);
     std::fs::write(gate, "continue").unwrap();
     wait_idle(&core, &conversation.id);
     let calls = std::fs::read_to_string(dir.path().join(CALLS)).unwrap();
-    let first_verifier: Value = calls
+    let first_reviewer: Value = calls
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .find(|call| {
@@ -48,21 +48,21 @@ fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round
                 .unwrap()
                 .as_str()
                 .unwrap();
-            prompt.contains("You verify") && prompt.contains("Task: Storage")
+            prompt.contains("You review") && prompt.contains("Task: Storage")
         })
         .unwrap();
     assert!(
-        first_verifier["args"]
+        first_reviewer["args"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|arg| arg == "live-verifier-model"),
-        "{first_verifier}"
+            .any(|arg| arg == "live-reviewer-model"),
+        "{first_reviewer}"
     );
 }
 
 /// Codex-shaped orchestrator: proposes a two-task plan, then summarizes the
-/// runtime's results. Agy-shaped worker/verifier: the verifier rejects the
+/// runtime's results. Agy-shaped worker/reviewer: the reviewer rejects the
 /// storage task once, then approves the worker's fix.
 fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let log = dir.join(CALLS);
@@ -82,9 +82,9 @@ with open({log:?}, "a") as f:
             + r#"
 plan = {"tasks": [
   {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "goal": "Assess storage", "scope": ["src"],
-   "kind": "architecture", "verifier": {"summary": "Verify the storage findings.", "focus": "claims", "risks": ["r-storage"]}},
+   "kind": "architecture", "reviewer": {"summary": "Review the storage findings.", "focus": "claims", "risks": ["r-storage"]}},
   {"id": "t2", "title": "TUI", "goal": "Assess TUI", "depends_on": ["t1"],
-   "kind": "analysis", "verifier": {"focus": "claims", "risks": ["r-tui"]}}]}
+   "kind": "analysis", "reviewer": {"focus": "claims", "risks": ["r-tui"]}}]}
 if "[runtime]" in prompt:
     answer = "summary: " + ("fixed report" if "fixed report" in prompt else "missing")
 else:
@@ -115,14 +115,14 @@ REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
 if any(marker in prompt for marker in REVIEW):
     session = "reviewer"
     answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
-elif "You verify" in prompt:
-    session = "verifier"
+elif "You review" in prompt:
+    session = "reviewer"
     approved = "Task: Storage" not in prompt or "fixed report" in prompt
     answer = verdict(approved, [] if approved else [{"severity": "high", "issue": "wrong claim", "where": "src/a.rs:1"}])
-elif "Your verifier found problems" in prompt:
+elif "Your reviewer found problems" in prompt:
     session, answer = "worker", "fixed report"
 elif "updated report" in prompt:
-    session, answer = "verifier", verdict(True, [])
+    session, answer = "reviewer", verdict(True, [])
 else:
     session, answer = "worker", "first report for " + prompt.split("Task: ")[1].split("\n")[0]
 answer = cover(answer)
@@ -178,10 +178,10 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     wait_idle(&core, &conversation.id);
     let original = core.store.latest_plan(&conversation.id).unwrap();
     assert_eq!(original[0].spec["summary"], "Assess the storage approach.");
-    // The verifier's summary is the runtime's; a planner no longer writes one.
+    // The reviewer's summary is the runtime's; a planner no longer writes one.
     assert_eq!(
-        original[0].spec["verifier"]["summary"],
-        "Verify the result meets the goal, its criteria and the domain risks."
+        original[0].spec["reviewer"]["summary"],
+        "Review the result meets the goal, its criteria and the domain risks."
     );
     assert!(
         original[1].spec.get("summary").is_none(),
@@ -201,8 +201,8 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     );
     for task in &replay.tasks {
         assert_eq!(
-            task.verifier_summary.as_deref(),
-            Some("Verify the result meets the goal, its criteria and the domain risks.")
+            task.reviewer_summary.as_deref(),
+            Some("Review the result meets the goal, its criteria and the domain risks.")
         );
     }
     assert!(replay.tasks[1].summary.is_none());
@@ -210,7 +210,7 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
 }
 
 #[test]
-fn a_plan_comment_gets_an_independent_revision_and_verification() {
+fn a_plan_comment_gets_an_independent_revision_and_review() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
@@ -226,7 +226,7 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
             &conversation.id,
             Some(&initial),
             &format!("plan:{initial}:line:2"),
-            "Explain storage verification in more detail",
+            "Explain storage review in more detail",
         )
         .unwrap();
     // The comment waits as a draft: the agent starts when the user sends the
@@ -286,17 +286,13 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
         .unwrap();
     assert!(revision.1.contains(&format!("Referenced plan {initial}")));
     assert!(revision.1.contains("Assess storage and TUI"));
-    assert!(
-        revision
-            .1
-            .contains("Explain storage verification in more detail")
-    );
+    assert!(revision.1.contains("Explain storage review in more detail"));
     let review = core.store.plan_history(&conversation.id, &revised).unwrap();
     assert!(
         review
             .turns
             .iter()
-            .any(|turn| turn.role == "plan-verifier" && turn.status == "done")
+            .any(|turn| turn.role == "plan-reviewer" && turn.status == "done")
     );
 }
 
@@ -318,16 +314,16 @@ fn calls(dir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-fn is_reviewer(args: &str) -> bool {
+fn is_session_reviewer(args: &str) -> bool {
     args.contains("You review a plan") || args.contains("You audit")
 }
 
-fn is_verifier(args: &str) -> bool {
-    !is_reviewer(args) && (args.contains("You verify") || args.contains("Check it again"))
+fn is_task_reviewer(args: &str) -> bool {
+    !is_session_reviewer(args) && (args.contains("You review") || args.contains("Check it again"))
 }
 
 #[test]
-fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
+fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join("src")).unwrap();
@@ -371,11 +367,11 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     let calls = calls(dir.path());
     let workers: Vec<_> = calls
         .iter()
-        .filter(|(bin, args)| bin == "agy" && !is_verifier(args) && !is_reviewer(args))
+        .filter(|(bin, args)| bin == "agy" && !is_task_reviewer(args) && !is_session_reviewer(args))
         .collect();
-    let verifiers: Vec<_> = calls
+    let reviewers: Vec<_> = calls
         .iter()
-        .filter(|(bin, args)| bin == "agy" && is_verifier(args))
+        .filter(|(bin, args)| bin == "agy" && is_task_reviewer(args))
         .collect();
     assert!(workers.iter().all(|(_, args)| {
         if args.contains("Task: Storage") {
@@ -393,26 +389,26 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         .unwrap();
     assert!(dependent.1.contains("this task is unblocked"));
     assert!(dependent.1.contains("fixed report") && !dependent.1.contains("first report"));
-    let storage_verifier = &verifiers[0].1;
+    let storage_reviewer = &reviewers[0].1;
     assert!(
-        storage_verifier.contains("Assess storage") && !storage_verifier.contains("Assess TUI")
+        storage_reviewer.contains("Assess storage") && !storage_reviewer.contains("Assess TUI")
     );
     assert!(
-        !verifiers[1].1.contains("--conversation verifier"),
-        "a verifier starts fresh in the next round"
+        !reviewers[1].1.contains("--conversation reviewer"),
+        "a reviewer starts fresh in the next round"
     );
-    assert!(verifiers[1].1.contains("Task: Storage"));
-    assert!(verifiers[1].1.contains("fixed report"));
+    assert!(reviewers[1].1.contains("Task: Storage"));
+    assert!(reviewers[1].1.contains("fixed report"));
     let first_round = core.store.task_round(&tasks[0].id, 1).unwrap();
     assert_eq!(first_round["verdict"]["approved"], false);
     let reviews: Vec<_> = calls
         .iter()
-        .filter(|(_, args)| is_reviewer(args))
+        .filter(|(_, args)| is_session_reviewer(args))
         .map(|(_, args)| args.contains("You audit"))
         .collect();
     assert_eq!(reviews, [false, true], "one plan review, then one audit");
-    let tui_verifier = &verifiers.last().unwrap().1;
-    assert!(tui_verifier.contains("Assess TUI") && !tui_verifier.contains("Assess storage"));
+    let tui_reviewer = &reviewers.last().unwrap().1;
+    assert!(tui_reviewer.contains("Assess TUI") && !tui_reviewer.contains("Assess storage"));
 }
 
 #[test]
@@ -502,7 +498,7 @@ if not os.path.exists('format-error-sent') or {persistent}:
             hook
         };
 
-        std::fs::write(&codex, source.replace(marker, &format!("{hook}\n{marker}"))).unwrap();
+        std::fs::write(&codex, source.replace(marker, &format!("if '[planner blocker]' in prompt:\n    _ledger_emit('The planner could not submit a valid plan.')\n{hook}\n{marker}"))).unwrap();
         let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
         core.send(&conversation.id, "Assess storage and TUI")
@@ -620,7 +616,7 @@ fn repairing_json_after_requirements_extraction_reuses_the_ledger() {
     let events = core.store.events_since(&conversation.id, 0, 2000).unwrap();
     for (role, expected) in [
         ("requirements-extraction-analyst", 1),
-        ("requirements-extraction-verifier", 0),
+        ("requirements-extraction-reviewer", 0),
     ] {
         assert_eq!(
             events
@@ -634,7 +630,7 @@ fn repairing_json_after_requirements_extraction_reuses_the_ledger() {
 }
 
 #[test]
-fn orchestrator_extends_a_running_graph_before_the_pending_verification() {
+fn orchestrator_extends_a_running_graph_before_the_pending_review() {
     extend_running_graph(false);
 }
 
@@ -671,7 +667,7 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     gate = planned_task(next(task for task in snapshot if task['id'] == 't2'))
     gate['depends_on'] = ['extra']
     import os,urllib.request
-    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Add focused analysis before downstream verification','tasks':[extra,gate],'retire':[]}}}
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Add focused analysis before downstream review','tasks':[extra,gate],'retire':[]}}}
     req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
     reply=json.load(urllib.request.urlopen(req,timeout=10))
     assert not reply['result'].get('isError'),reply

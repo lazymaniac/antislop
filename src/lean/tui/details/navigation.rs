@@ -55,11 +55,11 @@ impl Details {
     }
 
     pub fn switch_role(&mut self) {
-        let Some((role @ ("worker" | "verifier"), id)) = self.key.split_once(':') else {
+        let Some((role @ ("worker" | "reviewer"), id)) = self.key.split_once(':') else {
             return;
         };
         let other = if role == "worker" {
-            "verifier"
+            "reviewer"
         } else {
             "worker"
         };

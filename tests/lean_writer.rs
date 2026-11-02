@@ -7,7 +7,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Orchestrator proposes one writing task; the worker writes hello.txt in its
-/// cwd; the verifier approves. Every call logs its cwd and arguments.
+/// cwd; the reviewer approves. Every call logs its cwd and arguments.
 fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let log = dir.join("calls.jsonl");
     let common = format!(
@@ -25,7 +25,7 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
-  "writes": True, "scope": ["."], "kind": "implementation", "verifier": {"focus": "file content"}}]}
+  "writes": True, "scope": ["."], "kind": "implementation", "reviewer": {"focus": "file content"}}]}
 answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
@@ -55,8 +55,8 @@ elif "You review a code change" in prompt:
     session = "code-review"
     answer = "```verdict\n" + json.dumps({"approved": False, "findings": [
         {"severity": "medium", "issue": "greeting lacks a name", "where": "hello.txt:1"}]}) + "\n```"
-elif "You verify" in prompt:
-    session = "verifier"
+elif "You review" in prompt:
+    session = "reviewer"
     answer = "```verdict\n" + json.dumps({"approved": "git diff" in prompt, "findings": []}) + "\n```"
 else:
     session = "worker"
@@ -91,7 +91,7 @@ fn fake_clis_with_concurrent_edit(
         marker = dir.join("edited-once"),
         file = project.join("hello.txt"),
     );
-    let script = script.replace("elif \"You verify\" in prompt:", "elif \"You verify\" in prompt or \"account again\" in prompt:").replace("session = \"worker\"", &injection).replace(
+    let script = script.replace("elif \"You review\" in prompt:", "elif \"You review\" in prompt or \"account again\" in prompt:").replace("session = \"worker\"", &injection).replace(
         "answer = cover(answer)",
         "if \"Automatic integration conflict\" in prompt:\n    answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"\nanswer = cover(answer)",
     );
@@ -123,7 +123,7 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
-  "writes": True, "scope": ["."], "kind": "implementation", "verifier": {"focus": "file content"}}]}
+  "writes": True, "scope": ["."], "kind": "implementation", "reviewer": {"focus": "file content"}}]}
 answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
@@ -154,8 +154,8 @@ elif "You review a code change" in prompt:
     session = "code-review"
     answer = "```verdict\n" + json.dumps({{"approved": False, "findings": [
         {{"severity": "medium", "issue": "greeting lacks a name", "where": "hello.txt:1"}}]}}) + "\n```"
-elif "You verify" in prompt:
-    session = "verifier"
+elif "You review" in prompt:
+    session = "reviewer"
     answer = "```verdict\n" + json.dumps({{"approved": "git diff" in prompt, "findings": []}}) + "\n```"
 else:
     session = "worker"
@@ -339,7 +339,7 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis(dir.path());
-    // Read-only audits have no diff to inspect; this verifier simply approves.
+    // Read-only audits have no diff to inspect; this reviewer simply approves.
     let script = std::fs::read_to_string(&agy).unwrap();
     std::fs::write(&agy, script.replace("\"git diff\" in prompt", "True")).unwrap();
     let config = config_with(&codex, &agy, |text| {
@@ -379,8 +379,8 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
             "session = \"worker\"\n    os.makedirs(\".antislop\", exist_ok=True)\n    with open(\".antislop/worker-cache\", \"w\") as cache:\n        cache.write(\"prepared environment\")",
         )
         .replace(
-            "session = \"verifier\"",
-            "session = \"verifier\"\n    assert open(\".antislop/worker-cache\").read() == \"prepared environment\"",
+            "session = \"reviewer\"",
+            "session = \"reviewer\"\n    assert open(\".antislop/worker-cache\").read() == \"prepared environment\"",
         );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
@@ -425,7 +425,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     assert!(worktree.contains("/.antislop/worktrees/"), "{worktree}");
     assert_eq!(
         agents[1]["cwd"], agents[0]["cwd"],
-        "verifier uses the worker worktree"
+        "reviewer uses the worker worktree"
     );
     let worker_args = agents[0]["args"].to_string();
     assert!(worker_args.contains("accept-edits") && worker_args.contains("--sandbox"));
@@ -436,27 +436,27 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
 }
 
 #[test]
-fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() {
+fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let script = std::fs::read_to_string(&agy).unwrap().replace(
         "answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"",
         "with open(\"hello.txt\", \"w\") as repaired:\n        repaired.write(\"user draft\\nfrom worker\\n\")\n    answer = \"Preserved the user draft and added the worker greeting.\"",
-    ).replace("elif \"You verify\" in prompt:", "elif \"You verify\" in prompt or \"account again\" in prompt:");
+    ).replace("elif \"You review\" in prompt:", "elif \"You review\" in prompt or \"account again\" in prompt:");
     let script = script.replace(
         "primary.write(\"user draft\\n\")",
         &format!("primary.write(\"user draft\\n\")\n        with open({:?}, \"w\") as unrelated:\n            unrelated.write(\"concurrent README\\n\")", project.join("README")),
     ).replace(
-        "session = \"verifier\"",
-        &format!("session = \"verifier\"\n    assert open({:?}).read() == \"user draft\\n\", \"unverified repair touched primary tree\"", project.join("hello.txt")),
+        "session = \"reviewer\"",
+        &format!("session = \"reviewer\"\n    assert open({:?}).read() == \"user draft\\n\", \"unreviewed repair touched primary tree\"", project.join("hello.txt")),
     );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "approved", "{:?}", task.report);
-    assert_eq!(task.round, 2, "a fresh verifier round checks the repair");
+    assert_eq!(task.round, 2, "a fresh reviewer round checks the repair");
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user draft\nfrom worker\n"
@@ -475,7 +475,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() 
     );
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
     assert!(calls.contains("Automatic integration conflict"));
-    assert!(calls.contains("Verify the conflict resolution independently"));
+    assert!(calls.contains("Review the conflict resolution independently"));
     assert!(calls.contains("end with wait_for_answer"));
     let logged: Vec<Value> = calls
         .lines()
@@ -503,14 +503,14 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() 
             "missing {required} from integration handoff: {repair}"
         );
     }
-    let verify = logged
+    let review = logged
         .iter()
         .filter_map(|call| call["args"].as_array()?.last()?.as_str())
-        .find(|prompt| prompt.contains("Verify the conflict resolution independently"))
+        .find(|prompt| prompt.contains("Review the conflict resolution independently"))
         .unwrap();
-    assert!(verify.contains("Round: 2"));
-    assert!(verify.contains("Your obligations"));
-    assert!(verify.contains("Preserved the user draft and added the worker greeting."));
+    assert!(review.contains("Round: 2"));
+    assert!(review.contains("Your obligations"));
+    assert!(review.contains("Preserved the user draft and added the worker greeting."));
 }
 
 #[test]
@@ -724,7 +724,7 @@ fn an_applied_change_gives_its_card_the_effect_and_the_full_coverage() {
     );
     // The effect names the change, bounded, never the full report.
     assert_eq!(feedback["effect"], "wrote hello.txt");
-    // Coverage accounts for the verifier's real obligations: its one risk,
+    // Coverage accounts for the reviewer's real obligations: its one risk,
     // the common checks and the kind's checklist — all answered ok.
     let spec: antislop::lean::tasks::TaskContract =
         serde_json::from_value(task.spec.clone()).unwrap();
@@ -1003,11 +1003,11 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
-    // A new round starts a fresh verifier session. Coverage follow-ups within
-    // that round also need verifier answers from the stub.
+    // A new round starts a fresh reviewer session. Coverage follow-ups within
+    // that round also need reviewer answers from the stub.
     let script = std::fs::read_to_string(&agy).unwrap().replace(
-        "elif \"You verify\" in prompt:",
-        "elif (\"You verify\" in prompt or \"account again\" in prompt or \"does not account for\" in prompt):",
+        "elif \"You review\" in prompt:",
+        "elif (\"You review\" in prompt or \"account again\" in prompt or \"does not account for\" in prompt):",
     );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
@@ -1107,10 +1107,10 @@ fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     // The plan now has a second task waiting on the first.
     let script = std::fs::read_to_string(&codex).unwrap().replace(
-        r#""verifier": {"focus": "file content"}}]}"#,
-        r#""verifier": {"focus": "file content"}}, {"id": "t2", "title": "Extend greeting",
+        r#""reviewer": {"focus": "file content"}}]}"#,
+        r#""reviewer": {"focus": "file content"}}, {"id": "t2", "title": "Extend greeting",
            "goal": "Extend the greeting", "writes": True, "scope": ["."],
-           "kind": "implementation", "verifier": {"focus": "file content"},
+           "kind": "implementation", "reviewer": {"focus": "file content"},
            "depends_on": ["t1"]}]}"#,
     );
     std::fs::write(&codex, script).unwrap();
@@ -1324,4 +1324,76 @@ fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::Path
         .replace("\"approved\": \"git diff\" in prompt", "\"approved\": True");
     std::fs::write(&agy, script).unwrap();
     (codex, agy)
+}
+
+#[test]
+fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let script = std::fs::read_to_string(&codex).unwrap();
+    let start = script.find("plan = {\"tasks\":").unwrap();
+    let end = start + script[start..].find("\nanswer = ").unwrap();
+    let plan = r#"plan = {"tasks": [{"id": id, "title": "Add greeting " + id,
+        "goal": "Create hello-" + id + ".txt", "kind": "implementation"}
+        for id in ["first", "second"]]}"#;
+    std::fs::write(
+        &codex,
+        format!("{}{}{}", &script[..start], plan, &script[end..]),
+    )
+    .unwrap();
+    let barrier = format!(
+        r#"session = "worker"
+    import re, time
+    task_id = re.search(r"^Task id: (\S+)", prompt, re.M).group(1)
+    marker_dir = {marker_dir:?}
+    open(os.path.join(marker_dir, "started-" + task_id), "w").close()
+    deadline = time.monotonic() + 10
+    while not all(os.path.exists(os.path.join(marker_dir, "started-" + name)) for name in ["first", "second"]):
+        if time.monotonic() > deadline:
+            raise RuntimeError("independent writer did not start concurrently")
+        time.sleep(0.02)"#,
+        marker_dir = dir.path(),
+    );
+    let script = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace("session = \"worker\"", &barrier)
+        .replace(
+            "open(\"hello.txt\", \"w\")",
+            "open(\"hello-\" + task_id + \".txt\", \"w\")",
+        );
+    std::fs::write(&agy, script).unwrap();
+    let mut config = config(&codex, &agy);
+    config.policy.local_options = false;
+    config.policy.max_parallel = 2;
+    let core = Core::open(&project.join(".antislop"), config).unwrap();
+    let conversation = run_plan(&core, &project);
+    let tasks = original_tasks(&core, &conversation);
+    assert_eq!(tasks.len(), 2);
+    for task in &tasks {
+        assert_eq!(task.status, "approved", "{:?}", task.report);
+        assert!(task.spec.get("scope").is_none());
+    }
+    for name in ["first", "second"] {
+        assert_eq!(
+            std::fs::read_to_string(project.join(format!("hello-{name}.txt"))).unwrap(),
+            "from worker\n"
+        );
+    }
+    let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let workers: Vec<_> = calls
+        .iter()
+        .filter(|call| call["args"].to_string().contains("You are a worker"))
+        .collect();
+    assert_eq!(workers.len(), 2);
+    assert_ne!(workers[0]["cwd"], workers[1]["cwd"]);
+    assert!(
+        workers
+            .iter()
+            .all(|call| call["cwd"] != project.to_str().unwrap())
+    );
 }

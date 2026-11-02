@@ -59,7 +59,7 @@ pub fn cause(row: &TaskRow) -> Option<String> {
 pub fn worker_status(row: &TaskRow) -> String {
     let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
     match row.status.as_str() {
-        status::VERIFYING => format!("awaiting verdict{round}"),
+        status::REVIEWING => format!("awaiting verdict{round}"),
         other => format!("{}{round}", status_label(other)),
     }
 }
@@ -84,20 +84,20 @@ pub fn worker_state(view: &View, row: &TaskRow) -> String {
     }
 }
 
-/// The verifier's state word with its round, alone, for a card's state line.
-pub fn verifier_status(row: &TaskRow) -> String {
+/// The reviewer's state word with its round, alone, for a card's state line.
+pub fn reviewer_status(row: &TaskRow) -> String {
     let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
     match row.status.as_str() {
-        status::VERIFYING => format!("checking{round}"),
+        status::REVIEWING => format!("checking{round}"),
         status::FAILED | status::NEEDS_USER => format!("rejected{round}"),
         status::PROPOSED | status::QUEUED | status::WORKING => format!("waits for worker{round}"),
         other => format!("{}{round}", status_label(other)),
     }
 }
 
-/// The verifier's state line, with the same round the worker shows.
-pub fn verifier_state(row: &TaskRow) -> String {
-    let status = verifier_status(row);
+/// The reviewer's state line, with the same round the worker shows.
+pub fn reviewer_state(row: &TaskRow) -> String {
+    let status = reviewer_status(row);
     match row.status.as_str() {
         status::FAILED | status::NEEDS_USER => match cause(row) {
             Some(why) => format!("{status} · {why}"),
@@ -138,8 +138,8 @@ pub fn doing(view: &View, key: &str) -> Option<String> {
 
 /// Live activity for the task card follows the currently executing phase.
 pub fn task_activity(view: &View, row: &TaskRow) -> Option<String> {
-    if row.status == status::VERIFYING {
-        verifier_activity(view, row)
+    if row.status == status::REVIEWING {
+        reviewer_activity(view, row)
     } else {
         worker_activity(view, row)
     }
@@ -165,11 +165,11 @@ pub fn worker_activity(view: &View, row: &TaskRow) -> Option<String> {
     }
 }
 
-/// The verifier's own line under its state, read the same way: what its
+/// The reviewer's own line under its state, read the same way: what its
 /// check is doing while it runs, or the cause a rejection stopped with.
-pub fn verifier_activity(view: &View, row: &TaskRow) -> Option<String> {
-    if row.status == status::VERIFYING
-        && let Some(doing) = doing(view, &format!("verifier:{}", row.id))
+pub fn reviewer_activity(view: &View, row: &TaskRow) -> Option<String> {
+    if row.status == status::REVIEWING
+        && let Some(doing) = doing(view, &format!("reviewer:{}", row.id))
     {
         return Some(format!("doing: {doing}"));
     }
@@ -186,13 +186,13 @@ pub use effects::{
     integration_label, integration_line, settled_total,
 };
 
-/// The bottom line of a task card: the verifier shows the coverage it
+/// The bottom line of a task card: the reviewer shows the coverage it
 /// accounts for, both roles show how the result landed, concrete
 /// dependencies and the count of messages follow. Parts that do not fit
 /// the card drop from the right, so the line never overlaps a card edge.
 pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if role == "verifier" {
+    if role == "reviewer" {
         parts.push(coverage_short(row));
     }
     parts.push(integration_label(row));
@@ -232,7 +232,7 @@ pub fn next_step(view: &View, row: &TaskRow) -> String {
             }
         }
         status::WORKING => "next: the worker is running; Enter opens its details".to_owned(),
-        status::VERIFYING => "next: the verifier is checking; Enter opens its details".to_owned(),
+        status::REVIEWING => "next: the reviewer is checking; Enter opens its details".to_owned(),
         status::WAITING => {
             "next: finish the login or wait out the limit, then Ctrl+R resumes".to_owned()
         }

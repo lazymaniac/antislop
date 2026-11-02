@@ -1,9 +1,5 @@
 use super::*;
 
-fn normalize_scope_path(path: &str) -> &str {
-    path.trim().trim_start_matches("./").trim_end_matches('/')
-}
-
 pub fn work_kind_name(kind: WorkKind) -> &'static str {
     match kind {
         WorkKind::Orchestration => "orchestration",
@@ -26,35 +22,6 @@ pub fn work_kind_name(kind: WorkKind) -> &'static str {
         WorkKind::Analysis => "analysis",
         WorkKind::Delivery => "delivery",
     }
-}
-
-/// Whether two task scopes overlap on disk (empty scope means the whole project).
-pub fn scopes_overlap(a: &[String], b: &[String]) -> bool {
-    if a.is_empty() || b.is_empty() {
-        return true;
-    }
-    for left in a {
-        let left = normalize_scope_path(left);
-        if left.is_empty() || left == "." {
-            return true;
-        }
-        for right in b {
-            let right = normalize_scope_path(right);
-            if right.is_empty() || right == "." || left == right {
-                return true;
-            }
-            if left
-                .strip_prefix(right)
-                .is_some_and(|rest| rest.starts_with('/'))
-                || right
-                    .strip_prefix(left)
-                    .is_some_and(|rest| rest.starts_with('/'))
-            {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Whether task `from` depends directly or transitively on `target`.
@@ -85,20 +52,16 @@ pub fn depends_transitively(tasks: &[TaskContract], from: &str, target: &str) ->
 pub struct PeerNode<'a> {
     pub id: &'a str,
     pub depends_on: &'a [String],
-    pub writes: bool,
-    pub scope: &'a [String],
 }
 
 /// For each task id, lists the peer task ids with which it can execute in parallel
-/// (neither depends on the other, and if both write, their scopes do not overlap).
+/// (neither depends on the other; writers use isolated worktrees).
 pub fn parallel_peers(tasks: &[TaskContract]) -> std::collections::HashMap<String, Vec<String>> {
     let nodes: Vec<PeerNode> = tasks
         .iter()
         .map(|task| PeerNode {
             id: &task.id,
             depends_on: &task.depends_on,
-            writes: task.writes,
-            scope: &task.scope,
         })
         .collect();
     peers_of(&nodes)
@@ -168,11 +131,7 @@ fn peers_can_run(
     other: &PeerNode,
     reaches: &[Vec<bool>],
 ) -> bool {
-    other_at != at
-        && other.id != task.id
-        && !reaches[at][other_at]
-        && !reaches[other_at][at]
-        && !(task.writes && other.writes && scopes_overlap(task.scope, other.scope))
+    other_at != at && other.id != task.id && !reaches[at][other_at] && !reaches[other_at][at]
 }
 
 /// Builds a structured Markdown plan document with sections assigned to tasks.
@@ -240,7 +199,6 @@ fn append_task_details(document: &mut String, task: &TaskContract) {
         " (read-only)\n"
     });
     document.push_str(&format!("- **Goal**: {}\n", task.goal));
-    document.push_str(&format!("- **Scope**: {}\n", scope_text(&task.scope)));
 }
 
 fn append_task_relationships(

@@ -206,7 +206,7 @@ fn validate_round_comment(
         .split_once(':')
         .ok_or_else(|| Error::Invalid("round comment requires a task".into()))?;
     require(
-        matches!(role, "worker" | "verifier" | "check" | "diff"),
+        matches!(role, "worker" | "reviewer" | "check" | "diff"),
         "round comment requires a task",
     )?;
     let id = id.split(':').next().unwrap_or(id);

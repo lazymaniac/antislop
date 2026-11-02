@@ -199,40 +199,6 @@ pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Fingerprint of working tree files in `scope` for freshness validation.
-pub fn working_tree_fingerprint(project: &Path, scope: &[String]) -> String {
-    let mut sorted_scope = scope.to_vec();
-    sorted_scope.sort();
-    let mut fp = String::new();
-    for path in &sorted_scope {
-        fingerprint_path(project, path, &mut fp);
-    }
-    crate::hash(fp.as_bytes())
-}
-
-fn fingerprint_path(project: &Path, rel_path: &str, fp: &mut String) {
-    let full = project.join(rel_path);
-    let observation = if full.is_file() {
-        std::fs::read(&full).ok().map(|bytes| crate::hash(&bytes))
-    } else if full.is_dir() {
-        Command::new("git")
-            .arg("-C")
-            .arg(project)
-            .args(["status", "--porcelain=v1", "-z", "--", rel_path])
-            .output()
-            .ok()
-            .map(|status| crate::hash(&status.stdout))
-    } else {
-        Some("missing".to_owned())
-    };
-    if let Some(observation) = observation {
-        fp.push_str(rel_path);
-        fp.push(':');
-        fp.push_str(&observation);
-        fp.push('\n');
-    }
-}
-
 /// Commits everything the worker changed. Returns the new HEAD (unchanged if
 /// the worker changed nothing).
 pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {

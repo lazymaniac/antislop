@@ -11,9 +11,7 @@ impl Core {
         let conv = self.store.conversation(conversation)?;
         let project = PathBuf::from(conv.project);
         let head = git::head(&project).unwrap_or_default();
-        let scope: Vec<String> =
-            serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
-        let fingerprint = git::working_tree_fingerprint(&project, &scope);
+        let fingerprint = git::recovery_fingerprint(&project, &[".".into()])?;
         let mut data = freshness_seed(conversation, plan_id, task, &head, &fingerprint);
         self.append_run_revision(conversation, plan_id, &mut data)?;
         Ok(crate::hash(data.as_bytes()))
@@ -163,7 +161,7 @@ fn truncate_patch(mut patch: String) -> (String, bool) {
 
 fn reviewer_profile(config: &Config, value: &serde_json::Value) -> Option<serde_json::Value> {
     let spec = serde_json::from_value::<TaskContract>(value.clone()).ok()?;
-    let profile = config.resolve(spec.kind, RoleKind::Verifier).ok()?;
+    let profile = config.resolve(spec.kind, RoleKind::Reviewer).ok()?;
     Some(json!({
         "provider": profile.provider,
         "model": profile.model,

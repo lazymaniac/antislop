@@ -79,9 +79,9 @@ fn an_attached_terminal_fills_the_session_panel() {
 fn footer_numbers_match_each_keys_visible_tabs() {
     for key in [
         "worker:t1",
-        "verifier:t1",
+        "reviewer:t1",
         "auditor",
-        "plan-verifier",
+        "plan-reviewer",
         "planner",
         "orchestrator",
         "conversation",
@@ -99,7 +99,7 @@ fn footer_numbers_match_each_keys_visible_tabs() {
     }
 }
 
-fn verifier_task(extra: Value) -> Value {
+fn reviewer_task(extra: Value) -> Value {
     let mut task = serde_json::json!({
         "spec": {"id": "t1", "title": "T", "goal": "g", "kind": "analysis"},
     });
@@ -111,7 +111,7 @@ fn verifier_task(extra: Value) -> Value {
 
 #[test]
 fn checks_show_live_progress_before_any_verdict() {
-    let task = verifier_task(serde_json::json!({"checks": [
+    let task = reviewer_task(serde_json::json!({"checks": [
         {"id": "goal", "state": "settled", "status": "ok", "note": "a.rs:3"},
         {"id": "R085", "state": "checking", "status": null, "note": ""},
     ]}));
@@ -124,7 +124,7 @@ fn checks_show_live_progress_before_any_verdict() {
 
 #[test]
 fn checks_fall_back_to_the_verdict_and_flag_what_it_skipped() {
-    let task = verifier_task(serde_json::json!({"verdict": {"coverage": {
+    let task = reviewer_task(serde_json::json!({"verdict": {"coverage": {
             "goal": {"status": "issue", "note": "broken"}}}}));
     let rows = check_rows(&task);
     assert_eq!(rows[0].status.as_deref(), Some("issue"));
@@ -141,17 +141,17 @@ fn ac_copy_01_tab_names_preserved_and_windowed_when_narrow() {
     let line = format_tabs("orchestrator", 0, 100);
     let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     for tab in tabs_for("orchestrator") {
-        let tab = TABS[tab];
+        let tab = tab_name("orchestrator", tab);
         assert!(rendered.contains(tab), "missing tab {tab} in {rendered}");
     }
-    assert!(!rendered.contains("Result") && !rendered.contains("Checks"));
+    assert!(rendered.contains("Response") && !rendered.contains("Checks"));
 
     // Narrow: 50 columns -> active tab still visible
     let line = format_tabs("worker:t1", RESULT, 50);
     let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(
-        rendered.contains("[Result]"),
-        "active tab Result missing in {rendered}"
+        rendered.contains("[Results]"),
+        "active tab Results missing in {rendered}"
     );
 }
 
@@ -186,7 +186,7 @@ fn details_footer_hints_prioritized_by_width() {
 fn planner_plan_preview_tracks_submitted_and_published_versions() {
     let mut view = View::default();
     let mut details = Details::new("planner".into());
-    details.switch_tab(PLAN);
+    details.switch_tab(RESULT);
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
     terminal.draw(|frame| details.draw(frame, &view)).unwrap();
     assert!(screen(&terminal).contains("No plan submitted yet"));
@@ -276,18 +276,18 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
     };
     assert_eq!(
         names("worker:t1"),
-        ["Worker", "Result", "Comments", "Requirements"]
+        ["Worker", "Results", "Comments", "Requirements"]
     );
     assert_eq!(
-        names("verifier:t1"),
-        ["Verifier", "Checks", "Comments", "Requirements"]
+        names("reviewer:t1"),
+        ["Reviewer", "Review", "Checks", "Comments", "Requirements"]
     );
-    assert_eq!(names("auditor"), ["Overview", "Review", "Comments"]);
-    assert_eq!(names("plan-verifier"), ["Overview", "Review", "Comments"]);
+    assert_eq!(names("auditor"), ["Overview", "Audit", "Comments"]);
+    assert_eq!(names("plan-reviewer"), ["Overview", "Review", "Comments"]);
     assert_eq!(names("conversation"), ["Overview", "Comments"]);
     assert_eq!(names("planner"), ["Overview", "Plan", "Comments"]);
 
-    for key in ["worker:t1", "verifier:t1"] {
+    for key in ["worker:t1", "reviewer:t1"] {
         let mut details = Details::new(key.into());
         let tabs = tabs_for(key);
         assert_eq!(details.tab, tabs[0]);
@@ -305,7 +305,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
         let hidden = if key.starts_with("worker:") {
             CHECKS
         } else {
-            RESULT
+            PLAN
         };
         details.switch_tab(hidden);
         assert_eq!(details.tab, REQUIREMENTS, "hidden tabs cannot be selected");
@@ -315,7 +315,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             .map(|span| span.content.to_string())
             .collect::<String>();
         assert!(!rendered.contains(if key.starts_with("worker:") {
-            "Verifier"
+            "Reviewer"
         } else {
             "Worker"
         }));
@@ -332,20 +332,20 @@ fn switching_roles_preserves_round_and_each_roles_search() {
     details.fetch_in_flight = true;
     details.switch_role();
     assert!(!details.fetch_in_flight);
-    assert_eq!(details.key, "verifier:t1");
-    assert_eq!(details.tab, VERIFIER);
-    assert_eq!(details.composer_key().1, "verifier:uuid");
+    assert_eq!(details.key, "reviewer:t1");
+    assert_eq!(details.tab, REVIEWER);
+    assert_eq!(details.composer_key().1, "reviewer:uuid");
     assert_eq!(details.selected_round, Some(2));
     assert!(details.query.is_empty());
-    details.query = "verifier query".into();
+    details.query = "reviewer query".into();
     details.switch_role();
     assert_eq!(details.key, "worker:t1");
     assert_eq!(details.tab, 0);
     assert_eq!(details.query, "worker query");
     assert_eq!(details.scroll, 8);
-    details.switch_key("verifier:t2".into());
-    assert_eq!(details.tab, VERIFIER);
-    assert_eq!(details.session_keys(), ["verifier:t2"]);
+    details.switch_key("reviewer:t2".into());
+    assert_eq!(details.tab, REVIEWER);
+    assert_eq!(details.session_keys(), ["reviewer:t2"]);
 }
 
 #[test]
@@ -354,7 +354,7 @@ fn reviewers_show_their_latest_verdict_on_the_review_tab() {
     view.reviews
         .insert("auditor".into(), vec!["✗ failed: missing tests".into()]);
     let mut details = Details::new("auditor".into());
-    details.switch_tab(REVIEW);
+    details.switch_tab(RESULT);
     let shown: Vec<String> = details.lines(&view).into_iter().map(|(_, l)| l).collect();
     assert_eq!(shown, ["✗ failed: missing tests"]);
     details.switch_tab(0);
@@ -364,7 +364,85 @@ fn reviewers_show_their_latest_verdict_on_the_review_tab() {
             .iter()
             .all(|(_, line)| !line.contains("missing tests"))
     );
-    let mut empty = Details::new("plan-verifier".into());
-    empty.switch_tab(REVIEW);
-    assert!(empty.lines(&View::default())[0].1.contains("No review yet"));
+    let mut empty = Details::new("plan-reviewer".into());
+    empty.switch_tab(RESULT);
+    assert!(
+        empty.lines(&View::default())[0]
+            .1
+            .contains("No submitted results")
+    );
+}
+
+#[test]
+fn every_agent_exposes_results_and_keeps_reviewer_output_separate() {
+    let roles = [
+        "orchestrator",
+        "planner",
+        "plan-reviewer",
+        "auditor",
+        "requirements-extraction-analyst",
+        "requirements-audit-analyst",
+        "requirements-audit-reviewer",
+        "comment-orchestrator",
+        "worker:t1",
+        "reviewer:t1",
+    ];
+    let state = tempfile::tempdir().unwrap();
+    for key in roles {
+        let mut details = Details::new(key.into());
+        assert_eq!(details.nth_tab(1), Some(RESULT), "{key}");
+        details.switch_tab(RESULT);
+        let mut builder = super::super::document::Builder::new(state.path()).unwrap();
+        builder
+            .append("", |sink| sink("Own result: café 👩‍💻"))
+            .unwrap();
+        let own = builder.finish().unwrap();
+        let mut other = super::super::document::Builder::new(state.path()).unwrap();
+        other
+            .append("", |sink| sink("Another agent's report"))
+            .unwrap();
+        if key.starts_with("reviewer:") {
+            details
+                .documents
+                .insert("result".into(), other.finish().unwrap());
+            details.documents.insert("reviewer_result".into(), own);
+        } else {
+            details.documents.insert("result".into(), own);
+        }
+        let view = View::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+            let shown = screen(&terminal);
+            if shown.contains("Own result: café") {
+                assert!(!shown.contains("Another agent's report"));
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{key}: {shown}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn result_tab_names_describe_the_roles_deliverable() {
+    for (key, name) in [
+        ("worker:t1", "Results"),
+        ("reviewer:t1", "Review"),
+        ("planner", "Plan"),
+        ("orchestrator", "Response"),
+        ("plan-reviewer", "Review"),
+        ("auditor", "Audit"),
+        ("requirements-extraction-analyst", "Requirements"),
+        ("requirements-audit-analyst", "Audit"),
+        ("requirements-audit-reviewer", "Audit review"),
+    ] {
+        assert_eq!(tab_name(key, RESULT), name);
+        assert_eq!(
+            tabs_for(key).iter().filter(|tab| **tab == RESULT).count(),
+            1
+        );
+        assert!(!tabs_for(key).contains(&PLAN) && !tabs_for(key).contains(&REVIEW));
+    }
 }

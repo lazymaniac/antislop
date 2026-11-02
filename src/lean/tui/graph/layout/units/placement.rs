@@ -2,7 +2,7 @@ use super::links::gap_height;
 use super::*;
 use std::collections::BTreeMap;
 
-/// The session's own agents in rows of as many as fit across.
+/// Preparation and final review occupy separate rows, in workflow order.
 pub(super) fn admin_rows<'a>(builder: &Builder<'a>) -> Vec<Vec<&'a str>> {
     let visible: Vec<&str> = builder
         .admin
@@ -13,7 +13,18 @@ pub(super) fn admin_rows<'a>(builder: &Builder<'a>) -> Vec<Vec<&'a str>> {
     let across = builder.viewport.map_or(visible.len().max(1), |(width, _)| {
         usize::from(width.saturating_sub(MARGIN) / (builder.size.admin_w + GAP_X)).max(1)
     });
-    visible.chunks(across).map(<[&str]>::to_vec).collect()
+    let mut rows: Vec<Vec<&str>> = Vec::new();
+    for key in visible {
+        if let Some(row) = rows.last_mut()
+            && row.len() < across
+            && is_final_review(row[0]) == is_final_review(key)
+        {
+            row.push(key);
+        } else {
+            rows.push(vec![key]);
+        }
+    }
+    rows
 }
 
 pub(super) fn admin_width(size: Size, row: &[&str]) -> u16 {
@@ -57,20 +68,24 @@ pub(super) fn row_tops(
     gaps: &[Vec<usize>],
     rows: usize,
 ) -> Tops {
-    let (admin_tops, mut y) = admin_tops(builder, admin);
+    let split = admin.partition_point(|row| !is_final_review(row[0]));
+    let (mut admin_tops, y) = admin_row_tops(builder, &admin[..split], 0);
     let heights = row_heights(placed, rows);
-    let (unit_tops, gap_tops, bottom) = content_tops(&heights, gaps, admin.is_empty(), y);
-    y = bottom;
+    let (unit_tops, gap_tops, mut bottom) = content_tops(&heights, gaps, split == 0, y);
+    if split < admin.len() && (split > 0 || rows > 0) {
+        bottom += GAP_Y;
+    }
+    let (review_tops, bottom) = admin_row_tops(builder, &admin[split..], bottom);
+    admin_tops.extend(review_tops);
     Tops {
         admin: admin_tops,
         units: unit_tops,
         gaps: gap_tops,
-        bottom: y,
+        bottom,
     }
 }
 
-fn admin_tops(builder: &Builder<'_>, admin: &[Vec<&str>]) -> (Vec<u16>, u16) {
-    let mut y = 0u16;
+fn admin_row_tops(builder: &Builder<'_>, admin: &[Vec<&str>], mut y: u16) -> (Vec<u16>, u16) {
     let mut tops = Vec::new();
     for (index, row) in admin.iter().enumerate() {
         let height = row

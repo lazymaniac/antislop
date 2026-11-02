@@ -6,19 +6,25 @@ type ToolSpec = (String, Value, Vec<&'static str>);
 
 /// The roles that review plans, audits, or code changes without check coverage.
 fn plain_reviewer(role: &str) -> bool {
-    matches!(role, "plan-verifier" | "auditor") || role.starts_with("code-review:")
+    matches!(role, "plan-reviewer" | "auditor") || role.starts_with("code-review:")
 }
 
 pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
-    if let Some((_, verifier)) = crate::lean::task_role(role) {
-        return task_tools(verifier);
+    if let Some((_, reviewer)) = crate::lean::task_role(role) {
+        return task_tools(reviewer);
     }
     match role {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
         "planner" => vec![SUBMIT_PLAN, TOOL],
         "requirements-extraction-analyst" => vec!["submit_ledger"],
-        "requirements-audit-analyst" => vec!["submit_audit", "read_dependency_result"],
-        "requirements-audit-verifier" => vec!["submit_audit_review", "read_dependency_result"],
+        "requirements-audit-analyst" => {
+            vec!["submit_audit", "read_dependency_result", "read_evidence"]
+        }
+        "requirements-audit-reviewer" => vec![
+            "submit_audit_review",
+            "read_dependency_result",
+            "read_evidence",
+        ],
         _ if plain_reviewer(role) => vec![REVIEW],
         _ => vec![TOOL],
     }
@@ -29,7 +35,7 @@ pub(super) fn scoped_tools(
     contract: Option<&crate::lean::tasks::TaskContract>,
 ) -> Vec<&'static str> {
     let mut names = allowed_tools(role);
-    if crate::lean::task_role(role).is_some_and(|(_, verifier)| !verifier)
+    if crate::lean::task_role(role).is_some_and(|(_, reviewer)| !reviewer)
         && let Some(task) = contract
     {
         names.retain(|name| {
@@ -75,9 +81,16 @@ pub(super) fn scoped_tool_list(
     list
 }
 
-fn task_tools(verifier: bool) -> Vec<&'static str> {
-    if verifier {
-        vec![REVIEW, ASK, WAIT, "read_dependency_result", "current_turn"]
+fn task_tools(reviewer: bool) -> Vec<&'static str> {
+    if reviewer {
+        vec![
+            REVIEW,
+            ASK,
+            WAIT,
+            "read_dependency_result",
+            "read_evidence",
+            "current_turn",
+        ]
     } else {
         vec![
             "complete",
@@ -86,6 +99,8 @@ fn task_tools(verifier: bool) -> Vec<&'static str> {
             ASK,
             WAIT,
             "read_dependency_result",
+            "record_evidence",
+            "read_evidence",
             "current_turn",
         ]
     }
@@ -98,6 +113,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         SUBMIT_REQUIREMENTS,
         SUBMIT_PLAN,
         "read_dependency_result",
+        "read_evidence",
         "answer_agent",
         "defer_to_user",
         "retry_task",
@@ -119,6 +135,9 @@ pub(crate) fn tool_list(role: &str) -> Vec<Value> {
 fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
     let (description, fields, required) = tool_contract(name, role, orchestrator);
     let mut properties = fields.as_object().unwrap().clone();
+    if matches!(name, "complete" | "select") {
+        properties.insert("evidence".into(),json!({"type":"array","maxItems":64,"items":{"type":"string"},"description":"Optional existing MCP evidence ids to retain in this result. Evidence recorded this turn is attached automatically; use this for earlier evidence when amending a report."}));
+    }
     if name != "current_turn" {
         let description = if crate::lean::task_role(role).is_some() {
             "Exact active turn id from the latest prompt; call current_turn if uncertain. Never reuse a previous turn id."
@@ -151,13 +170,15 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
         "current_turn" => ("Read this gateway's current task role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
         "report_blocker" => ("End an options turn when no viable choice satisfies the current contract. Record the concrete blocker and condition for resuming. The task stays unapproved and its dependents do not run; the orchestrator must revise the owning task or resolve the blocker. Never fabricate a selection or finish only in terminal prose.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string"}}), vec!["turn", "report", "resume_condition"]),
-        "read_dependency_result" => ("Read the complete report of an approved dependency (including reachable ancestors in the bound plan) in pages of up to 16 KiB. This does not end the turn. Reuse the returned cursor and round for the next page. available_rounds lists completed same-input worker reports: if the latest is an amendment, read the earlier round it names with round. Earlier reports are historical; apply corrections from the latest result.".into(), json!({"dependency":{"type":"string","description":"Dependency name or full result id from the current handoff"},"round":{"type":"integer","minimum":0,"description":"Optional same-input worker round from available_rounds"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
+        "record_evidence" => ("Persist raw command/measurement output as immutable MCP execution evidence before completing. Supply the actual output, not a reconstruction or repository source contents. Disk-backed content survives worktree cleanup. Up to 256 KiB UTF-8 per labelled record; split larger outputs into distinct labels. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),
+        "read_evidence" => ("Read immutable MCP execution evidence of your own worker or a scoped completed dependency report, in pages of at most 16 KiB. Discover ids in read_dependency_result.evidence or the report's MCP evidence section. Reuse cursor until complete=true. This never ends the turn and does not grant filesystem or unrelated history access.".into(),json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),vec!["turn","evidence"]),
+        "read_dependency_result" => ("Read complete scoped worker reports in pages up to 16 KiB. dependency=self reads your own earlier worker results (also for reviewers). available_rounds contains current-input rounds. report_history lists immutable result_ref values including older input generations: to read an older report, pass its exact result_ref. Historical=true means obsolete inputs: preserve the evidence but do not use it to claim current acceptance. Amendments never replace the original; read the earlier report and apply later corrections. Evidence metadata provides ids for read_evidence. This does not end the turn.".into(), json!({"dependency":{"type":"string","description":"Dependency name, scoped producer task id, or self"},"result_ref":{"type":"string","description":"Exact immutable reference from report_history; enables explicitly marked historical-input reports"},"round":{"type":"integer","minimum":0,"description":"Optional current-input worker round; when result_ref is present it must match"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
         "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn", "text"]),
-        "finish_turn" if role == "planner" => (format!("Only after submit_plan refused a plan of this turn and you cannot correct what it names, for instance because the instructions demand what it refuses: end the turn without a plan and name the blocker; the user sees it at once. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),
+        "finish_turn" if role == "planner" => (format!("Only after submit_plan or the plan reviewer refused a plan and you cannot correct it within the agreed requirements: end the turn without a plan and name the blocker and decision needed; the orchestrator receives it. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),
         "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn", "text"]),
         "ask_user" => (format!("Ask the user one question with 2–6 choices; this ends your turn and the answer arrives as the user's next message. {RETRY}"), schema::question(), vec!["turn", "context", "question", "options"]),
         "submit_requirements" => (format!("Interview only: end the turn with the requirements summary for the user to approve: the goal and its acceptance criteria. {RETRY}"), json!({"markdown":{"type":"string","description":"The summary in Markdown"}}), vec!["turn", "markdown"]),
-        "complete" => (format!("Finish your task once its whole goal is done, not after a part of it; this ends your turn. {RETRY}"), json!({"summary":{"type":"string","description":"A few sentences on what was delivered; tasks that depend on this one receive only this"},"report":{"type":"string","description":"The full result your verifier checks: what you did, where, and how you checked it"}}), vec!["turn", "summary", "report"]),
+        "complete" => (format!("Finish your task once its whole goal is done, not after a part of it; this ends your turn. {RETRY}"), json!({"summary":{"type":"string","description":"A few sentences on what was delivered; tasks that depend on this one receive only this"},"report":{"type":"string","description":"The full result your reviewer checks: what you did, where, and how you checked it"}}), vec!["turn", "summary", "report"]),
         "select" => (format!("Options tasks only: record the approach you chose among 2–4 alternatives; this ends your turn. {RETRY}"), schema::selection(), vec!["turn", "alternatives", "selected", "rationale"]),
         "review" if plain_reviewer(role) => (format!("Record your review; this ends your turn. The runtime approves when no finding is critical, high or medium. {RETRY}"), schema::plain_review(), vec!["turn", "report", "findings"]),
         "review" => (format!("Record your review of the task; this ends your turn. The runtime approves the task when every check is ok or n/a and no finding is critical, high or medium. {RETRY}"), schema::review(), vec!["turn", "report", "checks", "findings"]),
@@ -169,7 +190,7 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
     if name == "submit_plan" {
-        let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a task in tasks runs again from the start"}});
+        let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a redeclared task retains existing work and is assessed before executor continuation; use revise_plan.replacements for unfinished successors"}});
         if orchestrator {
             fields["addressed"] = schema::addressed();
         }

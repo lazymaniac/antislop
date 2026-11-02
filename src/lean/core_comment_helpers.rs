@@ -67,7 +67,7 @@ fn artifact_label(rest: &str, plan: &[Task]) -> String {
 fn addressed_target_label(target: &str, plan: &[Task]) -> String {
     match target.split_once(':') {
         Some(("worker", id)) => format!("the worker of {}", task_label(id, plan)),
-        Some(("verifier", id)) => format!("the verifier of {}", task_label(id, plan)),
+        Some(("reviewer", id)) => format!("the reviewer of {}", task_label(id, plan)),
         Some(("diff", _)) => diff_label(target, plan),
         _ => named_target_label(target),
     }
@@ -95,7 +95,7 @@ fn diff_location_label(file: Option<&str>, line: Option<&str>, change: &str) -> 
 fn named_target_label(target: &str) -> String {
     match target {
         ORCHESTRATOR => "your own work".into(),
-        PLAN_VERIFIER => "the plan verifier's review".into(),
+        PLAN_REVIEWER => "the plan reviewer's review".into(),
         AUDITOR => "the auditor's report".into(),
         other => other.into(),
     }

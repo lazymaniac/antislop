@@ -14,7 +14,7 @@ pub(super) fn decode_audit_review(answer: &str) -> Result<(String, Vec<AuditAsse
     match TurnResult::decode(answer) {
         TurnResult::AuditReview { note, assessments } => Ok((note, assessments)),
         _ => Err(Error::Invalid(
-            "the audit verifier ended its turn without submit_audit_review".into(),
+            "the audit reviewer ended its turn without submit_audit_review".into(),
         )),
     }
 }
@@ -71,7 +71,7 @@ pub(super) fn bind_assessment(
         .map(|(_, evidence)| evidence.clone())
         .ok_or_else(|| {
             Error::Invalid(format!(
-                "the audit verifier assessed {}, which the audit did not propose",
+                "the audit reviewer assessed {}, which the audit did not propose",
                 assessment.evidence
             ))
         })?;

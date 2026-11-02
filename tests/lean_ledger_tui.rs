@@ -110,7 +110,7 @@ fn conversation_switches_keep_ledger_cursor_filter_and_background_chat() {
     assert_eq!(app.input.text, "background draft");
 }
 #[test]
-fn preview_is_required_and_has_no_manual_verified_field() {
+fn preview_is_required_and_has_no_manual_reviewed_field() {
     let mut view = browser();
     view.key(key(KeyCode::Char('e')), "c1");
     let form = view.form_mut().unwrap();
@@ -374,7 +374,7 @@ fn simplified_form_maps_named_requirement_fields() {
         (FormField::Parent, "parent"),
         (FormField::Dependencies, "dependency"),
         (FormField::ImplementationOwners, "worker"),
-        (FormField::VerificationOwners, "verifier"),
+        (FormField::ReviewOwners, "reviewer"),
         (FormField::Tasks, "task"),
         (FormField::Disposition, "superseded_by_user"),
         (FormField::Reason, "user correction"),
@@ -393,7 +393,7 @@ fn simplified_form_maps_named_requirement_fields() {
     assert_eq!(spec.parent.as_deref(), Some("parent"));
     assert_eq!(spec.depends_on, ["dependency"]);
     assert_eq!(spec.implementation_owners, ["worker"]);
-    assert_eq!(spec.verification_owners, ["verifier"]);
+    assert_eq!(spec.review_owners, ["reviewer"]);
     assert_eq!(spec.task_ids, ["task"]);
     assert_eq!(spec.disposition, Disposition::SupersededByUser);
     assert!(!spec.mandatory);

@@ -121,7 +121,7 @@ impl Fixture {
             .unwrap()
     }
     fn task(&self, id: &str, requirements: &[&str], depends: &[&str]) -> serde_json::Value {
-        json!({"id":id,"title":id,"goal":"implement and check scope","kind":"implementation","verifier":{"focus":"actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"depends_on":depends})
+        json!({"id":id,"title":id,"goal":"implement and check scope","kind":"implementation","reviewer":{"focus":"actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"depends_on":depends})
     }
     fn plan(&self, specs: Vec<serde_json::Value>) -> Vec<antislop::lean::store::Task> {
         let tasks = self.store.add_plan(&self.conversation, &specs).unwrap();
@@ -133,10 +133,10 @@ impl Fixture {
             .unwrap();
         tasks
     }
-    fn turn(&self, phase: &str, verifier: bool) -> String {
+    fn turn(&self, phase: &str, reviewer: bool) -> String {
         let role = format!(
             "requirements-{phase}-{}",
-            if verifier { "verifier" } else { "analyst" }
+            if reviewer { "reviewer" } else { "analyst" }
         );
         let turn = self
             .store
@@ -172,7 +172,7 @@ impl Fixture {
     }
     fn review(&self, phase: &str, fp: &str, approved: bool) {
         let producer = self.turn(phase, false);
-        let verifier = self.turn(phase, true);
+        let reviewer = self.turn(phase, true);
         let revision = self
             .store
             .run(&self.conversation, &self.run.id)
@@ -185,7 +185,7 @@ impl Fixture {
                 revision,
                 phase,
                 &producer,
-                &verifier,
+                &reviewer,
                 fp,
                 approved,
                 "compared every source and reproduced checks",
@@ -427,12 +427,12 @@ fn parent_requires_children_and_its_own_integration_evidence() {
     child.parent = Some("parent".into());
     f.apply(&f.change(0, vec![parent, child]));
     let tasks = f.approved(f.plan(vec![f.task("a", &["parent", "child"], &[])]));
-    let verifier = f.turn("audit", true);
+    let reviewer = f.turn("audit", true);
     f.store
         .add_ledger_evidence(
             &f.conversation,
             &f.run.id,
-            &verifier,
+            &reviewer,
             &f.assessment(&tasks[0], "parent", "integrated"),
         )
         .unwrap();
@@ -446,13 +446,13 @@ fn parent_requires_children_and_its_own_integration_evidence() {
             .find(|e| e.spec.id == "parent")
             .unwrap()
             .status,
-        "verified"
+        "reviewed"
     );
     f.store
         .add_ledger_evidence(
             &f.conversation,
             &f.run.id,
-            &verifier,
+            &reviewer,
             &f.assessment(&tasks[0], "child", "integrated"),
         )
         .unwrap();
@@ -461,22 +461,22 @@ fn parent_requires_children_and_its_own_integration_evidence() {
             .ledger_statuses(&f.conversation, &f.run.id, None, "integrated")
             .unwrap()
             .iter()
-            .all(|e| e.status == "verified")
+            .all(|e| e.status == "reviewed")
     );
     assert!(
         f.store
             .ledger_statuses(&f.conversation, &f.run.id, None, "changed")
             .unwrap()
             .iter()
-            .all(|e| e.status != "verified")
+            .all(|e| e.status != "reviewed")
     );
 }
 #[test]
-fn evidence_rejects_self_verification_empty_claims_and_stale_inputs() {
+fn evidence_rejects_self_review_empty_claims_and_stale_inputs() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));
     let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[])]));
-    let verifier = f.turn("audit", true);
+    let reviewer = f.turn("audit", true);
     let mut a = f.assessment(&tasks[0], "r1", "tree");
     assert!(
         f.store
@@ -486,21 +486,21 @@ fn evidence_rejects_self_verification_empty_claims_and_stale_inputs() {
     a.evidence.result = "done".into();
     assert!(
         f.store
-            .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &a)
+            .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &a)
             .is_err()
     );
     a.evidence.result = "test checks passed with measured outputs".into();
     a.evidence.generation = 99;
     assert!(
         f.store
-            .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &a)
+            .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &a)
             .is_err()
     );
     a.evidence.generation = 0;
     a.evidence.entry_version = 0;
     assert!(
         f.store
-            .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &a)
+            .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &a)
             .is_err()
     );
 }
@@ -517,12 +517,12 @@ fn completion_gate_requires_source_coverage_current_audit_and_integrated_evidenc
     );
     f.review("extraction", "", true);
     f.review("audit", "tree", true);
-    let verifier = f.turn("audit", true);
+    let reviewer = f.turn("audit", true);
     f.store
         .add_ledger_evidence(
             &f.conversation,
             &f.run.id,
-            &verifier,
+            &reviewer,
             &f.assessment(&tasks[0], "r1", "tree"),
         )
         .unwrap();
@@ -617,7 +617,7 @@ fn removed_entry_and_task_fields_are_rejected() {
     assert!(serde_json::from_value::<TaskContract>(task).is_ok());
     let planned = json!({"id": "task", "title": "Task", "goal": "Do it", "kind": "analysis"});
     assert!(serde_json::from_value::<PlannedTask>(planned.clone()).is_ok());
-    for field in ["plan_item_ids", "requirement_ids", "verifier", "inputs"] {
+    for field in ["plan_item_ids", "requirement_ids", "reviewer", "inputs"] {
         let mut old = planned.clone();
         old[field] = json!([]);
         assert!(
@@ -639,12 +639,12 @@ fn live_scope_edit_cancels_only_affected_process_and_rejects_late_task_updates()
     std::fs::write(&script,r#"#!/usr/bin/env python3
 import json,sys,uuid,os,time,re
 prompt=sys.argv[-1]
-if 'Task id:' in prompt and 'You verify' not in prompt:
+if 'Task id:' in prompt and 'You review' not in prompt:
     task='a' if 'Task id: a\n' in prompt else 'b'
     open(os.path.join(os.path.dirname(__file__),'entered-'+task),'w').close()
     while not os.path.exists(os.path.join(os.path.dirname(__file__),'release-'+task)):time.sleep(0.01)
     answer='Concrete report for '+task
-elif 'You verify' in prompt or 'You audit' in prompt:
+elif 'You review' in prompt or 'You audit' in prompt:
     ids=re.findall(r'^- ([A-Za-z0-9_.-]+): ',prompt,re.M)
     answer='```verdict\n'+json.dumps({'approved':True,'findings':[],'coverage':{i:{'status':'ok','note':'independently checked'} for i in ids}})+'\n```'
 else:answer='Scope remains open; request executor work for evidence.'
@@ -715,7 +715,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
 }
 
 #[test]
-fn compliance_sessions_verify_integrated_files_and_reopen_after_file_changes() {
+fn compliance_sessions_review_integrated_files_and_reopen_after_file_changes() {
     use antislop::{config::Config, lean::Core};
     use std::{os::unix::fs::PermissionsExt, process::Command, sync::atomic::AtomicBool};
     let f = Fixture::new();
@@ -759,11 +759,11 @@ if prompt.startswith('Audit the integrated project'):
             task=next(t for t in tasks if criterion['id'] in t['covers'])
             evidence.append({'criterion_id':criterion['id'],'task_id':task['task_id'],'result':'Read observed-result in integrated project: exact expected content delivered'})
     answer=block('compliance',{'approved':not os.path.exists('audit-gap'),'findings':[{'issue':'obligation omitted during extraction'}] if os.path.exists('audit-gap') else [],'evidence':evidence})
-elif prompt.startswith('Verify this audit independently'):
-    if os.path.exists('hold-audit-verifier'):
+elif prompt.startswith('Review this audit independently'):
+    if os.path.exists('hold-audit-reviewer'):
         import time
-        open('audit-verifier-entered','w').close()
-        while not os.path.exists('release-audit-verifier'):time.sleep(0.01)
+        open('audit-reviewer-entered','w').close()
+        while not os.path.exists('release-audit-reviewer'):time.sleep(0.01)
     assert open('observed-result').read()=='delivered'
     proposals,_=json.JSONDecoder().raw_decode(prompt.split('Proposed evidence (assess each by its id):\n',1)[1])
     answer=block('compliance_verdict',{'approved':not os.path.exists('audit-gap'),'note':'Read all sources and reproduced every integrated observation','assessments':[{'evidence':e['id'],'approved':True,'note':'Independently read integrated observed-result; content matches delivered'} for e in proposals]})
@@ -808,8 +808,8 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         core.conversations().unwrap()[0].status,
         "requirements_pending"
     );
-    // Scope publication can win while the auditor's verifier is still running.
-    std::fs::write(f.dir.path().join("hold-audit-verifier"), "").unwrap();
+    // Scope publication can win while the auditor's reviewer is still running.
+    std::fs::write(f.dir.path().join("hold-audit-reviewer"), "").unwrap();
     let auditing = core.clone();
     let conversation = f.conversation.clone();
     let plan = tasks[0].plan_id.clone();
@@ -819,7 +819,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             .unwrap()
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    while !f.dir.path().join("audit-verifier-entered").exists() {
+    while !f.dir.path().join("audit-reviewer-entered").exists() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -834,14 +834,14 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         .unwrap();
     core.apply_user_ledger_change(&proposal, &diff_hash(&diff).unwrap(), &change)
         .unwrap();
-    std::fs::write(f.dir.path().join("release-audit-verifier"), "").unwrap();
+    std::fs::write(f.dir.path().join("release-audit-reviewer"), "").unwrap();
     assert!(running.join().unwrap().contains("gate is CLOSED"));
     assert!(
         core.store
             .ledger_statuses(&f.conversation, &f.run.id, None, &fp)
             .unwrap()
             .iter()
-            .all(|e| e.status != "verified")
+            .all(|e| e.status != "reviewed")
     );
     std::fs::write(f.dir.path().join("observed-result"), "changed after audit").unwrap();
     assert_ne!(core.ledger_fingerprint(&f.conversation).unwrap(), fp);
@@ -855,7 +855,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             )
             .unwrap()
             .iter()
-            .all(|e| e.status != "verified")
+            .all(|e| e.status != "reviewed")
     );
 }
 
@@ -1082,7 +1082,7 @@ fn ledger_list_keeps_empty_filter_and_page_boundaries() {
         .store
         .list_ledger(
             &LedgerQuery {
-                status: Some("verified".into()),
+                status: Some("reviewed".into()),
                 ..query
             },
             "tree",
@@ -1099,41 +1099,41 @@ fn a_positive_assessment_cannot_hide_a_conflicting_result_on_the_same_inputs() {
     let mut task = f
         .approved(f.plan(vec![f.task("a", &["r1"], &[])]))
         .remove(0);
-    let verifier = f.turn("audit", true);
+    let reviewer = f.turn("audit", true);
     let mut failed = f.assessment(&task, "r1", "tree");
     failed.approved = false;
     failed.note = "independent check reproduced a failure".into();
     f.store
-        .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &failed)
+        .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &failed)
         .unwrap();
     let passing = f.assessment(&task, "r1", "tree");
     f.store
-        .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &passing)
+        .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &passing)
         .unwrap();
     assert_ne!(
         f.store
             .ledger_statuses(&f.conversation, &f.run.id, None, "tree")
             .unwrap()[0]
             .status,
-        "verified"
+        "reviewed"
     );
     task.round += 1;
     f.store.update_task(&task).unwrap();
     let passing = f.assessment(&task, "r1", "tree");
     f.store
-        .add_ledger_evidence(&f.conversation, &f.run.id, &verifier, &passing)
+        .add_ledger_evidence(&f.conversation, &f.run.id, &reviewer, &passing)
         .unwrap();
     assert_eq!(
         f.store
             .ledger_statuses(&f.conversation, &f.run.id, None, "tree")
             .unwrap()[0]
             .status,
-        "verified"
+        "reviewed"
     );
 }
 
 #[test]
-fn optional_criteria_alone_cannot_verify_an_obligation() {
+fn optional_criteria_alone_cannot_review_an_obligation() {
     let f = Fixture::new();
     let mut entry = f.entry("r1");
     entry.criteria[0].mandatory = false;
@@ -1144,7 +1144,7 @@ fn optional_criteria_alone_cannot_verify_an_obligation() {
         .store
         .ledger_statuses(&f.conversation, &f.run.id, None, "tree")
         .unwrap();
-    assert_ne!(entries[0].status, "verified");
+    assert_ne!(entries[0].status, "reviewed");
     assert!(
         f.store
             .requirements_gaps(&f.conversation, &f.run.id, "tree")
@@ -1201,8 +1201,8 @@ fn approving_requirements_plans_without_orchestrator_options() {
         std::fs::write(&script,r#"#!/usr/bin/env python3
 import sys,json,uuid
 prompt = sys.argv[-1]
-assert not prompt.startswith('Act as requirements analyst'), 'approved requirements must go directly to verification'
-answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'verifier':{'focus':'Check the observations'}}]})+'\n```'
+assert not prompt.startswith('Act as requirements analyst'), 'approved requirements must go directly to review'
+answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'reviewer':{'focus':'Check the observations'}}]})+'\n```'
 if 'You review a plan' in prompt or 'new plan:' in prompt:
     import os
     answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-final-plan'),'findings':[{'issue':'Plan misses an acceptance criterion'}] if os.path.exists('reject-final-plan') else []})+'\n```'
@@ -1305,7 +1305,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         );
         for role in [
             "requirements-options-analyst",
-            "requirements-options-verifier",
+            "requirements-options-reviewer",
         ] {
             assert!(
                 core.store
@@ -1595,7 +1595,7 @@ if prompt.startswith('Act as requirements analyst'):
 elif prompt.startswith('Independently compare') or 'You review a plan' in prompt or 'new plan:' in prompt:
     answer='```verdict\n'+json.dumps({'approved':True,'findings':[]})+'\n```'
 else:
-    answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'requirement_ids':['r1'],'criterion_ids':['r1.accept'],'verifier':{'focus':'Check the observations'}}]})+'\n```'
+    answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'requirement_ids':['r1'],'criterion_ids':['r1.accept'],'reviewer':{'focus':'Check the observations'}}]})+'\n```'
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
 print(json.dumps({'type':'turn.completed','usage':{}}))

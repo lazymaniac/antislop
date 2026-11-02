@@ -43,6 +43,8 @@ pub(crate) const TOOLS: &[&str] = &[
     ASK,
     WAIT,
     "read_dependency_result",
+    "record_evidence",
+    "read_evidence",
     "current_turn",
     "report_blocker",
     "answer_agent",

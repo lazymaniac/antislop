@@ -23,6 +23,27 @@ pub(in crate::lean) fn writer_worktree(
     } else {
         Default::default()
     };
+    if task
+        .feedback
+        .as_ref()
+        .is_some_and(|f| f["continuation_review"] == true)
+    {
+        let onto = core.writer_base(&task.plan_id, spec, project)?;
+        let combined = match (&task.base, &task.result) {
+            (Some(base), Some(result)) => git::combine(
+                project,
+                &core
+                    .state
+                    .join("worktrees")
+                    .join(format!("resume-{}-g{}", task.id, task.input_generation)),
+                &onto,
+                &[(base.clone(), result.clone())],
+            )?,
+            _ => onto.clone(),
+        };
+        task.base = Some(onto);
+        task.result = Some(combined);
+    }
     let base = match &task.base {
         Some(base) => base.clone(),
         None => core.writer_base(&task.plan_id, spec, project)?,
@@ -47,7 +68,7 @@ pub(super) fn task_directories(
         .clone()
         .or(observation)
         .unwrap_or_else(|| project.to_path_buf());
-    Ok((workdir, related_directories(spec, project)))
+    Ok((workdir, Vec::new()))
 }
 
 fn observation_worktree(
@@ -75,27 +96,12 @@ fn observation_worktree(
     Ok(Some(path))
 }
 
-fn related_directories(spec: &TaskContract, project: &Path) -> Vec<PathBuf> {
-    spec.scope
-        .iter()
-        .filter_map(|path| project.join(path).canonicalize().ok())
-        .map(|path| {
-            if path.is_dir() {
-                path
-            } else {
-                path.parent().map(Path::to_path_buf).unwrap_or(path)
-            }
-        })
-        .filter(|path| !path.starts_with(project))
-        .collect()
-}
-
 pub(super) fn is_recheck(
     core: &Core,
     conversation: &str,
     task: &Task,
     worker: &str,
-    verifier: &str,
+    reviewer: &str,
 ) -> Result<bool> {
     if task.report.is_none() {
         return Ok(false);
@@ -103,17 +109,17 @@ pub(super) fn is_recheck(
     if task
         .feedback
         .as_ref()
-        .is_some_and(|f| f["resume_role"] == "verifier")
+        .is_some_and(|f| f["resume_role"] == "reviewer")
     {
         return Ok(true);
     }
-    let verifier_work = core
+    let reviewer_work = core
         .store
-        .pending_mail(conversation, verifier)?
+        .pending_mail(conversation, reviewer)?
         .iter()
         .any(|mail| mail.kind == "agent_work");
     let worker_empty = core.store.pending_mail(conversation, worker)?.is_empty();
-    Ok(verifier_work && worker_empty)
+    Ok(reviewer_work && worker_empty)
 }
 
 pub(super) struct WorkerRound<'a> {

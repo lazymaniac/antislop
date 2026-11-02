@@ -147,16 +147,24 @@ fn invalidate_dependent(
 }
 
 fn invalidate_task_input(tx: &rusqlite::Transaction<'_>, dependent: &str) -> Result<()> {
+    let generation: i64 = tx.query_row(
+        "SELECT coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)",
+        [dependent],
+        |r| r.get(0),
+    )?;
+    Store::retain_work_from_ids(
+        tx,
+        dependent,
+        generation,
+        dependent,
+        generation + 1,
+        "dependency changed; assess retained work",
+    )?;
     tx.execute(
         "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
         [dependent],
     )?;
-    tx.execute(
-        "UPDATE tasks SET status='queued',verdict=NULL,feedback=NULL,
-        base=NULL,result=NULL
-        WHERE id=?1 AND status NOT IN ('proposed','stale','superseded')",
-        [dependent],
-    )?;
+    tx.execute("UPDATE tasks SET status='queued',verdict=NULL WHERE id=?1 AND status NOT IN ('proposed','stale','superseded')",[dependent])?;
     Ok(())
 }
 

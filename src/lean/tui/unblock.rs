@@ -30,7 +30,7 @@ pub struct Choice {
 /// integrated after independent approval. Tasks can be retried with guidance
 /// or cancelled; unresolved requirements remain open.
 pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
-    if matches!(task.status.as_str(), "queued" | "working" | "verifying") {
+    if matches!(task.status.as_str(), "queued" | "working" | "reviewing") {
         return vec![restart_choice()];
     }
     let mut choices = vec![retry_choice()];
@@ -69,7 +69,7 @@ fn written_recovery_choices() -> [Choice; 3] {
     [
         choice(
             RecoveryAction::IntegrateWithConsent,
-            "Integrate the independently verified change",
+            "Integrate the independently reviewed change",
             false,
         ),
         choice(
@@ -78,8 +78,8 @@ fn written_recovery_choices() -> [Choice; 3] {
             false,
         ),
         choice(
-            RecoveryAction::VerifyManualSnapshot,
-            "I fixed it myself: verify my working tree",
+            RecoveryAction::ReviewManualSnapshot,
+            "I fixed it myself: review my working tree",
             false,
         ),
     ]
@@ -302,7 +302,7 @@ mod tests {
             title: "Storage".into(),
             status: status.into(),
             writes,
-            reason: Some("the verifier repeated the same findings".into()),
+            reason: Some("the reviewer repeated the same findings".into()),
             ..TaskRow::default()
         }
     }
@@ -324,7 +324,7 @@ mod tests {
                 RetryWithGuidance,
                 IntegrateWithConsent,
                 KeepOnBranch,
-                VerifyManualSnapshot,
+                ReviewManualSnapshot,
                 RestartAgent,
             ]
         );
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn active_tasks_offer_only_restart() {
-        for status in ["queued", "working", "verifying"] {
+        for status in ["queued", "working", "reviewing"] {
             assert_eq!(actions(&row(status, true)), [RecoveryAction::RestartAgent]);
         }
     }
@@ -390,7 +390,7 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(text.contains("Task actions t1"));
-        assert!(text.contains("the verifier repeated the same findings"));
+        assert!(text.contains("the reviewer repeated the same findings"));
         let rect = modal.rects[1];
         let Outcome::Choose(choice) = modal.click(rect.x + 2, rect.y) else {
             panic!("a click on a choice chooses it");

@@ -3,7 +3,7 @@ use super::*;
 /// The id of the obligation to meet the task's own goal.
 pub const GOAL_CHECK: &str = "goal";
 
-/// What a task's verifier must account for in its verdict, with ids: the
+/// What a task's reviewer must account for in its verdict, with ids: the
 /// task's goal (`goal`), each acceptance criterion assigned to it (by its
 /// ledger id) and its kind's share of the risk catalog (`R001`…). Nothing
 /// else: no generated risks and no checks the runtime adds on its own.
@@ -73,7 +73,7 @@ fn append_missing_finding(verdict: &mut Verdict, missing: &[&(String, String)]) 
     verdict.findings.push(serde_json::json!({
         "severity": "high",
         "issue": format!(
-            "the verifier's verdict does not account for {}",
+            "the reviewer's verdict does not account for {}",
             missing
                 .iter()
                 .map(|(id, text)| format!("{id} ({text})"))
@@ -126,7 +126,7 @@ fn has_severe_check_finding(verdict: &Verdict, id: &str) -> bool {
     })
 }
 
-/// One progress line of a verifier: it started on an obligation (`status`
+/// One progress line of a reviewer: it started on an obligation (`status`
 /// is `None`) or settled it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckUpdate {
@@ -135,7 +135,7 @@ pub struct CheckUpdate {
     pub note: String,
 }
 
-/// The user's comments on checks, for the verifier: `(check id, text)`.
+/// The user's comments on checks, for the reviewer: `(check id, text)`.
 pub fn check_comments_text(comments: &[(String, String)]) -> String {
     if comments.is_empty() {
         return String::new();

@@ -100,6 +100,19 @@ fn round_documents(
         "result".into(),
         result_document(client, conversation, uuid, round, task)?,
     );
+    if let Some(run) = task["turns"].as_array().and_then(|turns| {
+        turns.iter().rev().find(|run| {
+            run["role"]
+                .as_str()
+                .is_some_and(|role| role.starts_with("reviewer:"))
+        })
+    }) {
+        let mut builder = document::Builder::new(client.state_dir())?;
+        let turn = run["turn_id"].as_str().unwrap_or_default();
+        if super::session::append_answers(client, conversation, turn, &mut builder)? {
+            documents.insert("reviewer_result".into(), builder.finish()?);
+        }
+    }
     Ok(documents)
 }
 
@@ -217,7 +230,7 @@ mod tests {
         let report =
             crate::lean::turn_result::report_with_deliverables("Worker text", Some(&selection));
         let task = json!({"status":"approved", "report":report,
-            "verdict":{"findings":[{"issue":"Verifier-only finding"}]}});
+            "verdict":{"findings":[{"issue":"Reviewer-only finding"}]}});
         let document = result_document(&client, "conversation", "task", 1, &task).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let page = loop {
@@ -238,7 +251,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            !text.contains("Verifier")
+            !text.contains("Reviewer")
                 && !text.contains("```json")
                 && !text.contains("\"alternatives\""),
             "{text}"

@@ -6,7 +6,7 @@ pub(super) type LedgerStatusTask = (String, String, String, u32, i64, String);
 #[derive(Default)]
 struct LedgerStatusIndex {
     linked: HashMap<String, LinkedTasks>,
-    verified_criteria: HashMap<(String, i64, String), EvidenceApproval>,
+    reviewed_criteria: HashMap<(String, i64, String), EvidenceApproval>,
 }
 
 #[derive(Default)]
@@ -34,10 +34,10 @@ impl LedgerStatusIndex {
     fn build(tasks: &[LedgerStatusTask], evidence: &[Evidence], fingerprint: &str) -> Self {
         let linked = linked_task_index(tasks);
         let current_tasks = current_approved_tasks(tasks);
-        let verified_criteria = current_evidence_index(evidence, fingerprint, &current_tasks);
+        let reviewed_criteria = current_evidence_index(evidence, fingerprint, &current_tasks);
         Self {
             linked,
-            verified_criteria,
+            reviewed_criteria,
         }
     }
 
@@ -47,8 +47,8 @@ impl LedgerStatusIndex {
             return Ok(());
         }
         let linked = self.linked.get(&entry.spec.id);
-        entry.status = if self.entry_verified(entry) {
-            "verified"
+        entry.status = if self.entry_reviewed(entry) {
+            "reviewed"
         } else {
             linked_status(entry, tasks, linked)
         }
@@ -56,7 +56,7 @@ impl LedgerStatusIndex {
         Ok(())
     }
 
-    fn entry_verified(&self, entry: &LedgerEntry) -> bool {
+    fn entry_reviewed(&self, entry: &LedgerEntry) -> bool {
         let mandatory = entry
             .spec
             .criteria
@@ -67,7 +67,7 @@ impl LedgerStatusIndex {
             found = true;
             let key = (entry.spec.id.clone(), entry.version, criterion.id.clone());
             if !self
-                .verified_criteria
+                .reviewed_criteria
                 .get(&key)
                 .is_some_and(|approval| approval.count > 0 && approval.all_approved)
             {
@@ -176,7 +176,7 @@ fn linked_status(
         any = true;
         all_approved &= status == "approved";
         stale |= status == "stale";
-        working |= matches!(status.as_str(), "working" | "verifying");
+        working |= matches!(status.as_str(), "working" | "reviewing");
         blocked |= matches!(
             status.as_str(),
             "failed" | "needs_user" | "cancelled" | "waiting"
@@ -223,7 +223,7 @@ pub(super) fn enforce_dependency_statuses(entries: &mut [LedgerEntry]) {
         .map(|(index, entry)| (entry.spec.id.clone(), index))
         .collect();
     let dependents = dependency_dependents(entries, &ids);
-    demote_unverified_parents(entries, &dependents);
+    demote_unreviewed_parents(entries, &dependents);
 }
 
 fn dependency_dependents(entries: &[LedgerEntry], ids: &HashMap<String, usize>) -> Vec<Vec<usize>> {
@@ -249,15 +249,15 @@ fn dependency_dependents(entries: &[LedgerEntry], ids: &HashMap<String, usize>) 
     dependents
 }
 
-fn demote_unverified_parents(entries: &mut [LedgerEntry], dependents: &[Vec<usize>]) {
+fn demote_unreviewed_parents(entries: &mut [LedgerEntry], dependents: &[Vec<usize>]) {
     let mut pending: VecDeque<usize> = entries
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| (entry.status != "verified").then_some(index))
+        .filter_map(|(index, entry)| (entry.status != "reviewed").then_some(index))
         .collect();
     while let Some(child) = pending.pop_front() {
         for &parent in &dependents[child] {
-            if entries[parent].status == "verified" {
+            if entries[parent].status == "reviewed" {
                 entries[parent].status = "implemented".into();
                 pending.push_back(parent);
             }
@@ -305,7 +305,7 @@ mod tests {
             assert_eq!(
                 entry.status,
                 if index % 2 == 0 {
-                    "verified"
+                    "reviewed"
                 } else {
                     "implemented"
                 }
@@ -333,7 +333,7 @@ mod tests {
                 depends_on: Vec::new(),
                 mandatory: true,
                 implementation_owners: Vec::new(),
-                verification_owners: Vec::new(),
+                review_owners: Vec::new(),
                 criteria: vec![Criterion {
                     id: "criterion".into(),
                     text: "Works".into(),
@@ -364,7 +364,7 @@ mod tests {
                 artifact: None,
                 integrated_fingerprint: fingerprint.into(),
             },
-            verifier_turn: "verifier".into(),
+            reviewer_turn: "reviewer".into(),
             assessment: "accepted".into(),
             approved: true,
         }

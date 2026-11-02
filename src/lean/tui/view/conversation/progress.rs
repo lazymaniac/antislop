@@ -1,7 +1,7 @@
 use super::super::*;
 
 pub(super) fn is_running(status: &str) -> bool {
-    matches!(status, "queued" | "working" | "verifying")
+    matches!(status, "queued" | "working" | "reviewing")
 }
 
 pub(super) fn progress_line(
@@ -49,7 +49,7 @@ fn progress_status(
         "skipped" => (format!("– {name} skipped{why}"), Tone::Queued),
         "working" if now.1 > previous_round && previous_round > 0 => (
             format!(
-                "↺ {name}: round {} after the verifier asked for changes",
+                "↺ {name}: round {} after the reviewer asked for changes",
                 now.1
             ),
             Tone::Active,

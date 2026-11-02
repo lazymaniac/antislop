@@ -47,7 +47,7 @@ pub enum ModalKind {
 }
 
 pub const ORCHESTRATOR: &str = "orchestrator";
-pub const PLAN_VERIFIER: &str = "plan-verifier";
+pub const PLAN_REVIEWER: &str = "plan-reviewer";
 pub const AUDITOR: &str = "auditor";
 /// Lines kept in a progress card before the oldest go.
 const PROGRESS_LINES: usize = 8;
@@ -129,12 +129,11 @@ pub struct TaskRow {
     pub uuid: Option<String>,
     pub title: String,
     pub summary: Option<String>,
-    pub verifier_summary: Option<String>,
+    pub reviewer_summary: Option<String>,
     /// Optional section heading in the plan document this task is assigned to.
     pub section: Option<String>,
     pub kind: String,
     pub goal: String,
-    pub scope: Vec<String>,
     pub depends_on: Vec<String>,
     /// Peer task ids that can execute in parallel with this task.
     pub parallel_with: Vec<String>,
@@ -143,7 +142,7 @@ pub struct TaskRow {
     pub risks: Vec<String>,
     pub status: String,
     pub round: u64,
-    /// What its worker or verifier is doing right now.
+    /// What its worker or reviewer is doing right now.
     pub activity: String,
     /// Why it stopped, when it stopped short of approval.
     pub reason: Option<String>,
@@ -163,9 +162,9 @@ pub struct TaskRow {
     pub integration: Option<Value>,
 }
 
-/// One runtime agent: the orchestrator, the plan verifier, the auditor,
-/// and each task's worker and verifier (shown together on one task card). Keys are `orchestrator`,
-/// `plan-verifier`, `auditor`, `worker:t1`, `verifier:t1`.
+/// One runtime agent: the orchestrator, the plan reviewer, the auditor,
+/// and each task's worker and reviewer (shown together on one task card). Keys are `orchestrator`,
+/// `plan-reviewer`, `auditor`, `worker:t1`, `reviewer:t1`.
 #[derive(Debug, Default)]
 pub struct View {
     pub workflow_phase: Option<String>,
@@ -205,7 +204,7 @@ pub struct View {
     /// The user's comments by id, deleted ones included.
     pub comments: BTreeMap<u64, Comment>,
     pub comment_progress: BTreeMap<u64, CommentProgress>,
-    /// The latest review of the plan verifier and the auditor, as lines.
+    /// The latest review of the plan reviewer and the auditor, as lines.
     pub reviews: HashMap<String, Vec<String>>,
     /// The user paused new plan work.
     pub paused: bool,
@@ -490,7 +489,7 @@ mod tests {
         for e in [
             task(2, "t1", "queued", 0, None),
             task(3, "t1", "working", 1, None),
-            task(4, "t1", "verifying", 1, None),
+            task(4, "t1", "reviewing", 1, None),
             task(5, "t1", "working", 2, None),
             // The same state again says nothing new.
             task(6, "t1", "working", 2, None),
@@ -500,7 +499,7 @@ mod tests {
                 "t2",
                 "needs_user",
                 3,
-                Some("the verifier repeated itself"),
+                Some("the reviewer repeated itself"),
             ),
         ] {
             view.apply(&e);
@@ -518,9 +517,9 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "↺ t1 Storage: round 2 after the verifier asked for changes",
+                "↺ t1 Storage: round 2 after the reviewer asked for changes",
                 "✓ t1 Storage approved (1/2)",
-                "! t2 API needs your decision — the verifier repeated itself",
+                "! t2 API needs your decision — the reviewer repeated itself",
             ]
         );
         assert_eq!(*tone, crate::lean::tui::Tone::Waiting);
@@ -761,12 +760,12 @@ mod tests {
 
     #[test]
     fn mail_for_the_reviewers_stays_with_the_reviewers() {
-        assert_eq!(View::mail_key("plan-verifier"), "plan-verifier");
+        assert_eq!(View::mail_key("plan-reviewer"), "plan-reviewer");
         assert_eq!(View::mail_key("auditor"), "auditor");
         assert_eq!(View::mail_key("runtime"), "runtime");
         assert_eq!(View::mail_key("comment-orchestrator"), "orchestrator");
         assert_eq!(View::mail_key("t1"), "worker:t1");
-        assert_eq!(View::mail_key("t1/verifier"), "verifier:t1");
+        assert_eq!(View::mail_key("t1/reviewer"), "reviewer:t1");
     }
 
     #[test]
@@ -805,14 +804,14 @@ mod tests {
                 "plan_proposed",
                 json!({"tasks": [{
                     "id": "t1", "title": "Storage", "summary": summary, "goal": "Full goal",
-                    "verifier": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
+                    "reviewer": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
                 }]}),
             ));
             // Summaries arrive sanitized: blank and escape-only legacy values
             // fold to an empty line, which the views read as not written.
             let expected = summary.as_str().map(clean_line);
             assert_eq!(view.tasks[0].summary, expected);
-            assert_eq!(view.tasks[0].verifier_summary, expected);
+            assert_eq!(view.tasks[0].reviewer_summary, expected);
             assert_eq!(view.tasks[0].goal, "Full goal");
             assert_eq!(view.tasks[0].focus, "Full focus");
             assert_eq!(view.tasks[0].risks, ["Data loss"]);
@@ -825,7 +824,7 @@ mod tests {
             json!({"tasks": [{"id": "old"}]}),
         ));
         assert!(view.tasks[0].summary.is_none());
-        assert!(view.tasks[0].verifier_summary.is_none());
+        assert!(view.tasks[0].reviewer_summary.is_none());
     }
 
     #[test]
@@ -892,7 +891,7 @@ mod tests {
             "plan_proposed",
             json!({"plan": "p1", "tasks": [{"id": "t1", "title": "A"}],
                    "review": {"approved": false, "error": "login required"},
-                   "automatic": false, "waiting": "the plan verifier did not approve this plan"}),
+                   "automatic": false, "waiting": "the plan reviewer did not approve this plan"}),
         ));
         view.apply(&event(
             2,
@@ -906,7 +905,7 @@ mod tests {
             .iter()
             .map(|entry| entry.text.as_str())
             .collect();
-        assert!(text.contains(&"⚠ plan verifier failed: login required"));
+        assert!(text.contains(&"⚠ plan reviewer failed: login required"));
         assert!(
             text.iter()
                 .any(|line| line.contains("Waiting for you") && line.contains("Ctrl+A"))
@@ -1012,19 +1011,19 @@ mod tests {
                 2,
                 None,
                 "task",
-                json!({"id": "t1", "task": "u1", "status": "verifying", "round": 1}),
+                json!({"id": "t1", "task": "u1", "status": "reviewing", "round": 1}),
             ),
             event(
                 3,
                 Some("v1"),
                 "turn_started",
-                json!({"role": "verifier:u1", "provider": "agy"}),
+                json!({"role": "reviewer:u1", "provider": "agy"}),
             ),
             event(
                 5,
                 None,
                 "mail",
-                json!({"id": 1, "sender": "t1/verifier", "recipient": "t2", "kind": "finding", "text": "x"}),
+                json!({"id": 1, "sender": "t1/reviewer", "recipient": "t2", "kind": "finding", "text": "x"}),
             ),
             event(
                 6,
@@ -1036,21 +1035,21 @@ mod tests {
             view.apply(&event);
         }
         assert_eq!(view.tasks[1].depends_on, ["t1"]);
-        let verifier = &view.agents["verifier:t1"];
-        assert!(verifier.running);
-        assert_eq!(verifier.provider, "agy");
-        let link = &view.links[&("verifier:t1".to_owned(), "worker:t2".to_owned())];
+        let reviewer = &view.agents["reviewer:t1"];
+        assert!(reviewer.running);
+        assert_eq!(reviewer.provider, "agy");
+        let link = &view.links[&("reviewer:t1".to_owned(), "worker:t2".to_owned())];
         assert_eq!(link.count, 1);
-        assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
+        assert_eq!(view.mailbox["worker:t2"], ["t1/reviewer → t2 (finding): x"]);
         assert_eq!(view.reviews[AUDITOR], ["✓ auditor: no issues"]);
-        assert_eq!(view.progress(), ["t1 verifying: verifier (agy)"]);
+        assert_eq!(view.progress(), ["t1 reviewing: reviewer (agy)"]);
     }
 
     #[test]
     fn admin_progress_names_a_starting_turn_as_no_activity_yet() {
         let mut view = View::default();
         view.agents.insert(
-            PLAN_VERIFIER.into(),
+            PLAN_REVIEWER.into(),
             Agent {
                 running: true,
                 activity: "starting turn".into(),
@@ -1059,7 +1058,7 @@ mod tests {
         );
         // The shared rule (taskinfo::doing) says the placeholder is not
         // work: the step is named, and its doing stays an honest "…".
-        assert_eq!(view.progress(), ["plan verifier: …"]);
+        assert_eq!(view.progress(), ["plan reviewer: …"]);
         view.agents.insert(
             AUDITOR.into(),
             Agent {
@@ -1070,14 +1069,14 @@ mod tests {
         );
         assert_eq!(
             view.progress(),
-            ["plan verifier: …", "auditor: auditing two plans"],
+            ["plan reviewer: …", "auditor: auditing two plans"],
             "live activity is one normalized line, like every other view"
         );
         // A stopped turn never shows as live activity either.
         if let Some(auditor) = view.agents.get_mut(AUDITOR) {
             auditor.running = false;
         }
-        assert_eq!(view.progress(), ["plan verifier: …"]);
+        assert_eq!(view.progress(), ["plan reviewer: …"]);
     }
 
     #[test]
@@ -1101,8 +1100,8 @@ mod tests {
         for (seq, id, target, status) in [
             (3, 1, "worker:t1", "open"),
             (4, 2, "diff:t1:src/a.rs:3", "open"),
-            (5, 3, "verifier:t1", "open"),
-            (6, 3, "verifier:t1", "deleted"),
+            (5, 3, "reviewer:t1", "open"),
+            (6, 3, "reviewer:t1", "deleted"),
         ] {
             view.apply(&event(
                 seq,
@@ -1118,7 +1117,7 @@ mod tests {
             [2, 1],
             "a diff's comments count for its worker"
         );
-        assert!(ids("verifier:t1").is_empty());
+        assert!(ids("reviewer:t1").is_empty());
         let text: Vec<&str> = view.transcript[2..]
             .iter()
             .map(|e| e.text.as_str())
@@ -1128,7 +1127,7 @@ mod tests {
             [
                 "✎ #1 to t1 worker: x",
                 "✎ #2 to t1 diff src/a.rs:3: x",
-                "✎ #3 to t1 verifier: x",
+                "✎ #3 to t1 reviewer: x",
                 "✎ #3 deleted"
             ],
             "the comment's message is not shown twice"
@@ -1143,7 +1142,7 @@ mod tests {
         let mut view = View::default();
         for (id, target) in [
             (1, "worker:t1"),
-            (2, "verifier:t1"),
+            (2, "reviewer:t1"),
             (3, "diff:t1:src/a.rs:1"),
             (4, "check:t1:V01"),
             (5, "check:t10:V01"),
@@ -1162,14 +1161,14 @@ mod tests {
             .collect();
         assert_eq!(ids, [4, 3, 2, 1]);
         let ids: Vec<_> = view
-            .comments_on("verifier:t1")
+            .comments_on("reviewer:t1")
             .iter()
             .map(|comment| comment.id)
             .collect();
         assert_eq!(
             ids,
             [4, 2],
-            "legacy verifier addresses keep their role-specific meaning"
+            "legacy reviewer addresses keep their role-specific meaning"
         );
     }
 

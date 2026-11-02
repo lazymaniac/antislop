@@ -26,9 +26,14 @@ use std::sync::Mutex;
 mod agent_exchange;
 #[path = "store/artifacts.rs"]
 mod artifacts;
+#[path = "store/continuations.rs"]
+mod continuations;
 #[path = "store/dependency_results.rs"]
-mod dependency_results;
+pub(in crate::lean) mod dependency_results;
+#[path = "store/evidence.rs"]
+mod evidence;
 pub(in crate::lean) use artifacts::ArtifactReceipt;
+pub(in crate::lean) use evidence::{EvidenceReference, MAX_RESULT_EVIDENCE};
 #[path = "store/answer_waits.rs"]
 mod answer_waits;
 #[path = "store/plan_reviews.rs"]
@@ -214,7 +219,7 @@ pub struct Comment {
 }
 
 /// One task of a plan. `spec` is what the orchestrator asked for; `report`
-/// is the worker's latest answer and `verdict` its verifier's latest one.
+/// is the worker's latest answer and `verdict` its reviewer's latest one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default)]
@@ -237,7 +242,7 @@ pub struct Task {
     pub feedback: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness_token: Option<String>,
-    /// What the verifier has settled so far in the current round, one entry
+    /// What the reviewer has settled so far in the current round, one entry
     /// per check (`id`, `state`, `status`, `note`). Filled when a task is
     /// read for a frontend, never stored on the task row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,7 +258,7 @@ pub fn now_ms() -> i64 {
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
-const SCHEMA: u32 = 14;
+const SCHEMA: u32 = 15;
 
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;

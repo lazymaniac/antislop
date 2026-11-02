@@ -59,8 +59,8 @@ pub(super) fn task_owner_lines(
     );
     push_section(
         &mut lines,
-        "Verification owners",
-        &entry.spec.verification_owners.join(", "),
+        "Review owners",
+        &entry.spec.review_owners.join(", "),
         theme,
         width,
     );
@@ -77,7 +77,7 @@ pub(super) fn append_linked_tasks(
         push_section(
             lines,
             "Linked tasks",
-            "No task mapping yet. Tasks are connected when a verified plan is prepared.",
+            "No task mapping yet. Tasks are connected when a reviewed plan is prepared.",
             theme,
             width,
         );
@@ -222,7 +222,7 @@ pub(super) fn append_evidence(
     width: usize,
 ) {
     let title = if item["approved"].as_bool() == Some(true) {
-        "Verified evidence"
+        "Reviewed evidence"
     } else {
         "Evidence needs review"
     };

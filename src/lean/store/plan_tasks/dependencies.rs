@@ -43,7 +43,7 @@ impl Store {
         if task.spec["options_for"].as_str() == Some(spec.id.as_str()) {
             return Ok(None);
         }
-        crate::require(task.status == "approved", "dependency is not verified")?;
+        crate::require(task.status == "approved", "dependency is not reviewed")?;
         let summary = self.dependency_summary(&task)?;
         Ok(Some(crate::lean::tasks::DependencyReport {
             id: dependency.to_owned(),
@@ -123,7 +123,7 @@ impl Store {
         let task = self
             .task_by_id(task_id)?
             .ok_or_else(|| Error::Invalid("options task disappeared".into()))?;
-        crate::require(task.status == "approved", "local options are not verified")?;
+        crate::require(task.status == "approved", "local options are not reviewed")?;
         let result = self.completed_task_output(&task)?;
         selected_report(&result)
     }

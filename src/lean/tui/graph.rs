@@ -5,7 +5,7 @@
 use super::taskinfo;
 use super::theme::Theme;
 use super::view::{
-    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View, agent_name, clean, truncate, wrap,
+    AUDITOR, ORCHESTRATOR, PLAN_REVIEWER, TaskRow, View, agent_name, clean, truncate, wrap,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,13 +15,13 @@ use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// The requirements phase runs these roles as rounds of one agent; the graph
-/// shows them as a single card, represented by the first one present.
+/// Current extraction and historical requirements roles share one card.
+/// These are role addresses, not a fixed number of rounds to execute.
 const REQUIREMENTS_ROUNDS: [&str; 4] = [
     "requirements-extraction-analyst",
-    "requirements-extraction-verifier",
+    "requirements-extraction-reviewer",
     "requirements-options-analyst",
-    "requirements-options-verifier",
+    "requirements-options-reviewer",
 ];
 const REQUIREMENTS_NAME: &str = "requirements";
 
@@ -62,8 +62,30 @@ fn node_name(key: &str) -> String {
     if requirements_round(key).is_some() {
         REQUIREMENTS_NAME.into()
     } else {
-        agent_name(key)
+        match key {
+            "requirements-audit-analyst" => "requirements audit".into(),
+            "requirements-audit-reviewer" => "audit reviewer".into(),
+            _ => agent_name(key),
+        }
     }
+}
+
+/// Workflow order, independent of agent creation time or alphabetical order.
+fn workflow_stage(key: &str) -> u8 {
+    match key {
+        ORCHESTRATOR => 0,
+        _ if requirements_round(key).is_some() => 1,
+        crate::lean::PLANNER => 2,
+        PLAN_REVIEWER => 3,
+        "requirements-audit-analyst" => 5,
+        "requirements-audit-reviewer" => 6,
+        AUDITOR => 7,
+        _ => 4,
+    }
+}
+
+fn is_final_review(key: &str) -> bool {
+    workflow_stage(key) >= 5
 }
 
 pub const WIDTH: u16 = 32;
@@ -88,7 +110,7 @@ const RECENT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Depends,
-    Verifies,
+    Reviews,
     Mail { recent: bool },
     Supervises,
 }
@@ -97,7 +119,7 @@ impl Kind {
     fn style(self) -> Style {
         match self {
             Self::Depends => Style::default().fg(super::theme::ayu::BLUE),
-            Self::Verifies => Style::default().fg(super::theme::ayu::YELLOW),
+            Self::Reviews => Style::default().fg(super::theme::ayu::YELLOW),
             Self::Mail { recent: true } => Style::default()
                 .fg(super::theme::ayu::PURPLE)
                 .add_modifier(Modifier::BOLD),
@@ -145,7 +167,7 @@ struct Edge {
 }
 
 /// The border around one task's cards: its options card, worker and
-/// verifier, titled with the task.
+/// reviewer, titled with the task.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     /// `task:{id}`, the `group` of every card inside.
@@ -177,11 +199,11 @@ pub use cache::LayoutCache;
 pub use filters::{RELATIONS, Relations, Scope};
 
 /// Which of a task's agents a card stands for. A task that only proposes
-/// options is one short exchange, so its worker and verifier share a card.
+/// options is one short exchange, so its worker and reviewer share a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
     Worker,
-    Verifier,
+    Reviewer,
     Pair,
 }
 
@@ -191,12 +213,12 @@ fn is_pair(task: &TaskRow) -> bool {
 
 /// The task a card belongs to and the role it shows.
 fn task_card<'a>(view: &'a View, key: &str) -> Option<(&'a TaskRow, Role)> {
-    let (id, verifier) = crate::lean::task_role(key)?;
+    let (id, reviewer) = crate::lean::task_role(key)?;
     let task = view.tasks.iter().find(|task| task.id == id)?;
     let role = if is_pair(task) {
         Role::Pair
-    } else if verifier {
-        Role::Verifier
+    } else if reviewer {
+        Role::Reviewer
     } else {
         Role::Worker
     };
@@ -228,6 +250,8 @@ fn is_admin(key: &str) -> bool {
 pub type EdgeRoute<'a> = (&'a str, &'a str, Vec<(u16, u16)>);
 
 mod canvas;
+mod plan;
+pub(super) use plan::PlanGraph;
 mod health;
 mod layout;
 mod nodes;

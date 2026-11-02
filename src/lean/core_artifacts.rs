@@ -37,6 +37,20 @@ impl Core {
         let mut inputs = BTreeMap::new();
         for path in &spec.outputs {
             let input = match self.store.artifact_input(task, path)? {
+                Some(None) if task.result.is_none() => {
+                    if let Some(receipt) = self.artifact_source(&conversation, path, &sources)? {
+                        let project =
+                            PathBuf::from(self.store.conversation(&conversation)?.project);
+                        git::require_owned_outputs(
+                            &project,
+                            std::slice::from_ref(path),
+                            &BTreeMap::from([(path.clone(), receipt.commit.clone())]),
+                        )?;
+                        self.store.recover_artifact_input(task, path, &receipt)?
+                    } else {
+                        None
+                    }
+                }
                 Some(input) => input,
                 None => {
                     let receipt = self.artifact_source(&conversation, path, &sources)?;
@@ -56,15 +70,31 @@ impl Core {
         sources: &[Task],
     ) -> Result<Option<ArtifactReceipt>> {
         if let Some(receipt) = self.store.artifact_receipt(conversation, path)? {
-            return Ok(sources
-                .iter()
-                .any(|task| task.id == receipt.task)
-                .then_some(receipt));
+            // The receipt proves this conversation delivered the file. Content is
+            // compared against the frozen commit before launch and again at delivery.
+            return Ok(Some(receipt));
         }
         // Older daemons already persisted successful landings. Use only a
         // declared artifact dependency with that durable proof, never a file
         // name, an unlanded result, or a report's assertion of ownership.
-        for task in sources.iter().rev() {
+        let mut candidates = sources.to_vec();
+        let ids = {
+            let db = self.store.db();
+            let mut query=db.prepare("SELECT DISTINCT t.id FROM tasks t,json_each(t.spec,'$.outputs') o WHERE t.conversation_id=?1 AND o.value=?2")?;
+            query
+                .query_map(rusqlite::params![conversation, path], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for id in ids {
+            if !candidates.iter().any(|t| t.id == id)
+                && let Some(task) = self.store.task_by_id(&id)?
+            {
+                candidates.push(task);
+            }
+        }
+        for task in candidates.iter().rev() {
             let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
             if spec.delivery == Some(tasks::DeliveryMode::Untracked)
                 && spec.outputs.iter().any(|p| p == path)

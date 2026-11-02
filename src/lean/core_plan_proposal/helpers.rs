@@ -128,7 +128,7 @@ impl Core {
             conversation,
             "requirements-planner",
             &format!(
-                "Regenerate the task plan from the verified ledger. {error}. {}",
+                "Regenerate the task plan from the reviewed ledger. {error}. {}",
                 self.ledger_context(conversation, run)?
             ),
         )?;
@@ -193,7 +193,7 @@ impl Core {
             return Ok(None);
         }
         if !checked {
-            return Ok(Some("the plan verifier did not approve this plan"));
+            return Ok(Some("the plan reviewer did not approve this plan"));
         }
         if self.store.count_since_user(conversation, RUNTIME)? > 0
             && self.repeats_a_plan_that_ran(conversation, &plan.id, specs)?

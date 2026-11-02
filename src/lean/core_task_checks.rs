@@ -3,7 +3,7 @@ use super::*;
 mod scheduler;
 
 impl Core {
-    /// Stores one check the verifier reported and tells frontends, when it
+    /// Stores one check the reviewer reported and tells frontends, when it
     /// changed what they show.
     pub(in crate::lean) fn record_check(
         &self,
@@ -50,7 +50,7 @@ impl Core {
     }
 
     /// Dynamically schedules and runs every task whose dependencies are approved
-    /// and whose write scope does not conflict with currently running writers.
+    /// within the configured concurrency limit, using isolated writer worktrees.
     /// Tasks start immediately as soon as their dependencies finish rather than
     /// waiting for unrelated slow tasks in the same wave.
     pub(in crate::lean) fn run_plan(

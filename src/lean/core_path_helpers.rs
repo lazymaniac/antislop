@@ -45,7 +45,7 @@ pub(super) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
     Ok(expected)
 }
 
-/// The kinds of checkout a task only reads through: a verifier's view of a
+/// The kinds of checkout a task only reads through: a reviewer's view of a
 /// round's result and a non-writer's view of the plan base. Each shows a
 /// commit another branch or the plan already holds.
 const VIEWS: [&str; 2] = ["review", "observation"];
@@ -54,7 +54,7 @@ const VIEWS: [&str; 2] = ["review", "observation"];
 /// With `keep`, only the older checkouts of `keep`'s own kind go: a session
 /// that worked in one is replaced when its next turn needs another
 /// directory, while the worker still works in its observation checkout when
-/// the verifier gets a new review one.
+/// the reviewer gets a new review one.
 #[cfg(test)]
 pub(super) fn release_views(state: &Path, task_id: &str, keep: Option<&Path>) -> Result<()> {
     for path in task_view_paths(state, task_id, keep)? {

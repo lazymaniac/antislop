@@ -55,40 +55,123 @@ impl Store {
         Ok((tasks, revision))
     }
 
-    pub(in crate::lean) fn dependency_report_round(
-        &self,
-        task: &Task,
-        requested: Option<u32>,
-    ) -> Result<(String, u32, Vec<u32>, Value)> {
-        let (producer, latest) = self.completed_task_result(task)?;
+    /// Immutable worker reports of this scoped producer, including older inputs.
+    /// Historical reports are discoverable, never substituted for current evidence.
+    pub(in crate::lean) fn dependency_reports(&self, task: &Task) -> Result<DependencyReports> {
+        let current = match self.completed_task_result(task) {
+            Ok(value) => Some(value),
+            Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows)) => None,
+            Err(error) => return Err(error),
+        };
+        let producer = current.as_ref().map_or(task.id.as_str(), |(id, _)| id);
         let source = self
-            .task_by_id(&producer)?
+            .task_by_id(producer)?
             .ok_or_else(|| Error::Invalid("result producer disappeared".into()))?;
-        let db = self.db();
-        let mut query = db.prepare("SELECT s.round,r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation=?3 AND t.status='done' AND t.role='worker:'||?1 AND json_extract(r.result,'$.type')='completed' ORDER BY s.round DESC,t.started_ms DESC,t.rowid DESC")?;
-        let mut rows = query.query(params![source.id, source.round, source.input_generation])?;
-        let mut rounds = Vec::new();
-        let mut selected = None;
-        while let Some(row) = rows.next()? {
-            let round: u32 = row.get(0)?;
-            if rounds.last() == Some(&round) {
+        let conversation = self.plan_conversation(&task.plan_id)?;
+        let mut pending = vec![task.clone()];
+        let mut visited = std::collections::HashSet::new();
+        let mut reports = Vec::new();
+        while let Some(ancestor) = pending.pop() {
+            if !visited.insert(ancestor.id.clone()) {
                 continue;
             }
-            rounds.push(round);
-            if requested == Some(round) {
-                selected = Some(serde_json::from_str::<Value>(&row.get::<_, String>(1)?)?);
+            crate::require(
+                self.plan_conversation(&ancestor.plan_id)? == conversation,
+                "historical result belongs to another conversation",
+            )?;
+            reports.extend(self.worker_report_references(&ancestor, &source)?);
+            let mut sources = {
+                let db = self.db();
+                let mut query = db.prepare("SELECT producer_task_id FROM task_result_sources WHERE task_id=?1 AND generation<=?2 UNION SELECT source_task FROM task_resume_results WHERE task_id=?1 AND generation<=?2 AND source_task<>?1")?;
+                query
+                    .query_map(params![ancestor.id, ancestor.input_generation], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            if let Some(prior) = ancestor
+                .feedback
+                .as_ref()
+                .and_then(|f| f["carried_from"].as_str())
+            {
+                sources.push(prior.to_owned());
+            }
+            for id in sources {
+                pending.push(self.task_by_id(&id)?.ok_or_else(|| {
+                    Error::Invalid("historical result producer disappeared".into())
+                })?);
             }
         }
-        let round = requested.unwrap_or_else(|| rounds.first().copied().unwrap_or(source.round));
-        if requested.is_some() && selected.is_none() {
-            crate::require(
-                rounds.is_empty() && round == source.round,
-                "round: no completed worker report for these dependency inputs",
-            )?;
-        }
-        if rounds.is_empty() {
-            rounds.push(source.round);
-        }
-        Ok((producer, round, rounds, selected.unwrap_or(latest)))
+        reports.sort_by_key(|r| {
+            (
+                !r.current_inputs,
+                std::cmp::Reverse(r.input_generation),
+                std::cmp::Reverse(r.round),
+            )
+        });
+        let retained = self.retained_result_ref(task)?;
+        Ok(DependencyReports {
+            producer: source,
+            current: current.map(|(_, output)| output).filter(|_| {
+                retained.is_some() || reports.is_empty() || reports.iter().any(|r| r.current_inputs)
+            }),
+            retained,
+            reports,
+        })
     }
+
+    fn worker_report_references(
+        &self,
+        ancestor: &Task,
+        current: &Task,
+    ) -> Result<Vec<ReportReference>> {
+        let db = self.db();
+        let mut query = db.prepare("SELECT t.id,s.round,x.generation,length(cast(json_extract(r.result,'$.report') as blob)) FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation<=?3 AND t.status='done' AND t.role='worker:'||?1 AND json_extract(r.result,'$.type')='completed' ORDER BY x.generation DESC,s.round DESC,t.started_ms DESC,t.rowid DESC")?;
+        Ok(query
+            .query_map(
+                params![ancestor.id, ancestor.round, ancestor.input_generation],
+                |row| {
+                    let generation = row.get(2)?;
+                    Ok(ReportReference {
+                        result_ref: row.get(0)?,
+                        round: row.get(1)?,
+                        input_generation: generation,
+                        bytes: row.get::<_, i64>(3)? as u64,
+                        producer_task: ancestor.id.clone(),
+                        current_inputs: ancestor.id == current.id
+                            && generation == current.input_generation,
+                    })
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub(in crate::lean) fn referenced_worker_report(
+        &self,
+        reference: &ReportReference,
+    ) -> Result<Value> {
+        let text: String = self.db().query_row(
+            "SELECT result FROM agent_results WHERE turn_id=?1",
+            [&reference.result_ref],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&text)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::lean) struct ReportReference {
+    pub result_ref: String,
+    pub round: u32,
+    pub input_generation: i64,
+    pub bytes: u64,
+    pub producer_task: String,
+    pub current_inputs: bool,
+}
+
+pub(in crate::lean) struct DependencyReports {
+    pub retained: Option<String>,
+    pub producer: Task,
+    pub current: Option<Value>,
+    pub reports: Vec<ReportReference>,
 }

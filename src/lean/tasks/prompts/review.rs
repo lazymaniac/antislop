@@ -1,18 +1,18 @@
 use super::*;
 
-pub fn verifier_prompt(
+pub fn reviewer_prompt(
     project: &str,
     task: &TaskContract,
     report: &str,
     changes: Option<&str>,
 ) -> String {
-    let task_context = verifier_task_context(task);
+    let task_context = reviewer_task_context(task);
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let obligations = obligations_text(&obligations(task));
-    let binding = verifier_binding(task);
+    let binding = reviewer_binding(task);
     let risks = risks_note(task);
     format!(
-        "You verify another agent's work. The project is your current working \
+        "You review another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
          files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
          {task_context}\n\n{binding}\n\n\
@@ -20,7 +20,12 @@ pub fn verifier_prompt(
          the catalog risks of this kind of work). \
          Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n{risks}\n\n\
          Command results are recorded evidence: judge them by the command and the output \
-         the report quotes. Explicit artifact outputs listed in the contract are available \
+         the report quotes or retains as immutable MCP execution evidence. Read the referenced \
+         records with read_evidence, paging until complete=true, before judging missing raw output. \
+         A valid MCP reference retains raw evidence without repeating its body in the report; \
+         evaluate the content, not whether it was pasted inline. For earlier reports use \
+         read_dependency_result with dependency=self and report_history.result_ref. Historical \
+         input reports are context, not current acceptance evidence. Explicit artifact outputs listed in the contract are available \
          in your checkout even under .antislop/; inspect those documents. Other files the \
          worker left under paths git ignores (such as .antislop/ or target/) never reach \
          your checkout; their absence is not a finding. \
@@ -30,13 +35,13 @@ pub fn verifier_prompt(
     )
 }
 
-fn verifier_binding(task: &TaskContract) -> &'static str {
+fn reviewer_binding(task: &TaskContract) -> &'static str {
     if task.changes_code() {
-        OPTIONS_VERIFICATION
+        OPTIONS_REVIEW
     } else if task.kind == crate::config::WorkKind::Options {
-        SELECTION_VERIFICATION
+        SELECTION_REVIEW
     } else {
-        REPORT_VERIFICATION
+        REPORT_REVIEW
     }
 }
 
@@ -46,12 +51,11 @@ fn change_note(changes: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn verifier_task_context(task: &TaskContract) -> String {
+fn reviewer_task_context(task: &TaskContract) -> String {
     format!(
-        "Task: {}\nGoal: {}\nScope: {}\nArtifact outputs: {}",
+        "Task: {}\nGoal: {}\nArtifact outputs: {}",
         task.title,
         task.goal,
-        scope_text(&task.scope),
         if task.change_kind() == ChangeKind::Artifact {
             task.outputs.join(", ")
         } else {
@@ -60,10 +64,10 @@ fn verifier_task_context(task: &TaskContract) -> String {
     )
 }
 
-/// Resumed verifiers need the same current dependency evidence as new sessions.
-/// `earlier` holds the previous round's findings, whose fixes the verifier
+/// Resumed reviewers need the same current dependency evidence as new sessions.
+/// `earlier` holds the previous round's findings, whose fixes the reviewer
 /// confirms by id.
-pub fn verifier_turn_prompt(
+pub fn reviewer_turn_prompt(
     project: &str,
     task: &TaskContract,
     report: &str,
@@ -73,16 +77,16 @@ pub fn verifier_turn_prompt(
     earlier: &[Value],
 ) -> String {
     let prompt = if fresh {
-        verifier_prompt(project, task, report, changes)
+        reviewer_prompt(project, task, report, changes)
     } else {
-        verifier_followup(task, report, changes)
+        reviewer_followup(task, report, changes)
     };
     prompt + &earlier_findings(earlier) + &report_recheck(task, earlier) + upstream
 }
 
 /// Report tasks block a later round only on what that round changed.
 fn report_recheck(task: &TaskContract, earlier: &[Value]) -> String {
-    let report = verifier_binding(task) == REPORT_VERIFICATION;
+    let report = reviewer_binding(task) == REPORT_REVIEW;
     if report && earlier.iter().any(crate::lean::progress::blocks) {
         format!("\n\n{REPORT_RECHECK}")
     } else {
@@ -90,7 +94,7 @@ fn report_recheck(task: &TaskContract, earlier: &[Value]) -> String {
     }
 }
 
-/// The blocking findings of the previous round, so the verifier can name
+/// The blocking findings of the previous round, so the reviewer can name
 /// the ones the updated work fixes: their ids are the runtime's, not its own.
 /// A broad finding the round narrowed counts as fixed and comes back as a
 /// narrower one, or a large task that shrinks every round looks stalled.
@@ -129,9 +133,9 @@ fn format_earlier_finding(finding: &Value) -> String {
     )
 }
 
-pub fn verifier_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
+pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
-    let binding = verifier_binding(task);
+    let binding = reviewer_binding(task);
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
          the files. {binding} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
@@ -157,10 +161,9 @@ pub fn code_review_prompt(
         "You review a code change the user asked you to look at. The repository \
          is your current working directory: {dir}. Read the change with {range} \
          and the surrounding files yourself; work read-only. {PROJECT_RULES}\n\n\
-         Task: {}\nGoal: {}\nScope: {}\nAlso check the risks of this kind of work:\n{}\n\n{comments}{}",
+         Task: {}\nGoal: {}\nAlso check the risks of this kind of work:\n{}\n\n{comments}{}",
         task.title,
         task.goal,
-        scope_text(&task.scope),
         obligations_text(&crate::lean::risks::for_kind(task.kind).collect::<Vec<_>>()),
         REVIEW_FORMAT
     )

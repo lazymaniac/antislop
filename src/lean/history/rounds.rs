@@ -244,7 +244,7 @@ fn load_round_turns(db: &rusqlite::Connection, task: &str, round: u32) -> Result
 
 fn load_native_sessions(db: &rusqlite::Connection, task: &str, round: u32) -> Result<Vec<Value>> {
     let mut statement = db.prepare(
-        "SELECT t.role,COALESCE(r.provider_thread_id,r.provider_session_id,t.session_id) FROM tasks k JOIN turns t ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id) JOIN run_contexts r ON r.turn_id=t.id JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p WHERE p.conversation_id=t.conversation_id AND p.role=t.role ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
+        "SELECT t.role,COALESCE(r.provider_thread_id,r.provider_session_id,t.session_id) FROM tasks k JOIN turns t ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'reviewer:'||k.id) JOIN run_contexts r ON r.turn_id=t.id JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p WHERE p.conversation_id=t.conversation_id AND p.role=t.role ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
     )?;
     statement
         .query_map(params![task, round], |row| {

@@ -166,10 +166,11 @@ mod tests {
     #[test]
     fn detail_tab_shortcut_uses_the_agent_specific_tab_order() {
         let mut app = App::test_app();
-        app.details = Some(Details::new("verifier:task".into()));
+        app.details = Some(Details::new("reviewer:task".into()));
 
         press(&mut app, KeyCode::Char('2'));
-
+        assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
+        press(&mut app, KeyCode::Char('3'));
         assert_eq!(app.details.as_ref().unwrap().tab, details::CHECKS);
     }
 

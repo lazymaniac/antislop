@@ -23,8 +23,8 @@ fn rounds_appear_only_once_work_reached_them() {
         worker_state(&View::default(), &row("working", 1)),
         "working r1"
     );
-    assert_eq!(verifier_state(&row("working", 1)), "waits for worker r1");
-    assert_eq!(verifier_state(&row("proposed", 0)), "waits for worker");
+    assert_eq!(reviewer_state(&row("working", 1)), "waits for worker r1");
+    assert_eq!(reviewer_state(&row("proposed", 0)), "waits for worker");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         "queued r2 · codex"
     );
     assert_eq!(with_provider("queued r2", Some("")), "queued r2");
-    // A running worker shows its activity as its own line; the verifier
+    // A running worker shows its activity as its own line; the reviewer
     // never borrows it, and the state line never carries it.
     view.agents.insert(
         "worker:t1".into(),
@@ -80,12 +80,12 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         },
     );
     assert_eq!(worker_activity(&view, &working), None);
-    // The verifier's own line belongs to its own status and agent.
-    let checking = row("verifying", 1);
-    assert_eq!(verifier_status(&checking), "checking r1");
-    assert_eq!(verifier_activity(&view, &checking), None);
+    // The reviewer's own line belongs to its own status and agent.
+    let checking = row("reviewing", 1);
+    assert_eq!(reviewer_status(&checking), "checking r1");
+    assert_eq!(reviewer_activity(&view, &checking), None);
     view.agents.insert(
-        "verifier:t1".into(),
+        "reviewer:t1".into(),
         crate::lean::tui::view::Agent {
             running: true,
             activity: "checking  the diff".into(),
@@ -93,7 +93,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         },
     );
     assert_eq!(
-        verifier_activity(&view, &checking).as_deref(),
+        reviewer_activity(&view, &checking).as_deref(),
         Some("doing: checking the diff")
     );
     // A stop puts the cause on the activity line, and the combined
@@ -107,7 +107,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
     );
     assert_eq!(worker_state(&view, &failed), "failed r2 · it conflicted");
     assert_eq!(
-        verifier_activity(&view, &failed).as_deref(),
+        reviewer_activity(&view, &failed).as_deref(),
         Some("it conflicted")
     );
     let quiet = row("needs_user", 1);
@@ -120,7 +120,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
     // by staying empty rather than inventing filler.
     let done = row("approved", 1);
     assert_eq!(worker_activity(&view, &done), None);
-    assert_eq!(verifier_activity(&view, &done), None);
+    assert_eq!(reviewer_activity(&view, &done), None);
     assert_eq!(worker_state(&view, &done), "approved r1");
 }
 
@@ -128,7 +128,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
 fn live_activity_never_shows_the_placeholder_or_a_stopped_turn() {
     let mut view = View::default();
     view.agents.insert(
-        "plan verifier".into(),
+        "plan reviewer".into(),
         crate::lean::tui::view::Agent {
             running: true,
             activity: "exec  two  words".into(),
@@ -136,7 +136,7 @@ fn live_activity_never_shows_the_placeholder_or_a_stopped_turn() {
         },
     );
     assert_eq!(
-        doing(&view, "plan verifier").as_deref(),
+        doing(&view, "plan reviewer").as_deref(),
         Some("exec two words")
     );
     view.agents.insert(
@@ -188,10 +188,10 @@ fn stops_name_the_cause_and_never_invent_one() {
 
 #[test]
 fn coverage_is_counts_or_a_question_never_a_quiet_zero() {
-    let bare = row("verifying", 1);
+    let bare = row("reviewing", 1);
     assert_eq!(coverage_short(&bare), "?");
     assert_eq!(coverage_full(&bare), "not reported");
-    let mut reported = row("verifying", 1);
+    let mut reported = row("reviewing", 1);
     reported.obligations = Some(json!({
         "total": 8, "ok": 5, "issue": 1, "blocked": 0, "na": 0,
         "missing": 2, "unknown": ["X9"]
@@ -271,7 +271,7 @@ fn only_explicit_metadata_marks_an_effect_as_a_fragment() {
 fn coverage_render_caps_fat_ids_and_counts_every_one_left_out() {
     // The runtime's preview shape: few short ids plus an honest count
     // of the rest.
-    let mut preview = row("verifying", 1);
+    let mut preview = row("reviewing", 1);
     preview.obligations = Some(json!({
         "total": 3, "ok": 1, "missing": 2,
         "unknown": ["XX1", "XX2"], "unknown_more": 6,
@@ -287,7 +287,7 @@ fn coverage_render_caps_fat_ids_and_counts_every_one_left_out() {
     let fat: Vec<String> = (0..12)
         .map(|i| format!("x{i}{}", "y".repeat(200)))
         .collect();
-    let mut replay = row("verifying", 1);
+    let mut replay = row("reviewing", 1);
     replay.obligations = Some(json!({
         "total": 2, "ok": 0, "missing": 2, "unknown": fat,
     }));

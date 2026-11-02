@@ -81,7 +81,7 @@ impl Execution<'_> {
             self.conversation,
             self.task,
             &self.worker,
-            &self.verifier,
+            &self.reviewer,
         )?;
         if !recheck && state.resumed && !state.dependents_invalidated {
             self.core
@@ -104,7 +104,7 @@ impl Execution<'_> {
             self.conversation,
             self.task,
             if recheck {
-                status::VERIFYING
+                status::REVIEWING
             } else {
                 status::WORKING
             },
@@ -151,7 +151,7 @@ impl Execution<'_> {
             workdir: &self.workdir,
             add_dirs: &self.add_dirs,
             upstream: &self.upstream,
-            verifier: &self.verifier,
+            reviewer: &self.reviewer,
             round,
             findings: &state.findings,
             report,
@@ -198,7 +198,7 @@ impl Execution<'_> {
             self.conversation,
             self.task,
             status::NEEDS_USER,
-            Some("the verifier's verdict still leaves obligations unaccounted for"),
+            Some("the reviewer's verdict still leaves obligations unaccounted for"),
         )?;
         Ok(false)
     }
@@ -253,7 +253,7 @@ impl Execution<'_> {
     }
 
     fn stalled(&mut self) -> Result<bool> {
-        let why = "no previously open obligation was resolved and the verifier confirmed none of its earlier findings fixed; the orchestrator must supply a new basis or revise the contract";
+        let why = "no previously open obligation was resolved and the reviewer confirmed none of its earlier findings fixed; the orchestrator must supply a new basis or revise the contract";
         let report = self.task.report.take().unwrap_or_default();
         self.task.report = Some(format!("{report}\n\n[runtime] {why}"));
         self.core.stop(

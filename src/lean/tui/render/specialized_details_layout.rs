@@ -93,8 +93,9 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
         .padding(Padding::horizontal(u16::from(body.width >= 20)))
 }
 
-pub(super) fn document_key(tab: usize) -> Option<&'static str> {
+pub(super) fn document_key(key: &str, tab: usize) -> Option<&'static str> {
     match tab {
+        RESULT if key.starts_with("reviewer:") => Some("reviewer_result"),
         RESULT => Some("result"),
         REVIEW => Some("review"),
         _ => None,
@@ -218,7 +219,7 @@ pub(super) fn overview_split_hint(searching: bool, query: &str, width: u16) -> S
     if searching {
         format!("Search: {query}_ · Enter confirm · Esc cancel")
     } else if width >= 100 {
-        "↑/↓ card · Enter fold · e all · i terminal · a message · ←/→ rounds · Ctrl+W worker/verifier · [] tabs · Esc back".into()
+        "↑/↓ card · Enter fold · e all · i terminal · a message · ←/→ rounds · Ctrl+W worker/reviewer · [] tabs · Esc back".into()
     } else {
         "↑/↓ card · Enter fold · i terminal · a message · Esc".into()
     }

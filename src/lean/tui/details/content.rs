@@ -11,11 +11,11 @@ impl Details {
         self.hero(view, theme)
     }
 
-    /// Both agents of this task, in the order they work: worker, verifier.
+    /// Both agents of this task, in the order they work: worker, reviewer.
     pub(in crate::lean::tui) fn role_keys(&self) -> Vec<String> {
         match self.key.split_once(':') {
-            Some(("worker" | "verifier", id)) => {
-                vec![format!("worker:{id}"), format!("verifier:{id}")]
+            Some(("worker" | "reviewer", id)) => {
+                vec![format!("worker:{id}"), format!("reviewer:{id}")]
             }
             _ => vec![self.key.clone()],
         }
@@ -31,12 +31,12 @@ impl Details {
     }
 
     /// The one agent the Overview in front shows: the worker's tab holds the
-    /// worker, the verifier's tab the verifier.
+    /// worker, the reviewer's tab the reviewer.
     pub(in crate::lean::tui) fn session_keys(&self) -> Vec<String> {
         match self.key.split_once(':') {
-            Some(("worker" | "verifier", id)) => {
-                vec![if self.tab == VERIFIER {
-                    format!("verifier:{id}")
+            Some(("worker" | "reviewer", id)) => {
+                vec![if self.tab == REVIEWER {
+                    format!("reviewer:{id}")
                 } else {
                     format!("worker:{id}")
                 }]

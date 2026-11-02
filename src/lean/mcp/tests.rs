@@ -179,16 +179,16 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "current_turn"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "record_evidence", "read_evidence", "current_turn"],
             ),
-            ("verifier:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "current_turn"]),
+            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "read_evidence", "current_turn"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
             assert_eq!(names, expected);
             assert!(!allowed_tools(role).contains(&"revise_plan"));
         }
-        let review = &tool_list("verifier:task")[0]["inputSchema"];
+        let review = &tool_list("reviewer:task")[0]["inputSchema"];
         assert_eq!(
             review["required"],
             json!(["turn", "report", "checks", "findings"])
@@ -206,6 +206,7 @@ mod role_tests {
                 "submit_requirements",
                 "submit_plan",
                 "read_dependency_result",
+                "read_evidence",
                 "answer_agent",
                 "defer_to_user",
                 "retry_task",
@@ -214,7 +215,7 @@ mod role_tests {
             ]
         );
         assert_eq!(allowed_tools("planner"), vec!["submit_plan", "finish_turn"]);
-        for reviewer in ["auditor", "plan-verifier", "code-review:t1"] {
+        for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(allowed_tools(reviewer), vec!["review"], "{reviewer}");
             let review = &tool_list(reviewer)[0]["inputSchema"];
             assert_eq!(review["required"], json!(["turn", "report", "findings"]));
@@ -223,9 +224,9 @@ mod role_tests {
         for (role, tool) in [
             ("requirements-extraction-analyst", "submit_ledger"),
             ("requirements-audit-analyst", "submit_audit"),
-            ("requirements-audit-verifier", "submit_audit_review"),
+            ("requirements-audit-reviewer", "submit_audit_review"),
         ] {
-            let expected = if role.starts_with("requirements-audit-") { vec![tool, "read_dependency_result"] } else { vec![tool] };
+            let expected = if role.starts_with("requirements-audit-") { vec![tool, "read_dependency_result", "read_evidence"] } else { vec![tool] };
             assert_eq!(allowed_tools(role), expected, "{role}");
             assert!(is_terminal(tool));
         }
@@ -261,7 +262,7 @@ mod role_tests {
         assert!(tool_list("auditor")[0]["inputSchema"]["properties"]["addressed"].is_null());
         let task = &schema::revision()["tasks"]["items"];
         assert_eq!(task["required"], json!(["id", "title", "goal", "kind"]));
-        for gone in ["inputs", "verifier", "requirement_ids"] {
+        for gone in ["inputs", "reviewer", "requirement_ids"] {
             assert!(task["properties"][gone].is_null(), "{gone}");
         }
         let planner = tool_list("planner");
@@ -518,7 +519,7 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
         assert!(list.iter().any(|entry|entry["name"]==tool));
         assert!(!list.iter().any(|entry|entry["name"]==other));
     }
-    let list = scoped_tool_list("verifier:t",Some(&task));
+    let list = scoped_tool_list("reviewer:t",Some(&task));
     let review = list.iter().find(|entry|entry["name"]=="review").unwrap();
     let schema = &review["inputSchema"]["properties"]["checks"];
     assert_eq!(schema["additionalProperties"],false);

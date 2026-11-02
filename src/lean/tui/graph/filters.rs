@@ -4,7 +4,7 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Relations {
     pub depends: bool,
-    pub verifies: bool,
+    pub reviews: bool,
     /// Messages to and from the selected card, and any sent just now.
     pub mail: bool,
     pub supervises: bool,
@@ -14,7 +14,7 @@ impl Default for Relations {
     fn default() -> Self {
         Self {
             depends: true,
-            verifies: true,
+            reviews: true,
             mail: true,
             supervises: false,
         }
@@ -22,13 +22,13 @@ impl Default for Relations {
 }
 
 /// The relations in the order of their keys, 1 to 4.
-pub const RELATIONS: [&str; 4] = ["dependencies", "verification", "messages", "supervision"];
+pub const RELATIONS: [&str; 4] = ["dependencies", "review", "messages", "supervision"];
 
 impl Relations {
     pub fn all() -> Self {
         Self {
             depends: true,
-            verifies: true,
+            reviews: true,
             mail: true,
             supervises: true,
         }
@@ -38,7 +38,7 @@ impl Relations {
     pub fn only(index: usize) -> Self {
         let mut relations = Self {
             depends: false,
-            verifies: false,
+            reviews: false,
             mail: false,
             supervises: false,
         };
@@ -53,7 +53,7 @@ impl Relations {
     }
 
     pub fn shown(self, index: usize) -> bool {
-        [self.depends, self.verifies, self.mail, self.supervises]
+        [self.depends, self.reviews, self.mail, self.supervises]
             .get(index)
             .copied()
             .unwrap_or(false)
@@ -62,7 +62,7 @@ impl Relations {
     fn flag(&mut self, index: usize) -> Option<&mut bool> {
         match index {
             0 => Some(&mut self.depends),
-            1 => Some(&mut self.verifies),
+            1 => Some(&mut self.reviews),
             2 => Some(&mut self.mail),
             3 => Some(&mut self.supervises),
             _ => None,
@@ -71,7 +71,7 @@ impl Relations {
 
     /// The relations drawn, by their initials, for the panel title.
     pub fn name(self) -> String {
-        let shown: Vec<_> = ["D", "V", "M", "S"]
+        let shown: Vec<_> = ["D", "R", "M", "S"]
             .into_iter()
             .enumerate()
             .filter(|(index, _)| self.shown(*index))
@@ -89,7 +89,7 @@ impl Relations {
     pub(super) fn shows(self, edge: &Edge, selected: Option<&str>) -> bool {
         match edge.kind {
             Kind::Depends => self.depends,
-            Kind::Verifies => self.verifies,
+            Kind::Reviews => self.reviews,
             Kind::Mail { recent } => {
                 self.mail && selected.is_none_or(|key| recent || edge.from == key || edge.to == key)
             }

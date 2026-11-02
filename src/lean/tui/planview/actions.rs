@@ -11,7 +11,17 @@ struct KeyState {
 impl PlanView {
     /// Handle keyboard navigation and actions in the full-screen plan view.
     pub fn key(&mut self, key: KeyEvent, view: &View) -> PlanAction {
-        let lines = self.build_lines(view);
+        let lines = self.description_lines(view);
+        if !view.tasks.is_empty() && key.code == KeyCode::Char('v') && key.modifiers.is_empty() {
+            self.graph_focused = !self.graph_focused;
+            self.graph_reveal = true;
+            self.confirm_accept = false;
+            return PlanAction::None;
+        }
+        if self.graph_focused && self.graph_key(key, view) {
+            self.confirm_accept = false;
+            return PlanAction::None;
+        }
         let state = self.prepare_key(view, lines.len());
         if let Some(action) = self.control_action(key, state) {
             return action;
@@ -78,6 +88,19 @@ impl PlanView {
             KeyCode::Char('x' | '2') if state.decidable => PlanAction::Reject,
             KeyCode::Char('C' | '3') => PlanAction::CommentWholePlan,
             KeyCode::Char('R' | '4') => self.activate(BottomButton::Review, state),
+            KeyCode::Char('c') if self.graph_focused => self
+                .selected_line_number(view)
+                .and_then(|number| {
+                    self.build_lines(view)
+                        .into_iter()
+                        .find(|line| line.number == number)
+                })
+                .map_or(PlanAction::CommentWholePlan, |line| {
+                    PlanAction::CommentLine {
+                        line: line.number,
+                        text_preview: line.text,
+                    }
+                }),
             KeyCode::Char('c') => line_comment(self.cursor, lines),
             KeyCode::Delete | KeyCode::Char('D') => self.delete_comment(view),
             KeyCode::Char(ch @ ('r' | 'o')) => self.toggle_comment(view, ch),
@@ -100,16 +123,27 @@ impl PlanView {
         PlanAction::None
     }
 
+    fn selected_comments<'a>(&self, view: &'a View) -> Vec<&'a Comment> {
+        if self.graph_focused {
+            let Some(task) = view.tasks.get(self.graph_selected) else {
+                return Vec::new();
+            };
+            self.build_lines(view)
+                .iter()
+                .filter(|line| line.task_id.as_deref() == Some(&task.id))
+                .flat_map(|line| self.line_comments(view, line.number))
+                .collect()
+        } else {
+            self.line_comments(view, self.selected_line_number(view).unwrap_or(0))
+        }
+    }
+
     fn delete_comment(&self, view: &View) -> PlanAction {
-        self.line_comments(view, self.cursor + 1)
+        self.selected_comments(view)
             .into_iter()
             .rev()
             .find(|comment| comment.status == "draft")
-            .or_else(|| {
-                self.line_comments(view, self.cursor + 1)
-                    .into_iter()
-                    .next_back()
-            })
+            .or_else(|| self.selected_comments(view).into_iter().next_back())
             .map(|comment| PlanAction::ToggleResolveComment {
                 id: comment.id,
                 next_status: "deleted".into(),
@@ -119,13 +153,12 @@ impl PlanView {
 
     fn toggle_comment(&self, view: &View, key: char) -> PlanAction {
         let comment = self
-            .line_comments(view, self.cursor + 1)
+            .selected_comments(view)
             .into_iter()
             .find(|comment| comment.status == "open")
-            .or_else(|| self.line_comments(view, self.cursor + 1).into_iter().next())
+            .or_else(|| self.selected_comments(view).into_iter().next())
             .or_else(|| {
-                self.cursor
-                    .eq(&0)
+                (self.cursor == 0 && !self.graph_focused)
                     .then(|| whole_plan_comment(self, view))
                     .flatten()
             });
@@ -167,6 +200,22 @@ impl PlanView {
         if let Some(action) = self.click_button(col, row, state) {
             return action;
         }
+        if self
+            .graph_area
+            .contains(ratatui::layout::Position::new(col, row))
+        {
+            self.graph_focused = true;
+            if let Some((_, index)) = self
+                .task_rects
+                .iter()
+                .find(|(rect, _)| rect.contains(ratatui::layout::Position::new(col, row)))
+            {
+                self.graph_selected = *index;
+                self.task_scroll = 0;
+                self.graph_reveal = true;
+            }
+            return PlanAction::None;
+        }
         self.click_document(col, row, view);
         PlanAction::None
     }
@@ -193,20 +242,24 @@ impl PlanView {
         if !self.doc_area.contains(pos) {
             return;
         }
+        self.graph_focused = false;
         let rel_y = usize::from(row.saturating_sub(self.doc_area.y));
         if let Some(Some(idx)) = self.row_docs.get(self.scroll + rel_y) {
-            self.cursor = (*idx).min(self.build_lines(view).len().saturating_sub(1));
+            self.cursor = (*idx).min(self.description_lines(view).len().saturating_sub(1));
         }
     }
 }
 
 fn line_comment(cursor: usize, lines: &[DocLine]) -> PlanAction {
+    if lines.is_empty() {
+        return PlanAction::CommentWholePlan;
+    }
     let preview = lines
         .get(cursor)
         .map(|line| line.text.clone())
         .unwrap_or_default();
     PlanAction::CommentLine {
-        line: cursor + 1,
+        line: lines.get(cursor).map_or(1, |line| line.number),
         text_preview: preview,
     }
 }

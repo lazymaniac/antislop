@@ -65,7 +65,7 @@ impl ConfigEditor {
             } else {
                 profile.clone()
             };
-            serde_json::json!({"executor": executor, "verifier": profile})
+            serde_json::json!({"executor": executor, "reviewer": profile})
         };
         self.append_entry(vec![section, name.into()], &value);
     }

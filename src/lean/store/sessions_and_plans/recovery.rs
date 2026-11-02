@@ -50,7 +50,7 @@ fn record_turn_interruption(
 pub(super) fn unfinished_plans(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(String, String)>> {
     let mut statement = tx.prepare(
         "SELECT DISTINCT conversation_id, plan_id FROM tasks
-         WHERE status IN ('queued','working','verifying')",
+         WHERE status IN ('queued','working','reviewing')",
     )?;
     Ok(statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -78,7 +78,7 @@ impl Store {
             .is_some_and(|r| r["type"] == "completed");
         let correction:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM mail WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?1) AND recipient='worker:'||?1 AND delivered_turn IS NULL)",[id],|r|r.get(0))?;
         if completed && !correction {
-            tx.execute("UPDATE tasks SET feedback=json_set(coalesce(feedback,'{}'),'$.resume_role','verifier') WHERE id=?1",[id])?;
+            tx.execute("UPDATE tasks SET feedback=json_set(coalesce(feedback,'{}'),'$.resume_role','reviewer') WHERE id=?1",[id])?;
         }
         let text = interrupted_report(self, report)?;
         tx.execute(
@@ -91,7 +91,7 @@ impl Store {
 
 fn unfinished_task_rows(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(String, Option<String>)>> {
     let mut statement =
-        tx.prepare("SELECT id,report FROM tasks WHERE status IN ('queued','working','verifying')")?;
+        tx.prepare("SELECT id,report FROM tasks WHERE status IN ('queued','working','reviewing')")?;
     Ok(statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?)

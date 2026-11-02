@@ -94,13 +94,13 @@ fn turn_text(turn: &str, prompt: &str) -> String {
         "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
          result tool of the MCP server `{}` that this prompt names (`{}` when it names none), \
          with turn = \"{turn}\"; stop only after receiving recorded=true. If rejected, correct \
-         the reported error and call it again. Task workers/verifiers can call current_turn with an empty object after a turn-id rejection and must copy its active id exactly. Never finish only in terminal prose. An options worker with no viable selection must call report_blocker instead of fabricating a choice or waiting for a timeout.",
+         the reported error and call it again. Task workers/reviewers can call current_turn with an empty object after a turn-id rejection and must copy its active id exactly. Never finish only in terminal prose. An options worker with no viable selection must call report_blocker instead of fabricating a choice or waiting for a timeout.",
         mcp::SERVER,
         mcp::TOOL
     )
 }
 
-/// The task and round a turn belonged to, for a task's workers and verifiers.
+/// The task and round a turn belonged to, for a task's workers and reviewers.
 fn turn_scope(core: &Core, turn: &str) -> Result<Option<(String, u32)>> {
     let row = core
         .store

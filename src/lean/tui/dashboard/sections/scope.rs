@@ -7,21 +7,7 @@ pub(super) fn lines(
     width: usize,
     row: &TaskRow,
 ) -> Vec<Line<'static>> {
-    let mut lines = row
-        .scope
-        .iter()
-        .flat_map(|path| {
-            item(
-                theme,
-                Span::styled(theme.glyphs().dot, theme.dim()),
-                None,
-                path,
-                width,
-                theme.text(),
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.extend(dependencies(view, theme, row));
+    let mut lines = dependencies(view, theme, row);
     lines.extend(metadata(details, theme, width, row));
     lines
 }

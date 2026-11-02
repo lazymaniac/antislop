@@ -36,7 +36,7 @@ if _ledger_head.startswith('Act as requirements analyst before planning.'):
     _ledger_emit(_ledger_block('ledger',{'run_id':_ledger_run['id'],'expected_spec_revision':_ledger_run['spec_revision'],'entries':entries}))
 if _ledger_head.startswith('Audit the integrated project'):
     _ledger_emit(_ledger_block('compliance',{'approved':False,'findings':[{'issue':'No integrated evidence supplied by this worker-only fixture'}],'evidence':[]}))
-if _ledger_head.startswith('Verify this audit independently'):
+if _ledger_head.startswith('Review this audit independently'):
     _ledger_emit(_ledger_block('compliance_verdict',{'approved':False,'note':'Worker-only fixture deliberately leaves integrated evidence open','assessments':[]}))
 # Keep existing task-specific fixture logic independent of appended ledger hints.
 if len(_ledger_context)==2:
@@ -61,6 +61,6 @@ def _ledger_dumps(value,*args,**kwargs):
             if isinstance(value['result'].get('response'),str): value['result']['response']=_ledger_answer(value['result']['response'])
     return _ledger_json(value,*args,**kwargs)
 json.dumps = _ledger_dumps
-if _ledger_run and 'Create a task plan from the verified ledger' in _ledger_prompt and _lo.path.exists(_ledger_cache):
+if _ledger_run and 'Create a task plan from the reviewed ledger' in _ledger_prompt and _lo.path.exists(_ledger_cache):
     with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)
     _ledger_emit(_ledger_answer(_ledger_block('plan',_ledger_payload)))

@@ -18,11 +18,13 @@ impl Core {
             .into_iter()
             .filter(|message| message.author != ORCHESTRATOR)
             .collect();
-        // Give each newly queued comment its own turn, including messages
-        // preceding it. Comments arriving during a turn stay queued.
+        // Give comments and returned plans their own turn, including messages
+        // preceding them, so a queued comment cannot consume planner feedback.
         Ok(pending
             .iter()
-            .find(|message| message.text.starts_with(COMMENT_PREFIX))
+            .find(|message| {
+                message.text.starts_with(COMMENT_PREFIX) || message.author == PLAN_REVIEWER
+            })
             .or_else(|| pending.last())
             .map(|message| message.seq))
     }
@@ -43,15 +45,21 @@ impl Core {
     }
 
     /// Whether the planner owns the next turn: this planning cycle has no plan
-    /// yet, or the orchestrator asked for a new one. Comments and everything
-    /// else after the first draft belong to the orchestrator.
+    /// yet, the orchestrator asked for a new one, or the reviewer returned it.
+    /// User comments and planner blockers belong to the orchestrator.
     pub(in crate::lean) fn planner_owns_turn(&self, conversation: &str, upto: u64) -> Result<bool> {
         let answered = self.store.last_orchestration_answered(conversation)?;
         let asked = self.asked_since(conversation, answered, upto)?;
-        if includes_comment(&asked) {
+        if includes_comment(&asked)
+            || asked
+                .iter()
+                .any(|message| message.author == PLANNER_BLOCKER)
+        {
             return Ok(false);
         }
-        Ok(self.store.awaiting_first_plan(conversation)? || includes_replan(&asked))
+        Ok(self.store.awaiting_first_plan(conversation)?
+            || includes_replan(&asked)
+            || asked.iter().any(|message| message.author == PLAN_REVIEWER))
     }
 }
 

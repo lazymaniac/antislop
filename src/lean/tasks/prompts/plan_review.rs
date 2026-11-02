@@ -6,18 +6,18 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
          project is your current working directory: {project}. Read the files \
          you need yourself; work read-only. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
-         The orchestrator's plan:\n{}\n\n{}{}{}",
+         The proposed plan:\n{}\n\n{}{}{}",
         request,
         plan_text(plan),
         PLAN_CHECKS,
-        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
+        super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
     )
 }
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
     format!(
-        "{}The orchestrator's new plan:\n{}\n\nCheck it again. {}{}{}",
+        "{}The new plan:\n{}\n\nCheck it again. {}{}{}",
         if request.is_empty() {
             String::new()
         } else {
@@ -25,7 +25,7 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
         },
         plan_text(plan),
         PLAN_CHECKS,
-        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
+        super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
     )
 }
@@ -36,20 +36,19 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      the same files or contract are not unordered); no ordering or intermediate \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
-     checkable; tasks and verifier criteria do not gate work on commit or tree hashes, \
-     snapshot adoption, a clean tree or unchanged scoped paths: agents use their allocated \
+     checkable; tasks and reviewer criteria do not gate work on commit or tree hashes, \
+     snapshot adoption, a clean tree or unchanged input paths: agents use their allocated \
      checkout as it is; task.summary, where given, is a concise single-sentence \
      semantic summary (about 60–80 characters) in the user's language, rather than the \
      first sentence of the goal; standard descriptions of built-in roles and automatically \
-     added quality gates may use the interface language; scope names the places that matter, \
-     including related projects or services for read-only tasks; a writer's scope stays within its worktree. Existing toolchain executables are not project inputs requiring scope entries. Tasks that change files are marked `writes`; only change_kind=code requires quality and \
-     verification agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
-     is left in a better state; each goal's result can be checked by its verifier from \
-     the files and the worker's recorded evidence, without the verifier executing or editing \
-     anything. This limits verifiers, not workers: a task whose kind writes (implementation, \
+     added quality gates may use the interface language; filesystem access follows the allocated checkout and CLI permissions, not task path lists. Writers stay within their worktrees. Existing toolchain executables need no separate path grant. Tasks that change files are marked `writes`; only change_kind=code requires quality and \
+     review agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
+     is left in a better state; each goal's result can be checked by its reviewer from \
+     the files and the worker's recorded evidence, without the reviewer executing or editing \
+     anything. This limits reviewers, not workers: a task whose kind writes (implementation, \
      refactoring, testing, static analysis, integration) runs the builds, tests, audits and \
      commands its goal names and records their output, so never flag a goal for requiring \
-     its worker to execute. Each verifier checks its task's goal, \
+     its worker to execute. Each reviewer checks its task's goal, \
      assigned acceptance criteria and its kind's risk catalog. ";
 
 /// The plan as the reviewer reads it: compact JSON. Tasks the runtime adds
@@ -110,7 +109,7 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates; writes=true alone does not require them. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.\n\nApproved tasks this revision sends back to work, because their contract changes or it names them in redo; options tasks are generated from the writer they serve and follow its contract: {}.",
+        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates; writes=true alone does not require them. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
         serde_json::to_string(&previous).unwrap_or_default(),
         listed(approved.kept),
         listed(approved.redone)
@@ -127,9 +126,9 @@ fn listed(ids: &[String]) -> String {
 
 pub fn plan_rejected(findings: &[Value]) -> String {
     format!(
-        "The plan verifier sent the plan back before the user saw it:\n{}\n\n\
-         Propose a corrected plan, or explain to the user why a finding does \
-         not apply.",
+        "The plan reviewer sent the plan back before the user saw it:\n{}\n\n\
+         Submit the complete corrected plan. If a finding cannot be resolved within \
+         the agreed requirements, report the blocker with finish_turn for the orchestrator.",
         findings_text(findings)
     )
 }
@@ -161,5 +160,5 @@ pub fn audit_followup(request: &str, results: &str) -> String {
 const AUDIT_CHECKS: &str = "List every obligation in the request, each \
      qualifier included, and decide for each whether the results and the files \
      show it done and whether touched code was left in a cleaner, better state \
-     than before. A missing, partial or unverified obligation is a high \
+     than before. A missing, partial or unreviewed obligation is a high \
      finding. ";

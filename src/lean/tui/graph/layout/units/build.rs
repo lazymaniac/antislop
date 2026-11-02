@@ -83,7 +83,7 @@ fn member_tasks(view: &View, unit: &Unit) -> Vec<usize> {
     tasks
 }
 
-/// The unit's cards from left to right: options, worker, verifier.
+/// The unit's cards from left to right: options, worker, reviewer.
 pub(super) fn member_keys(view: &View, unit: &Unit) -> Vec<String> {
     let task = &view.tasks[unit.task];
     let mut keys: Vec<String> = unit
@@ -93,7 +93,7 @@ pub(super) fn member_keys(view: &View, unit: &Unit) -> Vec<String> {
         .collect();
     keys.push(format!("worker:{}", task.id));
     if !is_pair(task) {
-        keys.push(format!("verifier:{}", task.id));
+        keys.push(format!("reviewer:{}", task.id));
     }
     keys
 }
@@ -128,7 +128,7 @@ fn status_layers(builder: &Builder<'_>, units: &[Unit]) -> Vec<u16> {
         .iter()
         .map(|unit| match builder.view.tasks[unit.task].status.as_str() {
             "proposed" | "queued" => 0,
-            "working" | "verifying" => 1,
+            "working" | "reviewing" => 1,
             "approved" => 2,
             _ => 3,
         })

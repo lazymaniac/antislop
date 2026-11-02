@@ -43,12 +43,6 @@ impl Core {
         } else {
             self.store.add_message(conversation, "user", text)?
         };
-        if let Err(error) = self.settle_scope_approval(conversation, text) {
-            self.notice(
-                conversation,
-                &format!("scope decision not settled: {error}"),
-            );
-        }
         self.wake(conversation);
         Ok(message)
     }
@@ -111,7 +105,7 @@ impl Core {
     }
 
     fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) {
-        if matches!(message.recipient.as_str(), PLAN_VERIFIER | AUDITOR) {
+        if matches!(message.recipient.as_str(), PLAN_REVIEWER | AUDITOR) {
             self.resume_agent_reviews(&message.conversation);
         }
         if message.recipient == ORCHESTRATOR {

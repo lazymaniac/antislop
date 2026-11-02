@@ -24,7 +24,7 @@ fn append_agent_records(details: &Details, view: &View, records: &mut Vec<Rc<Det
         records.push(task_record(
             view,
             task,
-            details.key.starts_with("verifier:"),
+            details.key.starts_with("reviewer:"),
         ));
     }
     match agent {
@@ -102,7 +102,7 @@ fn cli_record(agent: &Agent) -> Rc<DetailRecord> {
     record(lines, " ")
 }
 
-fn task_record(view: &View, task: &TaskRow, verifier: bool) -> Rc<DetailRecord> {
+fn task_record(view: &View, task: &TaskRow, reviewer: bool) -> Rc<DetailRecord> {
     let mut lines = task_summary_lines(view, task);
     lines.push(plain(format!("Task {}: {}", task.id, task.title)));
     lines.push(plain(format!(
@@ -115,13 +115,12 @@ fn task_record(view: &View, task: &TaskRow, verifier: bool) -> Rc<DetailRecord> 
         }
     )));
     append_list(&mut lines, "Depends on", &task.depends_on);
-    append_list(&mut lines, "Scope", &task.scope);
     lines.push(plain(String::new()));
     lines.push(label("Goal"));
     lines.push(plain(task.goal.clone()));
-    if verifier || !task.focus.is_empty() {
+    if reviewer || !task.focus.is_empty() {
         lines.push(plain(String::new()));
-        lines.push(label("Verification"));
+        lines.push(label("Review"));
         lines.push(plain(task.focus.clone()));
     }
     if !task.risks.is_empty() {

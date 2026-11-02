@@ -97,6 +97,15 @@ impl Store {
         turn: &str,
         result: &super::super::turn_result::TurnResult,
     ) -> Result<()> {
+        self.save_turn_result_with_evidence(turn, result, &[])
+    }
+
+    pub(in crate::lean) fn save_turn_result_with_evidence(
+        &self,
+        turn: &str,
+        result: &super::super::turn_result::TurnResult,
+        evidence: &[EvidenceReference],
+    ) -> Result<()> {
         let encoded = serde_json::to_string(result)?;
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -113,6 +122,12 @@ impl Store {
             tx.execute(
                 "INSERT INTO agent_results(turn_id,result) VALUES(?1,?2)",
                 params![turn, encoded],
+            )?;
+        }
+        for reference in evidence {
+            tx.execute(
+                "INSERT OR IGNORE INTO result_evidence(turn_id,evidence_id) VALUES(?1,?2)",
+                params![turn, reference.id],
             )?;
         }
         tx.commit()?;

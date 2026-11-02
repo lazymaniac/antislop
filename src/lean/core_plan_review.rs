@@ -1,7 +1,7 @@
 use super::*;
 
 impl Core {
-    /// An independent reviewer's verdict (a verifier profile, its own
+    /// An independent reviewer's verdict (a reviewer profile, its own
     /// session per role), or why there is none. `prompt` gets whether this is
     /// the session's first turn and the user's messages it has not seen.
     pub(in crate::lean) fn review(
@@ -79,7 +79,7 @@ fn review_setup<'a>(
         conversation,
         plan_id: plan_id.map(str::to_string),
         role: role.into(),
-        profile: config.resolve(WorkKind::Orchestration, RoleKind::Verifier),
+        profile: config.resolve(WorkKind::Orchestration, RoleKind::Reviewer),
         cwd: project.to_path_buf(),
         add_dirs: vec![],
         access: agent::Access::ReadOnly,

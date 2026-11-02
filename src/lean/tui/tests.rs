@@ -154,14 +154,14 @@ fn ac_key_03_multiline_boundary_up() {
 fn ac_modal_02_comment_editor_dismissal_preserves_graph_selection() {
     let mut app = test_app();
     app.focus = Focus::Graph;
-    app.selected = "verifier:t1".into();
+    app.selected = "reviewer:t1".into();
     app.editor = Some(Editor {
         target: app.selected.clone(),
         input: InputBuffer::with_text("draft comment"),
     });
     assert!(app.key(key_press(KeyCode::Esc)));
     assert!(app.editor.is_none());
-    assert_eq!(app.selected, "verifier:t1");
+    assert_eq!(app.selected, "reviewer:t1");
 }
 
 #[test]
@@ -234,9 +234,9 @@ fn comment_targets_from_graph_and_details() {
     assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
 
     app.editor = None;
-    app.details = Some(Details::new("verifier:t1".into()));
+    app.details = Some(Details::new("reviewer:t1".into()));
     app.key(key_press(KeyCode::Char('c')));
-    assert_eq!(app.editor.as_ref().unwrap().target, "verifier:t1");
+    assert_eq!(app.editor.as_ref().unwrap().target, "reviewer:t1");
 }
 
 #[test]
@@ -914,7 +914,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     let backend = TestBackend::new(60, 12);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    // 1. Initial page (scroll = 0): verify first set of shortcuts and full descriptions
+    // 1. Initial page (scroll = 0): review first set of shortcuts and full descriptions
     terminal
         .draw(|frame| {
             app.draw(frame);
@@ -932,7 +932,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     assert!(text1.contains("accept/resume"));
     assert!(text1.contains("delete to start / end of line"));
 
-    // 2. Navigate/scroll help down and verify modal isolation
+    // 2. Navigate/scroll help down and review modal isolation
     let bottom = app.help_max_scroll();
     for _ in 0..bottom {
         app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -946,7 +946,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
         "Help navigation must not modify underlying input draft"
     );
 
-    // 3. Scrolled view: verify subsequent shortcuts and complete descriptions
+    // 3. Scrolled view: review subsequent shortcuts and complete descriptions
     terminal
         .draw(|frame| {
             app.draw(frame);
@@ -977,7 +977,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     assert!(text2.contains("command palette"));
     assert!(text2.contains("back/clear draft"));
 
-    // 4. Verify End followed by Down, PageDown, Up (clamping and no overflow panic)
+    // 4. Review End followed by Down, PageDown, Up (clamping and no overflow panic)
     let max_scroll = app.help_max_scroll();
     assert!(max_scroll >= 8);
 
@@ -996,7 +996,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     app.key(event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.help_scroll, max_scroll - 1);
 
-    // 5. Verify resizing clamps stored help scroll
+    // 5. Review resizing clamps stored help scroll
     let mut terminal_tall = Terminal::new(TestBackend::new(60, 24)).unwrap();
     terminal_tall
         .draw(|frame| {
@@ -1018,7 +1018,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
         .unwrap();
     assert_eq!(app.help_max_scroll(), max_scroll);
 
-    // 6. Graph help at 60x12: verify long filter relation description is fully accessible without clipping
+    // 6. Graph help at 60x12: review long filter relation description is fully accessible without clipping
     app.show_help(Help::Graph);
     for _ in 0..2 {
         app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -1032,7 +1032,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     let text_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
     assert!(text_graph.contains("show / hide"));
     assert!(text_graph.contains("dependencies"));
-    assert!(text_graph.contains("verification"));
+    assert!(text_graph.contains("review"));
     assert!(text_graph.contains("messages"));
     assert!(text_graph.contains("supervision"));
 
@@ -1075,7 +1075,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
     assert!(text.contains("now"));
     assert!(text.contains("orchestrator") || text.contains(ORCHESTRATOR));
 
-    // Verify orchestrator node cells remain intact in the buffer
+    // Review orchestrator node cells remain intact in the buffer
     let mut orchestrator_visible = false;
     for y in 0..30 {
         let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
@@ -1390,7 +1390,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
         title: format!("Task {id}"),
         status: status.into(),
         writes: true,
-        reason: Some("the verifier repeated itself".into()),
+        reason: Some("the reviewer repeated itself".into()),
         ..view::TaskRow::default()
     };
     app.view.tasks = vec![task("t1", "approved")];
@@ -1421,7 +1421,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
     // The graph key acts on the selected step.
     app.view.tasks.push(task("t4", "failed"));
     app.focus = Focus::Graph;
-    app.selected = "verifier:t4".into();
+    app.selected = "reviewer:t4".into();
     // Stage Blocked keeps the graph visible: nothing is running.
     app.key(key_press(KeyCode::Char('u')));
     assert_eq!(app.unblock.as_ref().unwrap().task, "t4");

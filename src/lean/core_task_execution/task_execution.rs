@@ -20,7 +20,7 @@ pub(super) struct Execution<'a> {
     add_dirs: Vec<PathBuf>,
     upstream: String,
     worker: String,
-    verifier: String,
+    reviewer: String,
     integration_repairs: u64,
 }
 
@@ -41,7 +41,7 @@ struct Prepared {
     add_dirs: Vec<PathBuf>,
     upstream: String,
     worker: String,
-    verifier: String,
+    reviewer: String,
     integration_repairs: u64,
 }
 
@@ -64,7 +64,7 @@ impl Prepared {
             add_dirs,
             upstream,
             worker: format!("worker:{}", task.id),
-            verifier: format!("verifier:{}", task.id),
+            reviewer: format!("reviewer:{}", task.id),
             integration_repairs: task
                 .feedback
                 .as_ref()
@@ -96,7 +96,7 @@ impl<'a> Execution<'a> {
             add_dirs: prepared.add_dirs,
             upstream: prepared.upstream,
             worker: prepared.worker,
-            verifier: prepared.verifier,
+            reviewer: prepared.reviewer,
             integration_repairs: prepared.integration_repairs,
         })
     }

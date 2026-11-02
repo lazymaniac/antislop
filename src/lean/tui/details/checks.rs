@@ -1,6 +1,6 @@
 use super::*;
 
-/// One check of a verifier as the Checks tab shows it.
+/// One check of a reviewer as the Checks tab shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckRow {
     pub id: String,

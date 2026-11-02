@@ -26,12 +26,12 @@ pub use presentation::{
 
 pub const TABS: [&str; 8] = [
     "Overview",
-    "Result",
+    "Results",
     "Checks",
     "Comments",
     "Review",
     "Requirements",
-    "Verifier",
+    "Reviewer",
     "Plan",
 ];
 pub const RESULT: usize = 1;
@@ -39,31 +39,40 @@ pub const CHECKS: usize = 2;
 pub const COMMENTS: usize = 3;
 pub const REVIEW: usize = 4;
 pub const REQUIREMENTS: usize = 5;
-/// The verifier's own Overview: what it checks, and its terminal.
-pub const VERIFIER: usize = 6;
+/// The reviewer's own Overview: what it checks, and its terminal.
+pub const REVIEWER: usize = 6;
 pub const PLAN: usize = 7;
 
 /// The label of a tab for this agent.
 pub fn tab_name(key: &str, tab: usize) -> &'static str {
-    match (tab, key.split_once(':').map(|(role, _)| role)) {
-        (0, Some("worker")) => "Worker",
+    let role = key.split_once(':').map_or(key, |(role, _)| role);
+    match (tab, role) {
+        (0, "worker") => "Worker",
+        (RESULT, "planner") => "Plan",
+        (RESULT, "reviewer" | "plan-reviewer") => "Review",
+        (RESULT, "auditor" | "requirements-audit-analyst") => "Audit",
+        (RESULT, "requirements-audit-reviewer") => "Audit review",
+        (RESULT, "orchestrator") => "Response",
+        (RESULT, crate::lean::COMMENT_ORCHESTRATOR) => "Response",
+        (RESULT, role) if role.starts_with("requirements-") => "Requirements",
         _ => TABS[tab],
     }
 }
 
 /// Whether a tab is an agent's Overview (its info beside its terminal).
 pub fn is_overview(tab: usize) -> bool {
-    tab == 0 || tab == VERIFIER
+    tab == 0 || tab == REVIEWER
 }
 
 /// Each role exposes only its own tabs.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
         "worker" => vec![0, RESULT, COMMENTS, REQUIREMENTS],
-        "verifier" => vec![VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
-        "planner" => vec![0, PLAN, COMMENTS],
-        "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
-        _ => vec![0, COMMENTS],
+        "reviewer" => vec![REVIEWER, RESULT, CHECKS, COMMENTS, REQUIREMENTS],
+        "planner" => vec![0, RESULT, COMMENTS],
+        "plan-reviewer" | "auditor" => vec![0, RESULT, COMMENTS],
+        "conversation" => vec![0, COMMENTS],
+        _ => vec![0, RESULT, COMMENTS],
     }
 }
 
@@ -159,7 +168,7 @@ impl Details {
         self.task.as_ref().map_or(0, |task| check_rows(task).len())
     }
 
-    /// The task id of a worker or verifier.
+    /// The task id of a worker or reviewer.
     pub fn task_id(&self) -> Option<&str> {
         self.key.split_once(':').map(|(_, id)| id)
     }
@@ -174,11 +183,11 @@ impl Details {
         self.hero(view, theme)
     }
 
-    /// Both agents of this task, in the order they work: worker, verifier.
+    /// Both agents of this task, in the order they work: worker, reviewer.
     pub(super) fn role_keys(&self) -> Vec<String> {
         match self.key.split_once(':') {
-            Some(("worker" | "verifier", id)) => {
-                vec![format!("worker:{id}"), format!("verifier:{id}")]
+            Some(("worker" | "reviewer", id)) => {
+                vec![format!("worker:{id}"), format!("reviewer:{id}")]
             }
             _ => vec![self.key.clone()],
         }
@@ -226,8 +235,8 @@ impl Details {
     }
 }
 
-// The verifier's obligations (the goal, the task's acceptance criteria, then
-// its kind's risks) and how far each is: what the verifier reported while it
+// The reviewer's obligations (the goal, the task's acceptance criteria, then
+// its kind's risks) and how far each is: what the reviewer reported while it
 // works, else how the latest verdict accounted for it.
 
 #[cfg(test)]

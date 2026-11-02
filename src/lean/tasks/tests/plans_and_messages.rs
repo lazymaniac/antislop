@@ -36,7 +36,7 @@ fn plans_that_write_get_the_required_quality_gates() {
         lint.depends_on,
         vec!["t1", "t2", "quality-refactoring", "static-analyzer-options"]
     );
-    assert_eq!(lint.scope, vec!["src/a.rs", "tests/"]);
+    assert!(serde_json::to_value(lint).unwrap().get("scope").is_none());
     assert!(!gate(WorkKind::Security).writes);
     assert_eq!(
         gate(WorkKind::Integration).depends_on,

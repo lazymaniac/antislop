@@ -164,11 +164,11 @@ impl View {
     /// The agent key of a message's sender or recipient display name.
     pub(super) fn mail_key(name: &str) -> String {
         match name {
-            ORCHESTRATOR | PLAN_VERIFIER | AUDITOR | "user" | "runtime" => name.to_owned(),
+            ORCHESTRATOR | PLAN_REVIEWER | AUDITOR | "user" | "runtime" => name.to_owned(),
             crate::lean::PLANNER => crate::lean::PLANNER.to_owned(),
             crate::lean::COMMENT_ORCHESTRATOR => ORCHESTRATOR.to_owned(),
             name => match name.split_once('/') {
-                Some((task, _)) => format!("verifier:{task}"),
+                Some((task, _)) => format!("reviewer:{task}"),
                 None => format!("worker:{name}"),
             },
         }

@@ -12,7 +12,7 @@ pub enum FormField {
     Parent,
     Dependencies,
     ImplementationOwners,
-    VerificationOwners,
+    ReviewOwners,
     Tasks,
     Disposition,
     Reason,
@@ -29,7 +29,7 @@ impl FormField {
         Self::Parent,
         Self::Dependencies,
         Self::ImplementationOwners,
-        Self::VerificationOwners,
+        Self::ReviewOwners,
         Self::Tasks,
         Self::Disposition,
         Self::Reason,
@@ -98,7 +98,7 @@ impl Form {
     fn update_links(&self, spec: &mut EntrySpec) {
         spec.depends_on = self.field_ids(FormField::Dependencies);
         spec.implementation_owners = self.field_ids(FormField::ImplementationOwners);
-        spec.verification_owners = self.field_ids(FormField::VerificationOwners);
+        spec.review_owners = self.field_ids(FormField::ReviewOwners);
         spec.task_ids = self.field_ids(FormField::Tasks);
     }
 
@@ -144,7 +144,7 @@ fn form_values(spec: &EntrySpec) -> Vec<String> {
         spec.parent.clone().unwrap_or_default(),
         spec.depends_on.join(", "),
         spec.implementation_owners.join(", "),
-        spec.verification_owners.join(", "),
+        spec.review_owners.join(", "),
         spec.task_ids.join(", "),
         serde_json::to_value(spec.disposition)
             .unwrap()

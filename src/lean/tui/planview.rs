@@ -1,9 +1,9 @@
-//! Full-screen interactive plan document viewer with line-by-line cursor
-//! navigation, inline line comments, section completion underlining,
-//! dependency/parallel breakdown, and a fixed bottom action bar.
+//! Full-screen plan viewer: prose and inline comments beside an interactive
+//! task dependency graph, with a fixed bottom action bar.
 
 mod actions;
 mod document;
+mod graph;
 mod render;
 #[cfg(test)]
 #[path = "planview/tests.rs"]
@@ -110,6 +110,14 @@ pub struct PlanView {
     pub confirm_accept: bool,
     /// Advances the in-progress spinner; the app sets it before drawing.
     pub tick: u64,
+    /// The task graph has its own selection and scroll position.
+    pub graph_focused: bool,
+    pub graph_selected: usize,
+    pub graph_offset: (u16, u16),
+    pub graph_area: Rect,
+    pub task_rects: Vec<(Rect, usize)>,
+    graph_reveal: bool,
+    task_scroll: usize,
 }
 
 /// Columns taken by the line number and its separator.
@@ -133,6 +141,13 @@ impl PlanView {
             row_docs: Vec::new(),
             confirm_accept: false,
             tick: 0,
+            graph_focused: false,
+            graph_selected: 0,
+            graph_offset: (0, 0),
+            graph_area: Rect::default(),
+            task_rects: Vec::new(),
+            graph_reveal: true,
+            task_scroll: 0,
         }
     }
 

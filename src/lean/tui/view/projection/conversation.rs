@@ -157,7 +157,7 @@ pub(super) fn on_message_2(
         "code-review" => {}
         "user" => record_user_message(view, payload),
         "runtime" => record_runtime_message(view),
-        ORCHESTRATOR | PLAN_VERIFIER | crate::lean::PLANNER | "requirements-planner"
+        ORCHESTRATOR | PLAN_REVIEWER | crate::lean::PLANNER | "requirements-planner"
             if view.workflow_phase.as_deref() == Some("planning") => {}
         author => record_agent_message(view, author, payload),
     };
@@ -226,7 +226,7 @@ fn record_runtime_message(view: &mut View) {
 fn record_agent_message(view: &mut View, author: &str, payload: &Value) {
     let display = match author {
         ORCHESTRATOR => "orchestrator",
-        PLAN_VERIFIER => "plan verifier",
+        PLAN_REVIEWER => "plan reviewer",
         other => other,
     };
     let message = MessageEntry {

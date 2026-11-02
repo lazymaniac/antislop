@@ -73,7 +73,7 @@ mod tests {
         task.status = "approved".into();
         task.round = 1;
         core.store.update_task(&task).unwrap();
-        let role = format!("verifier:{}", task.id);
+        let role = format!("reviewer:{}", task.id);
         let turn = core
             .store
             .start_turn(&conversation.id, &role, "codex", 0, Some(&task.plan_id))

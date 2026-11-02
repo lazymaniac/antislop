@@ -25,7 +25,7 @@ impl Store {
             self.revision_apply_context(conversation, revision, baseline, specs, affected, lease)?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        apply.verify_lease(&tx, lease)?;
+        apply.review_lease(&tx, lease)?;
         apply.update_removed_tasks(&tx)?;
         for (position, spec) in specs.iter().enumerate() {
             apply.save_task(&tx, position, spec)?;

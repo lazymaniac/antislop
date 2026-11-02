@@ -15,7 +15,7 @@ use std::{
 };
 
 fn writer(id: &str) -> Value {
-    json!({"id":id,"title":id,"goal":"Implement selected format","kind":"implementation","writes":true,"scope":["."],"verifier":{"focus":"selected format"}})
+    json!({"id":id,"title":id,"goal":"Implement selected format","kind":"implementation","writes":true,"scope":["."],"reviewer":{"focus":"selected format"}})
 }
 
 fn run(
@@ -247,12 +247,12 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             assert!(done < start);
             assert_eq!(writer_row.status, "approved");
             // The generated gates are absent from the planner input. Check their
-            // own file bytes and verifier observations, not just prompt wording.
+            // own file bytes and reviewer observations, not just prompt wording.
             let written = calls.iter().find(|c| c["written"] == spec.id).unwrap();
             assert_eq!(written["actual"], "A");
-            let verified = calls.iter().find(|c| c["verified"] == spec.title).unwrap();
-            assert_eq!(verified["files"][format!("result-{}.txt", spec.id)], "A");
-            assert_eq!(verified["approved"], true);
+            let reviewed = calls.iter().find(|c| c["reviewed"] == spec.title).unwrap();
+            assert_eq!(reviewed["files"][format!("result-{}.txt", spec.id)], "A");
+            assert_eq!(reviewed["approved"], true);
             let worker = calls
                 .iter()
                 .find(|c| c["worker"] == true && c["task"] == spec.id)
@@ -260,13 +260,13 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
                 .as_str()
                 .unwrap();
             assert_selected_input(worker);
-            let verifier = calls
+            let reviewer = calls
                 .iter()
                 .find(|c| c["worker"] == false && c["task"] == spec.title)
                 .unwrap()["prompt"]
                 .as_str()
                 .unwrap();
-            assert_selected_input(verifier);
+            assert_selected_input(reviewer);
         }
         let prompt = calls.iter().find(|c| c["task"] == "w-options").unwrap()["prompt"]
             .as_str()
@@ -288,7 +288,7 @@ fn shared_analysis_never_substitutes_for_dedicated_options() {
     let mut x = writer("x");
     x["depends_on"] = json!(["shared", "w"]);
     let (stored, calls, _) = run(
-        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","kind":"options","writes":false,"verifier":{"focus":"selection"}},w,x]}),
+        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","kind":"options","writes":false,"reviewer":{"focus":"selection"}},w,x]}),
         false,
         REPORT,
         "A",
@@ -316,11 +316,11 @@ fn shared_analysis_never_substitutes_for_dedicated_options() {
 }
 
 #[test]
-fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
+fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
     let departure = r#"Departure: {"variant":"B","justification":"A violates the format required by the repository contract","evidence":"required-format.txt"}"#;
     for (claim, required_format, approved) in [
         (departure, "B", false),
-        // Same claim, different actual evidence: the verifier must reject it.
+        // Same claim, different actual evidence: the reviewer must reject it.
         (departure, "A", false),
         (
             r#"Departure: {"variant":"B","justification":"","evidence":"required-format.txt"}"#,
@@ -349,7 +349,7 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
             calls.iter().find(|c| c["written"] == "w").unwrap()["actual"],
             "B"
         );
-        let checks: Vec<_> = calls.iter().filter(|c| c["verified"] == "w").collect();
+        let checks: Vec<_> = calls.iter().filter(|c| c["reviewed"] == "w").collect();
         assert!(!checks.is_empty());
         for check in checks {
             assert_eq!(check["files"]["result-w.txt"], "B");
@@ -372,20 +372,20 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
         }
         assert!(task.verdict.is_some());
         assert_eq!(task.verdict.as_ref().unwrap()["approved"], approved);
-        let verifier = calls
+        let reviewer = calls
             .iter()
             .find(|c| c["worker"] == false && c["task"] == "w")
             .unwrap()["prompt"]
             .as_str()
             .unwrap();
-        assert!(verifier.contains(claim));
+        assert!(reviewer.contains(claim));
         for text in [
             "Independently compare the implementation",
             "reviewed options",
             "the worker's declaration is not proof",
             "APPROVED. I complied",
         ] {
-            assert!(verifier.contains(text), "{text}");
+            assert!(reviewer.contains(text), "{text}");
         }
         if !approved {
             assert!(
@@ -400,7 +400,7 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
 #[test]
 fn read_only_plan_runs_without_generated_options_or_quality_writers() {
     for gates in [false, true] {
-        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "kind":"analysis", "writes":false, "scope":["."], "verifier":{"focus":"read-only findings"}});
+        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "kind":"analysis", "writes":false, "scope":["."], "reviewer":{"focus":"read-only findings"}});
         let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), gates, REPORT, "A", "");
         assert_eq!(
             stored.len(),
@@ -462,12 +462,12 @@ fn assert_core_delivery(scenario: &str) {
         .iter()
         .filter(|c| c["worker"] == true && c["task"] == "w")
         .collect();
-    let verifier_calls: Vec<_> = calls
+    let reviewer_calls: Vec<_> = calls
         .iter()
         .filter(|c| c["worker"] == false && c["task"] == "w")
         .collect();
-    let continued = if scenario == "resume-verifier" {
-        &verifier_calls
+    let continued = if scenario == "resume-reviewer" {
+        &reviewer_calls
     } else {
         &worker_calls
     };
@@ -502,11 +502,11 @@ fn assert_core_delivery(scenario: &str) {
                 .contains("Round handoff")
         );
     }
-    if scenario == "resume-verifier" {
+    if scenario == "resume-reviewer" {
         assert_eq!(
             worker_calls.len(),
             2,
-            "resume_plan reruns the worker before a fresh verifier round"
+            "resume_plan reruns the worker before a fresh reviewer round"
         );
     }
     let second = continued[1];
@@ -518,8 +518,8 @@ fn assert_core_delivery(scenario: &str) {
         scenario == "mail-existing",
         "{scenario}"
     );
-    if scenario == "resume-verifier" {
-        assert!(prompt.contains("You verify another agent's work."));
+    if scenario == "resume-reviewer" {
+        assert!(prompt.contains("You review another agent's work."));
         assert!(prompt.contains("The worker's report:"));
         assert!(prompt.contains("Ask the orchestrator"));
     } else {
@@ -527,7 +527,7 @@ fn assert_core_delivery(scenario: &str) {
         assert!(prompt.contains("Never silently switch variants"));
         let branch = match scenario {
             "resume-worker" => "Your work on this task was interrupted",
-            "reject-once" => "Your verifier found problems:",
+            "reject-once" => "Your reviewer found problems:",
             "mail-new" => "You are a worker on a team",
             "mail-existing" => "Apply the scoped user instruction.",
             _ => unreachable!(),
@@ -541,9 +541,9 @@ fn assert_core_delivery(scenario: &str) {
         assert!(prompt.contains("MAIL-CYCLE-SENTINEL"));
     }
     if scenario == "reject-once" {
-        assert_eq!(verifier_calls.len(), 2);
-        let followup = verifier_calls[1]["prompt"].as_str().unwrap();
-        assert!(followup.contains("You verify another agent's work."));
+        assert_eq!(reviewer_calls.len(), 2);
+        let followup = reviewer_calls[1]["prompt"].as_str().unwrap();
+        assert!(followup.contains("You review another agent's work."));
         assert!(followup.contains("The worker's report:"));
         assert_selected_input(followup);
         assert!(followup.contains("Ask the orchestrator"));
@@ -561,8 +561,8 @@ fn core_delivery_starts_fresh_worker_session_after_interruption() {
 }
 
 #[test]
-fn core_delivery_starts_fresh_verifier_session_after_interruption() {
-    assert_core_delivery("resume-verifier");
+fn core_delivery_starts_fresh_reviewer_session_after_interruption() {
+    assert_core_delivery("resume-reviewer");
 }
 
 #[test]

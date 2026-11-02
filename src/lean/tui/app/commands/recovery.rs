@@ -44,7 +44,7 @@ impl App {
                 self.view
                     .tasks
                     .iter()
-                    .find(|task| matches!(task.status.as_str(), "working" | "verifying" | "queued"))
+                    .find(|task| matches!(task.status.as_str(), "working" | "reviewing" | "queued"))
             })
     }
 
@@ -52,7 +52,7 @@ impl App {
         id.and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
             .filter(|task| {
                 unblock::is_blocked(&task.status)
-                    || matches!(task.status.as_str(), "queued" | "working" | "verifying")
+                    || matches!(task.status.as_str(), "queued" | "working" | "reviewing")
             })
     }
 

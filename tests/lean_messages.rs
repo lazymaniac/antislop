@@ -46,7 +46,7 @@ def verdict(approved):
     return "```verdict\n" + json.dumps({{"approved": approved, "findings": [], "coverage": coverage}}) + "\n```"
 def task(id, title, depends=()):
     return {{"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "kind": "analysis", "verifier": {{"focus": "f"}}}}
+            "kind": "analysis", "reviewer": {{"focus": "f"}}}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({{"tasks": list(tasks)}}) + "\n```"
 def message(to, kind, text):
@@ -74,7 +74,7 @@ def message(to, kind, text):
     let agy = write(
         "agy",
         format!(
-            "{header}\nreview = any(m in prompt for m in (\"You review a plan\", \"You audit\", \"You verify\"))\n\
+            "{header}\nreview = any(m in prompt for m in (\"You review a plan\", \"You audit\", \"You review\", \"The new plan:\"))\n\
              session = \"reviewer\" if review else \"worker-\" + str(abs(hash(prompt.split(\"Task id: \")[-1][:3])))\n\
              if review:\n    answer = verdict(True)\nelse:\n{agent}\n\
              print(json.dumps({{\"event\": \"init\", \"conversation_id\": session}}))\n\
@@ -379,7 +379,7 @@ fn deferred_comment_revision(current_list: bool, new_user_input: bool) {
         &r#"
 import re
 ids = re.findall(r"user comment #(\d+) on", prompt)
-regenerated = "Regenerate the task plan from the verified ledger" in _ledger_prompt
+regenerated = "Regenerate the task plan from the reviewed ledger" in _ledger_prompt
 def claim(n):
     return "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[n]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Revised parser"))
 if not ids:
@@ -400,7 +400,7 @@ else:
     let source = std::fs::read_to_string(&codex).unwrap();
     let source = source.replace(
         "if len(_ledger_context)==2:\n    prompt = _ledger_context[0].rstrip()",
-        r#"if 'Regenerate the task plan from the verified ledger' in _ledger_prompt:
+        r#"if 'Regenerate the task plan from the reviewed ledger' in _ledger_prompt:
     open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()
     import time
     deadline = time.monotonic() + 15
@@ -425,7 +425,7 @@ if len(_ledger_context)==2:
             &conversation,
             &[serde_json::json!({
                 "id":"t1", "title":"Parser", "goal":"g", "kind":"analysis",
-                "verifier":{"focus":"f"}
+                "reviewer":{"focus":"f"}
             })],
         )
         .unwrap()[0]
@@ -662,7 +662,7 @@ answer = plan(writer("t1")) if "[runtime]" not in prompt else "done"
 "#;
 
 #[test]
-fn the_plan_verifier_is_told_when_a_plan_that_changes_code_has_no_context_scout() {
+fn the_plan_reviewer_is_told_when_a_plan_that_changes_code_has_no_context_scout() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -784,7 +784,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
         core.send_to_agent(&message).unwrap()["mail"],
         receipt["mail"]
     );
-    wait_until("corrected and verified", || {
+    wait_until("corrected and reviewed", || {
         core.is_idle(&conversation)
             && core
                 .store
@@ -799,7 +799,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
         "initial report"
     );
     let before = prompts(dir.path()).len();
-    message.recipient = format!("verifier:{}", first.id);
+    message.recipient = format!("reviewer:{}", first.id);
     message.operation_id = uuid::Uuid::new_v4().to_string();
     message.expected_round = Some(corrected.round);
     message.text = "recheck correction".into();
@@ -839,11 +839,33 @@ fn direct_worker_correction_invalidates_and_recomputes_the_dependency_chain() {
         answer = verdict(True)
     elif "make correction" in prompt:
         answer = 'new upstream result'
-    elif "new upstream result" in prompt:
-        answer = 'consumer used new result'
+    elif "Task: Consumer" in prompt:
+        answer = 'consumer used new result' if dependency_report() == 'new upstream result' else 'initial report'
     else:
         answer = 'initial report'"#,
     );
+    // Changed inputs first trigger a review of the retained consumer report.
+    // Reject its old result so the worker must consume the corrected dependency.
+    let binary = dir.path().join("agy");
+    let source = std::fs::read_to_string(&binary).unwrap();
+    let dependency_reader = r#"
+def dependency_report():
+    import os, urllib.request
+    body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'read_dependency_result', 'arguments': {'turn': os.environ['FIXTURE_TURN'], 'dependency': 't1'}}})
+    request = urllib.request.Request(os.environ['ANTISLOP_MCP_URL'], body.encode(), {'Authorization': 'Bearer ' + os.environ['ANTISLOP_MCP_TOKEN'], 'Content-Type': 'application/json'})
+    response = json.load(urllib.request.urlopen(request, timeout=30))['result']
+    assert not response.get('isError'), response
+    return json.loads(response['content'][0]['text'])['report']
+"#;
+    let source = source.replace(
+        "review = any",
+        &format!("{dependency_reader}\nreview = any"),
+    );
+    let source = source.replace(
+        "if review:\n    answer = verdict(True)",
+        "if review:\n    stale = 'Task: Consumer\\n' in prompt and dependency_report() == 'new upstream result' and 'consumer used new result' not in prompt\n    answer = verdict(not stale)",
+    );
+    std::fs::write(binary, source).unwrap();
     let conversation = run(&core, dir.path());
     wait_until("initial chain", || core.is_idle(&conversation));
     let initial = core.store.latest_plan(&conversation).unwrap();
@@ -918,13 +940,13 @@ answer = "ąe\u0301👩‍💻" * 300000 + "\n```plan\n" + json.dumps({"tasks": 
 }
 
 #[test]
-fn worker_message_during_verification_requires_another_round_before_approval() {
+fn worker_message_during_review_requires_another_round_before_approval() {
     use antislop::lean::store::AgentMessage;
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('corrected report' if 'correct during verification' in prompt else 'first report')"#,
+        r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('corrected report' if 'correct during review' in prompt else 'first report')"#,
     );
     let binary = dir.path().join("agy");
     let script = std::fs::read_to_string(&binary).unwrap().replace(
@@ -933,8 +955,8 @@ fn worker_message_during_verification_requires_another_round_before_approval() {
     );
     std::fs::write(binary, script).unwrap();
     let conversation = run(&core, dir.path());
-    wait_until("verifier started", || {
-        core.store.latest_plan(&conversation).unwrap()[0].status == "verifying"
+    wait_until("reviewer started", || {
+        core.store.latest_plan(&conversation).unwrap()[0].status == "reviewing"
     });
     let task = core.store.latest_plan(&conversation).unwrap().remove(0);
     core.send_to_agent(&AgentMessage {
@@ -944,10 +966,10 @@ fn worker_message_during_verification_requires_another_round_before_approval() {
         operation_id: uuid::Uuid::new_v4().to_string(),
         expected_round: Some(task.round),
         expected_run: None,
-        text: "correct during verification".into(),
+        text: "correct during review".into(),
     })
     .unwrap();
-    wait_until("correction verified", || {
+    wait_until("correction reviewed", || {
         core.is_idle(&conversation)
             && core
                 .store
@@ -1039,25 +1061,25 @@ fn direct_orchestrator_message_uses_normal_workflow_and_validates_the_run() {
 }
 
 #[test]
-fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_them() {
+fn direct_reviewer_recheck_keeps_unchanged_dependents_and_rejection_recomputes_them() {
     use antislop::lean::store::AgentMessage;
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         "answer = 'done' if '[runtime]' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
-        r#"    if "The worker's updated report:" in prompt or "You verify another agent's work." in prompt:
+        r#"    if "The worker's updated report:" in prompt or "You review another agent's work." in prompt:
         answer = verdict(False) if 'reject the old report' in prompt else verdict(True)
     else:
         answer = 'worker report'"#,
     );
-    // Let this fixture's task verifier decide both fresh and continued turns;
+    // Let this fixture's task reviewer decide both fresh and continued turns;
     // plan reviewers still use the helper's automatic approval.
     let binary = dir.path().join("agy");
     let script = std::fs::read_to_string(&binary).unwrap();
     std::fs::write(
         &binary,
         script.replace(
-            "\"You review a plan\", \"You audit\", \"You verify\"",
+            "\"You review a plan\", \"You audit\", \"You review\"",
             "\"You review a plan\", \"You audit\"",
         ),
     )
@@ -1068,7 +1090,7 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     let mut message = AgentMessage {
         conversation: conversation.clone(),
         plan: Some(initial[0].plan_id.clone()),
-        recipient: format!("verifier:{}", initial[0].id),
+        recipient: format!("reviewer:{}", initial[0].id),
         operation_id: uuid::Uuid::new_v4().to_string(),
         expected_round: Some(initial[0].round),
         expected_run: None,
@@ -1116,7 +1138,7 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
         prompt.contains("Task id: t1")
             && prompt.contains(&format!("Round: {}", rechecked[0].round + 2))
             && prompt.contains("Latest worker report")
-            && prompt.contains("Your verifier found problems:")
+            && prompt.contains("Your reviewer found problems:")
             && prompt.contains("The fixture rejected the work")
     }));
 }
@@ -1185,7 +1207,7 @@ fn direct_worker_failure_remains_queued_and_is_never_consumed_by_a_receipt_turn(
     message.expected_round = Some(failed.round);
     message.text = "retry the correction".into();
     core.send_to_agent(&message).unwrap();
-    wait_until("retried and verified", || {
+    wait_until("retried and reviewed", || {
         core.is_idle(&conversation)
             && core.store.task_by_id(&first.id).unwrap().unwrap().status == "approved"
     });
@@ -1214,7 +1236,7 @@ fn direct_reviewers_receive_review_context_instead_of_receipt_only_instructions(
     let conversation = run(&core, dir.path());
     wait_until("initial reviews", || core.is_idle(&conversation));
     let task = core.store.latest_plan(&conversation).unwrap().remove(0);
-    for role in ["plan-verifier", "auditor"] {
+    for role in ["plan-reviewer", "auditor"] {
         let sessions = core.store.sessions(&conversation).unwrap();
         let run = sessions
             .iter()
@@ -1363,7 +1385,7 @@ else:
     );
     let conversation = run(&core, dir.path());
     wait_until(
-        "worker received live answer and passed independent verification",
+        "worker received live answer and passed independent review",
         || core.is_idle(&conversation),
     );
     let tasks = core.store.latest_plan(&conversation).unwrap();

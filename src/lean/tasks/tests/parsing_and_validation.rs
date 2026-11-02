@@ -21,7 +21,7 @@ fn task_ids_reject_paths_and_empty_fragments() {
     }
     let mut task: TaskContract = serde_json::from_value(json!({
         "id": "x".repeat(257), "title": "Task", "goal": "Assess",
-        "kind": "analysis", "verifier": {"focus": "claims"}
+        "kind": "analysis", "reviewer": {"focus": "claims"}
     }))
     .unwrap();
     assert!(validate(&[task.clone()]).is_err());
@@ -83,7 +83,7 @@ fn a_planned_task_gets_writes_from_its_kind_unless_it_says_otherwise() {
         tasks.iter().map(|task| task.writes).collect::<Vec<_>>(),
         [false, true, true]
     );
-    assert!(tasks.iter().all(|task| task.verifier.summary.is_some()));
+    assert!(tasks.iter().all(|task| task.reviewer.summary.is_some()));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
             serde_json::from_value(serde_json::to_value(&tasks[0]).unwrap()).unwrap();
         assert_eq!(roundtrip, tasks[0]);
     }
-    for field in ["summery", "inputs", "verifier", "requirement_ids"] {
+    for field in ["summery", "inputs", "reviewer", "requirement_ids"] {
         let mut unknown = base.clone();
         unknown[field] = json!([]);
         assert!(parse(&unknown).is_err(), "{field}");
@@ -119,12 +119,12 @@ fn a_stored_contract_with_legacy_fields_still_loads() {
     let stored: TaskContract = serde_json::from_value(json!({
         "id": "t2", "title": "Use", "goal": "Use it", "kind": "analysis",
         "inputs": [{"name": "api", "task": "t1", "output": "api"}], "outputs": ["report"],
-        "verifier": {"focus": "claims", "risks": ["units"], "risk_ids": ["R002"], "summary": "Check."}
+        "reviewer": {"focus": "claims", "risks": ["units"], "risk_ids": ["R002"], "summary": "Check."}
     }))
     .unwrap();
-    assert_eq!(stored.verifier.summary.as_deref(), Some("Check."));
+    assert_eq!(stored.reviewer.summary.as_deref(), Some("Check."));
     let saved = serde_json::to_value(&stored).unwrap();
-    assert!(saved.get("inputs").is_none() && saved["verifier"].get("focus").is_none());
+    assert!(saved.get("inputs").is_none() && saved["reviewer"].get("focus").is_none());
 }
 
 #[test]
@@ -138,4 +138,24 @@ fn a_plan_with_out_of_order_dependencies_is_ordered_and_a_cycle_is_rejected() {
 
     let cycle = |a: &str, b: &str| json!({"id": a, "title": a, "goal": "g", "kind": "analysis", "depends_on": [b]});
     assert!(submitted(json!({"tasks": [cycle("a", "b"), cycle("b", "a")]})).is_err());
+}
+
+#[test]
+fn legacy_task_scopes_are_ignored_and_never_serialized() {
+    let plain = json!({"id":"t1","title":"Task","goal":"Inspect files","kind":"analysis"});
+    let mut legacy = plain.clone();
+    legacy["scope"] = json!(["../service", "/private/data", "src/**"]);
+    let planned: PlannedTask = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(
+        serde_json::to_value(&planned)
+            .unwrap()
+            .get("scope")
+            .is_none()
+    );
+    let expected = serde_json::from_value::<PlannedTask>(plain)
+        .unwrap()
+        .into_contract();
+    assert_eq!(planned.into_contract(), expected);
+    let saved: TaskContract = serde_json::from_value(legacy).unwrap();
+    assert!(serde_json::to_value(saved).unwrap().get("scope").is_none());
 }

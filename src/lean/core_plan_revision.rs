@@ -2,9 +2,8 @@
 use super::store::PlanRevision;
 use super::*;
 
-mod approval;
+mod acceptance;
 mod review;
-mod scope;
 
 struct PreparedRevision {
     baseline: Vec<Task>,
@@ -191,7 +190,7 @@ impl Core {
                 &self.store.ledger_entries(conversation, &run, None)?,
             )?;
         }
-        self.ensure_revision_scope(conversation, revision, &specs)?;
+        self.ensure_revision_accepted(conversation, revision)?;
         self.prepared_revision(conversation, request, revision, baseline, specs)
     }
 
@@ -210,23 +209,8 @@ impl Core {
         Ok(specs)
     }
 
-    fn ensure_revision_scope(
-        &self,
-        conversation: &str,
-        revision: &PlanRevision,
-        specs: &[TaskContract],
-    ) -> Result<()> {
-        let authorization = scope::plan_authorization(self, conversation, &revision.plan)?;
-        let expansion = scope::scope_expansion(specs, &authorization.read, &authorization.write)?;
-        if !expansion.is_empty() {
-            return Err(self.ask_scope_approval(
-                conversation,
-                revision,
-                &expansion,
-                &authorization.write,
-            )?);
-        }
-        Ok(())
+    fn ensure_revision_accepted(&self, conversation: &str, revision: &PlanRevision) -> Result<()> {
+        acceptance::ensure_accepted_plan(self, conversation, &revision.plan)
     }
 
     fn prepared_revision(
@@ -283,12 +267,11 @@ fn run_revision_worker(
 #[cfg(test)]
 mod tests {
     use super::review::affected_tasks;
-    use super::scope::{covers, validate_authorized_scope};
     use super::*;
     use std::collections::BTreeSet;
 
     fn contract(writes: bool, paths: &[&str]) -> TaskContract {
-        serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","kind":"implementation","writes":writes,"scope":paths,"verifier":{"focus":"Check local behavior"}})).unwrap()
+        serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","kind":"implementation","writes":writes,"scope":paths,"reviewer":{"focus":"Check local behavior"}})).unwrap()
     }
 
     #[test]
@@ -330,62 +313,16 @@ mod tests {
         };
 
         let reworded = with(&|s| s[0].goal = "Inspect A, allowing the /tmp socket".into());
-        assert!(affected_tasks(&baseline, &reworded, &[]).is_empty());
+        assert_eq!(affected_tasks(&baseline, &reworded, &[]), ids(&["a", "b"]));
+        let cosmetic = with(&|s| s[0].title = "Clearer title".into());
+        assert!(affected_tasks(&baseline, &cosmetic, &[]).is_empty());
         assert_eq!(
             affected_tasks(&baseline, &reworded, &["a".into()]),
             ids(&["a", "b"])
         );
-        let rescoped = with(&|s| s[0].scope = vec!["src".into(), "tests".into()]);
-        assert_eq!(affected_tasks(&baseline, &rescoped, &[]), ids(&["a", "b"]));
         // Work not yet approved follows its contract.
         let queued = with(&|s| s[2].goal = "Inspect C again".into());
         assert_eq!(affected_tasks(&baseline, &queued, &[]), ids(&["c"]));
-    }
-
-    #[test]
-    fn revision_preserves_separate_read_and_write_authorizations() {
-        let read = vec!["src".into(), "docs".into()];
-        let write = vec!["src".into()];
-        assert!(validate_authorized_scope(&[contract(false, &["docs"])], &read, &write).is_ok());
-        assert!(
-            validate_authorized_scope(&[contract(true, &["src/api.rs"])], &read, &write).is_ok()
-        );
-        assert!(validate_authorized_scope(&[contract(true, &["docs"])], &read, &write).is_err());
-        assert!(validate_authorized_scope(&[contract(true, &["src"])], &read, &[]).is_err());
-        assert!(validate_authorized_scope(&[contract(false, &[])], &read, &write).is_err());
-        assert!(
-            validate_authorized_scope(
-                &[contract(true, &["src/../secrets"])],
-                &[".".into()],
-                &[".".into()]
-            )
-            .is_err()
-        );
-        assert!(
-            validate_authorized_scope(
-                &[contract(false, &["../service"])],
-                &["../service".into()],
-                &[]
-            )
-            .is_ok()
-        );
-    }
-    #[test]
-    fn approved_globs_cover_the_paths_they_name() {
-        let read: Vec<String> = vec!["**/*".into(), "docs/**".into()];
-        let write: Vec<String> = vec!["src/lean/ledger/**".into(), "tests/*.rs".into()];
-        let ok =
-            |scope: &[&str]| validate_authorized_scope(&[contract(true, scope)], &read, &write);
-        assert!(ok(&["src/lean/ledger/storage/validation.rs"]).is_ok());
-        assert!(ok(&["src/lean/ledger", "tests/lean_ledger.rs"]).is_ok());
-        assert!(ok(&["src/lean/ledger/storage/**"]).is_ok());
-        assert!(ok(&["src/lean/tui/graph.rs"]).is_err());
-        assert!(ok(&["src/lean/**"]).is_err());
-        assert!(ok(&["tests/fixtures/data.rs"]).is_err());
-        assert!(covers("src/**", "src/lean/core_plan_revision.rs"));
-        assert!(covers("src/lean/core*", "src/lean/core_plan_revision.rs"));
-        assert!(!covers("src/lean/core*", "src/lean/store.rs"));
-        assert!(!covers("docs/**", "src/lib.rs"));
     }
 
     #[test]
@@ -414,6 +351,7 @@ mod tests {
             tasks: vec![],
             retire: vec![],
             redo: vec![],
+            replacements: Default::default(),
         };
         for key in ["first", "second"] {
             let error = core

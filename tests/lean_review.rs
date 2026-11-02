@@ -31,7 +31,7 @@ def verdict(approved, findings=()):
     return "```verdict\n" + json.dumps({"approved": approved, "findings": list(findings)}) + "\n```"
 def task(id, title, depends=()):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "kind": "analysis", "verifier": {"focus": "f"}}
+            "kind": "analysis", "reviewer": {"focus": "f"}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({"tasks": list(tasks)}) + "\n```"
 "#;
@@ -80,7 +80,7 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    // Every round starts fresh worker and verifier terminals, and a task runs
+    // Every round starts fresh worker and reviewer terminals, and a task runs
     // up to a dozen rounds.
     let deadline = Instant::now() + Duration::from_secs(600);
     while !core.is_idle(conversation) {
@@ -124,13 +124,13 @@ fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
 }
 
 #[test]
-fn a_plan_the_verifier_sends_back_is_revised_before_the_user_sees_it() {
+fn a_plan_the_reviewer_sends_back_is_revised_before_the_user_sees_it() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         false,
         r#"
-if "[plan verifier]" in prompt:
+if "[plan reviewer]" in prompt:
     answer = plan(task("t1", "Model"), task("t2", "Uses model, fixed", ["t1"]))
 else:
     answer = plan(task("t1", "Model"), task("t2", "Uses model"))
@@ -144,7 +144,12 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     let conversation = ask(&core, dir.path(), "build a model and use it");
 
     let reviews = events(&core, &conversation, "plan_review");
-    assert_eq!(reviews.len(), 1);
+    assert_eq!(
+        reviews.len(),
+        1,
+        "{:?}",
+        core.store.events_since(&conversation, 0, 1000).unwrap()
+    );
     assert_eq!(reviews[0]["approved"], false);
     let proposed = events(&core, &conversation, "plan_proposed");
     assert_eq!(proposed.len(), 1, "only the checked plan is shown");
@@ -158,9 +163,21 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     let messages = core.store.messages_after(&conversation, 0).unwrap();
     let sent_back = messages
         .iter()
-        .find(|message| message.author == "plan-verifier")
+        .find(|message| message.author == "plan-reviewer")
         .unwrap();
     assert!(sent_back.text.contains("t2 needs t1's result"));
+    let turns = core.store.events_since(&conversation, 0, 10_000).unwrap();
+    let planning_roles: Vec<_> = turns
+        .iter()
+        .filter(|event| event.kind == "turn_started")
+        .filter_map(|event| event.payload["role"].as_str())
+        .filter(|role| matches!(*role, "planner" | "orchestrator" | "comment-orchestrator"))
+        .collect();
+    assert_eq!(
+        planning_roles,
+        ["planner", "planner"],
+        "findings go directly to the planner"
+    );
     let latest = core.store.latest_plan(&conversation).unwrap();
     assert!(latest.iter().all(|task| task.status == "proposed"));
     assert_ne!(
@@ -207,7 +224,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
         "{refused}"
     );
     let reviews = events(&core, &conversation, "plan_review");
-    assert!(reviews.is_empty(), "the verifier never saw the broken plan");
+    assert!(reviews.is_empty(), "the reviewer never saw the broken plan");
     let proposed = events(&core, &conversation, "plan_proposed");
     assert_eq!(
         proposed.len(),
@@ -235,8 +252,8 @@ if "You review a plan" in prompt:
     say("plan", verdict(True))
 elif "You audit" in prompt:
     say("audit", verdict(False, [{"severity": "high", "issue": "README not covered", "where": "README"}]))
-elif "You verify" in prompt:
-    say("verifier", verdict(True))
+elif "You review" in prompt:
+    say("reviewer", verdict(True))
 else:
     say("worker", "analysis report")
 "#,
@@ -270,7 +287,7 @@ fn autonomous_plans_go_on_until_one_repeats_a_plan_that_ran() {
         // A plan sent back for ledger mapping is regenerated, not a further step.
         r#"answer = plan(task("t1", "Step " + str(min(bump("plans", 0 if "Regenerate the task plan" in prompt else 1), 4))))"#,
         r#"
-if "You verify" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
+if "You review" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
         or "You audit" in prompt or "next plan:" in prompt:
     say("reviewer", verdict(True))
 else:
@@ -306,9 +323,9 @@ if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "report")
-elif "You verify" in prompt or "updated report" in prompt:
+elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a%d" % n}]))
+    say("reviewer", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a%d" % n}]))
 else:
     say("worker", "report")
 "#,
@@ -321,7 +338,7 @@ else:
 }
 
 #[test]
-fn a_verifier_repeating_its_findings_stops_the_rounds() {
+fn a_reviewer_repeating_its_findings_stops_the_rounds() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -332,8 +349,8 @@ if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "report")
-elif "You verify" in prompt or "updated report" in prompt:
-    say("verifier", verdict(False, [{"severity": "high", "issue": "still wrong", "where": "a"}]))
+elif "You review" in prompt or "updated report" in prompt:
+    say("reviewer", verdict(False, [{"severity": "high", "issue": "still wrong", "where": "a"}]))
 else:
     say("worker", "report")
 "#,
@@ -361,7 +378,7 @@ else:
 }
 
 #[test]
-fn a_verifier_inventing_new_finding_ids_each_round_still_hands_the_task_back() {
+fn a_reviewer_inventing_new_finding_ids_each_round_still_hands_the_task_back() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -372,9 +389,9 @@ if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "report")
-elif "You verify" in prompt or "updated report" in prompt:
+elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("verifier", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a%d" % n}]))
+    say("reviewer", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a%d" % n}]))
 else:
     say("worker", "report")
 "#,
@@ -405,13 +422,13 @@ if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "report")
-elif "You verify" in prompt or "updated report" in prompt:
+elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
     cov["V1"] = {"status": "issue", "note": "open %d" % n}
     findings = [{"severity": "high", "id":"same-case","issue": "case %d" % n, "where": "a"}]
-    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
+    say("reviewer", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
 "#,
@@ -429,7 +446,7 @@ else:
 }
 
 #[test]
-fn independently_verified_progress_continues_past_many_rounds() {
+fn independently_reviewed_progress_continues_past_many_rounds() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -440,13 +457,13 @@ if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "report")
-elif "You verify" in prompt or "updated report" in prompt:
+elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
     if n < 14: cov["V1" if n % 2 else "V2"] = {"status": "issue", "note": "open %d" % n}
     findings = [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a%d" % n}]
-    say("verifier", "```verdict\n" + json.dumps({"approved": n >= 14, "findings": [] if n >= 14 else findings, "coverage": cov}) + "\n```", False)
+    say("reviewer", "```verdict\n" + json.dumps({"approved": n >= 14, "findings": [] if n >= 14 else findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
 "#,
@@ -489,7 +506,7 @@ const RISKY_PLAN: &str = r#"
 if "[runtime]" in prompt:
     answer = "done"
 else:
-    answer = plan(dict(task("t1", "Revenue"), verifier={"focus": "numbers", "risks": ["units of money"]}))
+    answer = plan(dict(task("t1", "Revenue"), reviewer={"focus": "numbers", "risks": ["units of money"]}))
 "#;
 
 #[test]
@@ -502,8 +519,8 @@ fn a_verdict_that_skips_an_obligation_is_asked_again_and_never_approves() {
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
-elif "You verify" in prompt or "does not account" in prompt:
-    say("verifier", json.dumps({"type":"review","report":"Skipped obligations","verdict":{"approved":True,"findings":[],"coverage":{}}}), covered=False)
+elif "You review" in prompt or "does not account" in prompt:
+    say("reviewer", json.dumps({"type":"review","report":"Skipped obligations","verdict":{"approved":True,"findings":[],"coverage":{}}}), covered=False)
 else:
     say("worker", "report")
 "#,
@@ -535,20 +552,20 @@ import re
 ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
-elif "You verify" in prompt and "fixed: converted" not in prompt:
+elif "You review" in prompt and "fixed: converted" not in prompt:
     # The units check, as an issue: the rest is asked for again.
     lines = re.findall(r"^- ([A-Za-z0-9_.-]+): (.*)$", prompt, re.M)
     uid = next(i for i, text in lines if "units, denominators" in text)
     coverage = {i:{"status":"ok","note":"checked"} for i in ids}
     coverage[uid] = {"status":"issue","note":"EUR added to PLN"}
-    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": [], "coverage": coverage}) + "\n```", covered=False)
+    say("reviewer", "```verdict\n" + json.dumps({"approved": False, "findings": [], "coverage": coverage}) + "\n```", covered=False)
 elif "does not account" in prompt:
     assert "R1" not in ids, ids
-    say("verifier", verdict(True))
+    say("reviewer", verdict(True))
 elif "found problems" in prompt:
     say("worker", "fixed: " + ("EUR added to PLN" in prompt and "converted" or "?"))
-elif "updated report" in prompt or ("You verify" in prompt and "fixed: converted" in prompt):
-    say("verifier", verdict(True))
+elif "updated report" in prompt or ("You review" in prompt and "fixed: converted" in prompt):
+    say("reviewer", verdict(True))
 else:
     say("worker", "report")
 "#,
@@ -573,7 +590,7 @@ else:
     answer = plan(task("t1", "Analyse"))
 "#,
         r#"
-if "You verify" in prompt or "You review a plan" in prompt or "You audit" in prompt:
+if "You review" in prompt or "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 else:
     say("worker", "report")
@@ -643,7 +660,7 @@ else:
     answer = plan(task("t1", "Step " + str(bump("plans"))))
 "#,
         r#"
-if "You verify" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
+if "You review" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
         or "You audit" in prompt or "next plan:" in prompt:
     say("reviewer", verdict(True))
 else:
@@ -702,7 +719,7 @@ else:
     raise RuntimeError("no worker may start for an invalid graph")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "inventory and verify");
+    let conversation = ask(&core, dir.path(), "inventory and review");
     let mut tasks = core.store.latest_plan(&conversation).unwrap();
     tasks[0].spec["depends_on"] = serde_json::json!(["t2"]);
     let db = rusqlite::Connection::open(dir.path().join("state/core.db")).unwrap();
@@ -766,7 +783,7 @@ if 'You review a plan' in prompt or 'new plan:' in prompt:
     assert_eq!(
         starts
             .iter()
-            .filter(|e| e["role"] == "plan-verifier")
+            .filter(|e| e["role"] == "plan-reviewer")
             .count(),
         2
     );

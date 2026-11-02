@@ -1,6 +1,9 @@
 //! Human-readable worker reports, including structured options deliverables.
 use crate::lean::turn_result::{Selection, TurnResult};
 
+mod agent;
+pub(super) use agent::agent_result;
+
 const SELECTION_HEADER: &str =
     "Recorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n";
 
@@ -86,7 +89,15 @@ impl ReportStream {
         self,
         sink: &mut dyn FnMut(&str) -> crate::Result<()>,
     ) -> crate::Result<()> {
-        sink(&worker_report(&self.pending))
+        self.finish_with(worker_report, sink)
+    }
+
+    pub(super) fn finish_with(
+        self,
+        format: fn(&str) -> String,
+        sink: &mut dyn FnMut(&str) -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        sink(&format(&self.pending))
     }
 }
 

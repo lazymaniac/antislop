@@ -76,9 +76,9 @@ if prompt == 'fixture W1':
     sys.exit(0)
 if os.path.basename(sys.argv[0]) == 'codex':
     plan = {'tasks': [
-        {'id':'W1','title':'Change mode','goal':'Change mode','kind':'implementation','writes':True,'scope':['mode.txt'],'verifier':{'focus':'mode'}},
-        {'id':'W2','title':'Use mode','goal':'Choose mode consumer','kind':'implementation','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'verifier':{'focus':'mode'}},
-        {'id':'gate','title':'Test mode','goal':'Choose mode checks','kind':'testing','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'verifier':{'focus':'mode'}}]}
+        {'id':'W1','title':'Change mode','goal':'Change mode','kind':'implementation','writes':True,'scope':['mode.txt'],'reviewer':{'focus':'mode'}},
+        {'id':'W2','title':'Use mode','goal':'Choose mode consumer','kind':'implementation','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'reviewer':{'focus':'mode'}},
+        {'id':'gate','title':'Test mode','goal':'Choose mode checks','kind':'testing','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'reviewer':{'focus':'mode'}}]}
     answer = 'done' if '[runtime]' in prompt else '```plan\n'+json.dumps(plan)+'\n```'
     print(json.dumps({'type':'thread.started','thread_id':'planner'}))
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
@@ -109,7 +109,7 @@ else:
         else:
             answer = 'No changes needed.'
     else:
-        if 'You verify' in prompt and 'Task: Change mode\n' in prompt:
+        if 'You review' in prompt and 'Task: Change mode\n' in prompt:
             assert json.load(open('mode.txt')) == {'records':[7,11]}
         ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':True,'findings':[],'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'

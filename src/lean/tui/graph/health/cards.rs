@@ -7,7 +7,7 @@ use super::*;
 pub(in crate::lean::tui::graph) fn activity_line(view: &View, key: &str) -> Option<String> {
     match task_card(view, key)? {
         (task, Role::Worker) => taskinfo::worker_activity(view, task),
-        (task, Role::Verifier) => taskinfo::verifier_activity(view, task),
+        (task, Role::Reviewer) => taskinfo::reviewer_activity(view, task),
         (task, Role::Pair) => taskinfo::task_activity(view, task),
     }
 }
@@ -33,13 +33,19 @@ fn card_text(view: &View, key: &str) -> Option<String> {
     match key {
         ORCHESTRATOR => Some("Agrees requirements with you and steers the team.".to_owned()),
         crate::lean::PLANNER => Some("Turns agreed requirements into a task plan.".to_owned()),
-        PLAN_VERIFIER => Some("Independently checks the plan before you see it.".to_owned()),
+        PLAN_REVIEWER => Some("Independently checks the plan before you see it.".to_owned()),
         AUDITOR => Some("Checks the finished work delivers your request.".to_owned()),
         crate::lean::COMMENT_ORCHESTRATOR => {
             Some("Answers your comments and acts on them.".to_owned())
         }
+        "requirements-audit-analyst" => {
+            Some("Checks implementation against each requirement.".to_owned())
+        }
+        "requirements-audit-reviewer" => {
+            Some("Independently reviews the requirements audit.".to_owned())
+        }
         _ if requirements_round(key).is_some() => {
-            Some("Extracts the requirements and proposes options.".to_owned())
+            Some("Records requirements from your request and documents.".to_owned())
         }
         _ => task_card_text(view, key),
     }
@@ -56,7 +62,7 @@ fn task_card_text(view: &View, key: &str) -> Option<String> {
     let summary = if role == "worker" {
         &task.summary
     } else {
-        &task.verifier_summary
+        &task.reviewer_summary
     };
     Some(
         summary
@@ -76,7 +82,7 @@ fn task_fallback(role: &str, task: &TaskRow, normalize: &impl Fn(&str) -> String
     if role == "worker" {
         label
     } else {
-        format!("Verify {label}.")
+        format!("Review {label}.")
     }
 }
 

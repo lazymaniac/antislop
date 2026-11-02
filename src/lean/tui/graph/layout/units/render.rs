@@ -37,7 +37,7 @@ pub(super) fn push_admin(
 }
 
 /// The unit's frame and cards, and the arrows between the cards: from the
-/// options to the worker, from the worker to its verifier.
+/// options to the worker, from the worker to its reviewer.
 pub(super) fn push_unit(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16) {
     let task = &builder.view.tasks[unit.task];
     let group = format!("task:{}", task.id);
@@ -96,8 +96,8 @@ fn push_internal_edge(
     let Some((from, right)) = previous.take() else {
         return;
     };
-    let kind = if key.starts_with("verifier:") {
-        Kind::Verifies
+    let kind = if key.starts_with("reviewer:") {
+        Kind::Reviews
     } else {
         Kind::Depends
     };

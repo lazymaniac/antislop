@@ -101,7 +101,7 @@ fn event(
     Ok(())
 }
 
-fn independent(db: &Connection, producer: &str, verifier: &str) -> Result<()> {
+fn independent(db: &Connection, producer: &str, reviewer: &str) -> Result<()> {
     let session = |id: &str| -> Result<(String, Option<String>, String, String)> {
         Ok(db.query_row(
             "SELECT role,session_id,status,conversation_id FROM turns WHERE id=?1",
@@ -110,10 +110,10 @@ fn independent(db: &Connection, producer: &str, verifier: &str) -> Result<()> {
         )?)
     };
     let (p, ps, pstatus, pc) = session(producer)?;
-    let (v, vs, vstatus, vc) = session(verifier)?;
+    let (v, vs, vstatus, vc) = session(reviewer)?;
     require(
-        producer != verifier && p != v && pc == vc && (ps.is_none() || vs.is_none() || ps != vs),
-        "self verification is forbidden",
+        producer != reviewer && p != v && pc == vc && (ps.is_none() || vs.is_none() || ps != vs),
+        "self review is forbidden",
     )?;
     require(
         pstatus == "done" && vstatus == "done",
@@ -165,7 +165,7 @@ fn requirements_resume_exists(db: &Connection, change: &LedgerChange) -> Result<
 
 fn resume_message(change: &LedgerChange) -> String {
     format!(
-        "The user approved the exact requirements change for run {}. Continue independent requirements verification and prepare the plan for review using this run. This approves requirements only; implementation still requires separate plan approval.",
+        "The user approved the exact requirements change for run {}. Continue independent requirements review and prepare the plan for review using this run. This approves requirements only; implementation still requires separate plan approval.",
         change.run_id
     )
 }
@@ -186,7 +186,7 @@ fn emit_resume_events(db: &Connection, change: &LedgerChange, seq: i64, text: &s
         db,
         &change.conversation,
         "planning_progress",
-        &serde_json::json!({"text":"Requirements approved. Resuming verification and planning."}),
+        &serde_json::json!({"text":"Requirements approved. Resuming review and planning."}),
     )?;
     Ok(())
 }

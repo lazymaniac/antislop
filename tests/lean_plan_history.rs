@@ -109,7 +109,7 @@ impl Drop for DaemonGuard {
 }
 
 // 1. Multiple plans with repeating short labels ('t1', 't2' in plan 1 and plan 2).
-// Verify:
+// Review:
 // - Distinct globally unique task UUIDs.
 // - Correct lookup by UUID vs scoped label.
 // - Events, turns, reports and verdicts associated with correct plan_id.
@@ -179,11 +179,11 @@ fn multiple_plans_with_repeating_labels_have_distinct_identities_and_event_scopi
     let plan2_t1 = plan2.tasks[0].clone();
     let plan2_t2 = plan2.tasks[1].clone();
 
-    // Verify task UUIDs are unique across plans despite repeating short labels
+    // Review task UUIDs are unique across plans despite repeating short labels
     assert_ne!(plan1_t1.id, plan2_t1.id);
     assert_ne!(plan1_t2.id, plan2_t2.id);
 
-    // Verify lookup by UUID finds exact task regardless of label
+    // Review lookup by UUID finds exact task regardless of label
     let retrieved_p1_t1 = core
         .store
         .task_by_id(&plan1_t1.id)
@@ -200,7 +200,7 @@ fn multiple_plans_with_repeating_labels_have_distinct_identities_and_event_scopi
     assert_eq!(retrieved_p2_t1.plan_id, plan2_id);
     assert_eq!(retrieved_p2_t1.spec["title"], "Plan 2 Task 1");
 
-    // Verify lookup by scoped label ("t1") within plan1 vs plan2
+    // Review lookup by scoped label ("t1") within plan1 vs plan2
     let p1_by_label = core.task(&plan1_id, "t1").unwrap();
     assert_eq!(p1_by_label.id, plan1_t1.id);
     let p2_by_label = core.task(&plan2_id, "t1").unwrap();
@@ -402,7 +402,7 @@ fn incompatible_legacy_database_is_rejected_without_changing_history() {
     }
 
     // The current store deliberately rejects incompatible schemas instead of
-    // silently migrating their histories. Verify the archive stays intact.
+    // silently migrating their histories. Review the archive stays intact.
     let before = std::fs::read(&db_path).unwrap();
     let error = Store::open(&db_path)
         .err()

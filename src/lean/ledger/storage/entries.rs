@@ -19,7 +19,7 @@ struct EntryRelations {
     dependencies: Vec<String>,
     tasks: Vec<String>,
     implementers: Vec<String>,
-    verifiers: Vec<String>,
+    reviewers: Vec<String>,
 }
 
 pub(super) fn entries(db: &Connection, run: &str, revision: i64) -> Result<Vec<LedgerEntry>> {
@@ -103,7 +103,7 @@ fn entry_spec(
         depends_on: relations.dependencies,
         task_ids: relations.tasks,
         implementation_owners: relations.implementers,
-        verification_owners: relations.verifiers,
+        review_owners: relations.reviewers,
         id: row.id.clone(),
     })
 }
@@ -117,7 +117,7 @@ fn entry_relations(db: &Connection, run: &str, id: &str, version: i64) -> Result
         dependencies: relations(db, run, id, version, "dependency")?,
         tasks: relations(db, run, id, version, "task")?,
         implementers: relations(db, run, id, version, "implementer")?,
-        verifiers: relations(db, run, id, version, "verifier")?,
+        reviewers: relations(db, run, id, version, "reviewer")?,
     })
 }
 

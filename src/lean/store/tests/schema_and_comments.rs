@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn incompatible_databases_are_rejected_without_writes() {
-    for version in [0, 1, 5, 10, 11, 12, 13, SCHEMA + 1] {
+    for version in [0, 1, 5, 10, 11, 12, 13, 14, SCHEMA + 1] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
         let db = Connection::open(&path).unwrap();

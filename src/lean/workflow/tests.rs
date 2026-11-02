@@ -19,7 +19,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","verifier":{"focus":"Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","reviewer":{"focus":"Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
@@ -77,7 +77,7 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","verifier":{"focus":"Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","reviewer":{"focus":"Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
@@ -332,7 +332,7 @@ fn every_planning_cycle_awaits_its_own_first_plan() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}});
+    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}});
     let settle = |request: &str| {
         let message = store
             .add_message(&conversation.id, "user", request)

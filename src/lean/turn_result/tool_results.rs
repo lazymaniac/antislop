@@ -4,9 +4,9 @@ use crate::lean::tasks::PlannedTask;
 use crate::{Result, require};
 use serde::Deserialize;
 
-/// What a verifier is shown of a completed turn: the prose report plus the
+/// What a reviewer is shown of a completed turn: the prose report plus the
 /// selection the runtime recorded. The selection is the work product itself;
-/// a verifier handed only the prose cannot judge it and rejects the task for
+/// a reviewer handed only the prose cannot judge it and rejects the task for
 /// payload it never saw.
 pub fn report_with_deliverables(report: &str, selection: Option<&Selection>) -> String {
     let mut text = report.to_owned();

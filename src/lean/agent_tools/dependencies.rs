@@ -12,7 +12,8 @@ impl Core {
         let requested = required_text(args, "dependency")?;
         let scope = self.dependency_reader_scope(conversation, role, turn)?;
         let task = scope.tasks.iter().rev().find(|task| {
-            task.id == requested
+            if task_role(role).is_some_and(|(id, _)| id == task.id) && requested != "self" { return false; }
+            (task.id == requested || (requested == "self" && task_role(role).is_some_and(|(id, _)| id == task.id)))
                 || task.spec["id"].as_str() == Some(&requested)
                 || (requested == "selected_approach"
                     && scope.selected_for.as_deref().is_some_and(|id| task.spec["options_for"] == id))
@@ -24,7 +25,7 @@ impl Core {
             Error::Invalid(format!("dependency {requested:?} is not an input of this task or is unknown in its bound scope; available results: {available}"))
         })?;
         require(
-            task.status == status::APPROVED,
+            task.status == status::APPROVED || task_role(role).is_some_and(|(id, _)| id == task.id),
             "dependency is not approved",
         )?;
         let requested_round = args
@@ -37,8 +38,86 @@ impl Core {
                     .ok_or_else(|| Error::Invalid("round: expected a non-negative integer".into()))
             })
             .transpose()?;
-        let (producer, round, available_rounds, output) =
-            self.store.dependency_report_round(task, requested_round)?;
+        let history = self.store.dependency_reports(task)?;
+        let result_ref = args
+            .get("result_ref")
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str()
+                    .ok_or_else(|| Error::Invalid("result_ref: expected a report reference".into()))
+            })
+            .transpose()?;
+        let selected = if let Some(reference) = result_ref {
+            Some(
+                history
+                    .reports
+                    .iter()
+                    .find(|r| r.result_ref == reference)
+                    .ok_or_else(|| {
+                        self.report_reference_error(conversation, reference, &history)
+                    })?,
+            )
+        } else if let Some(round) = requested_round {
+            history
+                .reports
+                .iter()
+                .find(|r| r.round == round && r.current_inputs)
+        } else {
+            history
+                .reports
+                .iter()
+                .find(|r| r.current_inputs)
+                .or_else(|| {
+                    history
+                        .reports
+                        .iter()
+                        .find(|r| Some(&r.result_ref) == history.retained.as_ref())
+                })
+        };
+        if let Some(selected) = selected {
+            require(
+                requested_round.is_none_or(|round| round == selected.round),
+                "round: does not match result_ref",
+            )?;
+        }
+        let mut available_rounds = history
+            .reports
+            .iter()
+            .filter(|r| r.current_inputs)
+            .map(|r| r.round)
+            .collect::<Vec<_>>();
+        available_rounds.dedup();
+        let round = selected.map_or(history.producer.round, |r| r.round);
+        let generation = selected.map_or(history.producer.input_generation, |r| r.input_generation);
+        let historical = selected.is_some_and(|r| !r.current_inputs);
+        let selected_producer = selected.map(|r| r.producer_task.clone());
+        let selected_ref = selected.map(|r| r.result_ref.clone());
+        let producer = history.producer.id.clone();
+        let output = if let Some(reference) = selected {
+            self.store.referenced_worker_report(reference)?
+        } else {
+            require(
+                requested_round
+                    .is_none_or(|r| r == history.producer.round && available_rounds.is_empty()),
+                "round: no completed worker report for these dependency inputs",
+            )?;
+            match history.current {
+                Some(output) => output,
+                None => {
+                    return Ok(
+                        json!({"state":"no_current_result","result_id":producer,"report":"","complete":true,"available_rounds":available_rounds,"report_history":history.reports}),
+                    );
+                }
+            }
+        };
+        if available_rounds.is_empty() && generation == history.producer.input_generation {
+            available_rounds.push(round);
+        }
+        let evidence = selected_ref
+            .as_deref()
+            .map(|id| self.store.result_evidence(id))
+            .transpose()?
+            .unwrap_or_default();
         let report = dependency_report_text(&output)?;
         let binding = crate::hash(serde_json::to_vec(&(
             conversation,
@@ -49,39 +128,17 @@ impl Core {
             &task.id,
             &producer,
             round,
+            generation,
+            &selected_ref,
             crate::hash(report.as_bytes()),
         ))?);
-        let offset = match args.get("cursor").filter(|value| !value.is_null()) {
-            None => 0,
-            Some(value) => {
-                let (key, offset) = value
-                    .as_str()
-                    .and_then(|s| s.split_once(':'))
-                    .ok_or_else(|| Error::Invalid("cursor: expected continuation cursor".into()))?;
-                require(
-                    key == binding,
-                    "cursor: belongs to another turn, input generation or result",
-                )?;
-                offset
-                    .parse::<usize>()
-                    .map_err(|_| Error::Invalid("cursor: invalid offset".into()))?
-            }
-        };
-        require(
-            offset <= report.len() && report.is_char_boundary(offset),
-            "cursor: invalid boundary",
-        )?;
-        let mut end = offset.saturating_add(16 * 1024).min(report.len());
-        while !report.is_char_boundary(end) {
-            end -= 1;
-        }
-        let cursor = (end < report.len()).then(|| format!("{binding}:{end}"));
+        let (page, cursor) = page_text(&report, &binding, args)?;
         Ok(
-            json!({"dependency":requested,"result_id":producer,"round":round,"available_rounds":available_rounds,"report":&report[offset..end],"cursor":cursor,"complete":end==report.len()}),
+            json!({"dependency":requested,"result_id":producer,"round":round,"available_rounds":available_rounds,"report_history":history.reports,"result_ref":selected_ref,"input_generation":generation,"historical":historical,"retained_for_review":history.retained.is_some(),"compatibility_reviewed":history.retained.is_some() && task.status == status::APPROVED,"report_producer":selected_producer,"evidence":evidence,"report":page,"complete":cursor.is_none(),"cursor":cursor}),
         )
     }
 
-    fn dependency_reader_scope(
+    pub(super) fn dependency_reader_scope(
         &self,
         conversation: &str,
         role: &str,
@@ -96,7 +153,7 @@ impl Core {
                 self.store.plan_conversation(&task.plan_id)? == conversation,
                 "task belongs to another conversation",
             )?;
-            let spec: TaskContract = serde_json::from_value(task.spec)?;
+            let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
             let mut allowed = spec
                 .depends_on
                 .iter()
@@ -122,7 +179,7 @@ impl Core {
                     }
                 }
             }
-            let tasks = plan_tasks
+            let mut tasks: Vec<Task> = plan_tasks
                 .into_iter()
                 .filter(|candidate| {
                     candidate.spec["id"]
@@ -131,15 +188,17 @@ impl Core {
                         || candidate.spec["options_for"] == spec.id
                 })
                 .collect();
+            let generation = task.input_generation;
+            tasks.push(task);
             return Ok(DependencyScope {
                 tasks,
-                generation: task.input_generation,
+                generation,
                 selected_for: Some(spec.id),
             });
         }
         if matches!(
             role,
-            "requirements-audit-analyst" | "requirements-audit-verifier"
+            "requirements-audit-analyst" | "requirements-audit-reviewer"
         ) {
             let (tasks, generation) =
                 self.store
@@ -163,8 +222,8 @@ impl Core {
     }
 }
 
-struct DependencyScope {
-    tasks: Vec<Task>,
+pub(super) struct DependencyScope {
+    pub(super) tasks: Vec<Task>,
     generation: i64,
     selected_for: Option<String>,
 }
@@ -181,4 +240,40 @@ fn dependency_report_text(output: &Value) -> Result<String> {
     report
         .map(str::to_owned)
         .ok_or_else(|| Error::Invalid("dependency has no report".into()))
+}
+
+/// Cursor leases include the reader turn and the immutable result identity.
+pub(super) fn page_text(
+    text: &str,
+    binding: &str,
+    args: &Value,
+) -> Result<(String, Option<String>)> {
+    let offset = match args.get("cursor").filter(|v| !v.is_null()) {
+        None => 0,
+        Some(value) => {
+            let (key, offset) = value
+                .as_str()
+                .and_then(|s| s.split_once(':'))
+                .ok_or_else(|| Error::Invalid("cursor: expected continuation cursor".into()))?;
+            require(
+                key == binding,
+                "cursor: belongs to another turn, input generation or result",
+            )?;
+            offset
+                .parse::<usize>()
+                .map_err(|_| Error::Invalid("cursor: invalid offset".into()))?
+        }
+    };
+    require(
+        offset <= text.len() && text.is_char_boundary(offset),
+        "cursor: invalid boundary",
+    )?;
+    let mut end = offset.saturating_add(16 * 1024).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok((
+        text[offset..end].to_owned(),
+        (end < text.len()).then(|| format!("{binding}:{end}")),
+    ))
 }

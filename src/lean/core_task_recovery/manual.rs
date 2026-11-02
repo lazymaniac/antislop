@@ -1,4 +1,4 @@
-use super::super::core_task_execution::verifier_setup;
+use super::super::core_task_execution::reviewer_setup;
 use super::*;
 
 mod finish;
@@ -26,7 +26,7 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
 fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> {
     let snapshot = git::snapshot(
         &work.project,
-        &format!("manual fix verification: {}", work.spec.title),
+        &format!("manual fix review: {}", work.spec.title),
     )?;
     let base = work
         .task
@@ -39,8 +39,8 @@ fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> 
     work.task.verdict = None;
     work.task.base = Some(base.clone());
     work.task.result = Some(snapshot.clone());
-    core.set_status(&work.req.conversation, &mut work.task, status::VERIFYING)?;
-    let verdict = run_verifier(core, work, &snapshot, &changes)?;
+    core.set_status(&work.req.conversation, &mut work.task, status::REVIEWING)?;
+    let verdict = run_reviewer(core, work, &snapshot, &changes)?;
     let obligations = tasks::obligations(&work.spec);
     let mut verdict = verdict;
     tasks::settle(&mut verdict, &obligations, !work.spec.writes);
@@ -52,17 +52,17 @@ fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> 
     })
 }
 
-fn run_verifier(
+fn run_reviewer(
     core: &Core,
     work: &mut RecoveryWork,
     snapshot: &str,
     changes: &str,
 ) -> Result<Verdict> {
-    let (setup, project) = verifier_setup(core, work, snapshot)?;
+    let (setup, project) = reviewer_setup(core, work, snapshot)?;
     let upstream = core.upstream(&work.task.plan_id, &work.spec)?;
     let cancel = AtomicBool::new(false);
     let answer = core.turn(setup, &cancel, |fresh, _| {
-        verifier_prompt(
+        reviewer_prompt(
             &project,
             &work.spec,
             work.task.report.as_deref().unwrap_or(""),
@@ -74,19 +74,19 @@ fn run_verifier(
     decode_answer(core, work, &answer, &cancel)
 }
 
-fn verifier_setup<'a>(
+fn reviewer_setup<'a>(
     core: &Core,
     work: &'a RecoveryWork,
     snapshot: &str,
 ) -> Result<(TurnSetup<'a>, String)> {
-    let (verifier, reviewdir, branch) = manual_review_paths(core, work);
+    let (reviewer, reviewdir, branch) = manual_review_paths(core, work);
     git::add_worktree(&work.project, &reviewdir, &branch, snapshot)?;
     let project = reviewdir.to_string_lossy().into_owned();
-    let setup = verifier_setup::build(
+    let setup = reviewer_setup::build(
         &work.req.conversation,
         &work.task,
-        verifier,
-        work.config.resolve(work.spec.kind, RoleKind::Verifier),
+        reviewer,
+        work.config.resolve(work.spec.kind, RoleKind::Reviewer),
         &reviewdir,
         vec![],
     );
@@ -100,10 +100,10 @@ fn manual_review_paths(core: &Core, work: &RecoveryWork) -> (String, PathBuf, St
     );
     let branch = format!("antislop/{suffix}");
     let dir = core.state.join("worktrees").join(suffix);
-    (format!("verifier:{}", work.task.id), dir, branch)
+    (format!("reviewer:{}", work.task.id), dir, branch)
 }
 
-fn verifier_prompt(
+fn reviewer_prompt(
     project: &str,
     spec: &TaskContract,
     report: &str,
@@ -111,7 +111,7 @@ fn verifier_prompt(
     fresh: bool,
     upstream: &str,
 ) -> String {
-    tasks::verifier_turn_prompt(project, spec, report, Some(changes), fresh, upstream, &[])
+    tasks::reviewer_turn_prompt(project, spec, report, Some(changes), fresh, upstream, &[])
 }
 
 fn decode_answer(
@@ -121,7 +121,7 @@ fn decode_answer(
     cancel: &AtomicBool,
 ) -> Result<Verdict> {
     let Some(answer) = answer else {
-        return failed_verifier(core, work, cancel);
+        return failed_reviewer(core, work, cancel);
     };
     match serde_json::from_str::<turn_result::TurnResult>(answer)? {
         turn_result::TurnResult::Review { verdict, .. } => Ok(verdict),
@@ -135,11 +135,11 @@ fn decode_answer(
     }
 }
 
-fn failed_verifier(core: &Core, work: &mut RecoveryWork, cancel: &AtomicBool) -> Result<Verdict> {
-    let verifier = format!("verifier:{}", work.task.id);
-    core.stop_task(&work.req.conversation, &mut work.task, &verifier, cancel)?;
+fn failed_reviewer(core: &Core, work: &mut RecoveryWork, cancel: &AtomicBool) -> Result<Verdict> {
+    let reviewer = format!("reviewer:{}", work.task.id);
+    core.stop_task(&work.req.conversation, &mut work.task, &reviewer, cancel)?;
     Err(Error::Invalid(
-        "manual snapshot verifier failed; inspect its raw turn error".into(),
+        "manual snapshot reviewer failed; inspect its raw turn error".into(),
     ))
 }
 

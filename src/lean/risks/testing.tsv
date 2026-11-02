@@ -1,4 +1,4 @@
-R031	testing	Verification is missing or incomplete.	Look for criteria without a test or other evidence.
+R031	testing	Review is missing or incomplete.	Look for criteria without a test or other evidence.
 R034	testing	A test reproduces the implementation instead of the requirement.	Compare the assertions with the specification rather than with the code.
 R035	testing	A test passes despite a wrong result.	Read each assertion and check it would fail if the result were wrong; look for assertions on constants or on the mocked value itself.
 R036	testing	Excessive mocks hide incorrect integration.	Check where mocks replace real components and whether a contract or integration test covers that boundary.

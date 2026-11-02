@@ -117,7 +117,7 @@ fn task_results(tasks: &[Task]) -> String {
 fn report_intro(results: &str) -> String {
     format!(
         "The plan finished. Results of each task follow. Answer the user's \
-         request using them; verify anything doubtful in the files yourself.\n{results}"
+         request using them; review anything doubtful in the files yourself.\n{results}"
     )
 }
 
@@ -125,7 +125,7 @@ fn task_result(task: &Task) -> String {
     let report = task.report.as_deref().unwrap_or("(no report)");
     let findings = task_findings(task);
     format!(
-        "\n## {} — {} ({}, {} round(s))\nGoal: {}\nWorker report:\n{report}\nOpen verifier findings:\n{findings}\n",
+        "\n## {} — {} ({}, {} round(s))\nGoal: {}\nWorker report:\n{report}\nOpen reviewer findings:\n{findings}\n",
         task.spec["id"].as_str().unwrap_or_default(),
         task.spec["title"].as_str().unwrap_or_default(),
         task.status,
@@ -147,7 +147,7 @@ fn task_findings(task: &Task) -> String {
     };
     if verdict.approved {
         format!(
-            "the verifier approved this task's worktree, but the task ended as {}",
+            "the reviewer approved this task's worktree, but the task ended as {}",
             task.status
         )
     } else {
@@ -223,5 +223,5 @@ fn append_compliance_gaps(text: &mut String, gaps: &[String]) {
     if gaps.is_empty() {
         return;
     }
-    text.push_str(&format!("\nRuntime requirements_complete gate is CLOSED. Do not claim success. Open obligations:\n{}\nPropose executor work for missing evidence; verifiers stay read-only.\n", gaps.join("\n")));
+    text.push_str(&format!("\nRuntime requirements_complete gate is CLOSED. Do not claim success. Open obligations:\n{}\nPropose executor work for missing evidence; reviewers stay read-only.\n", gaps.join("\n")));
 }

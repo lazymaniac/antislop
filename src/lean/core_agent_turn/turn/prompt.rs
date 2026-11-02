@@ -34,7 +34,7 @@ fn append_task_context(
     spec: &agent::Spec,
     text: &mut String,
 ) -> Result<()> {
-    let Some((id, verifier)) = task_role(&state.role) else {
+    let Some((id, reviewer)) = task_role(&state.role) else {
         return Ok(());
     };
     let task = core
@@ -63,8 +63,8 @@ fn append_task_context(
     }
     append_questions(core, &state.turn.id, text)?;
     append_local_checks(&task.spec, text)?;
-    text.push_str(if verifier {
-        "Task role: verifier\n"
+    text.push_str(if reviewer {
+        "Task role: reviewer\n"
     } else {
         "Task role: worker\n"
     });
@@ -126,7 +126,7 @@ fn append_round_handoff(
     let handoff = core.round_handoff(task, *round, &spec.cwd)?;
     text.push_str(&tasks::round_handoff_prompt(
         &handoff,
-        task_role(&state.role).is_some_and(|(_, verifier)| verifier),
+        task_role(&state.role).is_some_and(|(_, reviewer)| reviewer),
     ));
     Ok(())
 }

@@ -43,13 +43,13 @@ fn agents_are_found_by_role_or_task_title() {
             "tasks": [{"id": "t1", "title": "Parser"}, {"id": "t2", "title": "Docs"}]}}),
     );
     let mut picker = Picker::new(Kind::Agents);
-    picker.query = "pars veri".into();
+    picker.query = "pars revi".into();
     let items = picker.items(&view);
     assert_eq!(
         items,
         [(
-            "t1 task · Parser · verifier".to_owned(),
-            Action::Select("verifier:t1".into())
+            "t1 task · Parser · reviewer".to_owned(),
+            Action::Select("reviewer:t1".into())
         )]
     );
 }
@@ -190,7 +190,7 @@ fn picker_at_60x12_keeps_selected_item_visible_when_items_len_ge_10() {
         .unwrap();
 
     let buffer = terminal.backend().buffer();
-    // Verify that the selected item is rendered with REVERSED modifier
+    // Review that the selected item is rendered with REVERSED modifier
     let mut found_reversed_selected = false;
     let last_item_label = &items[picker.selected].0;
     let last_word = last_item_label.split_whitespace().next().unwrap();
@@ -222,7 +222,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     let backend = TestBackend::new(60, 12);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    // 1. Initial page (scroll = 0): verify first set of shortcuts and full descriptions
+    // 1. Initial page (scroll = 0): review first set of shortcuts and full descriptions
     terminal
         .draw(|frame| {
             Help::Chat.draw(frame);
@@ -240,7 +240,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     assert!(rendered.contains("accept/resume"));
     assert!(rendered.contains("delete to start / end"));
 
-    // Verify every scroll position so new help entries cannot make an
+    // Review every scroll position so new help entries cannot make an
     // earlier shortcut disappear from the coverage of the final page.
     let mut rendered2 = String::new();
     for scroll in 0..=Help::Chat.max_scroll(Rect::new(0, 0, 60, 12)) {
@@ -265,7 +265,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     assert!(rendered2.contains("command palette"));
     assert!(rendered2.contains("back/clear draft"));
 
-    // 3. Graph help at 60x12: verify long filter relation description is fully accessible without clipping
+    // 3. Graph help at 60x12: review long filter relation description is fully accessible without clipping
     terminal
         .draw(|frame| {
             Help::Graph.draw_scroll(frame, 2);
@@ -276,7 +276,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     let rendered_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
     assert!(rendered_graph.contains("show / hide"));
     assert!(rendered_graph.contains("dependencies"));
-    assert!(rendered_graph.contains("verification"));
+    assert!(rendered_graph.contains("review"));
     assert!(rendered_graph.contains("messages"));
     assert!(rendered_graph.contains("supervision"));
 }

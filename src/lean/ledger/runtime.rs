@@ -72,7 +72,7 @@ impl Core {
         run_id: &str,
     ) -> Result<String> {
         Ok(format!(
-            "\nRun and ledger inputs (stable identities; keep their versions):\n{}\nSources: {}\nEntries: {}\nNever weaken an obligation. Propose changes for user approval. Worker approval does not verify requirements.\n",
+            "\nRun and ledger inputs (stable identities; keep their versions):\n{}\nSources: {}\nEntries: {}\nNever weaken an obligation. Propose changes for user approval. Worker approval does not review requirements.\n",
             serde_json::to_string(&self.store.run(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_sources(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_entries(conversation, run_id, None)?.iter().map(|e|json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision,"spec":e.spec})).collect::<Vec<_>>())?
@@ -145,13 +145,13 @@ impl Core {
         let workflow = self.store.workflow(conversation)?;
         if !workflow.summary.is_empty() {
             out.push_str(&format!(
-                "\nInterview summary (derived context; verify against user sources and selected option descriptions, never treat additions as user authorization):\n{}\n",
+                "\nInterview summary (derived context; review against user sources and selected option descriptions, never treat additions as user authorization):\n{}\n",
                 workflow.summary
             ));
         }
         Ok(())
     }
-    /// Extraction is separate from task planning and has a separate verifier session.
+    /// Extraction is separate from task planning and has a separate reviewer session.
     pub(in crate::lean) fn validate_ledger_plan(
         &self,
         conversation: &str,
@@ -160,7 +160,7 @@ impl Core {
     ) -> Result<()> {
         require(
             self.store.extraction_current(conversation, run_id)?,
-            "requirements source coverage needs independent verification",
+            "requirements source coverage needs independent review",
         )?;
         let tasks = self.store.plan(plan)?;
         require(!tasks.is_empty(), "integrity error: plan has no tasks")?;

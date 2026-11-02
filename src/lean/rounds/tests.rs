@@ -37,7 +37,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Task) {
             &[json!({
                 "requirement_ids":["R1"], "criterion_ids":["R1.accept"],
             "id":"task", "title":"Round task", "goal":"Keep all context", "writes":false,
-                "kind":"implementation", "verifier":{"focus":"Check everything", "risks":[]}
+                "kind":"implementation", "reviewer":{"focus":"Check everything", "risks":[]}
             })],
         )
         .unwrap()
@@ -61,7 +61,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
     let cwd = PathBuf::from(core.store.conversation(&conversation).unwrap().project);
     for role in [
         format!("worker:{}", task.id),
-        format!("verifier:{}", task.id),
+        format!("reviewer:{}", task.id),
     ] {
         task.round = 1;
         core.store.update_task(&task).unwrap();
@@ -293,7 +293,7 @@ echo '{"type":"turn.completed"}'
         core.store.update_task(&task).unwrap();
         for role in [
             format!("worker:{}", task.id),
-            format!("verifier:{}", task.id),
+            format!("reviewer:{}", task.id),
         ] {
             for _ in 0..2 {
                 let mut profile = core
@@ -595,7 +595,7 @@ fn execute(
     conversation: &str,
     task: &Task,
     profile: ResolvedProfile,
-    verifier: bool,
+    reviewer: bool,
 ) -> Option<String> {
     core.turn(
         TurnSetup {
@@ -607,7 +607,7 @@ fn execute(
             plan_id: Some(task.plan_id.clone()),
             role: format!(
                 "{}:{}",
-                if verifier { "verifier" } else { "worker" },
+                if reviewer { "reviewer" } else { "worker" },
                 task.id
             ),
             cwd: PathBuf::from(core.store.conversation(conversation).unwrap().project),
@@ -757,7 +757,7 @@ fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh(
         core.store.update_task(&task).unwrap();
         let role = format!(
             "{}:{}",
-            if after_report { "verifier" } else { "worker" },
+            if after_report { "reviewer" } else { "worker" },
             task.id
         );
         let turn = core
@@ -806,7 +806,7 @@ fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh(
         core.store.update_task(&task).unwrap();
         execute(&core, &conversation, &task, profile.clone(), false).unwrap();
         execute(&core, &conversation, &task, profile, true).unwrap();
-        for prefix in ["worker", "verifier"] {
+        for prefix in ["worker", "reviewer"] {
             let latest = core
                 .store
                 .last_turn(&conversation, &format!("{prefix}:{}", task.id))
@@ -869,7 +869,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
 fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() {
     let (_dir, core, conversation, mut task) = fixture();
     let extra_specs: Vec<_>=["dep","unrelated"].into_iter().map(|id|json!({
-        "id":id,"title":id,"goal":"Provide evidence","kind":"analysis","verifier":{"focus":"Check evidence"}
+        "id":id,"title":id,"goal":"Provide evidence","kind":"analysis","reviewer":{"focus":"Check evidence"}
     })).collect();
     let mut others = core.store.add_plan(&conversation, &extra_specs).unwrap();
     let full_report = "FULL DEPENDENCY REPORT\n".repeat(2000);
@@ -933,17 +933,17 @@ fn same_round_cli_turns_keep_known_identity_when_resumed_output_omits_it() {
     core.store.update_task(&task).unwrap();
     let mut profile = fake_profile(&core, &fake_cli(dir.path()));
     profile.args.push("--omit-resumed-session-id".into());
-    for verifier in [false, true] {
+    for reviewer in [false, true] {
         let role = format!(
             "{}:{}",
-            if verifier { "verifier" } else { "worker" },
+            if reviewer { "reviewer" } else { "worker" },
             task.id
         );
-        execute(&core, &conversation, &task, profile.clone(), verifier).unwrap();
+        execute(&core, &conversation, &task, profile.clone(), reviewer).unwrap();
         let first = core.store.last_turn(&conversation, &role).unwrap().unwrap();
         assert!(first.session_id.is_some());
         for _ in 0..2 {
-            execute(&core, &conversation, &task, profile.clone(), verifier).unwrap();
+            execute(&core, &conversation, &task, profile.clone(), reviewer).unwrap();
             let next = core.store.last_turn(&conversation, &role).unwrap().unwrap();
             assert_eq!(next.session_id, first.session_id);
             assert!(!turn_prompt(dir.path(), &next.id).contains("Round handoff"));

@@ -153,7 +153,7 @@ fn finding_section(theme: &Theme, width: usize, verdict: &Value) -> Section {
 fn finding_body(theme: &Theme, width: usize, findings: &[&Value]) -> Vec<Line<'static>> {
     if findings.is_empty() {
         return vec![Line::styled(
-            "No issues: the verifier approved without notes.",
+            "No issues: the reviewer approved without notes.",
             theme.status("approved"),
         )];
     }

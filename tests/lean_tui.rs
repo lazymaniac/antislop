@@ -213,18 +213,20 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         title: "Full task title".into(),
         status: "working".into(),
         summary: Some("Improve  storage\n behavior 👩‍💻 e\u{301}.".into()),
-        verifier_summary: Some("Verify storage correctness.".into()),
-        goal: format!("{} TASK_END", "Long task description ".repeat(35)),
-        scope: vec!["src/file.rs".into()],
-        focus: format!("{} VERIFY_END", "Verify all required behavior ".repeat(12)),
+        reviewer_summary: Some("Review storage correctness.".into()),
+        goal: format!(
+            "{} src/file.rs TASK_END",
+            "Long task description ".repeat(35)
+        ),
+        focus: format!("{} REVIEW_END", "Review all required behavior ".repeat(12)),
         risks: vec!["RISK_END".into()],
         ..Default::default()
     });
-    for active_role in ["worker", "verifier"] {
+    for active_role in ["worker", "reviewer"] {
         view.tasks[0].status = if active_role == "worker" {
             "working"
         } else {
-            "verifying"
+            "reviewing"
         }
         .into();
         view.agents.insert(
@@ -237,10 +239,10 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         );
         let graph = Graph::new(&view);
         let worker = graph.node("worker:t1").unwrap();
-        let verifier = graph.node("verifier:t1").unwrap();
-        assert_ne!(verifier.key, worker.key);
-        assert_eq!(verifier.group, worker.group);
-        for key in ["worker:t1", "verifier:t1"] {
+        let reviewer = graph.node("reviewer:t1").unwrap();
+        assert_ne!(reviewer.key, worker.key);
+        assert_eq!(reviewer.group, worker.group);
+        for key in ["worker:t1", "reviewer:t1"] {
             let node = graph.node(key).unwrap();
             assert!(node.height <= HEIGHT, "card height stays bounded");
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
@@ -248,7 +250,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
             let text = canvas.lines().join("\n");
             assert!(
                 !text.contains("TASK_END")
-                    && !text.contains("VERIFY_END")
+                    && !text.contains("REVIEW_END")
                     && !text.contains("RISK_END")
             );
             assert!(!text.contains("src/file.rs"));
@@ -263,7 +265,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                 assert!(text.contains("Improve storage"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
             } else {
-                assert!(text.contains("Verify storage"), "{text}");
+                assert!(text.contains("Review storage"), "{text}");
                 assert!(text.contains("correctness."), "{text}");
             }
             let mut details = Details::new(key.into());
@@ -276,10 +278,10 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                 .join("\n");
             assert!(
                 full.contains("TASK_END")
-                    && full.contains("VERIFY_END")
+                    && full.contains("REVIEW_END")
                     && full.contains("src/file.rs")
             );
-            if key.starts_with("verifier") {
+            if key.starts_with("reviewer") {
                 assert!(full.contains("RISK_END"));
             }
         }
@@ -303,7 +305,7 @@ fn graph_scrolls_through_many_short_cards() {
             id: format!("t{i}"),
             title: format!("Task {i}"),
             summary: Some(format!("Perform task {i}.")),
-            verifier_summary: Some(format!("Check task {i}.")),
+            reviewer_summary: Some(format!("Check task {i}.")),
             ..Default::default()
         })
         .collect();
@@ -742,7 +744,7 @@ fn app_interaction_sequences_editing_and_paste() {
         Some("Pasted text truncated to 64 KB")
     );
 
-    // 7. Verify visual rendering with TestBackend
+    // 7. Review visual rendering with TestBackend
     terminal
         .draw(|f| {
             app.draw(f);
@@ -1941,7 +1943,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     );
     assert_eq!(app.input.text, "second attempt");
 
-    // Also verify Ctrl+S is blocked
+    // Also review Ctrl+S is blocked
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     assert_eq!(
         app.notice.as_deref(),
@@ -2472,7 +2474,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         result: Err("awaria sieci".into()),
     });
 
-    // Verification: sending flag is cleared, draft is restored to input!
+    // Review: sending flag is cleared, draft is restored to input!
     assert!(!app.sending, "sending must be cleared after A->B->A error");
     assert_eq!(app.pending_send, None);
     assert_eq!(app.input.text, "initial message content");
@@ -2510,7 +2512,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         result: Err("comment rejected".into()),
     });
 
-    // Verification: sending_comment flag is cleared, comment editor is restored!
+    // Review: sending_comment flag is cleared, comment editor is restored!
     assert!(
         !app.sending_comment,
         "sending_comment must be cleared after A->B->A error"
@@ -2525,7 +2527,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         Some("✗ comment rejected (comment draft preserved)")
     );
 
-    // 7. Verify response arriving while user is in B (A -> B), then returns to A (B -> A)
+    // 7. Review response arriving while user is in B (A -> B), then returns to A (B -> A)
     app.input = InputBuffer::with_text("message processed in the background");
     app.submit();
     let send_req_bg = app.send_request_id;
@@ -2582,7 +2584,7 @@ fn tui_comments_with_same_target_in_different_conversations_and_plans() {
         InputBuffer::with_text("conv2 plan alpha draft"),
     );
 
-    // Verify all 4 are isolated and accessible without collision:
+    // Review all 4 are isolated and accessible without collision:
     assert_eq!(
         app.get_comment_draft("worker:t1").text,
         "conv2 plan alpha draft"
@@ -2792,7 +2794,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
     }));
     assert_eq!(app.view.messages[1].state, "rejected");
 
-    // 4. Render on a terminal and verify buffer symbols
+    // 4. Render on a terminal and review buffer symbols
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     term.draw(|f| app.draw(f)).unwrap();
     let text: String = term
@@ -2994,7 +2996,7 @@ fn tui_malicious_output_sanitization_on_buffer() {
 #[test]
 fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     use antislop::lean::tui::graph::{Graph, GroupingMode};
-    use antislop::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View};
+    use antislop::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_REVIEWER, TaskRow, View};
 
     // 1. Stable, deterministic positions based on dependency topology
     let mut view = View::default();
@@ -3042,12 +3044,12 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
         (n.x, n.y)
     };
     let w1 = node_pos(&g1, "worker:t1");
-    let v1 = node_pos(&g1, "verifier:t1");
+    let v1 = node_pos(&g1, "reviewer:t1");
     let w2 = node_pos(&g1, "worker:t2");
     let w3 = node_pos(&g1, "worker:t3");
     let w4 = node_pos(&g1, "worker:t4");
 
-    // Worker and verifier stand side by side in their task's frame
+    // Worker and reviewer stand side by side in their task's frame
     assert_eq!(w1.1, v1.1);
     assert!(w1.0 < v1.0);
 
@@ -3057,10 +3059,10 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     assert_eq!(w2.1, w3.1);
     assert!(w2.1 < w4.1);
 
-    // Fixed supervision positions
-    assert_eq!(node_pos(&g1, PLAN_VERIFIER).1, 0);
+    // Preparation precedes tasks; final acceptance follows the last task.
+    assert_eq!(node_pos(&g1, PLAN_REVIEWER).1, 0);
     assert_eq!(node_pos(&g1, ORCHESTRATOR).1, 0);
-    assert_eq!(node_pos(&g1, AUDITOR).1, 0);
+    assert!(node_pos(&g1, AUDITOR).1 > w4.1);
 
     // 2. Large graph (500 tasks): tests non-recursive Kahn's algorithm
     let mut large_tasks = Vec::new();
@@ -3172,7 +3174,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
 }
 
 #[test]
-fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
+fn test_spatial_graph_rdm_relation_markers_and_visible_only_navigation() {
     use antislop::lean::tui::graph::{Canvas, Graph, GroupingMode};
     use antislop::lean::tui::view::{Link, TaskRow, View};
 
@@ -3201,7 +3203,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
         },
     );
 
-    // 1. Edge and node relation markers (V, D, M)
+    // 1. Edge and node relation markers (R, D, M)
     let graph = Graph::new(&view);
     let mut canvas = Canvas::new(graph.width, graph.height);
     graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
@@ -3209,11 +3211,11 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     let text = lines.join("\n");
 
     // Edges and node badges contain markers
-    assert!(text.contains('V') || text.contains('D') || text.contains("✉3"));
+    assert!(text.contains('R') || text.contains('D') || text.contains("✉3"));
 
     // 2. Visible-only navigation and Collapsing
     let next_below = graph.neighbour("worker:t1", 0, 1);
-    assert_ne!(next_below.as_deref(), Some("verifier:t1"));
+    assert_ne!(next_below.as_deref(), Some("reviewer:t1"));
 
     let mut collapsed = std::collections::HashSet::new();
     collapsed.insert("t1".into());
@@ -3221,13 +3223,13 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
         Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
 
     let w1 = collapsed_graph.node("worker:t1").unwrap();
-    let v1 = collapsed_graph.node("verifier:t1").unwrap();
+    let v1 = collapsed_graph.node("reviewer:t1").unwrap();
     assert!(w1.visible);
     assert!(w1.collapsed);
     assert!(v1.visible);
 
     let next_below_collapsed = collapsed_graph.neighbour("worker:t1", 0, 1);
-    assert_ne!(next_below_collapsed.as_deref(), Some("verifier:t1"));
+    assert_ne!(next_below_collapsed.as_deref(), Some("reviewer:t1"));
 
     // 3. Text query filtering
     let mut app = App::test_app();
@@ -3454,9 +3456,9 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     details.scroll = 8;
     details.query = "logi".into();
 
-    // Switch to agent verifier:t1
-    details.switch_key("verifier:t1".into());
-    assert_eq!(details.key, "verifier:t1");
+    // Switch to agent reviewer:t1
+    details.switch_key("reviewer:t1".into());
+    assert_eq!(details.key, "reviewer:t1");
     assert_eq!(details.scroll, 0);
     assert_eq!(details.query, "");
     details.scroll = 25;
@@ -3478,12 +3480,12 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     );
     assert_eq!(details.query, "analysis");
 
-    // Switching from the worker Overview opens the verifier's own Overview.
-    details.switch_key("verifier:t1".into());
-    assert_eq!(details.key, "verifier:t1");
-    assert_eq!(details.tab, antislop::lean::tui::details::VERIFIER);
+    // Switching from the worker Overview opens the reviewer's own Overview.
+    details.switch_key("reviewer:t1".into());
+    assert_eq!(details.key, "reviewer:t1");
+    assert_eq!(details.tab, antislop::lean::tui::details::REVIEWER);
     assert_eq!(details.scroll, 0);
-    // Switch to Comments on verifier:t1: restores scroll 25 and query "dowody"
+    // Switch to Comments on reviewer:t1: restores scroll 25 and query "dowody"
     details.switch_tab(antislop::lean::tui::details::COMMENTS);
     assert_eq!(details.tab, antislop::lean::tui::details::COMMENTS);
     assert_eq!(details.scroll, 25);
@@ -3603,16 +3605,16 @@ fn test_recipient_selection_and_broadcast() {
     let picker = Picker::new(Kind::Recipients);
     let items = picker.items(&view);
 
-    // Verify broadcast and specific targets
+    // Review broadcast and specific targets
     assert!(items.iter().any(|(label, act)| label.contains("all")
         && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "all")));
     assert!(items.iter().any(|(label, act)| label.contains("orchestrator") && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "orchestrator")));
     assert!(items.iter().any(|(label, act)| label.contains("worker:t1")
         && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "worker:t1")));
     assert_eq!(items.len(), 6, "both protocol roles remain selectable");
-    for status in ["working", "verifying", "approved"] {
+    for status in ["working", "reviewing", "approved"] {
         view.tasks[0].status = status.into();
-        for role in ["worker", "verifier"] {
+        for role in ["worker", "reviewer"] {
             let address = format!("{role}:t1");
             assert!(picker.items(&view).iter().any(|(_, act)| matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == &address)));
         }
@@ -3829,7 +3831,7 @@ fn test_stale_confirmation_handling_and_rendering() {
         .expect("conf-async must exist");
     assert_eq!(async_card.status, ConfirmationStatus::Stale);
 
-    // 4. Rendering test: verify stale cards render "[stale: stale_scope]"
+    // 4. Rendering test: review stale cards render "[stale: stale_scope]"
     let mut terminal = Terminal::new(TestBackend::new(180, 40)).unwrap();
     terminal.draw(|f| app.draw(f)).unwrap();
     let rendered: String = terminal
@@ -4042,7 +4044,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         Some((92, 20)),
     );
     let p1_w = collapsed_graph.node("worker:p1").unwrap();
-    let p1_v = collapsed_graph.node("verifier:p1").unwrap();
+    let p1_v = collapsed_graph.node("reviewer:p1").unwrap();
     assert!(p1_w.visible && p1_w.collapsed);
     assert!(p1_v.visible);
 
@@ -4148,7 +4150,7 @@ fn test_adaptive_graph_collision_and_routing_safety() {
             }
         }
 
-        // 3. Rendering into Canvas and verifying bounded window
+        // 3. Rendering into Canvas and reviewing bounded window
         let mut canvas = Canvas::new_window(0, 0, w, h);
         graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     }
@@ -4167,7 +4169,7 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
         },
         TaskRow {
             id: "t2".into(),
-            status: "verifying".into(),
+            status: "reviewing".into(),
             ..Default::default()
         },
     ];
@@ -4183,7 +4185,7 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
         app.graph_grouping,
         app.graph_viewport,
     );
-    let node = graph.node("verifier:t2").unwrap();
+    let node = graph.node("reviewer:t2").unwrap();
     app.mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: inner.x + node.x + 3 - app.offset.0,
@@ -4191,8 +4193,8 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(
-        app.selected, "verifier:t2",
-        "clicking the verifier's card selects the verifier"
+        app.selected, "reviewer:t2",
+        "clicking the reviewer's card selects the reviewer"
     );
     app.toggle_selected_collapse();
     app.select_node("worker:t2".into());
@@ -4208,15 +4210,15 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
     assert_eq!(details.key, "worker:t2");
     assert_eq!(
         details.tab, 0,
-        "opening the worker keeps its role even during verification"
+        "opening the worker keeps its role even during review"
     );
     assert!(
         !antislop::lean::tui::details::tabs_for(&details.key)
             .contains(&antislop::lean::tui::details::CHECKS)
     );
     app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert_eq!(app.details.as_ref().unwrap().key, "verifier:t2");
-    app.key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t2");
+    app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
     assert_eq!(
         app.details.as_ref().unwrap().tab,
         antislop::lean::tui::details::CHECKS
@@ -4353,7 +4355,7 @@ fn test_canvas_memory_bounded_for_large_graphs() {
 #[test]
 fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     use antislop::lean::tui::graph::{Graph, GroupingMode};
-    use antislop::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View};
+    use antislop::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_REVIEWER, TaskRow, View};
 
     let tasks = vec![
         TaskRow {
@@ -4391,7 +4393,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         Some((92, 20)),
     );
 
-    assert!(!filtered_graph.node(PLAN_VERIFIER).unwrap().visible);
+    assert!(!filtered_graph.node(PLAN_REVIEWER).unwrap().visible);
     assert!(!filtered_graph.node(ORCHESTRATOR).unwrap().visible);
     assert!(!filtered_graph.node(AUDITOR).unwrap().visible);
 
@@ -4403,9 +4405,9 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         "Compacted to row 0, inside its frame, when admin nodes hidden!"
     );
 
-    let v1 = filtered_graph.node("verifier:t1").unwrap();
+    let v1 = filtered_graph.node("reviewer:t1").unwrap();
     assert!(v1.visible);
-    assert_eq!(v1.y, w1.y, "The verifier stands beside its worker");
+    assert_eq!(v1.y, w1.y, "The reviewer stands beside its worker");
 
     // 2. Column selection according to visible tasks:
     // Only "task 3" visible (raw topological depth was 2).
@@ -4610,7 +4612,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         );
         let visible_chain: Vec<_> = g_chain.nodes.iter().filter(|n| n.visible).collect();
 
-        // Verify routing safety on chains
+        // Review routing safety on chains
         for filter in [
             Relations::all(),
             Relations::only(3),
@@ -4738,7 +4740,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         );
         assert!(g_collapsed.node("worker:cy1").unwrap().collapsed);
         assert!(
-            g_collapsed.node("verifier:cy1").unwrap().visible,
+            g_collapsed.node("reviewer:cy1").unwrap().visible,
             "Collapsed task remains addressable by either role"
         );
 
@@ -4833,7 +4835,7 @@ fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
     view.apply(&ev(
         3,
         "task",
-        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 1,
+        json!({"id": "t1", "task": "u1", "status": "reviewing", "round": 1,
                "feedback": {"round": 0, "effect": "x", "coverage": {"total": 1},
                             "integration": {"outcome": "committed"}}}),
     ));
@@ -4918,7 +4920,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         "plan_proposed",
         json!({"plan": "p1", "tasks": [
             {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
-             "verifier": {"summary": "Check the storage path."}},
+             "reviewer": {"summary": "Check the storage path."}},
             {"id": "t2", "title": "API", "depends_on": ["t1"]}
         ]}),
     ));
@@ -4958,17 +4960,17 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     );
     let (text, _) = card(&view, "worker:t1");
     assert!(text.contains("round 1"), "{text}");
-    let (text, _) = card(&view, "verifier:t1");
+    let (text, _) = card(&view, "reviewer:t1");
     assert!(text.contains("waits for worker r1"), "{text}");
-    // Verifier checking: separate activity lines per role.
+    // Reviewer checking: separate activity lines per role.
     view.agents.get_mut("worker:t1").unwrap().running = false;
     view.apply(&ev(
         3,
         "task",
-        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 1, "feedback": null}),
+        json!({"id": "t1", "task": "u1", "status": "reviewing", "round": 1, "feedback": null}),
     ));
     view.agents.insert(
-        "verifier:t1".into(),
+        "reviewer:t1".into(),
         Agent {
             running: true,
             provider: "agy".into(),
@@ -4980,20 +4982,20 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     assert!(worker_now.contains("awaiting verdict r1"), "{worker_now}");
     assert!(
         !worker_now.contains("cargo test"),
-        "the verifier's work shows on its own card: {worker_now}"
+        "the reviewer's work shows on its own card: {worker_now}"
     );
-    let (verifier_now, _) = card(&view, "verifier:t1");
-    assert!(verifier_now.contains("round 1"), "{verifier_now}");
-    assert!(verifier_now.contains("cargo test"), "{verifier_now}");
+    let (reviewer_now, _) = card(&view, "reviewer:t1");
+    assert!(reviewer_now.contains("round 1"), "{reviewer_now}");
+    assert!(reviewer_now.contains("cargo test"), "{reviewer_now}");
     assert!(
-        verifier_now.contains("verifier") && !verifier_now.contains("agy"),
-        "verifier card omits the CLI: {verifier_now}"
+        reviewer_now.contains("reviewer") && !reviewer_now.contains("agy"),
+        "reviewer card omits the CLI: {reviewer_now}"
     );
     assert!(
-        !verifier_now.contains("codex"),
-        "no worker agent on the verifier card"
+        !reviewer_now.contains("codex"),
+        "no worker agent on the reviewer card"
     );
-    view.agents.get_mut("verifier:t1").unwrap().running = false;
+    view.agents.get_mut("reviewer:t1").unwrap().running = false;
     // Approved with feedback: effect on the worker card, coverage and the
     // one landing label on the bottom line; details keep the same words.
     view.apply(&ev(
@@ -5011,10 +5013,10 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     assert!(worker.contains("effect: 2 files"), "{worker}");
     assert!(worker.contains("committed"), "{worker}");
     assert!(worker_h <= HEIGHT, "card height stays bounded");
-    let (verifier, verifier_h) = card(&view, "verifier:t1");
-    assert!(verifier.contains("2/3"), "coverage counters: {verifier}");
-    assert!(verifier.contains("committed"), "{verifier}");
-    assert!(verifier_h <= HEIGHT);
+    let (reviewer, reviewer_h) = card(&view, "reviewer:t1");
+    assert!(reviewer.contains("2/3"), "coverage counters: {reviewer}");
+    assert!(reviewer.contains("committed"), "{reviewer}");
+    assert!(reviewer_h <= HEIGHT);
     for (_, _, path) in Graph::new(&view).edge_routes(Relations::all()) {
         for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
             assert!(!antislop::lean::tui::graph::Graph::route_intersects_card(
@@ -5046,7 +5048,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         5,
         "task",
         json!({"id": "t1", "task": "u1", "status": "failed", "round": 1, "feedback": null,
-               "reason": "the verifier repeated itself"}),
+               "reason": "the reviewer repeated itself"}),
     ));
     view.apply(&ev(
         6,
@@ -5070,7 +5072,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     );
     let (failed, _) = card(&view, "worker:t1");
     assert!(
-        failed.contains("failed r1") && failed.contains("the verifier repeated"),
+        failed.contains("failed r1") && failed.contains("the reviewer repeated"),
         "state alone, cause on its own line: {failed}"
     );
     let mut failed_details = Details::new("worker:t1".into());
@@ -5082,7 +5084,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        cause.contains("the verifier repeated itself"),
+        cause.contains("the reviewer repeated itself"),
         "details keep the whole cause: {cause}"
     );
     // A failed task with no reported cause says so instead of inventing one.
@@ -5120,7 +5122,7 @@ fn card_height_tracks_visible_content_and_retry_removes_old_feedback() {
         |seq: u64, kind: &str, payload: Value| json!({"seq":seq,"kind":kind,"payload":payload});
     let mut view = View::default();
     view.apply(&ev(1,"plan_proposed",json!({"plan":"p1","tasks":[
-        {"id":"t1","title":"Store","summary":"Fix storage.","verifier":{"summary":"Check storage."}},
+        {"id":"t1","title":"Store","summary":"Fix storage.","reviewer":{"summary":"Check storage."}},
         {"id":"t2","title":"API","depends_on":["t1"],"summary":"Long café 👩‍💻 description. ".repeat(30)}
     ]})));
     let height = |view: &View| Graph::new(view).node("worker:t1").unwrap().height;
@@ -5825,7 +5827,7 @@ mod config_editor_acceptance {
                         kind,
                         RoleRouting {
                             executor: route.executor,
-                            verifier: route.verifier,
+                            reviewer: route.reviewer,
                         },
                     )
                 })
@@ -6574,7 +6576,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
-        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"verifying","round":1}})],
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":1}})],
         idle: false, autonomous: false,
     });
     app.open_details("worker:t1".into());
@@ -6750,7 +6752,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
         if round > 1 {
             app.apply_update(Update::Events {
                 conversation:"test-conv".into(), generation:1,
-                events:vec![json!({"seq":round,"kind":"task","payload":{"id":"t1","task":"u1","status":"verifying","round":round}})],
+                events:vec![json!({"seq":round,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":round}})],
                 idle:false, autonomous:false,
             });
         }
@@ -6965,7 +6967,7 @@ fn configuration_provider_and_route_structural_edits_round_trip() {
                 .path[1]
                 .clone();
             assert_eq!(route.executor, first_profile);
-            assert_eq!(route.verifier, first_profile);
+            assert_eq!(route.reviewer, first_profile);
         }
         let mut loaded = ConfigEditor::new(&saved, "antislop.toml".into()).unwrap();
         loaded.selected = loaded
@@ -7072,7 +7074,7 @@ fn configuration_sparse_routes_and_empty_providers_can_be_restored() {
     let restored = antislop::config::Config::from_toml(&editor.source().unwrap()).unwrap();
     let route = &restored.routing[&antislop::config::WorkKind::Orchestration];
     assert_eq!(route.executor, restored.orchestrator.profile);
-    assert!(restored.profiles.contains_key(&route.verifier));
+    assert!(restored.profiles.contains_key(&route.reviewer));
     editor.fields.retain(|f| f.path[0] != "providers");
     editor.selected = 0;
     editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
@@ -7185,17 +7187,17 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
     app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
     app.paste("worker 👩‍💻e\u{301}");
     app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    app.paste("verifier draft");
+    app.paste("reviewer draft");
     let details = app.details.as_ref().unwrap();
     let worker = (app.conversation.clone(), format!("worker:{uuid}"));
-    let verifier = (app.conversation.clone(), format!("verifier:{uuid}"));
+    let reviewer = (app.conversation.clone(), format!("reviewer:{uuid}"));
     assert_eq!(
         details.drafts.borrow()[&worker].input.text,
         "worker 👩‍💻e\u{301}"
     );
     assert_eq!(
-        details.drafts.borrow()[&verifier].input.text,
-        "verifier draft"
+        details.drafts.borrow()[&reviewer].input.text,
+        "reviewer draft"
     );
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
@@ -7213,8 +7215,8 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
         "worker 👩‍💻e\u{301}"
     );
     assert_eq!(
-        details.drafts.borrow()[&verifier].input.text,
-        "verifier draft"
+        details.drafts.borrow()[&reviewer].input.text,
+        "reviewer draft"
     );
 }
 
@@ -7411,7 +7413,7 @@ fn dashboard_screen(
         json!({"plan": "p1", "tasks": [
             {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
              "goal": "Make the storage layer atomic.\nNever lose a write on crash.",
-             "verifier": {"summary": "Check it.", "focus": "Crash safety.",
+             "reviewer": {"summary": "Check it.", "focus": "Crash safety.",
                           "risks": ["Torn writes", "Lock inversion"]}},
             {"id": "t2", "title": "API", "depends_on": ["t1"]}
         ]}),
@@ -7419,7 +7421,7 @@ fn dashboard_screen(
     view.apply(&ev(
         2,
         "task",
-        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 2, "feedback": null}),
+        json!({"id": "t1", "task": "u1", "status": "reviewing", "round": 2, "feedback": null}),
     ));
     view.agents.insert(
         "worker:t1".into(),
@@ -7435,7 +7437,7 @@ fn dashboard_screen(
         },
     );
     view.agents.insert(
-        "verifier:t1".into(),
+        "reviewer:t1".into(),
         Agent {
             running: true,
             provider: "claude".into(),
@@ -7443,8 +7445,8 @@ fn dashboard_screen(
             ..Agent::default()
         },
     );
-    let key = if tab == antislop::lean::tui::details::VERIFIER {
-        "verifier:t1"
+    let key = if tab == antislop::lean::tui::details::REVIEWER {
+        "reviewer:t1"
     } else {
         "worker:t1"
     };
@@ -7454,7 +7456,7 @@ fn dashboard_screen(
         "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",
         "spec": {"id": "t1", "title": "Store", "goal": "g", "kind": "implementation",
                  "requirement_ids": ["Q1"],
-                 "verifier": {"focus": "Crash safety.", "risks": ["Torn writes", "Lock inversion"]}},
+                 "reviewer": {"focus": "Crash safety.", "risks": ["Torn writes", "Lock inversion"]}},
         "checks": [{"id": "R1", "state": "settled", "status": "issue", "note": "fsync missing"},
                    {"id": "R2", "state": "checking"}],
         "verdict": {"findings": [{"severity": "high", "issue": "No fsync before rename",
@@ -7480,22 +7482,22 @@ fn dashboard_screen(
 
 #[test]
 fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
-    use antislop::lean::tui::details::VERIFIER;
-    // Verifier section: what it checks and what it found, beside its terminal.
-    let wide = dashboard_screen(140, 40, VERIFIER, |_| {});
+    use antislop::lean::tui::details::REVIEWER;
+    // Reviewer section: what it checks and what it found, beside its terminal.
+    let wide = dashboard_screen(140, 40, REVIEWER, |_| {});
     for needle in [
-        "VERIFYING r2",
-        "[Verifier]",
-        "Verification",
+        "REVIEWING r2",
+        "[Reviewer]",
+        "Review",
         "Torn writes",
         "Checks",
         "12.3k in / 4.0k out",
-        "Session · verifier",
+        "Session · reviewer",
     ] {
         assert!(wide.contains(needle), "{needle}\n{wide}");
     }
     assert!(!wide.contains("Make the storage layer atomic"), "{wide}");
-    let findings = dashboard_screen(140, 40, VERIFIER, |details| details.dash_jump(true));
+    let findings = dashboard_screen(140, 40, REVIEWER, |details| details.dash_jump(true));
     assert!(findings.contains("No fsync before rename"), "{findings}");
     assert!(findings.contains("src/store.rs:42"), "{findings}");
     // Worker section: the assignment, beside the worker's terminal.
@@ -7535,7 +7537,7 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
     // Tiny terminals never panic.
     for (w, h) in [(12, 5), (24, 6), (40, 8)] {
         dashboard_screen(w, h, 0, |_| {});
-        dashboard_screen(w, h, VERIFIER, |_| {});
+        dashboard_screen(w, h, REVIEWER, |_| {});
     }
 }
 

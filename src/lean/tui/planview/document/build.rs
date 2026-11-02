@@ -5,6 +5,55 @@ impl PlanView {
         let raw_doc = raw_document(view);
         DocumentBuilder::new(view).build(&raw_doc)
     }
+    /// Keep original line numbers so existing comment anchors survive the split.
+    pub(in crate::lean::tui::planview) fn description_lines(&self, view: &View) -> Vec<DocLine> {
+        let lines = self.build_lines(view);
+        if view.tasks.is_empty() {
+            return lines;
+        }
+        let mut hidden_level = None;
+        let mut prose = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let heading = line.text.trim();
+            let level = heading.chars().take_while(|ch| *ch == '#').count();
+            if level > 0 && hidden_level.is_some_and(|hidden| level <= hidden) {
+                hidden_level = None;
+            }
+            let task_heading = line.is_heading
+                && view
+                    .tasks
+                    .iter()
+                    .any(|task| heading.contains(&format!("[{}]", task.id)));
+            let generated_heading = line.is_heading
+                && lines
+                    .get(index + 1)
+                    .is_some_and(|next| next.text.starts_with("- **Task**:"));
+            if task_heading || generated_heading {
+                hidden_level = Some(level);
+            }
+            if hidden_level.is_none() && heading != "## Plan Sections & Task Breakdown" {
+                prose.push(line.clone());
+            }
+        }
+        while prose.last().is_some_and(|line| line.text.trim().is_empty()) {
+            prose.pop();
+        }
+        prose
+    }
+
+    pub(in crate::lean::tui::planview) fn selected_line_number(
+        &self,
+        view: &View,
+    ) -> Option<usize> {
+        if self.graph_focused {
+            self.selected_task_line(view)
+        } else {
+            self.description_lines(view)
+                .get(self.cursor)
+                .map(|line| line.number)
+        }
+    }
+
     pub fn line_comments<'a>(&self, view: &'a View, line_no: usize) -> Vec<&'a Comment> {
         let target_scoped = format!("plan:{}:line:{line_no}", self.plan_id);
         let target_plain = format!("plan:line:{line_no}");

@@ -16,7 +16,7 @@ impl Core {
         let dependency_note = dependency_note(specs);
         self.review(
             conversation,
-            PLAN_VERIFIER,
+            PLAN_REVIEWER,
             Some(&plan.id),
             project,
             cancel,
@@ -86,7 +86,7 @@ impl Core {
         )?;
         self.store.add_message(
             conversation,
-            PLAN_VERIFIER,
+            PLAN_REVIEWER,
             &tasks::plan_rejected(&verdict.findings),
         )?;
         Ok(())

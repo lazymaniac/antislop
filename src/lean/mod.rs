@@ -86,9 +86,9 @@ use store::{
 use tasks::{Outcome, TaskContract, Verdict, status};
 
 /// A task role address. Bare task IDs are handled by callers that accept them;
-/// storage and UI callers must only recognize explicit worker/verifier roles.
+/// storage and UI callers must only recognize explicit worker/reviewer roles.
 pub(crate) fn task_role(key: &str) -> Option<(&str, bool)> {
-    key.strip_prefix("verifier:")
+    key.strip_prefix("reviewer:")
         .map(|id| (id, true))
         .or_else(|| key.strip_prefix("worker:").map(|id| (id, false)))
 }
@@ -110,7 +110,7 @@ pub struct ConversationSummary {
 pub enum RecoveryAction {
     IntegrateWithConsent,
     KeepOnBranch,
-    VerifyManualSnapshot,
+    ReviewManualSnapshot,
     RetryWithGuidance,
     RestartAgent,
     CancelTask,
@@ -189,10 +189,12 @@ pub fn task_scope_hash(task: &Task) -> String {
 const ORCHESTRATOR: &str = "orchestrator";
 /// Plan feedback has an independent native CLI session.
 pub const COMMENT_ORCHESTRATOR: &str = "comment-orchestrator";
-/// Drafts the first plan; its own native CLI session and execution profile.
+/// Drafts and corrects plans; its own native CLI session and execution profile.
 pub const PLANNER: &str = "planner";
 /// Author of the orchestrator's request that the planner redraft the plan.
 pub const REPLAN: &str = "replan-request";
+/// A planner blocker that requires orchestration or a user decision.
+const PLANNER_BLOCKER: &str = "planner-blocker";
 /// The sessions that answer the user's messages, in the order they are asked.
 pub const ORCHESTRATION_ROLES: [&str; 3] = [ORCHESTRATOR, COMMENT_ORCHESTRATOR, PLANNER];
 const RUNTIME: &str = "runtime";
@@ -204,7 +206,7 @@ const DIFF_LIMIT: usize = 2 * 1024 * 1024;
 /// How a comment's message starts, before its id.
 pub const COMMENT_PREFIX: &str = "[user comment #";
 /// Checks each plan before the user sees it.
-const PLAN_VERIFIER: &str = "plan-verifier";
+const PLAN_REVIEWER: &str = "plan-reviewer";
 const PLAN_LINT: &str = "plan-lint";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";

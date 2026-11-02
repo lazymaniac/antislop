@@ -1,10 +1,10 @@
-//! Whether a worker is getting closer to approval. A verifier words its
+//! Whether a worker is getting closer to approval. A reviewer words its
 //! findings differently every round, so their text says little; the
 //! obligations it leaves open (`V5`, `R2`…) keep their ids. A worker
 //! that leaves mostly the same ones open round after round, without ever
 //! getting below its best so far, is not getting closer. Broad checks such as
-//! `goal` stay open while the verifier finds one new defect after another, so
-//! the verifier also confirms which of its earlier findings the round fixed;
+//! `goal` stay open while the reviewer finds one new defect after another, so
+//! the reviewer also confirms which of its earlier findings the round fixed;
 //! a fixed finding is progress even when the same checks remain open. A
 //! finding the round only narrowed counts as fixed, and what remains comes
 //! back as a new, narrower finding.
@@ -73,7 +73,7 @@ pub struct Progress {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Run {
     basis: String,
-    /// Rounds the verifier rejected. A round a restart cut off has no
+    /// Rounds the reviewer rejected. A round a restart cut off has no
     /// verdict and does not count, though it uses up its number.
     #[serde(default)]
     pub rejections: u32,
@@ -115,7 +115,7 @@ impl Progress {
     }
 
     /// A task round: stalled only when its open obligations show no progress
-    /// and the verifier confirms none of its earlier findings fixed.
+    /// and the reviewer confirms none of its earlier findings fixed.
     pub fn record_round(&mut self, open: BTreeSet<String>, fixed_earlier: bool) -> bool {
         self.record(open) && !fixed_earlier
     }

@@ -42,16 +42,15 @@ fn proposed_task(task: &Value, peers: &Value) -> TaskRow {
         uuid: None,
         title: line("title"),
         summary: optional("summary"),
-        verifier_summary: task["verifier"]["summary"].as_str().map(clean_line),
+        reviewer_summary: task["reviewer"]["summary"].as_str().map(clean_line),
         section: optional("section"),
         kind: line("kind"),
         goal: line("goal"),
-        scope: strings(&task["scope"]),
         depends_on: strings(&task["depends_on"]),
         parallel_with: strings(peers),
         writes: task["writes"] == true,
-        focus: clean_line(task["verifier"]["focus"].as_str().unwrap_or_default()),
-        risks: strings(&task["verifier"]["risks"]),
+        focus: clean_line(task["reviewer"]["focus"].as_str().unwrap_or_default()),
+        risks: strings(&task["reviewer"]["risks"]),
         status: "proposed".into(),
         round: 0,
         activity: proposed_activity(task["writes"] == true),
@@ -92,8 +91,6 @@ fn fill_parallel_fallback(view: &mut View, payload: &Value) {
             .map(|row| crate::lean::tasks::PeerNode {
                 id: &row.id,
                 depends_on: &row.depends_on,
-                writes: row.writes,
-                scope: &row.scope,
             })
             .collect::<Vec<_>>(),
     );
@@ -106,13 +103,13 @@ fn reset_plan_agents(view: &mut View) {
     view.task_rows.clear();
     view.task_check_events.clear();
     view.agents
-        .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("verifier:"));
+        .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("reviewer:"));
     view.links.clear();
     view.mailbox.clear();
 }
 
 fn append_plan_review(view: &mut View, payload: &Value) {
-    for line in crate::lean::cli::review_lines("plan verifier", &payload["review"]) {
+    for line in crate::lean::cli::review_lines("plan reviewer", &payload["review"]) {
         view.push(
             Style::default().fg(crate::lean::tui::theme::ayu::YELLOW),
             line,
@@ -120,7 +117,7 @@ fn append_plan_review(view: &mut View, payload: &Value) {
     }
     let review = &payload["review"];
     if !review.is_null() {
-        view.review(PLAN_VERIFIER, review);
+        view.review(PLAN_REVIEWER, review);
     }
 }
 
@@ -187,7 +184,7 @@ pub(super) fn on_plan_review(
 ) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);
-    view.review(PLAN_VERIFIER, payload);
+    view.review(PLAN_REVIEWER, payload);
 }
 
 pub(super) fn on_plan_invalid(

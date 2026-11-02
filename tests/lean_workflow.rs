@@ -19,14 +19,14 @@ fn guided_session_source(dir: &std::path::Path) -> String {
         std::fs::write(&script, r#"#!/usr/bin/env python3
 import json, sys, os, re
 prompt = sys.argv[-1]
-plan = '```plan\n' + json.dumps({'tasks':[{'id':'t1','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'verifier':{'focus':'Check the observations','risks':[]}}]}) + '\n```'
+plan = '```plan\n' + json.dumps({'tasks':[{'id':'t1','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'reviewer':{'focus':'Check the observations','risks':[]}}]}) + '\n```'
 if 'SESSION PHASE: INTERVIEW.' in prompt:
     # A premature plan from an agent must never bypass the interview gate.
     if 'Interview answer (' in prompt:
         answer = '```requirements\nGoal: inspect the project.\nScope: read only.\nAcceptance: report observations.\n```\n' + plan
     else:
         answer = '```question\n' + json.dumps({'id':'scope','context':'The scope determines what we inspect.','question':'What should we inspect?','options':[{'label':'Source code','description':'Inspect code quality first'},{'label':'Documentation','description':'Inspect documentation first'}]}) + '\n```\n' + plan
-elif any(marker in prompt for marker in ['You review a plan', 'new plan:', 'You verify', 'Your verifier found']):
+elif any(marker in prompt for marker in ['You review a plan', 'new plan:', 'You review', 'Your reviewer found']):
     ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
     answer = '```verdict\n' + json.dumps({'approved':True,'findings':[], 'coverage':{i:{'status':'ok','note':'checked'} for i in ids}}) + '\n```'
 elif 'Task: ' in prompt:
@@ -329,7 +329,7 @@ print(json.dumps({'type':'turn.completed'}))
         )
         .unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
-        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","kind":"analysis","verifier":{"focus":"Inspect evidence"}})]).unwrap().remove(0);
+        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","kind":"analysis","reviewer":{"focus":"Inspect evidence"}})]).unwrap().remove(0);
         if phase == "implementation" {
             core.store
                 .queue_plan(&conversation.id, &task.plan_id)

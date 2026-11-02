@@ -153,7 +153,7 @@ fn approved_dependency_exposes_complete_earlier_rounds_after_a_carried_amendment
     carried.status = status::APPROVED.into();
     carried.feedback = Some(json!({"carried_from":source.id}));
     core.store.update_task(&carried).unwrap();
-    let role = format!("verifier:{}", tasks[1].id);
+    let role = format!("reviewer:{}", tasks[1].id);
     let turn = core
         .store
         .start_turn(&conversation, &role, "fixture", 0, Some(&tasks[1].plan_id))
@@ -270,7 +270,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
     other.status = status::APPROVED.into();
     core.store.update_task(&other).unwrap();
     authorize(&core, &conversation, &other.plan_id);
-    for role in ["requirements-audit-analyst", "requirements-audit-verifier"] {
+    for role in ["requirements-audit-analyst", "requirements-audit-reviewer"] {
         let turn = core
             .store
             .start_turn(&conversation, role, "fixture", 0, Some(&task.plan_id))
@@ -403,7 +403,7 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
     }
     for role in [
         format!("worker:{}", tasks[2].id),
-        format!("verifier:{}", tasks[2].id),
+        format!("reviewer:{}", tasks[2].id),
     ] {
         let turn = core
             .store
@@ -480,7 +480,7 @@ fn approved_transitive_results_are_readable_but_siblings_and_foreign_results_are
         .remove(0);
     for role in [
         format!("worker:{}", tasks[2].id),
-        format!("verifier:{}", tasks[2].id),
+        format!("reviewer:{}", tasks[2].id),
     ] {
         let turn = core
             .store

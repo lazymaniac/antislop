@@ -1,5 +1,5 @@
 //! The risk catalog of design §19, shared out among the kinds of work: each
-//! entry belongs to the kind whose verifier can settle it, so a verifier
+//! entry belongs to the kind whose reviewer can settle it, so a reviewer
 //! accounts only for the risks of its worker's domain.
 
 use crate::config::WorkKind;

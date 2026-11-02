@@ -246,6 +246,6 @@ fn workflow_card_text(view: &View) -> Option<(&'static str, String)> {
         view::Stage::Interview => ("Phase 1/3: Review requirements", format!("{}\n\nReview the summary. Add comments in chat or choose Proceed to planning.", view.requirements_summary)),
         view::Stage::Planning => ("Phase 2/3: Planning", "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned()),
         view::Stage::Review => ("Phase 2/3: Review and comment on the plan", "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Ctrl+A accepts the plan and starts implementation.".to_owned()),
-        _ => ("Phase 3/3: Implementation", "Follow task progress and verification in the graph. Open task details to inspect results, diffs or add comments.".to_owned()),
+        _ => ("Phase 3/3: Implementation", "Follow task progress and review in the graph. Open task details to inspect results, diffs or add comments.".to_owned()),
     })
 }

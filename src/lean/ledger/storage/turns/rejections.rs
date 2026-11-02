@@ -15,7 +15,7 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         let change = load_rejection(&tx, conversation, run_id, id, hash)?;
-        if verify_rejection_retry(self, &tx, id, comment)? {
+        if review_rejection_retry(self, &tx, id, comment)? {
             return Ok(());
         }
         validate_proposal_state(&tx, conversation, run_id, id, hash, &change)?;
@@ -75,7 +75,7 @@ fn validate_proposal_state(
     Ok(())
 }
 
-fn verify_rejection_retry(
+fn review_rejection_retry(
     store: &Store,
     tx: &rusqlite::Transaction<'_>,
     id: &str,

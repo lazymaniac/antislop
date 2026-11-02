@@ -144,16 +144,16 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                     .extraction_current(&conversation, &run.id)
                     .unwrap()
             );
-            let verifiers: i64 = core
+            let reviewers: i64 = core
                 .store
                 .db()
                 .query_row(
-                    "SELECT count(*) FROM turns WHERE role='requirements-extraction-verifier'",
+                    "SELECT count(*) FROM turns WHERE role='requirements-extraction-reviewer'",
                     [],
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(verifiers, 0, "no separate source-coverage review runs");
+            assert_eq!(reviewers, 0, "no separate source-coverage review runs");
         } else {
             assert!(
                 result

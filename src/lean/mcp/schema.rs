@@ -51,7 +51,7 @@ pub(super) fn review() -> Value {
         &["check", "severity", "issue", "where"],
     );
     json!({
-        "report":{"type":"string","description":"What you verified and how"},
+        "report":{"type":"string","description":"What you reviewed and how"},
         "checks":{"type":"object","additionalProperties":check,"description":"Every check id the prompt lists, each with status and note"},
         "findings":{"type":"array","items":finding},
         "resolved":{"type":"array","items":{"type":"string"},"description":"Ids of your earlier findings, as the prompt lists them, that the updated work fixes wholly or in part; what remains of a partly fixed one is a new, narrower finding"}
@@ -132,7 +132,6 @@ pub(super) fn planned_task() -> Value {
             "goal":{"type":"string","description":"What the task must achieve, in full sentences"},
             "kind":{"enum":KINDS},
             "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. When that kind already has explicitly declared checks, its canonical gate id refers to all of those checks. Each dependent receives dependency summaries"},
-            "scope":{"type":"array","items":{"type":"string"},"description":"Project paths the task works in"},
             "writes":{"type":"boolean","description":"Omit to follow the kind: implementation, refactoring, testing, static_analysis and integration write"},
             "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Independent of writes."},
             "outputs":{"type":"array","items":{"type":"string"},"description":"Explicit relative output files, required for artifact"},
@@ -175,6 +174,20 @@ pub(super) fn revision() -> Value {
         "reason":{"type":"string","description":"What the revision changes and why"},
         "tasks":{"type":"array","items":planned_task(),"description":"Changed or added tasks, each complete"},
         "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"},
-        "redo":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks whose work must be done again because their result is wrong. An approved task changed only in its title, goal or summary otherwise keeps its result"}
+        "replacements":{"type":"object","additionalProperties":{"type":"string"},"description":"New task id -> unfinished retired task id. The successor retains its report/checkpoint and starts with reassessment; completed tasks cannot be replaced."},
+        "redo":{"type":"array","items":{"type":"string"},"description":"Ids of tasks whose existing work needs correction. Checkpoints remain preserved; reassess before continuing, never recreate integrated changes from scratch"}
     })
+}
+
+#[cfg(test)]
+mod filesystem_tests {
+    use super::*;
+
+    #[test]
+    fn tasks_expose_outputs_and_dependencies_without_path_allowlists() {
+        let schema = planned_task();
+        assert!(schema["properties"].get("scope").is_none());
+        assert!(schema["properties"].get("outputs").is_some());
+        assert!(schema["properties"].get("depends_on").is_some());
+    }
 }

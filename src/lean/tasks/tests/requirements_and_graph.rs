@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn requirements_reach_only_verifiers_as_readable_id_and_text() {
+fn requirements_reach_only_reviewers_as_readable_id_and_text() {
     let entry: crate::lean::ledger::LedgerEntry = serde_json::from_value(serde_json::json!({
         "run_id":"run","version":1,"spec_revision":1,"original":"","status":"active",
         "spec":{"id":"R1","source":{"source_id":"s","start":0,"end":0},
@@ -28,11 +28,11 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
         protected_paths: vec![],
         primary: "/primary".into(),
     };
-    let verifier = super::round_handoff_prompt(&handoff, true);
-    assert!(verifier.contains(
+    let reviewer = super::round_handoff_prompt(&handoff, true);
+    assert!(reviewer.contains(
             "Requirements and acceptance criteria:\n- R1: Export works 👩‍💻\n  - C1: CSV has a header\n  - C2 (optional): Large files stream\n"
         ));
-    assert!(!verifier.contains("\"interpretation\""));
+    assert!(!reviewer.contains("\"interpretation\""));
     let worker = super::round_handoff_prompt(&handoff, false);
     assert!(worker.contains("Requirements and acceptance criteria"));
     assert!(worker.contains("CSV has a header"));
@@ -75,11 +75,11 @@ fn contract(value: serde_json::Value) -> TaskContract {
 fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     let writer = contract(serde_json::json!({
         "id":"w","title":"Writer","goal":"WRITER GOAL","kind":"implementation","writes":true,
-        "verifier":{"focus":"f"}
+        "reviewer":{"focus":"f"}
     }));
     let options = contract(serde_json::json!({
         "id":"w-options","title":"Options for Writer","goal":"OPTIONS BOILERPLATE","kind":"options",
-        "options_for":"w","verifier":{"focus":"f"}
+        "options_for":"w","reviewer":{"focus":"f"}
     }));
     let prompt = plan_review_prompt("/p", "request", &[options, writer]);
     assert!(prompt.contains("WRITER GOAL"));
@@ -89,21 +89,21 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
         !prompt.contains("\n  \"id\""),
         "plan JSON is not pretty-printed"
     );
-    // Only verifiers are read-only; a writing worker runs what its goal names.
-    assert!(prompt.contains("This limits verifiers, not workers"));
+    // Only reviewers are read-only; a writing worker runs what its goal names.
+    assert!(prompt.contains("This limits reviewers, not workers"));
     assert!(!prompt.contains("never by execution or edits"));
 }
 
 #[test]
 fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     let same = contract(serde_json::json!({
-        "id":"a","title":"A","goal":"UNCHANGED GOAL","kind":"analysis","verifier":{"focus":"f"}
+        "id":"a","title":"A","goal":"UNCHANGED GOAL","kind":"analysis","reviewer":{"focus":"f"}
     }));
     let before = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"OLD GOAL","kind":"analysis","verifier":{"focus":"f"}
+        "id":"b","title":"B","goal":"OLD GOAL","kind":"analysis","reviewer":{"focus":"f"}
     }));
     let after = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"NEW GOAL","kind":"analysis","verifier":{"focus":"f"}
+        "id":"b","title":"B","goal":"NEW GOAL","kind":"analysis","reviewer":{"focus":"f"}
     }));
     let baseline = [&same, &before].map(|task| serde_json::to_value(task).unwrap());
     let plan = [same, after];
@@ -128,7 +128,7 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
         false,
     );
     assert!(resumed.contains("approved, whose work is done and kept: a."));
-    assert!(resumed.contains("sends back to work") && resumed.ends_with(": b."));
+    assert!(resumed.contains("are reassessed first") && resumed.ends_with(": b."));
     assert!(!resumed.contains("You review a plan"));
     assert!(resumed.contains("Reason: reason"));
 }
@@ -217,7 +217,7 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
         assert!(
             prompt.contains("Never demand manual options or code gates for none/artifact tasks")
         );
-        assert!(prompt.contains("installation directory to scope"));
+        assert!(prompt.contains("separate path grant"));
         assert!(prompt.contains("ASDF_RUST_VERSION"));
         assert!(prompt.contains("writing outside the allocated worktree"));
     }
@@ -226,9 +226,9 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
             .iter()
             .all(|finding| finding.rule != "writer-scope-outside-project")
     );
-    assert!(worker_prompt("/project", &report).contains("installation directory to scope"));
+    assert!(worker_prompt("/project", &report).contains("separate path grant"));
     for prompt in [planner_instructions(), orchestrator_instructions()] {
-        assert!(prompt.contains("installation directory to scope"));
+        assert!(prompt.contains("separate path grant"));
         assert!(prompt.contains("does not authorize reading unrelated external data"));
     }
 }

@@ -93,7 +93,7 @@ fn ascii_marks(grapheme: &str) -> Option<&'static str> {
         "◆" => "O",
         "◇" => "P",
         "≡" => "A",
-        "◈" => "V",
+        "◈" => "R",
         "✓" => "+",
         "⚠" => "!",
         "⚙" | "✎" => "#",

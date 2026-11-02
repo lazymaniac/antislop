@@ -3,7 +3,7 @@ use super::*;
 mod repair;
 
 impl Core {
-    /// Resolve in the allocated worktree, then run the independent verifier
+    /// Resolve in the allocated worktree, then run the independent reviewer
     /// again. A semantic choice is the resolver's explicit user question.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::lean) fn repair_integration(

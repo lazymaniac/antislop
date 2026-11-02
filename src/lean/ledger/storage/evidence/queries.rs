@@ -35,7 +35,7 @@ fn matches_ledger_filter(
         .as_ref()
         .is_none_or(|status| *status == entry.status)
         && (!query.missing_coverage
-            || !matches!(entry.status.as_str(), "verified" | "superseded_by_user"))
+            || !matches!(entry.status.as_str(), "reviewed" | "superseded_by_user"))
         && linked.is_none_or(|ids| ids.contains(&entry.spec.id))
 }
 
@@ -61,7 +61,7 @@ pub(super) fn extraction_gap(store: &Store, conversation: &str, run: &str) -> Re
         return Ok(Vec::new());
     }
     Ok(vec![
-        "source coverage has not been independently verified for this revision".into(),
+        "source coverage has not been independently reviewed for this revision".into(),
     ])
 }
 
@@ -71,7 +71,7 @@ pub(super) fn entry_gaps(entries: &[LedgerEntry]) -> Vec<String> {
         gaps.push("ledger is empty".into());
     }
     for entry in entries.iter().filter(|e| {
-        e.spec.disposition == Disposition::Active && e.spec.mandatory && e.status != "verified"
+        e.spec.disposition == Disposition::Active && e.spec.mandatory && e.status != "reviewed"
     }) {
         gaps.push(format!(
             "{}: {} (current integrated evidence required)",
