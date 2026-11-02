@@ -1,4 +1,3 @@
-use super::super::super::core_path_helpers::task_path_component;
 use super::super::super::*;
 use super::super::verifier_setup;
 
@@ -8,7 +7,6 @@ pub(super) struct ReviewRound<'a> {
     pub task: &'a mut Task,
     pub cancel: &'a AtomicBool,
     pub spec: &'a TaskContract,
-    pub project: &'a Path,
     pub workdir: &'a Path,
     pub add_dirs: &'a [PathBuf],
     pub upstream: &'a str,
@@ -65,17 +63,6 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
     input
         .core
         .set_status(input.conversation, input.task, status::VERIFYING)?;
-    let reviewdir = review_worktree(
-        input.core,
-        input.task,
-        input.project,
-        input.workdir,
-        input.round,
-    )?;
-    request_review_turn(input, &reviewdir)
-}
-
-fn request_review_turn(input: &ReviewRound<'_>, reviewdir: &Path) -> Result<Option<String>> {
     let setup = verifier_setup::build(
         input.conversation,
         input.task,
@@ -84,7 +71,7 @@ fn request_review_turn(input: &ReviewRound<'_>, reviewdir: &Path) -> Result<Opti
             .core
             .config_snapshot()
             .resolve(input.spec.kind, RoleKind::Verifier),
-        reviewdir,
+        input.workdir,
         input.add_dirs.to_vec(),
     );
     let checks = input
@@ -94,7 +81,7 @@ fn request_review_turn(input: &ReviewRound<'_>, reviewdir: &Path) -> Result<Opti
         core: input.core,
         cancel: input.cancel,
         setup,
-        reviewdir,
+        reviewdir: input.workdir,
         spec: input.spec,
         report: input.report,
         changes: input.changes,
@@ -118,31 +105,6 @@ fn run_review_turn(input: ReviewTurn<'_>) -> Result<Option<String>> {
         );
         format!("{}{prompt}", input.user_checks)
     })
-}
-
-fn review_worktree(
-    core: &Core,
-    task: &Task,
-    project: &Path,
-    workdir: &Path,
-    round: u32,
-) -> Result<PathBuf> {
-    let review_commit = task.result.clone().or_else(|| git::head(workdir).ok());
-    let Some(result) = review_commit else {
-        return Ok(workdir.to_path_buf());
-    };
-    let path = core.state.join("worktrees").join(format!(
-        "{}-review-g{}-{round}",
-        task_path_component(&task.id)?,
-        task.input_generation
-    ));
-    let branch = format!(
-        "antislop/{}-review-g{}-{round}",
-        task.id, task.input_generation
-    );
-    core.release_task_views(&task.id, Some(&path));
-    git::add_worktree(project, &path, &branch, &result)?;
-    Ok(path)
 }
 
 fn parse_verdict(

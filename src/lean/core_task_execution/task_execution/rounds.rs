@@ -148,7 +148,6 @@ impl Execution<'_> {
             task: self.task,
             cancel: self.cancel,
             spec: &self.spec,
-            project: &self.project,
             workdir: &self.workdir,
             add_dirs: &self.add_dirs,
             upstream: &self.upstream,

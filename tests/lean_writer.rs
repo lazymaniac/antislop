@@ -372,6 +372,17 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     let project = project(dir.path());
     let base = git(&project, &["rev-parse", "HEAD"]);
     let (codex, agy) = fake_clis(dir.path());
+    let script = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace(
+            "session = \"worker\"",
+            "session = \"worker\"\n    os.makedirs(\".antislop\", exist_ok=True)\n    with open(\".antislop/worker-cache\", \"w\") as cache:\n        cache.write(\"prepared environment\")",
+        )
+        .replace(
+            "session = \"verifier\"",
+            "session = \"verifier\"\n    assert open(\".antislop/worker-cache\").read() == \"prepared environment\"",
+        );
+    std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
 
@@ -386,7 +397,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "from worker\n"
     );
-    assert!(git(&project, &["worktree", "list"]).lines().count() >= 3);
+    assert!(!git(&project, &["worktree", "list"]).contains("-review-g"));
 
     let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
@@ -412,9 +423,9 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     assert_eq!(agents.len(), 2);
     let worktree = agents[0]["cwd"].as_str().unwrap();
     assert!(worktree.contains("/.antislop/worktrees/"), "{worktree}");
-    assert_ne!(
+    assert_eq!(
         agents[1]["cwd"], agents[0]["cwd"],
-        "verifier reads its immutable checkout"
+        "verifier uses the worker worktree"
     );
     let worker_args = agents[0]["args"].to_string();
     assert!(worker_args.contains("accept-edits") && worker_args.contains("--sandbox"));
