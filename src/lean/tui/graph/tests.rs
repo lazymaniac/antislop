@@ -609,7 +609,7 @@ fn health_marks_problems_and_cards_have_no_frame() {
 }
 
 #[test]
-fn card_progress_bounces_on_the_stripe_and_stops_when_queued_or_done() {
+fn card_progress_waits_at_top_bounces_while_working_and_finishes_at_bottom() {
     let mut row = task("t1", &[]);
     row.status = "working".into();
     row.round = 2;
@@ -656,17 +656,27 @@ fn card_progress_bounces_on_the_stripe_and_stops_when_queued_or_done() {
                     assert!(!canvas.lines()[1].contains(spinner));
                 }
             }
-            view.tasks[0].status = "queued".into();
-            assert_eq!(frame(&view, 0).lines(), frame(&view, 7).lines());
-            let mut queued = frame(&view, 0);
-            assert_eq!(
-                Canvas::glyph(queued.cell(node.x, node.y + last / 2).unwrap()),
-                if theme.ascii { "#" } else { "█" }
-            );
-            assert_eq!(marker_rows(&mut queued), vec![last / 2]);
-            for status in ["approved", "skipped", "cancelled", "revised"] {
+            for status in ["proposed", "queued", "waiting"] {
                 view.tasks[0].status = status.into();
-                assert!(marker_rows(&mut frame(&view, 0)).is_empty(), "{status}");
+                assert_eq!(frame(&view, 0).lines(), frame(&view, 7).lines());
+                let mut queued = frame(&view, 0);
+                assert_eq!(
+                    Canvas::glyph(queued.cell(node.x, node.y).unwrap()),
+                    if theme.ascii { "#" } else { "█" }
+                );
+                assert_eq!(marker_rows(&mut queued), vec![0], "{status}");
+            }
+            for status in [
+                "verifying",
+                "approved",
+                "failed",
+                "skipped",
+                "cancelled",
+                "revised",
+            ] {
+                view.tasks[0].status = status.into();
+                assert_eq!(frame(&view, 0).lines(), frame(&view, 7).lines());
+                assert_eq!(marker_rows(&mut frame(&view, 0)), vec![last], "{status}");
             }
             view.tasks[0].status = "working".into();
         }
@@ -674,7 +684,7 @@ fn card_progress_bounces_on_the_stripe_and_stops_when_queued_or_done() {
 }
 
 #[test]
-fn finished_session_agent_has_no_progress_marker() {
+fn session_agent_marker_moves_from_top_to_bottom_after_its_turn() {
     let mut view = View::default();
     view.agents.insert(
         ORCHESTRATOR.into(),
@@ -697,11 +707,24 @@ fn finished_session_agent_has_no_progress_marker() {
     agent.running = false;
     agent.turns = 3;
     agent.activity = "✓ turn finished".into();
+    for activity in ["✓ turn finished", ""] {
+        view.agents.get_mut(ORCHESTRATOR).unwrap().activity = activity.into();
+        let mut canvas = frame(&view);
+        for row in 0..node.height {
+            let style = canvas.cell(node.x, node.y + row).unwrap().style;
+            assert_eq!(
+                style == theme.card().patch(theme.progress_marker()),
+                row == node.height - 1
+            );
+        }
+    }
+    view.agents.insert(ORCHESTRATOR.into(), Default::default());
     let mut canvas = frame(&view);
     for row in 0..node.height {
-        assert_ne!(
-            canvas.cell(node.x, node.y + row).unwrap().style.fg,
-            Some(Color::White)
+        let style = canvas.cell(node.x, node.y + row).unwrap().style;
+        assert_eq!(
+            style == theme.card().patch(theme.progress_marker()),
+            row == 0
         );
     }
 }
@@ -1059,5 +1082,31 @@ fn options_card_finishes_with_one_result_line_and_no_cli() {
             !rows.join(" ").contains("codex") && !rows.join(" ").contains("V:"),
             "{rows:?}"
         );
+    }
+}
+
+#[test]
+fn verifier_marker_waits_for_worker_before_animating_and_finishing() {
+    let mut row = task("t1", &[]);
+    row.status = "working".into();
+    let mut view = view(vec![row]);
+    let graph = Graph::new(&view);
+    let node = graph.node("verifier:t1").unwrap();
+    let theme = Theme::new(true, false);
+    for (status, expected) in [
+        ("working", 0),
+        ("verifying", 1),
+        ("approved", node.height - 1),
+    ] {
+        view.tasks[0].status = status.into();
+        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+        draw_node(&view, &mut canvas, node, false, &theme, 1);
+        let markers: Vec<_> = (0..node.height)
+            .filter(|row| {
+                canvas.cell(node.x, node.y + row).unwrap().style
+                    == theme.card().patch(theme.progress_marker())
+            })
+            .collect();
+        assert_eq!(markers, [expected], "{status}");
     }
 }

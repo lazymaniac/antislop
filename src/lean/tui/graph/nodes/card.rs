@@ -94,26 +94,33 @@ impl Card<'_> {
     }
 
     fn paint_progress(&mut self, tick: u64) {
-        // Idle also covers agents whose turn or task has already ended.
-        if self.health == Health::Idle {
-            let finished = match self.task {
+        // Idle covers both agents awaiting their first turn and finished
+        // session agents or tasks that were skipped/cancelled.
+        let finished = match self.health {
+            Health::Done | Health::Problem => true,
+            Health::Idle => match self.task {
                 Some(task) => matches!(task.status.as_str(), "skipped" | "cancelled" | "revised"),
                 None => {
-                    current_round(self.view, &card_members(self.view, &self.node.key)).is_some()
+                    let members = card_members(self.view, &self.node.key);
+                    current_round(self.view, &members).is_some()
+                        || members.iter().any(|key| {
+                            self.view
+                                .agents
+                                .get(*key)
+                                .is_some_and(|agent| agent.turns > 0)
+                        })
                 }
-            };
-            if finished {
-                return;
-            }
-        }
+            },
+            _ => false,
+        };
         let last = self.node.height.saturating_sub(1);
         let row = match self.health {
             Health::Working if last > 0 => {
                 let phase = tick % (u64::from(last) * 2);
                 phase.min(u64::from(last) * 2 - phase) as u16
             }
-            Health::Working | Health::Idle => last / 2,
-            _ => return,
+            _ if finished => last,
+            _ => 0,
         };
         let marker = if self.theme.ascii { '#' } else { '█' };
         self.canvas.put(
