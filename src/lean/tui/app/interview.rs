@@ -17,7 +17,10 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn interview_visible(&self) -> bool {
-        (self.view.workflow_phase.as_deref() == Some("interview") || self.view.user_decision)
+        self.plan_view.is_none()
+            && self.diff.is_none()
+            && self.details.is_none()
+            && (self.view.workflow_phase.as_deref() == Some("interview") || self.view.user_decision)
             && self
                 .view
                 .interview_question

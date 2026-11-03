@@ -44,16 +44,16 @@ fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
             json!({
                 "task": task.spec["id"],
                 "status": task.status,
-                "reason": task.feedback.as_ref().and_then(|feedback| feedback.get("reason")),
+                "reason": task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
                 "waiting_request": task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
-                "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")),
+                "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")).map(|value| tasks::bound(&value.to_string(), 4000)),
             })
         })
         .collect();
     serde_json::to_string(&blocked).unwrap_or_default()
 }
 
-const COORDINATION_GUIDANCE: &str = "Answer pending questions with answer_agent. Do not instruct a worker to park on an answered question: answered questions resume tasks. For a user decision on an open worker question, hand it over with defer_to_user. For a separate decision or an answered worker question, call ask_user; never reopen answered questions; do not represent a proposed revision as applied. Repair contracts or dependencies only with revise_plan. Use current task_states, not earlier ids or statuses from history. Run a task whose current status is failed for a reason outside its contract (a turn limit, a crashed CLI) again with retry_task. coordinating/stalled tasks require revise_plan; retry_task cannot resume them. Do not approve unperformed work or recreate unavailable historical evidence. When a task stalls because its reviewer keeps asking for more than its dependents need, narrow its goal to what they need, or ask the user; never answer a stall by adding deliverables to the contract, which only makes the next round fail on more.";
+const COORDINATION_GUIDANCE: &str = "Answer pending questions with answer_agent. Do not instruct a worker to park on an answered question: answered questions resume tasks. For a user decision on an open worker question, hand it over with defer_to_user. For a separate decision or an answered worker question, call ask_user; never reopen answered questions; do not represent a proposed revision as applied. Repair contracts or dependencies only with revise_plan. Use current task_states, not earlier ids or statuses from history. Run a task whose current status is failed for a reason outside its contract (a turn limit, a crashed CLI) again with retry_task. coordinating/stalled tasks require revise_plan; retry_task cannot resume them. Do not approve unperformed work or recreate unavailable historical evidence. For each missing input identify a producer within the current authority or a concrete user decision. A missing local audit calls for an independent audit task, not an indefinite wait for someone else to provide it. Distinguish actual user requirements from procedural restrictions added by agents. Never claim to await a user decision without an open ask_user or deferred question. When a task stalls because its reviewer keeps asking for more than its dependents need, narrow its goal to what they need, or ask the user; never answer a stall by adding deliverables to the contract, which only makes the next round fail on more.";
 
 pub(super) fn orchestrator_prompt(
     project: &Path,
@@ -101,7 +101,11 @@ pub(super) fn format_messages(messages: &[Message]) -> String {
 
 fn format_message(message: &Message) -> String {
     match message.author.as_str() {
-        RUNTIME => format!("[runtime]\n{}", message.text),
+        RUNTIME => format!(
+            "[runtime message {}]\n{}",
+            message.seq,
+            tasks::bound(&message.text, 12000)
+        ),
         PLAN_REVIEWER => format!("[plan reviewer]\n{}", message.text),
         PLANNER_BLOCKER => format!("[planner blocker]\n{}", message.text),
         REPLAN => format!("[replan request]\n{}", message.text),
@@ -156,6 +160,25 @@ mod stopped_report_tests {
         );
         assert!(!report.contains("queued"), "{report}");
         assert!(!report.contains("skipped"), "{report}");
+    }
+
+    #[test]
+    fn oversized_runtime_diagnostics_do_not_overflow_orchestration_prompts() {
+        let raw = "binary patch failed\n".repeat(130_000);
+        let mut failed = task("failed", status::FAILED);
+        failed.feedback = Some(json!({"reason":raw}));
+        let report = blocked_report(&[failed], true);
+        assert!(report.len() < 5000, "{}", report.len());
+        assert!(report.contains("binary patch failed"));
+        let message: Message = serde_json::from_value(json!({
+            "seq":198,"conversation_id":"conversation","author":RUNTIME,"text":raw,"created_ms":0
+        }))
+        .unwrap();
+        assert!(format_message(&message).len() < 13000);
+        assert_eq!(
+            message.text, raw,
+            "full diagnostic remains available in history"
+        );
     }
 
     #[test]

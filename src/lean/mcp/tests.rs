@@ -214,9 +214,16 @@ mod role_tests {
                 "request_replan",
             ]
         );
-        assert_eq!(allowed_tools("planner"), vec!["submit_plan", "finish_turn"]);
+        assert_eq!(
+            allowed_tools("planner"),
+            vec!["submit_plan", "finish_turn", "read_evidence"]
+        );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
-            assert_eq!(allowed_tools(reviewer), vec!["review"], "{reviewer}");
+            assert_eq!(
+                allowed_tools(reviewer),
+                vec!["review", "read_evidence"],
+                "{reviewer}"
+            );
             let review = &tool_list(reviewer)[0]["inputSchema"];
             assert_eq!(review["required"], json!(["turn", "report", "findings"]));
             assert!(review["properties"]["checks"].is_null());

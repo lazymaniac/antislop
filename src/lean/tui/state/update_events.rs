@@ -125,6 +125,11 @@ impl App {
     }
 
     fn open_pending_plan(&mut self, saw_manual_plan: bool) {
+        if let (Some(plan_view), Some(plan)) = (&mut self.plan_view, &self.view.plan)
+            && plan_view.plan_id != *plan
+        {
+            plan_view.plan_id = plan.clone();
+        }
         if saw_manual_plan
             && self.view.plan_proposed()
             && !self.view.tasks.is_empty()

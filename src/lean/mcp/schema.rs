@@ -174,7 +174,7 @@ pub(super) fn revision() -> Value {
         "reason":{"type":"string","description":"What the revision changes and why"},
         "tasks":{"type":"array","items":planned_task(),"description":"Changed or added tasks, each complete"},
         "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"},
-        "replacements":{"type":"object","additionalProperties":{"type":"string"},"description":"New task id -> unfinished retired task id. The successor retains its report/checkpoint and starts with reassessment; completed tasks cannot be replaced."},
+        "replacements":{"type":"object","additionalProperties":{"type":"string"},"description":"New task id -> retired local task name, or source_task UUID from unfinished_checkpoints for a code writer recovering an earlier plan. Historical sources must belong to this conversation and remain unapproved. The successor retains the report/checkpoint and starts with reassessment; approval never transfers. No historical task needs to be listed in retire."},
         "redo":{"type":"array","items":{"type":"string"},"description":"Ids of tasks whose existing work needs correction. Checkpoints remain preserved; reassess before continuing, never recreate integrated changes from scratch"}
     })
 }

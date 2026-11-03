@@ -202,6 +202,17 @@ impl Store {
         record_extraction_acceptance(&tx, conversation, run_id, revision, producer)?;
         tx.commit().map_err(Into::into)
     }
+    /// An accepted extraction became stale after a source was registered.
+    /// Initial extraction is still owned by the normal planning workflow.
+    pub fn extraction_needs_refresh(&self, conversation: &str, run_id: &str) -> Result<bool> {
+        let revision = self.run(conversation, run_id)?.spec_revision;
+        let accepted: bool = self.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger_reviews WHERE run_id=?1 AND spec_revision=?2 AND kind='extraction' AND approved=1)",
+            params![run_id,revision], |r| r.get(0),
+        )?;
+        Ok(accepted && !self.extraction_current(conversation, run_id)?)
+    }
+
     pub fn extraction_current(&self, conversation: &str, run_id: &str) -> Result<bool> {
         let db = self.db();
         let r = run(&db, conversation, run_id)?;

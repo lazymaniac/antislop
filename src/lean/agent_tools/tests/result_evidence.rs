@@ -276,7 +276,7 @@ fn evidence_is_immutable_scoped_and_not_a_filesystem_or_history_backdoor() {
         .is_err()
     );
     let (other, reader) = start(&core, &conversation, &tasks[2], false);
-    assert!(
+    assert_eq!(
         core.agent_tool(
             &conversation,
             &other,
@@ -284,9 +284,10 @@ fn evidence_is_immutable_scoped_and_not_a_filesystem_or_history_backdoor() {
             "read_evidence",
             &json!({"evidence":id})
         )
-        .is_err()
+        .unwrap()["text"],
+        args["text"]
     );
-    assert!(
+    assert_eq!(
         core.agent_tool(
             &conversation,
             &other,
@@ -294,7 +295,8 @@ fn evidence_is_immutable_scoped_and_not_a_filesystem_or_history_backdoor() {
             "complete",
             &json!({"summary":"Done","report":"Other","evidence":[id]})
         )
-        .is_err()
+        .unwrap()["recorded"],
+        true
     );
     assert!(
         core.agent_tool(
@@ -560,4 +562,82 @@ fn reference_diagnostics_distinguish_typos_wrong_dependency_and_reference_kind()
         .unwrap_err()
         .to_string();
     assert!(error.contains("this is a report reference"), "{error}");
+}
+
+#[test]
+fn evidence_context_survives_an_amendment_that_omits_its_execution_references() {
+    let (_directory, core, conversation, mut tasks) = fixture();
+    tasks[0].round = 1;
+    core.store.update_task(&tasks[0]).unwrap();
+    let (role, original) = start(&core, &conversation, &tasks[0], false);
+    let recorded = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &original.id,
+            "record_evidence",
+            &json!({"label":"post-fix-success","text":"immutable raw output: exit=0"}),
+        )
+        .unwrap();
+    let id = recorded["evidence"]["id"].as_str().unwrap();
+    core.agent_tool(
+        &conversation,
+        &role,
+        &original.id,
+        "complete",
+        &json!({"summary":"Executed","report":"Success"}),
+    )
+    .unwrap();
+    core.store
+        .finish_turn(&original.id, store::TurnStatus::Done, None)
+        .unwrap();
+    tasks[0].round = 2;
+    core.store.update_task(&tasks[0]).unwrap();
+    let (role, amendment) = start(&core, &conversation, &tasks[0], false);
+    // Reproduce an amended report that accidentally loses its earlier links.
+    core.agent_tool(&conversation, &role, &amendment.id, "complete", &json!({"summary":"Fixture corrected","report":"Only the test fixture changed; no new trial."})).unwrap();
+    core.store
+        .finish_turn(&amendment.id, store::TurnStatus::Done, None)
+        .unwrap();
+    assert!(
+        core.store
+            .result_evidence(&amendment.id)
+            .unwrap()
+            .is_empty()
+    );
+    let manifest = core.store.task_evidence_context(&tasks[0].id, 0).unwrap();
+    assert_eq!(manifest.len(), 1);
+    assert_eq!(manifest[0].id, id);
+    assert!(
+        !serde_json::to_string(&manifest)
+            .unwrap()
+            .contains("immutable raw output")
+    );
+    assert!(
+        core.store
+            .task_evidence_context(&tasks[1].id, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        core.store
+            .task_evidence_context(&tasks[0].id, 1)
+            .unwrap()
+            .is_empty()
+    );
+    // Keep prompt cost bounded even when a task has many command records.
+    tasks[0].round = 3;
+    core.store.update_task(&tasks[0]).unwrap();
+    let (_, many) = start(&core, &conversation, &tasks[0], false);
+    for i in 0..64 {
+        core.store
+            .record_evidence(&many.id, &format!("check-{i}"), "raw")
+            .unwrap();
+    }
+    core.store
+        .finish_turn(&many.id, store::TurnStatus::Done, None)
+        .unwrap();
+    let manifest = core.store.task_evidence_context(&tasks[0].id, 0).unwrap();
+    assert_eq!(manifest.len(), 64);
+    assert!(manifest.iter().all(|e| e.producer_turn == many.id));
 }

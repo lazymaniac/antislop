@@ -36,7 +36,7 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      the same files or contract are not unordered); no ordering or intermediate \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
-     checkable; tasks and reviewer criteria do not gate work on commit or tree hashes, \
+     checkable. Every prerequisite must either have an executable producer task and dependency edge, already available evidence, or a concrete user decision outside the team's authority. Reject a task that merely waits for an absent review/input while forbidding anyone to produce it. Distinguish the user's acceptance criteria from methods introduced by earlier agents: do not promote a suggested method, similarity flag, unknown provenance or generic caution into a new mandatory external attestation. Audit flags need a defined assessment and disposition, not an assumption that each proves failure. Preserve actual requirements and thresholds; if a real scope change is necessary, ask for the concrete decision. A task declaring an audit must perform it using authorized sources; independent review may use a separate agent and does not inherently require unavailable external material. Check that preserved reports also preserve any unintegrated code needed by their successors, using runtime checkpoint transfers when necessary. Tasks and reviewer criteria do not gate work on commit or tree hashes, \
      snapshot adoption, a clean tree or unchanged input paths: agents use their allocated \
      checkout as it is; task.summary, where given, is a concise single-sentence \
      semantic summary (about 60–80 characters) in the user's language, rather than the \

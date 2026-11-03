@@ -85,7 +85,7 @@ impl TurnResult {
             Self::Blocked {
                 report,
                 resume_condition,
-            } if !reviewer && spec.kind == crate::config::WorkKind::Options => {
+            } if !reviewer => {
                 require(!report.trim().is_empty(), "report: required")?;
                 require(
                     !resume_condition.trim().is_empty(),
@@ -228,7 +228,7 @@ fn invalid_task_result(reviewer: bool) -> Result<()> {
     let message = if reviewer {
         "a reviewer ends its turn with review or wait_for_answer"
     } else {
-        "a worker ends its turn with complete (select or report_blocker for an options task) or wait_for_answer"
+        "a worker ends its turn with complete (select for an options task), report_blocker or wait_for_answer"
     };
     Err(crate::Error::Invalid(message.into()))
 }

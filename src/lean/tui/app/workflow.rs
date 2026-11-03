@@ -34,7 +34,12 @@ impl App {
     }
 
     fn open_plan_comment(&mut self, line: Option<usize>) {
-        let Some(plan) = self.view.plan.clone() else {
+        let Some(plan) = self
+            .view
+            .plan
+            .clone()
+            .or_else(|| self.plan_view.as_ref().map(|p| p.plan_id.clone()))
+        else {
             return;
         };
         let target = line.map_or_else(
@@ -50,7 +55,12 @@ impl App {
     }
 
     fn submit_plan_review(&self) {
-        if let Some(plan) = self.view.plan.clone() {
+        if let Some(plan) = self
+            .view
+            .plan
+            .clone()
+            .or_else(|| self.plan_view.as_ref().map(|p| p.plan_id.clone()))
+        {
             self.request(
                 Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewComments {
                     conversation: self.conversation.clone(),

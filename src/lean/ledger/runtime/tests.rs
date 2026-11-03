@@ -75,7 +75,7 @@ if True:
     assert 'ORCHESTRATOR_ROUTE_ONLY' not in prompt
     n=int(open('attempts').read()) if os.path.exists('attempts') else 0
     open('attempts','w').write(str(n+1))
-    if n >= 1:
+    if n >= 1 and run['spec_revision'] == 0:
         # submit_ledger refused the first submission within the turn.
         assert 'entry p has unknown parent missing' in prompt, prompt
     source=json.loads(lines[1].removeprefix('Sources: '))[0]['id']
@@ -154,6 +154,53 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 )
                 .unwrap();
             assert_eq!(reviewers, 0, "no separate source-coverage review runs");
+            assert!(
+                !core
+                    .store
+                    .extraction_needs_refresh(&conversation, &run.id)
+                    .unwrap()
+            );
+            let note = core
+                .store
+                .add_message(
+                    &conversation,
+                    "user",
+                    "Operational note; no new product requirement",
+                )
+                .unwrap();
+            // Simulate registration followed by interruption before extraction.
+            core.store
+                .register_message_source(&conversation, &run.id, note.seq)
+                .unwrap();
+            assert!(
+                core.store
+                    .extraction_needs_refresh(&conversation, &run.id)
+                    .unwrap()
+            );
+            core.refresh_requirements_if_needed(&conversation, &AtomicBool::new(false))
+                .unwrap();
+            assert!(
+                core.store
+                    .extraction_current(&conversation, &run.id)
+                    .unwrap()
+            );
+            assert!(
+                !core
+                    .store
+                    .extraction_needs_refresh(&conversation, &run.id)
+                    .unwrap()
+            );
+            assert_eq!(
+                core.store
+                    .run(&conversation, &run.id)
+                    .unwrap()
+                    .spec_revision,
+                1
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
+                "3"
+            );
         } else {
             assert!(
                 result

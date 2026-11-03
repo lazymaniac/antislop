@@ -285,7 +285,7 @@ src
    review
     affected_tasks(baseline,specs,redo):BTreeSet<String> > changed_tasks,as_str
     ReviewContext(C{conversation,revision,baseline,specs,cancel,project})
-    - ApprovedRevisionWork,RevisionBarrier,contract_changed,reworded_only,previous_specs
+    - ApprovedRevisionWork,RevisionBarrier,contract_changed,reworded_only,checkpoint_review_context,previous_specs
     - RevisionBarrier: drop
   core_plan_revision.rs
    - PreparedRevision,RevisionRegistration,run_revision_worker
@@ -336,7 +336,7 @@ src
      is_recheck(core,conversation,task,worker,reviewer):Result<bool> > pending_mail
      run(input):Result<Option<String>> > completed_task_output,run_worker_round
      task_directories(core,task,spec,project,worktree):Result<(PathBuf,Vec<PathBuf>)> > observation_worktree
-     writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~45 > prepare_artifact_outputs,writer_base,worktree_path
+     writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~49 > prepare_artifact_outputs,writer_base,combine_saved_checkpoint,worktree_path
      WorkerRound(C{core,conversation,task,cancel,spec,workdir,project_text,add_dirs,upstream,worker,round,state,recheck})
      - run_worker_turn,worker_{setup,dirs,access},continuation
    task_execution.rs
@@ -609,12 +609,13 @@ src
     - recover
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
-    commit_artifacts(worktree,outputs,message,require_all):Result<String> > artifact_files,commit_all
+    commit_artifacts(worktree,outputs,message,require_all):Result<String> > artifact_files,stage_source
    changes
     changed_files(dir,base,result):Result<Vec<String>> > changed_paths
     diff_stat(dir,base,result):Result<String>
     matching_paths(dir,left,right,paths):Result<Vec<String>> > changed_paths
-    patch(dir,base,rev):Result<String>
+    patch(dir,base,rev):Result<String> > make_patch
+    source_patch(dir,base,rev):Result<String> > make_patch
     squash(worktree,base,message):Result<String> > commit_subject
     - parse_changed_paths
    integration/files
@@ -636,6 +637,7 @@ src
     integrated_fingerprint(project):Result<String> > snapshot
     snapshot(dir,message):Result<String> > snapshot_with_artifacts
     snapshot_with_artifacts(dir,outputs,message):Result<String> > artifact_files,commit_subject,{absolute,snapshot}_index,write_snapshot
+    stage_source(dir,index):Result<()> ~78 > command
     uncommitted(dir):Result<Vec<String>> > git
     - staged_paths_clean,commit_only_paths
    untracked
@@ -645,8 +647,10 @@ src
    worktree
     add_worktree(project,path,branch,base):Result<()> > require_worktree_branch,git
     branches(project,prefix):Result<Vec<String>>
-    combine(project,scratch,onto,changes):Result<String> > {remove,add}_worktree,apply_changes
-    commit_all(worktree,message):Result<String> > commit_subject,git,head
+    combine(project,scratch,onto,changes):Result<String> > combine_or_conflict
+    combine_or_conflict(project,scratch,onto,changes):Result<CombineResult> > {remove,add}_worktree,apply_changes
+    commit_all(worktree,message):Result<String> > stage_source,commit_staged
+    commit_staged(worktree,message):Result<String> > commit_subject,git,head
     common_base(dir,left,right):Result<String>
     delete_branch(project,branch):Result<()>
     head(dir):Result<String>
@@ -663,6 +667,7 @@ src
     tree_identity(dir,commit):Result<String>
     worktree_branch(path):Result<String>
     worktree_project(path):Result<PathBuf>
+    CombineResult(E{Applied,Conflicted})
     - apply_{change,patch}
   git.rs
    commit_subject(message):String > conventional_subject
@@ -914,7 +919,7 @@ src
     read_dependency_result(conversation,role,turn,args):Result<Value> ~129 > required_text,dependency_{reader_scope,reports},report_reference_error,referenced_worker_report,result_evidence,{dependency_report,page}_text
     dependency_reader_scope(conversation,role,turn):Result<DependencyScope> ~77 > task_{role,by_id},require,plan_conversation,dependency_inputs,flatten,as_str,DependencyScope,audit_dependency_scope,dependency_plan,plan_revision
     evidence_tool(conversation,role,turn,tool,args):Result<Value> > task_role,required_text,authorized_evidence,{evidence,page}_text
-    completion_evidence(conversation,role,turn,args,result):Result<Vec<store::EvidenceReference>> ~46 > require,{result,authorized}_evidence
+    completion_evidence(conversation,turn,args,result):Result<Vec<store::EvidenceReference>> ~46 > require,{result,authorized}_evidence
     require_open_agent_turn(conversation,role,turn):Result<()> > task_role,require_current_task_generation
     require_current_task_generation(turn,task):Result<()> > db,require
     question_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {ask_agent,wait_for_answer}_tool
@@ -923,7 +928,7 @@ src
     finish_tool(conversation,role,turn,tool,args):Result<Value> > require_{plan_correction,refused_plan},record_result
     interview_tool(conversation,role,turn,tool,args):Result<Value> > require,interviewing,workflow,record_result
     report_reference_error(conversation,requested,history):Error ~44 > flatten,db,reference_error
-    evidence_reference_error(conversation,role,turn,requested,reason):Error > result_evidence,dependency_{reader_scope,reports},reference_error
+    evidence_reference_error(conversation,requested,reason):Error > db,reference_error
     record_result(turn,result):Result<Value> > save_turn_result
     record_task_result(conversation,role,turn,result):Result<Value> > record_task_result_with_evidence
     record_task_result_with_evidence(conversation,role,turn,result,evidence):Result<Value> > validate_agent_result,save_turn_result_with_evidence,invalidate_open_questions
@@ -992,7 +997,7 @@ src
     publish_plan(&Arc<Self>,conversation,text,addressed,plan,specs,review):Result<()> > resolve_plan_comments,autonomous,plan_{waiting_reason,scope_hash,event_payload},accept_plan
     propose(&Arc<Self>,conversation,project,text,proposal,addressed,cancel):Result<()> > prepare_{proposal,plan},complete_proposal,ProposalPublication
     plan_report(&Arc<Self>,conversation,plan_id,cancel):Result<String> > task_results,report_{compliance_gaps,intro},append_plan_audit,PlanAuditInput,append_compliance_gaps
-    resume_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_{belongs_to_conversation,run},start_plan
+    resume_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> ~41 > plan_{belongs_to_conversation,run},extraction_needs_refresh,add_message,wake,start_plan
     accept_plan_scoped(&Arc<Self>,conversation,plan_id,scope_hash):Result<Vec<Task>> ×0 > plan_scope_hash,accept_plan
     resume_plan_scoped(&Arc<Self>,conversation,plan_id,scope_hash):Result<Vec<Task>> ×0 > plan_scope_hash,resume_plan
     recover_task(&Arc<Self>,req):Result<TaskRecoveryResponse> > recover_task_as
@@ -1049,6 +1054,7 @@ src
     apply_checked_ledger_change(proposal_id,diff_hash,change):Result<ChangeResult> > check_ledger_proposal,{applied,preview,apply}_ledger_change
     announce_affected_ledger_tasks(change,result):Result<()> > drop,queue_worktree_cleanup,task_by_id,announce_task
     requirements_turn(&Arc<Self>,scope,reviewer,prompt,cancel):Result<(String,String)> > require,plan_{conversation,run},publish_requirements_progress,requirements_{role,turn_setup,turn_metadata},ledger_context,run_requirements_agent,{last,bind_requirements}_turn
+    refresh_requirements_if_needed(&Arc<Self>,conversation,cancel):Result<()> > planning_run,extraction_needs_refresh,ensure_requirements,accepted_plan,plan_run,as_str,maybe_continue_plan
     ensure_requirements(&Arc<Self>,conversation,cancel):Result<Run> > {prepare,extract,accept}_requirements
     register_missing_sources(conversation,run,user):Result<bool> > ledger_sources,execution_decision_ids,{missing,register_message}_source
     validate_extraction(conversation,run,existing,extraction):Result<LedgerChange> > require,preview_ledger_change
@@ -1107,7 +1113,7 @@ src
     - Session: build,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,describe_result_error,learn_identity,
                opencode_session
    stops
-    screen_stop(provider,screen):Option<StopCause> ~47
+    screen_stop(provider,screen):Option<StopCause> ~51
     StopCause(E{ProviderLimit,LoginRequired,UnexpectedDialog,Timeout,ProcessExit,Cancelled})
      marker():&'static str
      diagnostic(detail):crate::Error
@@ -1126,7 +1132,7 @@ src
     - RevisionApply
   plan_revision.rs
    PlanRevision(C{plan,base_revision,reason,tasks,retire,redo,replacements})
-    merge(baseline):Result<Vec<TaskContract>> > require_revision_reason,baseline_specs,validate_retire_and_redo,remove_retired,merge_updates,order_graph
+    merge(baseline):Result<Vec<TaskContract>> ~45 > require_revision_reason,baseline_specs,validate_retire_and_redo,remove_retired,merge_updates,order_graph
     - validate_update
    RevisionLease(C{requirement_revision,request})
    - replace_or_append,same_contract
@@ -1295,6 +1301,7 @@ src
     assert_task_inputs(task):Result<()> > require,task_generation
     record_ledger_review(conversation,run_id,revision,kind,producer,reviewer,fingerprint,approved,note):Result<()> > db,LedgerReview,persist_review
     accept_extraction(conversation,run_id,revision,producer):Result<()> > db,validate_extraction_revision,record_extraction_acceptance
+    extraction_needs_refresh(conversation,run_id):Result<bool> > extraction_current
     extraction_current(conversation,run_id):Result<bool> > run
     create_run(conversation,goal):Result<Run> > conversation,require,run_start_message,event
     run(conversation,id):Result<Run> > db
@@ -1381,8 +1388,8 @@ src
     record_evidence(turn,label,text):Result<EvidenceReference> ~50 > db,EvidenceReference
     evidence(conversation,id):Result<EvidenceReference> > db
     evidence_text(evidence):Result<String>
+    task_evidence_context(task,generation):Result<Vec<EvidenceReference>> > db
     result_evidence(turn):Result<Vec<EvidenceReference>> > db
-    evidence_report_owners(id):Result<Vec<String>> > db
     plan_page_rows(conversation,offset,limit):Result<(usize,Vec<String>,Option<String>)> > db,plan_{count,ids},active_plan
     load_plan_histories(conversation,plan_ids):Result<Vec<PlanHistory>> > plan_history
     turn_final_answer(conversation,turn):Result<Option<String>> ×0 > db,hydrate_event_payload
@@ -2271,7 +2278,7 @@ src
      - report_text
    planview
     actions
-     PlanView: key(key,view):PlanAction > description_lines,prepare_key,{control,regular}_action; mouse_click(col,row,view):PlanAction > action_state,click_{button,document}
+     PlanView: key(key,view):PlanAction > description_lines,prepare_key,{control,regular}_action; mouse_click(col,row,view):PlanAction > action_state,click_button,right,click_document
      - KeyState,{line,whole_plan}_comment
      - PlanView: move_{cursor,button},selected_comments,{delete,toggle}_comment,activate
     document/build
@@ -2471,7 +2478,7 @@ src
      details_dashboard_key(key,plain):bool
      details_tab_key(key):bool
      details_content_key(key,plain):bool > details_{check_comment_key,round_key,control_scroll_key,scroll_key}
-     details_primary_key(key,plain):bool > details_{close_or_search,overview_key},show_help,details_{open_comment,comment_status}
+     details_primary_key(key,plain):bool ~46 > details_close_or_search,run_workflow,details_overview_key,show_help,details_{open_comment,comment_status}
      details_key(key) > details_{edit_key,search_key,screen_key}
      graph_key(key):bool > card_key,graph_{for_key,scroll_key,direction},move_graph_selection,graph_action_key
      toggle_focus()
@@ -2932,6 +2939,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-· 118,538 LOC · input 1,037,505 · output 42,345 tokens · state 80b41ba95e89
+· 119,760 LOC · input 1,050,758 · output 42,523 tokens · state b4cf7b79db11
 ```
 <!-- hologram:end -->

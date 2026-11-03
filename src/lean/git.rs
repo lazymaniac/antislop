@@ -45,7 +45,7 @@ pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
         Err(Error::Invalid(format!(
             "git {}: {}",
             args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            crate::lean::agent::clip_tail(String::from_utf8_lossy(&output.stderr).trim(), 8000)
         )))
     }
 }
@@ -247,12 +247,35 @@ mod tests {
             project.path(),
             &scratch.path().join("base-t3"),
             &onto,
-            &[(base1, change1)],
+            &[(base1.clone(), change1.clone())],
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("does not apply"), "{error}");
         assert!(!scratch.path().join("base-t3").exists(), "scratch removed");
+        let conflict = combine_or_conflict(
+            project.path(),
+            &scratch.path().join("base-t3"),
+            &onto,
+            &[(base1, change1)],
+        )
+        .unwrap();
+        assert!(
+            matches!(conflict, CombineResult::Conflicted(detail) if detail.contains("does not apply"))
+        );
+        assert!(
+            !scratch.path().join("base-t3").exists(),
+            "conflicted scratch removed"
+        );
+        assert!(
+            combine_or_conflict(
+                project.path(),
+                &scratch.path().join("base-t3"),
+                &onto,
+                &[(onto.clone(), "missing-commit".into())]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -494,7 +517,11 @@ mod snapshot_tests {
         std::fs::remove_file(path.join("b.txt")).unwrap();
         std::fs::create_dir(path.join("target")).unwrap();
         std::fs::write(path.join("target/out"), "ignored\n").unwrap();
+        std::fs::create_dir(path.join(".antislop")).unwrap();
+        std::fs::write(path.join(".antislop/build.bin"), b"runtime\0bytes").unwrap();
         ok(path, &["add", "a.txt"]).unwrap();
+        ok(path, &["add", "--force", ".antislop/build.bin"]).unwrap();
+        let index = std::fs::read(path.join(".git/index")).unwrap();
         let status = |path: &Path| {
             String::from_utf8(git(path, &["status", "--porcelain"]).unwrap().stdout).unwrap()
         };
@@ -502,6 +529,7 @@ mod snapshot_tests {
 
         let snapshot = snapshot(path, "s").unwrap();
         assert_eq!(status(path), before, "index and files untouched");
+        assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
         assert_eq!(
             ok(path, &["rev-parse", &format!("{snapshot}^")]).unwrap(),
             head(path).unwrap()
@@ -521,6 +549,63 @@ mod snapshot_tests {
                 .contains("antislop")),
             "no scratch index left behind"
         );
+    }
+
+    #[test]
+    fn source_continuation_replays_binary_code_but_not_legacy_runtime_files() {
+        let dir = repo();
+        let project = dir.path();
+        ok(project, &["config", "core.abbrev", "4"]).unwrap();
+        let base = head(project).unwrap();
+        let views = tempfile::tempdir().unwrap();
+        let writer = views.path().join("writer");
+        add_worktree(project, &writer, "worker", &base).unwrap();
+        std::fs::write(writer.join("image.bin"), b"source\0binary").unwrap();
+        std::fs::create_dir(writer.join(".antislop")).unwrap();
+        std::fs::write(writer.join(".antislop/build.bin"), b"runtime\0binary").unwrap();
+        // Reproduce a checkpoint from a version that captured its own runtime.
+        ok(&writer, &["add", "--all"]).unwrap();
+        ok(
+            &writer,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "legacy",
+            ],
+        )
+        .unwrap();
+        let legacy = head(&writer).unwrap();
+        let source = combine(
+            project,
+            &views.path().join("view"),
+            &base,
+            &[(base.clone(), legacy)],
+        )
+        .unwrap();
+        assert_eq!(
+            changed_files(project, &base, &source).unwrap(),
+            ["image.bin"]
+        );
+        assert_eq!(
+            git(project, &["show", &format!("{source}:image.bin")])
+                .unwrap()
+                .stdout,
+            b"source\0binary"
+        );
+        // New worker checkpoints exclude runtime even without a .gitignore.
+        let clean = views.path().join("clean");
+        add_worktree(project, &clean, "clean", &base).unwrap();
+        std::fs::create_dir(clean.join(".antislop")).unwrap();
+        std::fs::write(clean.join(".antislop/runtime"), "leave on disk").unwrap();
+        std::fs::write(clean.join("new.txt"), "source").unwrap();
+        ok(&clean, &["add", "--force", ".antislop/runtime"]).unwrap();
+        let saved = commit_all(&clean, "checkpoint").unwrap();
+        assert_eq!(changed_files(project, &base, &saved).unwrap(), ["new.txt"]);
+        assert!(clean.join(".antislop/runtime").exists());
     }
 
     #[test]

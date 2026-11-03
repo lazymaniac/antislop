@@ -30,7 +30,7 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          For tasks you author, write `summary` in the user's language: one concise sentence \
          of about 60–80 characters on what the worker will do, not a copy of the goal. \
          Keep the full instructions in `goal`.\n\n\
-         Each task gets a worker that reads the files itself (give the goal and useful file hints, not \
+         Every prerequisite needs a producer task, available evidence, or a concrete decision outside the team's authority. Do not create tasks whose only action is waiting for an absent input with no owner. Keep user acceptance criteria distinct from methods proposed by agents: an audit flag or unknown provenance is not automatically proof of failure or a requirement for an external attestation. Assign independent local assessment where authorized and define how unknowns are handled before measurements, preserving requirements and thresholds. Recover unfinished technical code before dependent audits; preserving a report alone does not preserve its code. Each task gets a worker that reads the files itself (give the goal and useful file hints, not \
          file contents; never limit a task to received or supplied material, and never forbid \
          the commands it reads with: for some CLIs reading a file is a shell command, so \
          forbid builds, tests or checkers by name instead) and a reviewer that checks the goal, the acceptance criteria the task \

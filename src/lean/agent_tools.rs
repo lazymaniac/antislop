@@ -82,7 +82,7 @@ impl Core {
         args: &Value,
     ) -> Result<Value> {
         let mut result = turn_result::task_tool_result(tool, args)?;
-        let evidence = self.completion_evidence(conversation, role, turn, args, &mut result)?;
+        let evidence = self.completion_evidence(conversation, turn, args, &mut result)?;
         self.record_task_result_with_evidence(conversation, role, turn, result, &evidence)
     }
 }

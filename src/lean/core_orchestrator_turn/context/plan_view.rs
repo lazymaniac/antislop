@@ -65,9 +65,18 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
         .first()
         .map(|task| core.store.plan_revision(&task.plan_id))
         .transpose()?;
+    let checkpoints = graph
+        .first()
+        .map(|task| {
+            let conversation = core.store.plan_conversation(&task.plan_id)?;
+            core.store
+                .unfinished_checkpoints(&conversation, &task.plan_id)
+        })
+        .transpose()?
+        .unwrap_or_default();
     let states = graph.iter().map(|task| json!({
         "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round,
-        "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")),
+        "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
         "recovery":match task.status.as_str() {
             status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
             status::COORDINATING => "revise_plan to repair the stalled contract or dependencies",
@@ -75,7 +84,7 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
             _ => "do not retry; preserve approved work and let queued/running tasks proceed",
         }
     })).collect::<Vec<_>>();
-    serde_json::to_string(&json!({"plan":graph.first().map(|task|&task.plan_id),"base_revision":base_revision,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>(),"task_states":states})).map_err(Error::from)
+    serde_json::to_string(&json!({"plan":graph.first().map(|task|&task.plan_id),"base_revision":base_revision,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>(),"task_states":states,"unfinished_checkpoints":checkpoints})).map_err(Error::from)
 }
 
 #[cfg(test)]
@@ -110,10 +119,14 @@ mod tests {
                 &[json!({"id":"obsolete","title":"Draft","goal":"Draft","kind":"analysis"})],
             )
             .unwrap();
+        tasks[0].feedback = Some(json!({"reason":"binary apply failed ".repeat(130_000)}));
+        core.store.update_task(&tasks[0]).unwrap();
         let view = load(&core, &conversation).unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&view.graph_json).unwrap();
+        assert!(snapshot["task_states"][0]["reason"].as_str().unwrap().len() < 2100);
         assert_eq!(snapshot["plan"], tasks[0].plan_id);
         assert_eq!(snapshot["tasks"], json!(specs));
+        assert_eq!(snapshot["unfinished_checkpoints"], json!([]));
         assert_eq!(snapshot["task_states"][0]["status"], status::FAILED);
         assert_eq!(snapshot["task_states"][1]["status"], status::COORDINATING);
         assert!(

@@ -15,7 +15,7 @@ pub struct PlanRevision {
     /// task whose contract changes only in wording keeps its result.
     #[serde(default)]
     pub redo: Vec<String>,
-    /// New task id -> unfinished task id whose work it continues.
+    /// New task id -> retired local task id, or an unfinished historical task UUID.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub replacements: std::collections::BTreeMap<String, String>,
 }
@@ -27,10 +27,16 @@ impl PlanRevision {
         self.validate_retire_and_redo(&specs)?;
         for (new, old) in &self.replacements {
             crate::require(
-                self.retire.contains(old)
+                (self.retire.contains(old)
+                    || (uuid::Uuid::parse_str(old).is_ok()
+                        && !baseline.iter().any(|t| t.spec["id"] == *old)
+                        && self
+                            .tasks
+                            .iter()
+                            .any(|t| &t.id == new && t.writes && t.changes_code())))
                     && self.tasks.iter().any(|t| &t.id == new)
                     && !baseline.iter().any(|t| t.spec["id"] == *new),
-                "replacements: each new task must replace a retired existing task using a fresh id",
+                "replacements: use a fresh task id and a retired local source, or a code writer and a historical checkpoint UUID",
             )?;
             crate::require(
                 !baseline

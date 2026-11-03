@@ -26,6 +26,8 @@ use std::sync::Mutex;
 mod agent_exchange;
 #[path = "store/artifacts.rs"]
 mod artifacts;
+#[path = "store/checkpoints.rs"]
+mod checkpoints;
 #[path = "store/continuations.rs"]
 mod continuations;
 #[path = "store/dependency_results.rs"]

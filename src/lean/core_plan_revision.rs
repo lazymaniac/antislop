@@ -184,6 +184,7 @@ impl Core {
     ) -> Result<PreparedRevision> {
         let baseline = self.store.plan(&revision.plan)?;
         let specs = self.revised_specs(revision, &baseline)?;
+        self.store.revision_checkpoints(conversation, revision)?;
         if let Some(run) = self.store.plan_run(&revision.plan)? {
             super::ledger::validate_runtime_constraints(
                 &specs,

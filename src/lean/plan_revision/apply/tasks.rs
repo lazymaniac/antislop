@@ -110,12 +110,17 @@ fn save_task_row(
                     .as_str()
                     .unwrap_or_default(),
             ) {
-                let old = apply
-                    .baseline
-                    .iter()
-                    .find(|t| t.spec["id"] == *source)
-                    .ok_or_else(|| Error::Invalid("replacement source disappeared".into()))?;
-                Store::retain_work(tx, old, id, 0, "replacement continues unfinished work")?;
+                if let Some(old) = apply.baseline.iter().find(|t| t.spec["id"] == *source) {
+                    Store::retain_work(tx, old, id, 0, "replacement continues unfinished work")?;
+                } else {
+                    Store::inherit_revision_checkpoint(
+                        tx,
+                        apply.conversation,
+                        &apply.revision.plan,
+                        source,
+                        id,
+                    )?;
+                }
             }
         }
     }

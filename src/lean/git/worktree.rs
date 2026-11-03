@@ -202,9 +202,13 @@ pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
 /// Commits everything the worker changed. Returns the new HEAD (unchanged if
 /// the worker changed nothing).
 pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+    super::snapshots::stage_source(worktree, None)?;
+    commit_staged(worktree, message)
+}
+
+pub(super) fn commit_staged(worktree: &Path, message: &str) -> Result<String> {
     let subject = commit_subject(message);
     let message = subject.as_str();
-    ok(worktree, &["add", "--all"])?;
     if !git(worktree, &["diff", "--cached", "--quiet"])?
         .status
         .success()
@@ -231,12 +235,30 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
 /// `onto`, made in a scratch worktree. A change already contained in `onto`
 /// (it was integrated and committed) is skipped; one that does not apply is
 /// an error saying which.
+pub enum CombineResult {
+    Applied(String),
+    Conflicted(String),
+}
+
 pub fn combine(
     project: &Path,
     scratch: &Path,
     onto: &str,
     changes: &[(String, String)],
 ) -> Result<String> {
+    match combine_or_conflict(project, scratch, onto, changes)? {
+        CombineResult::Applied(commit) => Ok(commit),
+        CombineResult::Conflicted(detail) => Err(Error::Invalid(detail)),
+    }
+}
+
+/// A content conflict is recoverable input; other Git failures remain errors.
+pub fn combine_or_conflict(
+    project: &Path,
+    scratch: &Path,
+    onto: &str,
+    changes: &[(String, String)],
+) -> Result<CombineResult> {
     let branch = format!(
         "antislop/combine-{}",
         scratch
@@ -249,6 +271,14 @@ pub fn combine(
     add_worktree(project, scratch, &branch, onto)?;
     let file = scratch.with_extension("patch");
     let result = apply_changes(project, scratch, onto, changes, &file);
+    let conflicted = result.is_err()
+        && ok(scratch, &["diff", "--name-only", "--diff-filter=U"])
+            .is_ok_and(|files| !files.trim().is_empty());
+    let result = match result {
+        Ok(commit) => Ok(CombineResult::Applied(commit)),
+        Err(error) if conflicted => Ok(CombineResult::Conflicted(error.to_string())),
+        Err(error) => Err(error),
+    };
     let _ = std::fs::remove_file(&file);
     let cleanup = remove_worktree(project, scratch, &branch);
     if result.is_ok() {
@@ -285,7 +315,7 @@ fn apply_change(
     {
         return Ok(());
     }
-    let patch = patch(project, base, Some(change))?;
+    let patch = super::changes::source_patch(project, base, change)?;
     if patch.trim().is_empty() {
         return Ok(());
     }

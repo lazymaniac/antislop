@@ -179,3 +179,50 @@ fn workspace_trust_round_trips() {
     store.untrust_project("/workspace/proj1").unwrap();
     assert!(!store.is_trusted("/workspace/proj1").unwrap());
 }
+
+#[test]
+fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
+    let dir = test_tempdir();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("/p").unwrap();
+    let mut tasks = store.add_plan(&conversation.id, &[
+        serde_json::json!({"id":"fresh","title":"Fresh","goal":"Run","kind":"analysis"}),
+        serde_json::json!({"id":"legacy","title":"Legacy","goal":"Run","kind":"analysis"}),
+        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","kind":"analysis"})
+    ]).unwrap();
+    for task in &mut tasks {
+        task.status = "queued".into();
+        store.update_task(task).unwrap();
+    }
+    tasks[1].report = Some("[interrupted] the daemon stopped while this task ran\n\n".repeat(13));
+    tasks[1].feedback = Some(serde_json::json!({"resume_role":"reviewer"}));
+    store.update_task(&tasks[1]).unwrap();
+    tasks[2].report = Some("Actual retained worker findings".into());
+    store.update_task(&tasks[2]).unwrap();
+    store.interrupt_unfinished_tasks().unwrap();
+    let once = store.plan(&tasks[0].plan_id).unwrap();
+    assert!(once[0].report.is_none());
+    assert!(
+        once[1].report.is_none(),
+        "{:?}",
+        once.iter()
+            .map(|t| (&t.spec["id"], &t.report))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        store.completed_task_output(&once[1]).is_err(),
+        "runtime notices cannot become worker completions"
+    );
+    assert!(
+        once[2]
+            .report
+            .as_ref()
+            .unwrap()
+            .starts_with("Actual retained worker findings")
+    );
+    store.interrupt_unfinished_tasks().unwrap();
+    let twice = store.plan(&tasks[0].plan_id).unwrap();
+    assert!(twice[0].report.is_none());
+    assert!(twice[1].report.is_none());
+    assert_eq!(twice[2].report, once[2].report);
+}

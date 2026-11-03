@@ -8,7 +8,33 @@ impl App {
         if self.details_close_or_search(key) {
             return true;
         }
+        if key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            match key.code {
+                KeyCode::Char('l') => {
+                    self.run_workflow(Command::Plan);
+                    return true;
+                }
+                KeyCode::Char('p') => {
+                    self.picker = Some(Picker::new(Kind::Commands));
+                    return true;
+                }
+                _ => {}
+            }
+        }
         if self.details_overview_key(key, plain) {
+            return true;
+        }
+        if plain
+            && key.code == KeyCode::Char('p')
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|d| d.tab == details::PLAN)
+        {
+            self.run_workflow(Command::Plan);
             return true;
         }
         if key.code == KeyCode::Char('?') {

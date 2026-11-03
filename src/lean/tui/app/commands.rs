@@ -42,6 +42,9 @@ impl App {
             .filter(|form| !form.sent)
         {
             form.visible = true;
+            self.plan_view = None;
+            self.diff = None;
+            self.details = None;
         } else {
             self.notice = Some("No question is waiting for an answer.".into());
         }

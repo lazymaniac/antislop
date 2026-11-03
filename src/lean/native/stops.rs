@@ -32,7 +32,7 @@ pub(crate) fn screen_stop(provider: ProviderKind, screen: &str) -> Option<StopCa
     for line in screen.lines() {
         let line = line
             .trim()
-            .trim_start_matches(['│', '┃', '╭', '╰', '❯', '⎿'])
+            .trim_start_matches(['│', '┃', '╭', '╰', '❯', '⎿', '■'])
             .trim();
         let line = line.to_ascii_lowercase();
         let limit = match provider {
@@ -65,6 +65,10 @@ pub(crate) fn screen_stop(provider: ProviderKind, screen: &str) -> Option<StopCa
         {
             return Some(StopCause::LoginRequired);
         }
+        if provider == ProviderKind::Codex && line.starts_with("message exceeds the maximum length")
+        {
+            return Some(StopCause::UnexpectedDialog);
+        }
         if line.starts_with("do you want to allow ")
             || line.starts_with("would you like to run the following command?")
             || line.starts_with("do you trust the files in this folder?")
@@ -94,6 +98,20 @@ mod tests {
                 "⎿  You've hit your 5-hour limit · resets 4pm"
             ),
             Some(StopCause::ProviderLimit)
+        );
+        assert_eq!(
+            screen_stop(
+                ProviderKind::Codex,
+                "■ Message exceeds the maximum length of 1048576 characters (2456553 provided)."
+            ),
+            Some(StopCause::UnexpectedDialog)
+        );
+        assert_eq!(
+            screen_stop(
+                ProviderKind::Codex,
+                "The error was: Message exceeds the maximum length"
+            ),
+            None
         );
         for text in [
             "The code mentions permission and rate limits.",

@@ -46,7 +46,7 @@ fn write_snapshot(
     if index.exists() {
         std::fs::copy(index, scratch)?;
     }
-    with_index(dir, scratch, &["add", "--all", "--", "."])?;
+    stage_source(dir, Some(scratch))?;
     if !outputs.is_empty() {
         let mut args = vec!["--literal-pathspecs", "add", "--force", "--"];
         args.extend(outputs.iter().map(String::as_str));
@@ -224,4 +224,85 @@ pub(crate) fn base_with_artifacts(
     })();
     let _ = std::fs::remove_file(scratch);
     result
+}
+
+// NUL path lists preserve literal filenames without OS argument limits.
+// Explicit artifacts are staged after this runtime exclusion.
+pub(super) fn stage_source(dir: &Path, index: Option<&Path>) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let command = || {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(dir).env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(index) = index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        command
+    };
+    let exists = command()
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()?
+        .status
+        .success();
+    let reset = if exists {
+        vec!["reset", "-q", "HEAD", "--", ".antislop"]
+    } else {
+        vec![
+            "rm",
+            "--cached",
+            "-r",
+            "--ignore-unmatch",
+            "--",
+            ".antislop",
+        ]
+    };
+    let output = command().args(reset).output()?;
+    crate::require(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stderr),
+    )?;
+    let paths = command()
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--deduplicate",
+            "-z",
+            "--",
+            ".",
+            ":(top,exclude).antislop",
+        ])
+        .output()?;
+    crate::require(
+        paths.status.success(),
+        &String::from_utf8_lossy(&paths.stderr),
+    )?;
+    if paths.stdout.is_empty() {
+        return Ok(());
+    }
+    let mut child = command()
+        .args([
+            "--literal-pathspecs",
+            "add",
+            "--all",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let written = child
+        .stdin
+        .take()
+        .expect("piped git stdin")
+        .write_all(&paths.stdout);
+    let output = child.wait_with_output()?;
+    crate::require(
+        output.status.success(),
+        &crate::lean::agent::clip_tail(&String::from_utf8_lossy(&output.stderr), 8000),
+    )?;
+    written?;
+    Ok(())
 }

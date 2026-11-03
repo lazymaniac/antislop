@@ -167,13 +167,13 @@ impl App {
     }
 
     fn prepare_comment_send(&self, request_id: u64, editor: Editor) {
-        let (round, run) = self.comment_context();
+        let (plan, round, run) = self.comment_context(&editor.target);
         let text = comment_text(&editor, &self.view);
         CommentSend {
             client: self.client.clone(),
             updates: self.updates.clone(),
             conversation: self.conversation.clone(),
-            plan: self.view.plan.clone(),
+            plan,
             generation: self.generation,
             request_id,
             editor,
@@ -184,7 +184,20 @@ impl App {
         .spawn();
     }
 
-    fn comment_context(&self) -> (Option<u32>, Option<String>) {
+    fn comment_context(&self, target: &str) -> (Option<String>, Option<u32>, Option<String>) {
+        let default_plan = self
+            .view
+            .plan
+            .clone()
+            .or_else(|| self.plan_view.as_ref().map(|p| p.plan_id.clone()));
+        if self.plan_view.is_some()
+            || self.diff.is_some()
+            || target == "plan"
+            || target.starts_with("plan:")
+            || is_rejection_target(target)
+        {
+            return (default_plan, None, None);
+        }
         let round = self
             .details
             .as_ref()
@@ -198,14 +211,31 @@ impl App {
                 })
             })
             .map(|round| round as u32);
-        let run = self
+        let run_task = self
             .details
             .as_ref()
             .filter(|details| details.task_id().is_none())
-            .and_then(|details| details.task.as_ref())
+            .and_then(|details| details.task.as_ref());
+        let run = run_task
             .and_then(|task| task["_run"].as_str())
             .map(str::to_owned);
-        (round, run)
+        let plan = if let Some(run_id) = run.as_deref() {
+            run_task
+                .and_then(|task| task["turns"].as_array())
+                .and_then(|turns| {
+                    turns
+                        .iter()
+                        .find(|turn| turn["id"].as_str() == Some(run_id))
+                        .or_else(|| turns.first())
+                })
+                .map_or_else(
+                    || default_plan.clone(),
+                    |turn| turn["plan_id"].as_str().map(str::to_owned),
+                )
+        } else {
+            default_plan
+        };
+        (plan, round, run)
     }
 
     pub(in crate::lean::tui) fn return_to_main(&mut self) {

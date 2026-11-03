@@ -144,6 +144,17 @@ impl PlanView {
             .rev()
             .find(|comment| comment.status == "draft")
             .or_else(|| self.selected_comments(view).into_iter().next_back())
+            .or_else(|| {
+                (!self.graph_focused)
+                    .then(|| {
+                        self.whole_plan_comments(view)
+                            .into_iter()
+                            .rev()
+                            .find(|comment| comment.status == "draft")
+                            .or_else(|| whole_plan_comment(self, view))
+                    })
+                    .flatten()
+            })
             .map(|comment| PlanAction::ToggleResolveComment {
                 id: comment.id,
                 next_status: "deleted".into(),
@@ -200,16 +211,15 @@ impl PlanView {
         if let Some(action) = self.click_button(col, row, state) {
             return action;
         }
-        if self
-            .graph_area
-            .contains(ratatui::layout::Position::new(col, row))
-        {
+        let pos = ratatui::layout::Position::new(col, row);
+        let in_tasks_pane = self.graph_area.width > 0
+            && col >= self.graph_area.x
+            && col < self.graph_area.right()
+            && row >= self.graph_area.y
+            && row < self.graph_area.bottom().saturating_add(7);
+        if in_tasks_pane {
             self.graph_focused = true;
-            if let Some((_, index)) = self
-                .task_rects
-                .iter()
-                .find(|(rect, _)| rect.contains(ratatui::layout::Position::new(col, row)))
-            {
+            if let Some((_, index)) = self.task_rects.iter().find(|(rect, _)| rect.contains(pos)) {
                 self.graph_selected = *index;
                 self.task_scroll = 0;
                 self.graph_reveal = true;

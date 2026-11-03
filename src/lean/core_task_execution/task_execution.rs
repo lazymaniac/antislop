@@ -54,7 +54,16 @@ impl Prepared {
         if git::is_repository(&workdir) {
             core.store.db().execute("INSERT OR IGNORE INTO task_source_revisions(task_id,generation,revision) VALUES(?1,?2,?3)",rusqlite::params![task.id,task.input_generation,git::head(&workdir)?])?;
         }
-        let upstream = core.upstream(&task.plan_id, &spec)?;
+        let mut upstream = core.upstream(&task.plan_id, &spec)?;
+        if let Some(conflict) = task
+            .feedback
+            .as_ref()
+            .and_then(|f| f.get("checkpoint_merge"))
+        {
+            upstream.push_str(&format!(
+                "\nRuntime checkpoint integration context: {conflict}. Your files are the preserved checkpoint because rebasing it onto reviewed upstream code conflicted. Assess the saved code and compare the referenced upstream through Git; do not infer that upstream changes are present in these files. Preserve both intended behaviors. The normal integration repair will reconcile any remaining content conflicts after review. References are runtime inputs, not acceptance gates.\n"
+            ));
+        }
         Ok(Self {
             spec,
             config: core.config_snapshot(),

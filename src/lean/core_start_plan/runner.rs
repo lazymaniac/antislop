@@ -204,6 +204,15 @@ impl Core {
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
+        // A registered source may outlive an interrupted planning pass. Refresh
+        // its coverage before coordinating, without forcing a replacement plan.
+        if let Err(error) = self.refresh_requirements_if_needed(conversation, cancel) {
+            self.notice(
+                conversation,
+                &format!("could not refresh requirements source coverage: {error}"),
+            );
+            return Err(error);
+        }
         if self.planner_owns_turn(conversation, upto)? {
             self.planner_turn(conversation, upto, cancel)
         } else {

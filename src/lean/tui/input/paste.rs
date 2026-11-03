@@ -42,6 +42,13 @@ impl App {
     }
 
     fn paste_details(&mut self, text: &str) -> bool {
+        if self.picker.is_some()
+            || self.editor.is_some()
+            || self.plan_view.is_some()
+            || self.diff.is_some()
+        {
+            return false;
+        }
         let Some(details) = &mut self.details else {
             return false;
         };

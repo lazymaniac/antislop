@@ -166,27 +166,244 @@ fn replacement_inherits_unfinished_work_but_cannot_replace_completed_work() {
 }
 
 #[test]
-fn requirements_staleness_does_not_drop_an_unintegrated_checkpoint_on_replan() {
-    let (_dir, store, conversation, run, mut tasks) = fixture();
-    store.queue_plan(&conversation, &tasks[0].plan_id).unwrap();
-    tasks[0].status = "stale".into();
-    tasks[0].round = 2;
-    tasks[0].report = Some("Retained unfinished work".into());
-    tasks[0].base = Some("partial-base".into());
-    tasks[0].result = Some("partial-checkpoint".into());
-    store.update_task(&tasks[0]).unwrap();
+fn replanning_preserves_unintegrated_checkpoints_without_approving_them() {
+    for state in ["stale", "coordinating", "failed", "waiting"] {
+        let (_dir, store, conversation, run, mut tasks) = fixture();
+        store.queue_plan(&conversation, &tasks[0].plan_id).unwrap();
+        tasks[0].status = state.into();
+        tasks[0].round = 2;
+        tasks[0].report = Some("Retained unfinished work".into());
+        tasks[0].base = Some("partial-base".into());
+        tasks[0].result = Some("partial-checkpoint".into());
+        store.update_task(&tasks[0]).unwrap();
+        let next = store
+            .add_plan(&conversation, &[tasks[0].spec.clone()])
+            .unwrap();
+        store
+            .link_plan_run(&conversation, &next[0].plan_id, &run)
+            .unwrap();
+        store.queue_plan(&conversation, &next[0].plan_id).unwrap();
+        let continued = store.task_by_id(&next[0].id).unwrap().unwrap();
+        assert_eq!(continued.status, "queued", "{state}");
+        assert_eq!(continued.base, tasks[0].base);
+        assert_eq!(continued.result, tasks[0].result);
+        assert_eq!(
+            continued.feedback.as_ref().unwrap()["resume_role"],
+            "reviewer"
+        );
+    }
+}
+
+#[test]
+fn replanning_prefers_the_latest_unfinished_checkpoint_over_an_older_exact_contract() {
+    let (_dir, store, conversation, run, mut original) = fixture();
+    original[0].status = "approved".into();
+    original[0].report = Some("Older approved report".into());
+    store.update_task(&original[0]).unwrap();
+    let mut changed = original[0].spec.clone();
+    changed["goal"] = "Repair the existing instrument".into();
+    let mut recent = store.add_plan(&conversation, &[changed]).unwrap().remove(0);
+    store
+        .link_plan_run(&conversation, &recent.plan_id, &run)
+        .unwrap();
+    recent.status = "coordinating".into();
+    recent.report = Some("Latest repair needs source review".into());
+    recent.base = Some("repair-base".into());
+    recent.result = Some("latest-repair".into());
+    store.update_task(&recent).unwrap();
     let next = store
-        .add_plan(&conversation, &[tasks[0].spec.clone()])
+        .add_plan(&conversation, &[original[0].spec.clone()])
         .unwrap();
     store
         .link_plan_run(&conversation, &next[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &next[0].plan_id).unwrap();
     let continued = store.task_by_id(&next[0].id).unwrap().unwrap();
-    assert_eq!(continued.base, tasks[0].base);
-    assert_eq!(continued.result, tasks[0].result);
+    assert_eq!(continued.status, "queued");
+    assert_eq!(continued.report, recent.report);
+    assert_eq!(continued.base, recent.base);
+    assert_eq!(continued.result, recent.result);
+}
+
+#[test]
+fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement() {
+    let (_dir, store, conversation, run, mut previous) = fixture();
+    let source = &mut previous[1];
+    source.spec["writes"] = true.into();
+    source.spec["change_kind"] = "code".into();
+    source.status = "coordinating".into();
+    source.round = 3;
+    source.report = Some("Technical repair complete; source audit still pending".into());
+    source.base = Some("repair-base".into());
+    source.result = Some("repair-checkpoint".into());
+    store.update_task(source).unwrap();
+    store
+        .db()
+        .execute(
+            "UPDATE tasks SET spec=?2 WHERE id=?1",
+            rusqlite::params![source.id, source.spec.to_string()],
+        )
+        .unwrap();
+    let source = source.clone();
+    let next = store
+        .add_plan(&conversation, &[previous[0].spec.clone()])
+        .unwrap();
+    store
+        .link_plan_run(&conversation, &next[0].plan_id, &run)
+        .unwrap();
+    store
+        .bind_task_ledger(&conversation, &run, &next[0].plan_id)
+        .unwrap();
+    store.queue_plan(&conversation, &next[0].plan_id).unwrap();
+    let baseline = store.plan(&next[0].plan_id).unwrap();
+    let mut successor: TaskContract = serde_json::from_value(source.spec.clone()).unwrap();
+    successor.id = "recover-repair".into();
+    successor.goal =
+        "Recover and assess the existing technical repair; source audit is separate".into();
+    let revision = PlanRevision {
+        plan: next[0].plan_id.clone(),
+        base_revision: 0,
+        reason: "Recover code omitted by the earlier replan".into(),
+        tasks: vec![successor.clone()],
+        retire: vec![],
+        redo: vec![],
+        replacements: std::collections::BTreeMap::from([(successor.id.clone(), source.id.clone())]),
+    };
+    let candidates = store
+        .unfinished_checkpoints(&conversation, &revision.plan)
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["source_task"], source.id);
     assert_eq!(
-        continued.feedback.as_ref().unwrap()["resume_role"],
-        "reviewer"
+        store
+            .revision_checkpoints(&conversation, &revision)
+            .unwrap()[0]["target"],
+        successor.id
+    );
+    let other = store.create_conversation("other").unwrap();
+    assert!(
+        store
+            .unfinished_checkpoints(&other.id, &revision.plan)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.revision_checkpoints(&other.id, &revision).is_err());
+    let specs = revision.merge(&baseline).unwrap();
+    apply(
+        &store,
+        &conversation,
+        &revision,
+        &baseline,
+        &specs,
+        &BTreeSet::new(),
+    );
+    let recovered = store
+        .task_in_plan_by_id(&revision.plan, &successor.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.status, "queued");
+    assert_eq!(recovered.base, source.base);
+    assert_eq!(recovered.result, source.result);
+    assert_eq!(recovered.report, source.report);
+    assert_eq!(recovered.feedback.unwrap()["resume_role"], "reviewer");
+    assert_eq!(
+        store.task_by_id(&source.id).unwrap().unwrap().status,
+        "coordinating"
+    );
+    assert_eq!(store.plan_revision(&revision.plan).unwrap(), 1);
+    assert!(
+        store
+            .unfinished_checkpoints(&conversation, &revision.plan)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .revision_checkpoints(&conversation, &revision)
+            .unwrap_err()
+            .to_string()
+            .contains("already has an active")
+    );
+    let mut read_only = revision.clone();
+    read_only.tasks[0].writes = false;
+    assert!(read_only.merge(&baseline).is_err());
+    for state in ["approved", "working"] {
+        let mut unavailable = source.clone();
+        unavailable.status = state.into();
+        store.update_task(&unavailable).unwrap();
+        assert!(
+            store
+                .revision_checkpoints(&conversation, &revision)
+                .is_err(),
+            "{state}"
+        );
+    }
+}
+
+#[test]
+fn a_checkpoint_that_changed_during_review_cannot_partially_apply_a_revision() {
+    let (_dir, store, conversation, run, mut old) = fixture();
+    old[1].spec["writes"] = true.into();
+    old[1].spec["change_kind"] = "code".into();
+    old[1].status = "coordinating".into();
+    old[1].base = Some("base".into());
+    old[1].result = Some("checkpoint".into());
+    store.update_task(&old[1]).unwrap();
+    store
+        .db()
+        .execute(
+            "UPDATE tasks SET spec=?2 WHERE id=?1",
+            rusqlite::params![old[1].id, old[1].spec.to_string()],
+        )
+        .unwrap();
+    let baseline = store
+        .add_plan(&conversation, &[old[0].spec.clone()])
+        .unwrap();
+    store
+        .link_plan_run(&conversation, &baseline[0].plan_id, &run)
+        .unwrap();
+    store
+        .bind_task_ledger(&conversation, &run, &baseline[0].plan_id)
+        .unwrap();
+    let mut successor: TaskContract = serde_json::from_value(old[1].spec.clone()).unwrap();
+    successor.id = "recover".into();
+    let revision = PlanRevision {
+        plan: baseline[0].plan_id.clone(),
+        base_revision: 0,
+        reason: "Recover existing code".into(),
+        tasks: vec![successor],
+        retire: vec![],
+        redo: vec![],
+        replacements: std::collections::BTreeMap::from([("recover".into(), old[1].id.clone())]),
+    };
+    let specs = revision.merge(&baseline).unwrap();
+    store
+        .revision_checkpoints(&conversation, &revision)
+        .unwrap();
+    old[1].status = "approved".into();
+    store.update_task(&old[1]).unwrap();
+    let (request, _) = store
+        .reserve_revision_job(&conversation, &crate::id(), &revision)
+        .unwrap();
+    let error = store
+        .apply_plan_revision(
+            &conversation,
+            &revision,
+            &baseline,
+            &specs,
+            &BTreeSet::new(),
+            &RevisionLease {
+                requirement_revision: 1,
+                request: &request,
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("must be unfinished"), "{error}");
+    assert_eq!(store.plan_revision(&revision.plan).unwrap(), 0);
+    assert!(
+        store
+            .task_in_plan_by_id(&revision.plan, "recover")
+            .unwrap()
+            .is_none()
     );
 }

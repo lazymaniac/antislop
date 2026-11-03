@@ -62,6 +62,12 @@ fn append_task_context(
         }
     }
     append_questions(core, &state.turn.id, text)?;
+    let evidence = core
+        .store
+        .task_evidence_context(&task.id, task.input_generation)?;
+    if !evidence.is_empty() {
+        text.push_str(&format!("Historical execution evidence for this task's current inputs (up to 64 most recent records; read_evidence): {}\nThese immutable references survive shortened reports. Read relevant records before claiming a required execution never ran or requesting a repeat. They do not attest the current code: compare what changed since the producing turn. Preserve relevant references with complete's evidence field when amending a report.\n", serde_json::to_string(&evidence)?));
+    }
     append_local_checks(&task.spec, text)?;
     text.push_str(if reviewer {
         "Task role: reviewer\n"

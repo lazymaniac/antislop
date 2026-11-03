@@ -6,7 +6,8 @@ type Row = (String, Value, Option<String>);
 /// Each task of `plan_id` whose contract matches an approved task of the
 /// conversation's approved history takes over its original report. The same
 /// requirements retain approval; new requirements queue a reviewer-only review. A writer's
-/// change is already in the project, so no commits come along.
+/// approved change is already in the project. Unfinished work keeps its
+/// checkpoint and is reassessed without inheriting approval.
 /// `feedback.carried_from` names the task whose turns produced the result.
 /// Returns what to tell the user, if anything was matched by id.
 pub(super) fn carry_approved(
@@ -19,7 +20,7 @@ pub(super) fn carry_approved(
     };
     let approved = rows(
         tx,
-        "SELECT id,spec,feedback FROM tasks WHERE conversation_id=?1 AND status IN ('approved','stale') ORDER BY created_ms DESC,rowid DESC",
+        "SELECT id,spec,feedback FROM tasks WHERE conversation_id=?1 AND (status IN ('approved','stale') OR (status IN ('coordinating','failed','cancelled','needs_user','waiting','queued') AND (report IS NOT NULL OR result IS NOT NULL))) ORDER BY created_ms DESC,rowid DESC",
         conversation,
     )?;
     let project: String = tx.query_row(
@@ -51,12 +52,12 @@ fn carry_plan_tasks(
         plan_id,
     )? {
         let name = spec["id"].as_str().unwrap_or_default().to_owned();
-        let exact = approved.iter().find(|old| same_contract(&old.1, &spec));
-        let candidate = exact.or_else(|| approved.iter().find(|old| old.1["id"] == spec["id"]));
-        let Some(old) = candidate else {
+        // The newest checkpoint supersedes older reports, even when an older
+        // approved contract happens to match the new wording exactly.
+        let Some(old) = approved.iter().find(|old| old.1["id"] == spec["id"]) else {
             continue;
         };
-        let unchanged_contract = exact.is_some();
+        let unchanged_contract = same_contract(&old.1, &spec);
         let source_changes = source_changes(tx, old, project, &mut current_source)?;
         let unchanged_sources = source_changes.is_empty();
         let unchanged_dependencies = dependencies_are_current(tx, plan_id, old)?;
@@ -172,7 +173,7 @@ fn source_plan(
             "SELECT t.plan_id, coalesce(a.run_id=b.run_id, 0) FROM tasks t
                LEFT JOIN plan_runs a ON a.plan_id=t.plan_id
                LEFT JOIN plan_runs b ON b.plan_id=?2
-             WHERE t.conversation_id=?1 AND t.plan_id<>?2 AND t.status IN ('approved','stale')
+             WHERE t.conversation_id=?1 AND t.plan_id<>?2 AND (t.status IN ('approved','stale') OR (t.status IN ('coordinating','failed','cancelled','needs_user','waiting','queued') AND (t.report IS NOT NULL OR t.result IS NOT NULL)))
              ORDER BY t.created_ms DESC, t.rowid DESC LIMIT 1",
             params![conversation, plan_id],
             |row| Ok((row.get(0)?, row.get(1)?)),

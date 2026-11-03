@@ -89,42 +89,28 @@ impl Core {
     pub(super) fn evidence_reference_error(
         &self,
         conversation: &str,
-        role: &str,
-        turn: &str,
         requested: &str,
         reason: &str,
     ) -> Error {
-        let mut available = self.store.result_evidence(turn).unwrap_or_default();
-        let mut report_ids = std::collections::HashSet::new();
-        if let Ok(scope) = self.dependency_reader_scope(conversation, role, turn) {
-            for task in scope.tasks {
-                if task.status != status::APPROVED
-                    && !task_role(role).is_some_and(|(id, _)| id == task.id)
-                {
-                    continue;
-                }
-                if let Ok(history) = self.store.dependency_reports(&task) {
-                    for report in history.reports {
-                        report_ids.insert(report.result_ref.clone());
-                        available.extend(
-                            self.store
-                                .result_evidence(&report.result_ref)
-                                .unwrap_or_default(),
-                        );
-                    }
-                }
-            }
-        }
-        available.sort_by(|a, b| a.id.cmp(&b.id));
-        available.dedup_by(|a, b| a.id == b.id);
-        let available = available
-            .into_iter()
-            .map(|r| (r.id, r.label))
-            .collect::<Vec<_>>();
+        let db = self.store.db();
+        let available = db
+            .prepare("SELECT e.id,e.label FROM agent_evidence e JOIN turns t ON t.id=e.turn_id WHERE t.conversation_id=?1 ORDER BY t.started_ms DESC,e.rowid DESC")
+            .and_then(|mut q| {
+                q.query_map([conversation], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        let report_reference = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_results r JOIN turns t ON t.id=r.turn_id WHERE r.turn_id=?1 AND t.conversation_id=?2)",
+                rusqlite::params![requested, conversation],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
         reference_error(
             "evidence",
             requested,
-            if report_ids.contains(requested) {
+            if report_reference {
                 "this is a report reference; use read_dependency_result.result_ref, not read_evidence"
             } else {
                 reason

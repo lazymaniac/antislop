@@ -6,17 +6,41 @@ pub fn diff_stat(dir: &Path, base: &str, result: &str) -> Result<String> {
 /// The change from `base` to `rev`, or to the working tree when `rev` is
 /// `None`, as a unified patch with unquoted UTF-8 paths and renames.
 pub fn patch(dir: &Path, base: &str, rev: Option<&str>) -> Result<String> {
+    make_patch(dir, base, rev, false)
+}
+
+// Explicit artifact inputs are overlaid separately; composing source views
+// must not replay runtime files accidentally captured by older workers.
+pub(super) fn source_patch(dir: &Path, base: &str, rev: &str) -> Result<String> {
+    make_patch(dir, base, Some(rev), true)
+}
+
+fn make_patch(dir: &Path, base: &str, rev: Option<&str>, source_only: bool) -> Result<String> {
     let mut args = vec![
         "-c",
         "core.quotePath=false",
         "diff",
         "--no-color",
         "--no-ext-diff",
+        "--binary",
+        "--full-index",
         "-M",
         base,
     ];
     args.extend(rev);
-    ok(dir, &args)
+    if source_only {
+        args.extend(["--", ".", ":(top,exclude).antislop"]);
+    }
+    let output = git(dir, &args)?;
+    crate::require(
+        output.status.success(),
+        &format!(
+            "git diff: {}",
+            crate::lean::agent::clip_tail(&String::from_utf8_lossy(&output.stderr), 8000)
+        ),
+    )?;
+    // Binary patches require their trailing empty line; ok() trims it away.
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub fn changed_files(dir: &Path, base: &str, result: &str) -> Result<Vec<String>> {

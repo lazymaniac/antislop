@@ -29,6 +29,22 @@ fn insert_graph_task(view: &mut View, row: TaskRow) {
     if let Some(existing) = view.tasks.iter_mut().find(|existing| existing.id == row.id) {
         *existing = row;
     } else {
+        if !view.plan_doc.trim().is_empty() && !view.plan_doc.contains(&format!("[{}]", row.id)) {
+            let number = view.tasks.len() + 1;
+            let section = row
+                .section
+                .as_deref()
+                .filter(|section| !section.trim().is_empty())
+                .unwrap_or(&row.title);
+            view.plan_doc.push_str(&format!(
+                "\n\n### {number}. {section} [{}] ({})\n- **Task**: `{}` — {}\n- **Goal**: {}\n",
+                row.id,
+                status_label(&row.status),
+                row.id,
+                row.title,
+                row.goal
+            ));
+        }
         if let Some(uuid) = &row.uuid {
             view.task_rows.insert(uuid.clone(), view.tasks.len());
         }

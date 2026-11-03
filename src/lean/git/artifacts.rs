@@ -9,12 +9,13 @@ pub(crate) fn commit_artifacts(
     require_all: bool,
 ) -> Result<String> {
     let files = artifact_files(worktree, outputs, require_all)?;
+    super::snapshots::stage_source(worktree, None)?;
     if !files.is_empty() {
         let mut args = vec!["--literal-pathspecs", "add", "--force", "--"];
         args.extend(files.iter().map(String::as_str));
         ok(worktree, &args)?;
     }
-    commit_all(worktree, message)
+    super::worktree::commit_staged(worktree, message)
 }
 
 pub(super) fn artifact_files(

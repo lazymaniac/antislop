@@ -232,7 +232,7 @@ pub fn worker_followup(findings: &[Value]) -> String {
          updated report: for each finding what you changed and the evidence, without \
          restating the task or pasting file contents. {}",
         findings_text(findings),
-        "End with complete (select for viable options; report_blocker when no option satisfies the contract).",
+        "End with complete (select for viable options), or report_blocker when a concrete prerequisite prevents completion.",
     )
 }
 
@@ -254,7 +254,7 @@ fn worker_prompt_parts(
     String,
 ) {
     let team = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
-    let blocker = "If no option satisfies an options task's contract, end with report_blocker and its resume condition; do not invent a choice or finish only in terminal prose. For missing input use ask; if the answer has not come, end with wait_for_answer. Do not invent requirements or implement outside this contract.";
+    let blocker = "If a concrete missing input or prerequisite prevents completion, end with report_blocker and its resume condition, preserving completed work. This is available to every worker, including options workers with no viable choice. Do not claim success, invent a choice or finish only in terminal prose. Ask when the orchestrator can resolve an unknown decision; if the answer has not come, end with wait_for_answer. If the answer confirms the input is unavailable, use report_blocker instead of repeating the question or waiting for an answer already received. Do not invent requirements or implement outside this contract.";
     let binding = if task.changes_code() {
         OPTIONS_BINDING
     } else {

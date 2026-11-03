@@ -24,6 +24,9 @@ impl App {
         if self.scroll_help(down) {
             return;
         }
+        if self.picker.is_some() || self.editor.is_some() {
+            return;
+        }
         if let Some(view) = &mut self.plan_view {
             view.key(
                 event::KeyEvent::new(

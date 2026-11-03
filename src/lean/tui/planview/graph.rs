@@ -84,22 +84,11 @@ impl PlanView {
         theme: &Theme,
     ) {
         let mut text = format!(
-            "{}: {}\n{} · {}\n{}\nDepends on: {} · Parallel with: {}",
+            "{}: {}\n{} · {}",
             task.id,
             task.title,
             task.kind,
             if task.writes { "writes" } else { "read-only" },
-            task.goal,
-            if task.depends_on.is_empty() {
-                "none".into()
-            } else {
-                task.depends_on.join(", ")
-            },
-            if task.parallel_with.is_empty() {
-                "none".into()
-            } else {
-                task.parallel_with.join(", ")
-            }
         );
         for line in self
             .build_lines(view)
@@ -118,6 +107,20 @@ impl PlanView {
                 }
             }
         }
+        text.push_str(&format!(
+            "\n{}\nDepends on: {} · Parallel with: {}",
+            task.goal,
+            if task.depends_on.is_empty() {
+                "none".into()
+            } else {
+                task.depends_on.join(", ")
+            },
+            if task.parallel_with.is_empty() {
+                "none".into()
+            } else {
+                task.parallel_with.join(", ")
+            }
+        ));
         let block = Block::default()
             .borders(Borders::TOP)
             .border_style(theme.dim())

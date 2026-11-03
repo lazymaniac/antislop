@@ -30,19 +30,23 @@ pub(in crate::lean) fn writer_worktree(
     {
         let onto = core.writer_base(&task.plan_id, spec, project)?;
         let combined = match (&task.base, &task.result) {
-            (Some(base), Some(result)) => git::combine(
-                project,
-                &core
-                    .state
-                    .join("worktrees")
-                    .join(format!("resume-{}-g{}", task.id, task.input_generation)),
-                &onto,
-                &[(base.clone(), result.clone())],
-            )?,
-            _ => onto.clone(),
+            (Some(base), Some(result)) => {
+                combine_saved_checkpoint(core, task, project, &onto, base, result)?
+            }
+            _ => git::CombineResult::Applied(onto.clone()),
         };
-        task.base = Some(onto);
-        task.result = Some(combined);
+        match combined {
+            git::CombineResult::Applied(combined) => {
+                task.base = Some(onto);
+                task.result = Some(combined);
+            }
+            git::CombineResult::Conflicted(detail) => {
+                // Keep the original delta so the existing integration repair
+                // can reconcile it after the worker and reviewer assess it.
+                task.feedback.as_mut().expect("continuation feedback")["checkpoint_merge"] =
+                    json!({"onto":onto,"detail":detail});
+            }
+        }
     }
     let base = match &task.base {
         Some(base) => base.clone(),
@@ -81,7 +85,30 @@ fn observation_worktree(
     if worktree.is_some() || !git::is_repository(project) {
         return Ok(None);
     }
-    let base = core.writer_base(&task.plan_id, spec, project)?;
+    let onto = core.writer_base(&task.plan_id, spec, project)?;
+    // A narrowed read-only continuation must inspect its own retained changes,
+    // even when the unfinished writer's checkpoint has not landed yet.
+    // Generated options run before their owner, but must inspect the owner's
+    // retained implementation when choosing how to continue it.
+    let owner = spec
+        .options_for
+        .as_deref()
+        .map(|id| core.store.task_in_plan_by_id(&task.plan_id, id))
+        .transpose()?
+        .flatten();
+    let source = owner
+        .as_ref()
+        .filter(|owner| owner.status != status::APPROVED)
+        .unwrap_or(task);
+    let base = match (&source.base, &source.result) {
+        (Some(base), Some(result)) => {
+            match combine_saved_checkpoint(core, task, project, &onto, base, result)? {
+                git::CombineResult::Applied(combined) => combined,
+                git::CombineResult::Conflicted(_) => result.clone(),
+            }
+        }
+        _ => onto,
+    };
     let path = core.state.join("worktrees").join(format!(
         "{}-observation-g{}",
         task_path_component(&task.id)?,
@@ -91,9 +118,47 @@ fn observation_worktree(
         "antislop/{}-observation-g{}",
         task.id, task.input_generation
     );
+    if path.exists()
+        && git::tree_identity(project, &git::head(&path)?)? != git::tree_identity(project, &base)?
+    {
+        // Recreate clean read-only views through the existing pin/session-aware
+        // cleanup. Never reset a writer or remove an attached/edited checkout.
+        core.release_task_views(&task.id, None);
+        require(
+            !path.exists(),
+            "the old observation checkout is still in use or has edits; detach its native terminal and retry",
+        )?;
+    }
     core.release_task_views(&task.id, Some(&path));
     git::add_worktree(project, &path, &branch, &base)?;
     Ok(Some(path))
+}
+
+fn combine_saved_checkpoint(
+    core: &Core,
+    task: &Task,
+    project: &Path,
+    onto: &str,
+    base: &str,
+    result: &str,
+) -> Result<git::CombineResult> {
+    let combined = git::combine_or_conflict(
+        project,
+        &core.state.join("worktrees").join(format!(
+            "resume-{}-g{}",
+            task_path_component(&task.id)?,
+            task.input_generation
+        )),
+        onto,
+        &[(base.to_owned(), result.to_owned())],
+    )?;
+    if let git::CombineResult::Conflicted(detail) = &combined {
+        let conversation = core.store.plan_conversation(&task.plan_id)?;
+        core.notice(&conversation, &format!(
+            "Saved checkpoint kept for assessment; integration repair will reconcile its conflict with upstream changes: {detail}"
+        ));
+    }
+    Ok(combined)
 }
 
 pub(super) fn is_recheck(
@@ -221,5 +286,140 @@ fn continuation(round: u32, state: &RoundState) -> Option<String> {
         Some(tasks::worker_resume(&state.findings))
     } else {
         Some(tasks::worker_followup(&state.findings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_continuation_observes_retained_checkpoint_and_new_project_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("instrument.txt"), "old instrument").unwrap();
+        let base = git::commit_all(&project, "base").unwrap();
+        let checkpoint = directory.path().join("checkpoint");
+        git::add_worktree(&project, &checkpoint, "antislop/checkpoint", &base).unwrap();
+        std::fs::write(checkpoint.join("instrument.txt"), "repaired instrument").unwrap();
+        let result = git::commit_all(&checkpoint, "repair").unwrap();
+        std::fs::write(project.join("user.txt"), "new local input").unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({
+            "id":"accept-repair", "title":"Accept repair", "goal":"Inspect the existing repair",
+            "kind":"analysis", "writes":false
+        }))
+        .unwrap();
+        let mut task = core
+            .store
+            .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
+            .unwrap()
+            .remove(0);
+        task.base = Some(base.clone());
+        task.result = Some(result);
+        task.feedback = Some(json!({"continuation_review":true}));
+        let (view, dirs) = task_directories(&core, &task, &spec, &project, &None).unwrap();
+        assert!(dirs.is_empty());
+        assert_ne!(view, project);
+        assert_eq!(
+            std::fs::read_to_string(view.join("instrument.txt")).unwrap(),
+            "repaired instrument"
+        );
+        assert_eq!(
+            std::fs::read_to_string(view.join("user.txt")).unwrap(),
+            "new local input"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
+            "old instrument"
+        );
+        assert_eq!(git::head(&project).unwrap(), base);
+        let owner_spec: TaskContract = serde_json::from_value(json!({
+            "id":"recover", "title":"Recover", "goal":"Continue the saved repair",
+            "kind":"implementation", "writes":true
+        }))
+        .unwrap();
+        let options_spec: TaskContract = serde_json::from_value(json!({
+            "id":"recover-options", "title":"Options", "goal":"Assess recovery",
+            "kind":"options", "options_for":"recover"
+        }))
+        .unwrap();
+        let mut tasks = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[
+                    serde_json::to_value(&owner_spec).unwrap(),
+                    serde_json::to_value(&options_spec).unwrap(),
+                ],
+            )
+            .unwrap();
+        let (stale_view, _) =
+            task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(stale_view.join("instrument.txt")).unwrap(),
+            "old instrument"
+        );
+        tasks[0].base = task.base.clone();
+        tasks[0].result = task.result.clone();
+        tasks[0].status = status::QUEUED.into();
+        core.store.update_task(&tasks[0]).unwrap();
+        let (options_view, _) =
+            task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(options_view.join("instrument.txt")).unwrap(),
+            "repaired instrument"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
+            "old instrument"
+        );
+        std::fs::write(project.join("instrument.txt"), "reviewed upstream change").unwrap();
+        let upstream = git::commit_all(&project, "upstream edit").unwrap();
+        core.record_plan_landing(&tasks[0].plan_id, "upstream", &upstream)
+            .unwrap();
+        let (conflict_view, _) =
+            task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(conflict_view.join("instrument.txt")).unwrap(),
+            "repaired instrument"
+        );
+        tasks[0].feedback = Some(json!({"continuation_review":true}));
+        let saved_base = tasks[0].base.clone();
+        let saved_result = tasks[0].result.clone();
+        let writer = writer_worktree(&core, &mut tasks[0], &owner_spec, &project)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(writer.join("instrument.txt")).unwrap(),
+            "repaired instrument"
+        );
+        assert_eq!(tasks[0].base, saved_base);
+        assert_eq!(tasks[0].result, saved_result);
+        assert!(
+            tasks[0].feedback.as_ref().unwrap()["checkpoint_merge"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("does not apply")
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
+            "reviewed upstream change"
+        );
+        assert_eq!(git::head(&project).unwrap(), upstream);
     }
 }

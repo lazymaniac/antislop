@@ -3,6 +3,9 @@ use super::*;
 
 impl App {
     pub(super) fn mouse_click(&mut self, col: u16, row: u16) {
+        if self.picker.is_some() || self.editor.is_some() || self.help.is_some() {
+            return;
+        }
         if self.click_plan_view(col, row) || self.dialog_open() {
             return;
         }

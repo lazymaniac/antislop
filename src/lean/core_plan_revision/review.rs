@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 use std::collections::BTreeSet;
 
 pub(super) struct ReviewContext<'a> {
@@ -13,6 +14,7 @@ pub(super) struct ReviewContext<'a> {
 struct ReviewData<'a> {
     context: &'a ReviewContext<'a>,
     approved: &'a ApprovedRevisionWork,
+    checkpoints: &'a [Value],
 }
 
 impl Core {
@@ -23,6 +25,9 @@ impl Core {
     ) -> Result<()> {
         let affected = affected_tasks(context.baseline, context.specs, &context.revision.redo);
         let approved = approved_work(context.baseline, &affected);
+        let checkpoints = self
+            .store
+            .revision_checkpoints(context.conversation, context.revision)?;
         // Held from the review on: a task the revision changes would start on
         // the contract it is about to lose and be cancelled when it applies.
         let _barrier = {
@@ -32,14 +37,20 @@ impl Core {
         self.review_revision(&ReviewData {
             context: &context,
             approved: &approved,
+            checkpoints: &checkpoints,
         })?;
         require(!context.cancel.load(Ordering::SeqCst), "revision cancelled")?;
-        self.apply_after_review(&context, lease, affected)
+        self.apply_after_review(&context, lease, affected, &checkpoints)
     }
 
     fn review_revision(self: &Arc<Self>, data: &ReviewData<'_>) -> Result<()> {
         let context = data.context;
         let previous = previous_specs(context);
+        let reason = format!(
+            "{}\nRuntime checkpoint bindings (metadata, not acceptance criteria): {}. An empty new_transfers list does not remove existing_checkpoints. Ordinary contract edits preserve existing reports/base/result and request reassessment; do not demand a duplicate transfer or new recovery stage for code already attached to a task. Successors must assess retained code against their own goals before approval and integration. No source approval is inherited.",
+            context.revision.reason,
+            checkpoint_review_context(context.revision, context.baseline, data.checkpoints),
+        );
         let review = self
             .review(
                 context.conversation,
@@ -57,7 +68,7 @@ impl Core {
                             kept: &data.approved.kept,
                             redone: &data.approved.redone,
                         },
-                        &context.revision.reason,
+                        &reason,
                         initial,
                     )
                 },
@@ -83,11 +94,18 @@ impl Core {
         context: &ReviewContext<'_>,
         lease: &super::store::RevisionLease<'_>,
         affected: BTreeSet<String>,
+        checkpoints: &[Value],
     ) -> Result<()> {
         self.cancel_affected_tasks(&affected);
         self.wait_for_affected_tasks(&affected, context.cancel)?;
         let _graph = self.graph_updates.lock().expect("graph update mutex");
         let _integration = self.integrating.lock().expect("integration mutex");
+        require(
+            self.store
+                .revision_checkpoints(context.conversation, context.revision)?
+                == checkpoints,
+            "checkpoint source changed during revision review; review the new source before adoption",
+        )?;
         self.checkpoint_revision_work(&affected)?;
         self.store.apply_plan_revision(
             context.conversation,
@@ -267,6 +285,27 @@ impl Drop for RevisionBarrier<'_> {
     }
 }
 
+fn checkpoint_review_context(
+    revision: &PlanRevision,
+    baseline: &[Task],
+    transfers: &[Value],
+) -> Value {
+    let existing = baseline
+        .iter()
+        .filter_map(|task| {
+            let (base, result) = task.base.as_ref().zip(task.result.as_ref())?;
+            (base != result).then(|| {
+                serde_json::json!({
+                    "task":task.spec["id"], "runtime_id":task.id, "status":task.status,
+                    "base":base, "result":result,
+                    "retired":revision.retire.iter().any(|id| task.spec["id"] == *id),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"new_transfers":transfers, "replacements":revision.replacements, "existing_checkpoints":existing})
+}
+
 fn previous_specs(context: &ReviewContext<'_>) -> Vec<serde_json::Value> {
     context
         .baseline
@@ -279,6 +318,31 @@ fn previous_specs(context: &ReviewContext<'_>) -> Vec<serde_json::Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reworded_recovery_keeps_its_existing_checkpoint_visible_to_review() {
+        let task: Task = serde_json::from_value(json!({
+            "id":"runtime-writer", "plan_id":"plan", "spec":{"id":"recover"},
+            "status":"queued", "round":1, "base":"old", "result":"saved-code",
+            "report":"A retained report is not a replacement for this code"
+        }))
+        .unwrap();
+        let revision: PlanRevision = serde_json::from_value(json!({
+            "plan":"plan", "base_revision":1, "reason":"Clarify assessment", "tasks":[], "retire":[]
+        }))
+        .unwrap();
+        let context = checkpoint_review_context(&revision, std::slice::from_ref(&task), &[]);
+        assert_eq!(context["new_transfers"], json!([]));
+        assert_eq!(context["existing_checkpoints"][0]["result"], "saved-code");
+        assert_eq!(context["existing_checkpoints"][0]["retired"], false);
+        assert!(!context.to_string().contains("A retained report"));
+        let mut unchanged = task;
+        unchanged.result = unchanged.base.clone();
+        assert_eq!(
+            checkpoint_review_context(&revision, &[unchanged], &[])["existing_checkpoints"],
+            json!([])
+        );
+    }
 
     #[test]
     fn repeated_review_rejections_never_authorize_a_revision() {

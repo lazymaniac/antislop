@@ -90,13 +90,24 @@ impl Store {
         Ok(text)
     }
 
+    /// Bounded reference-only context survives report amendments. Records are
+    /// historical observations, never an attestation of the current code.
+    pub(in crate::lean) fn task_evidence_context(
+        &self,
+        task: &str,
+        generation: i64,
+    ) -> Result<Vec<EvidenceReference>> {
+        let db = self.db();
+        Ok(db.prepare("SELECT e.id,e.label,e.bytes,e.sha256,e.turn_id FROM agent_evidence e
+            JOIN turns t ON t.id=e.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs i ON i.turn_id=t.id
+            WHERE s.task_id=?1 AND i.generation=?2 AND t.role='worker:'||?1 AND t.status='done'
+            ORDER BY t.started_ms DESC,e.rowid DESC LIMIT 64")?
+            .query_map(params![task,generation], evidence_row)?.collect::<std::result::Result<_,_>>()?)
+    }
+
     pub(in crate::lean) fn result_evidence(&self, turn: &str) -> Result<Vec<EvidenceReference>> {
         let db = self.db();
         Ok(db.prepare("SELECT id,label,bytes,sha256,turn_id FROM agent_evidence WHERE turn_id=?1 OR id IN (SELECT evidence_id FROM result_evidence WHERE turn_id=?1) ORDER BY label,id")?.query_map([turn], evidence_row)?.collect::<std::result::Result<_,_>>()?)
-    }
-
-    pub(in crate::lean) fn evidence_report_owners(&self, id: &str) -> Result<Vec<String>> {
-        Ok(self.db().prepare("SELECT turn_id FROM agent_evidence WHERE id=?1 UNION SELECT turn_id FROM result_evidence WHERE evidence_id=?1")?.query_map([id], |r|r.get(0))?.collect::<std::result::Result<_,_>>()?)
     }
 }
 

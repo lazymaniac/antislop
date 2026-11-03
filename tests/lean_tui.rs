@@ -3653,6 +3653,65 @@ fn test_precise_comment_targets_and_labels() {
     assert_eq!(comment_label("finding:F1", &[]), "finding F1");
     assert_eq!(comment_label("report:R1", &[]), "report of task R1");
     assert_eq!(comment_label("artifact:A1", &[]), "artifact A1");
+
+    // Commenting in PlanView while Details and an interview/decision question are present
+    // must isolate PlanView input/paste and send comment_scoped without leaking round/run.
+    let dir = test_tempdir();
+    let sock = test_socket(dir.relative_path());
+    let listener = UnixListener::bind(&sock).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let _server = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_ok()
+                && let Ok(parsed) = serde_json::from_str::<Value>(&line)
+            {
+                let _ = tx.send(parsed["request"].clone());
+                let _ = stream.write_all(b"{\"data\":{\"id\":1},\"error\":null}\n");
+                let _ = stream.flush();
+            }
+        }
+    });
+    let (mut app, _rx_updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    app.conversation = "c-plan".into();
+    app.view.apply(&json!({
+        "seq": 1,
+        "kind": "plan_proposed",
+        "payload": {
+            "plan": "p1",
+            "document": "# Plan\nLine two",
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "proposed"}]
+        }
+    }));
+    app.view.apply(&json!({
+        "seq": 2,
+        "kind": "user_decision_requested",
+        "payload": {
+            "id": "d1",
+            "prompt": "Choose",
+            "options": [{"id": "o1", "label": "Opt 1"}]
+        }
+    }));
+    let mut details = Details::new("worker:t1".into());
+    details.selected_round = Some(2);
+    details.editing = true;
+    app.details = Some(details);
+    app.plan_view = Some(antislop::lean::tui::PlanView::new("p1".into()));
+
+    app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+    assert_eq!(
+        app.editor.as_ref().map(|e| e.target.as_str()),
+        Some("plan:p1:line:1")
+    );
+    app.paste("Plan comment text");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "Plan comment text");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(req["op"], "comment");
+    assert_eq!(req["plan"], "p1");
+    assert_eq!(req["target"], "plan:p1:line:1");
+    assert!(req.get("round").is_none() && req.get("run").is_none());
 }
 
 #[test]

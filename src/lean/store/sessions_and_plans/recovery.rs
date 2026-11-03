@@ -80,10 +80,19 @@ impl Store {
         if completed && !correction {
             tx.execute("UPDATE tasks SET feedback=json_set(coalesce(feedback,'{}'),'$.resume_role','reviewer') WHERE id=?1",[id])?;
         }
-        let text = interrupted_report(self, report)?;
+        let mut text = interrupted_report(self, report)?;
+        if text.is_none() && completed {
+            let result: Value =
+                serde_json::from_str(durable.as_deref().expect("completed result"))?;
+            text = interrupted_report(self, result["report"].as_str())?;
+        }
+        let encoded = text
+            .as_deref()
+            .map(|text| self.content.encode(text))
+            .transpose()?;
         tx.execute(
             "UPDATE tasks SET status='queued',report=?2 WHERE id=?1",
-            params![id, self.content.encode(&text)?],
+            params![id, encoded],
         )?;
         Ok(())
     }
@@ -97,16 +106,25 @@ fn unfinished_task_rows(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(String, O
         .collect::<std::result::Result<_, _>>()?)
 }
 
-fn interrupted_report(store: &Store, report: Option<&str>) -> Result<String> {
+fn interrupted_report(store: &Store, report: Option<&str>) -> Result<Option<String>> {
     let mut text = report
         .map(|report| store.content.decode(report))
         .transpose()?
         .unwrap_or_default();
-    if !text.is_empty() {
-        text.push_str("\n\n");
+    const NOTICE: &str = "[interrupted] the daemon stopped while this task ran";
+    if !text
+        .lines()
+        .any(|line| !line.trim().is_empty() && line.trim() != NOTICE)
+    {
+        // A restart notice is runtime state, never a completed worker report.
+        // Normalize old notice-only rows too, so fresh tasks start with a worker.
+        return Ok(None);
     }
-    text.push_str("[interrupted] the daemon stopped while this task ran");
-    Ok(text)
+    if !text.trim_end().ends_with(NOTICE) {
+        text.push_str("\n\n");
+        text.push_str(NOTICE);
+    }
+    Ok(Some(text))
 }
 
 pub(super) fn insert_proposed_tasks(

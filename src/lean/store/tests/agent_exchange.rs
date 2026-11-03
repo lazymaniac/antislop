@@ -332,6 +332,12 @@ fn acknowledged_worker_result_is_reused_after_interruption() {
         store.completed_task_output(&recovered).unwrap()["report"],
         "API defined"
     );
+    assert!(recovered.report.as_ref().unwrap().contains("API defined"));
+    store.interrupt_unfinished_tasks().unwrap();
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().report,
+        recovered.report
+    );
 }
 
 #[test]

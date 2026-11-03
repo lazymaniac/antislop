@@ -15,7 +15,7 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     }
     match role {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
-        "planner" => vec![SUBMIT_PLAN, TOOL],
+        "planner" => vec![SUBMIT_PLAN, TOOL, "read_evidence"],
         "requirements-extraction-analyst" => vec!["submit_ledger"],
         "requirements-audit-analyst" => {
             vec!["submit_audit", "read_dependency_result", "read_evidence"]
@@ -25,7 +25,7 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
             "read_dependency_result",
             "read_evidence",
         ],
-        _ if plain_reviewer(role) => vec![REVIEW],
+        _ if plain_reviewer(role) => vec![REVIEW, "read_evidence"],
         _ => vec![TOOL],
     }
 }
@@ -42,7 +42,7 @@ pub(super) fn scoped_tools(
             if task.kind == crate::config::WorkKind::Options {
                 *name != "complete"
             } else {
-                !matches!(*name, "select" | "report_blocker")
+                *name != "select"
             }
         });
     }
@@ -169,9 +169,9 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
         "current_turn" => ("Read this gateway's current task role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
-        "report_blocker" => ("End an options turn when no viable choice satisfies the current contract. Record the concrete blocker and condition for resuming. The task stays unapproved and its dependents do not run; the orchestrator must revise the owning task or resolve the blocker. Never fabricate a selection or finish only in terminal prose.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string"}}), vec!["turn", "report", "resume_condition"]),
+        "report_blocker" => ("End a worker turn when missing input or an unsatisfied prerequisite prevents completing the current contract. Record the concrete blocker and condition for resuming. Preserve completed work and checkpoints. The task stays unapproved and its dependents do not run; the orchestrator must resolve the blocker or revise the contract. Do not claim success or repeat a question already answered without new evidence.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string"}}), vec!["turn", "report", "resume_condition"]),
         "record_evidence" => ("Persist raw command/measurement output as immutable MCP execution evidence before completing. Supply the actual output, not a reconstruction or repository source contents. Disk-backed content survives worktree cleanup. Up to 256 KiB UTF-8 per labelled record; split larger outputs into distinct labels. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),
-        "read_evidence" => ("Read immutable MCP execution evidence of your own worker or a scoped completed dependency report, in pages of at most 16 KiB. Discover ids in read_dependency_result.evidence or the report's MCP evidence section. Reuse cursor until complete=true. This never ends the turn and does not grant filesystem or unrelated history access.".into(),json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),vec!["turn","evidence"]),
+        "read_evidence" => ("Read immutable MCP execution evidence recorded in this conversation, in pages of at most 16 KiB. Discover ids in read_dependency_result.evidence, the report's MCP evidence section, or task instructions. Reuse cursor until complete=true. This never ends the turn and does not grant filesystem access.".into(),json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),vec!["turn","evidence"]),
         "read_dependency_result" => ("Read complete scoped worker reports in pages up to 16 KiB. dependency=self reads your own earlier worker results (also for reviewers). available_rounds contains current-input rounds. report_history lists immutable result_ref values including older input generations: to read an older report, pass its exact result_ref. Historical=true means obsolete inputs: preserve the evidence but do not use it to claim current acceptance. Amendments never replace the original; read the earlier report and apply later corrections. Evidence metadata provides ids for read_evidence. This does not end the turn.".into(), json!({"dependency":{"type":"string","description":"Dependency name, scoped producer task id, or self"},"result_ref":{"type":"string","description":"Exact immutable reference from report_history; enables explicitly marked historical-input reports"},"round":{"type":"integer","minimum":0,"description":"Optional current-input worker round; when result_ref is present it must match"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
         "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn", "text"]),
         "finish_turn" if role == "planner" => (format!("Only after submit_plan or the plan reviewer refused a plan and you cannot correct it within the agreed requirements: end the turn without a plan and name the blocker and decision needed; the orchestrator receives it. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),

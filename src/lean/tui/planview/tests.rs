@@ -275,6 +275,25 @@ fn review_sends_the_drafts_only_when_there_are_some() {
             next_status: "deleted".into()
         }
     );
+    // D also deletes a whole-plan draft comment when the cursor line has no line comment.
+    view.comments.insert(
+        3,
+        Comment {
+            id: 3,
+            plan_id: Some("p".into()),
+            target: "plan:p".into(),
+            text: "whole plan remark".into(),
+            status: "draft".into(),
+        },
+    );
+    plan.cursor = 0;
+    assert_eq!(
+        press(&mut plan, &view, KeyCode::Char('D')),
+        PlanAction::ToggleResolveComment {
+            id: 3,
+            next_status: "deleted".into()
+        }
+    );
 }
 
 fn graph_view() -> View {
@@ -337,6 +356,20 @@ fn split_plan_keeps_prose_and_comment_anchors_and_draws_dependency_edges() {
         plan.cursor, note_index,
         "graph navigation preserves the prose cursor"
     );
+    // Task comments appear at the top of Selected task even when goal is very long.
+    view.tasks[0].goal = "very long goal text ".repeat(30);
+    view.comments.insert(2, comment(2, "draft", 4));
+    term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(true, false)))
+        .unwrap();
+    let text = screen(&term).join("\n");
+    assert!(
+        text.contains("#2 [draft]: remark 2"),
+        "task comment is visible in Selected task:\n{text}"
+    );
+    // Clicking in Selected task below graph_area focuses the task graph pane.
+    plan.graph_focused = false;
+    plan.mouse_click(plan.graph_area.x + 2, plan.graph_area.bottom() + 1, &view);
+    assert!(plan.graph_focused);
 }
 
 #[test]

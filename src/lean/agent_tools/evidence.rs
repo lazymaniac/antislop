@@ -22,7 +22,7 @@ impl Core {
             );
         }
         let id = required_text(args, "evidence")?;
-        let reference = self.authorized_evidence(conversation, role, turn, &id)?;
+        let reference = self.authorized_evidence(conversation, &id)?;
         let text = self.store.evidence_text(&reference)?;
         let binding = crate::hash(serde_json::to_vec(&(conversation, role, turn, &reference))?);
         let (text, cursor) = page_text(&text, &binding, args)?;
@@ -32,46 +32,15 @@ impl Core {
     fn authorized_evidence(
         &self,
         conversation: &str,
-        role: &str,
-        turn: &str,
         id: &str,
     ) -> Result<store::EvidenceReference> {
-        let evidence = self.store.evidence(conversation, id).map_err(|_| {
+        self.store.evidence(conversation, id).map_err(|_| {
             self.evidence_reference_error(
                 conversation,
-                role,
-                turn,
                 id,
                 "unknown or unavailable evidence reference in this conversation",
             )
-        })?;
-        if evidence.producer_turn == turn && task_role(role).is_some() {
-            return Ok(evidence);
-        }
-        let owners = self.store.evidence_report_owners(id)?;
-        let scope = self.dependency_reader_scope(conversation, role, turn)?;
-        for task in scope.tasks {
-            if task.status != status::APPROVED
-                && !task_role(role).is_some_and(|(id, _)| id == task.id)
-            {
-                continue;
-            }
-            let history = self.store.dependency_reports(&task)?;
-            if history
-                .reports
-                .iter()
-                .any(|report| owners.contains(&report.result_ref))
-            {
-                return Ok(evidence);
-            }
-        }
-        Err(self.evidence_reference_error(
-            conversation,
-            role,
-            turn,
-            id,
-            "evidence is outside the current task scope or its producer is not approved",
-        ))
+        })
     }
 
     /// Every record made this turn is retained automatically. Explicit references
@@ -79,7 +48,6 @@ impl Core {
     pub(super) fn completion_evidence(
         &self,
         conversation: &str,
-        role: &str,
         turn: &str,
         args: &Value,
         result: &mut TurnResult,
@@ -106,7 +74,7 @@ impl Core {
         let mut references = self.store.result_evidence(turn)?;
         for id in requested {
             if !references.iter().any(|r| r.id == id) {
-                references.push(self.authorized_evidence(conversation, role, turn, &id)?);
+                references.push(self.authorized_evidence(conversation, &id)?);
             }
         }
         require(

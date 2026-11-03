@@ -7,6 +7,28 @@ mod turn;
 pub(super) use turn::RequirementsTurnScope;
 
 impl Core {
+    pub(in crate::lean) fn refresh_requirements_if_needed(
+        self: &Arc<Self>,
+        conversation: &str,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        if let Some(run) = self.store.planning_run(conversation)?
+            && self.store.extraction_needs_refresh(conversation, &run.id)?
+        {
+            let refreshed = self.ensure_requirements(conversation, cancel)?;
+            // Source-only context must not leave an already authorized queued
+            // plan stranded. Semantic changes still require plan reassessment.
+            if refreshed.spec_revision == run.spec_revision
+                && let Some(plan) = self.store.accepted_plan(conversation)?
+                && self.store.plan_run(&plan)?.as_deref() == Some(run.id.as_str())
+            {
+                let _scope = self.integrating.lock().expect("integration mutex");
+                self.maybe_continue_plan(conversation, &plan)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::lean) fn ensure_requirements(
         self: &Arc<Self>,
         conversation: &str,
