@@ -50,7 +50,14 @@ impl Store {
             .ok_or_else(|| Error::Invalid("plan has no requirements".into()))?;
         let entries = self.ledger_entries(conversation, &run, Some(lease.requirement_revision))?;
         tasks::validate_revision_coverage(specs, &entries)?;
-        crate::lean::ledger::validate_runtime_constraints(specs, &entries)?;
+        self.validate_authorized_plan_constraints(
+            conversation,
+            &revision.plan,
+            specs,
+            baseline,
+            &revision.redo,
+            &entries,
+        )?;
         Ok(RevisionApply {
             conversation,
             revision,

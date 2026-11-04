@@ -111,8 +111,11 @@ impl<'a> Execution<'a> {
     }
 
     fn load_spec(core: &Core, task: &Task) -> Result<TaskContract> {
+        let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
+        spec.require_not_deferred()?;
+        core.store.validate_task_execution_constraints(task)?;
         core.store.assert_task_inputs(task)?;
-        Ok(serde_json::from_value(task.spec.clone())?)
+        Ok(spec)
     }
 
     pub(super) fn run(mut self) -> Result<()> {

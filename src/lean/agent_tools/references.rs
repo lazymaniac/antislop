@@ -30,8 +30,9 @@ pub(super) fn reference_error(
         .map(|(id, note)| format!("{id} ({note})"))
         .collect::<Vec<_>>()
         .join(", ");
+    let supplied = super::super::agent::clip(requested, 80);
     Error::Invalid(format!(
-        "{field}: {format}{reason}{hint}; available in this scope: [{choices}]"
+        "{field}: {format}{reason}; requested {supplied:?}{hint}; available in this scope: [{choices}]"
     ))
 }
 

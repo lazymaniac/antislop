@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct GatePlan {
     prerequisites: Vec<String>,
+    deferred: bool,
     prior_gates: Vec<String>,
     refactoring: Option<String>,
     ids: BTreeSet<String>,
@@ -20,6 +21,9 @@ impl GatePlan {
             .collect();
         let (placed, upstream) = upstream_tasks(tasks, referenced);
         Self {
+            deferred: tasks
+                .iter()
+                .any(|task| task.changes_code() && task.deferred),
             // An explicitly referenced checkpoint follows all upstream work,
             // including read-only reviews, but never its own consumers.
             prerequisites: if placed {
@@ -42,14 +46,16 @@ impl GatePlan {
         let id = reserve_task_id(agent.id, &mut self.ids);
         let dependencies = self.dependencies(agent.kind, &id);
         let description = gate_description(agent);
-        Some(gate_task(
+        let mut task = gate_task(
             agent,
             id,
             dependencies,
             &self.requirement_ids,
             &self.criterion_ids,
             description,
-        ))
+        );
+        task.deferred = self.deferred;
+        Some(task)
     }
 
     fn dependencies(&mut self, kind: WorkKind, id: &str) -> Vec<String> {
@@ -170,6 +176,7 @@ fn gate_task(
         change_kind: None,
         outputs: Vec::new(),
         delivery: None,
+        deferred: false,
         quality_gate: true,
         options_for: None,
         requirement_ids: requirement_ids.to_vec(),

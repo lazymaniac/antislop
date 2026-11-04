@@ -449,3 +449,32 @@ fn a_gate_alias_cannot_hide_a_self_dependency() {
     let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");
 }
+
+#[test]
+fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
+    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","goal":"Preserve code work","kind":"implementation","deferred":true})).unwrap();
+    let writer = planned.into_contract();
+    assert!(writer.deferred);
+    let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","goal":"Read retained results","kind":"analysis"})).unwrap();
+    assert!(!diagnostic.deferred);
+    assert!(
+        serde_json::to_value(&diagnostic)
+            .unwrap()
+            .get("deferred")
+            .is_none(),
+        "legacy contracts retain their serialized form"
+    );
+    let graph = finalize_plan(vec![writer, diagnostic], true, true);
+    tasks::validate(&graph).unwrap();
+    for task in &graph {
+        if task.id == "diagnose" {
+            assert!(!task.deferred);
+        } else {
+            assert!(task.deferred, "{} must stay held", task.id);
+        }
+    }
+    assert_eq!(finalize_plan(graph.clone(), true, true), graph);
+    let restored: Vec<TaskContract> =
+        serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
+    assert_eq!(restored, graph, "holds survive persistence and restart");
+}

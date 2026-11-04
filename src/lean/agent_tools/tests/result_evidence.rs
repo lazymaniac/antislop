@@ -480,6 +480,17 @@ fn a_new_producers_amendment_does_not_hide_the_carried_original() {
 
 #[test]
 fn reference_diagnostics_distinguish_typos_wrong_dependency_and_reference_kind() {
+    let malformed = crate::lean::agent_tools::references::reference_error(
+        "evidence",
+        &"ą\n".repeat(5000),
+        "invalid reference",
+        &[],
+    )
+    .to_string();
+    assert!(
+        malformed.len() < 400 && !malformed.contains('\n'),
+        "{malformed}"
+    );
     let (_directory, core, conversation, mut tasks) = fixture();
     let (role, producer) = start(&core, &conversation, &tasks[0], false);
     let response = core
@@ -506,6 +517,7 @@ fn reference_diagnostics_distinguish_typos_wrong_dependency_and_reference_kind()
         .to_string();
     assert!(
         error.contains("possible typo")
+            && error.contains(&format!("requested {typo:?}"))
             && error.contains(id)
             && error.contains("nothing was substituted"),
         "{error}"
@@ -640,4 +652,134 @@ fn evidence_context_survives_an_amendment_that_omits_its_execution_references() 
     let manifest = core.store.task_evidence_context(&tasks[0].id, 0).unwrap();
     assert_eq!(manifest.len(), 64);
     assert!(manifest.iter().all(|e| e.producer_turn == many.id));
+}
+
+#[test]
+fn blocked_worker_history_remains_readable_without_becoming_a_completed_result() {
+    let (_directory, core, conversation, mut tasks) = fixture();
+    tasks[0].round = 1;
+    core.store.update_task(&tasks[0]).unwrap();
+    let (role, blocked) = start(&core, &conversation, &tasks[0], false);
+    let report = "Preserved failed qualification; equivalence not established. ą🦀\n".repeat(700);
+    core.agent_tool(&conversation, &role, &blocked.id, "report_blocker", &json!({
+        "report":report, "resume_condition":"Read the preserved record before continuing analysis"
+    })).unwrap();
+    core.store
+        .finish_turn(&blocked.id, store::TurnStatus::Done, None)
+        .unwrap();
+    tasks[0].report = Some(report.clone());
+    core.store.update_task(&tasks[0]).unwrap();
+    assert!(core.store.completed_task_result(&tasks[0]).is_err());
+
+    // Coordination needs the blocked producer's full result without approving it.
+    for coordinator in [ORCHESTRATOR, COMMENT_ORCHESTRATOR] {
+        let turn = core
+            .store
+            .start_turn(
+                &conversation,
+                coordinator,
+                "fixture",
+                0,
+                Some(&tasks[0].plan_id),
+            )
+            .unwrap();
+        let page = core
+            .agent_tool(
+                &conversation,
+                coordinator,
+                &turn.id,
+                "read_dependency_result",
+                &json!({"dependency":"baseline"}),
+            )
+            .unwrap();
+        assert_eq!(page["result_type"], "blocked");
+        assert_eq!(page["task_approved"], false);
+        assert_eq!(page["task_status"], tasks[0].status);
+        assert_eq!(page["result_ref"], blocked.id);
+        assert!(
+            page["report"]
+                .as_str()
+                .unwrap()
+                .starts_with("Preserved failed qualification")
+        );
+        core.store
+            .finish_turn(&turn.id, store::TurnStatus::Done, None)
+            .unwrap();
+    }
+    // Both the next worker and its reviewer need the full record, not just a handoff.
+    tasks[0].round = 2;
+    core.store.update_task(&tasks[0]).unwrap();
+    for reviewer in [false, true] {
+        let (role, reader) = start(&core, &conversation, &tasks[0], reviewer);
+        let mut args = json!({"dependency":"self"});
+        let mut full = String::new();
+        loop {
+            let page = core
+                .agent_tool(
+                    &conversation,
+                    &role,
+                    &reader.id,
+                    "read_dependency_result",
+                    &args,
+                )
+                .unwrap();
+            assert_eq!(page["result_type"], "blocked");
+            assert_eq!(page["available_rounds"], json!([]));
+            assert_eq!(page["report_history"][0]["result_ref"], blocked.id);
+            assert_eq!(page["report_history"][0]["result_type"], "blocked");
+            full.push_str(page["report"].as_str().unwrap());
+            if page["complete"] == true {
+                break;
+            }
+            args["cursor"] = page["cursor"].clone();
+        }
+        assert_eq!(full, report);
+        core.store
+            .finish_turn(&reader.id, store::TurnStatus::Done, None)
+            .unwrap();
+    }
+
+    core.store
+        .db()
+        .execute(
+            "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+            [&tasks[0].id],
+        )
+        .unwrap();
+    let fresh = core.store.task_by_id(&tasks[0].id).unwrap().unwrap();
+    let (role, reader) = start(&core, &conversation, &fresh, false);
+    let history = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &reader.id,
+            "read_dependency_result",
+            &json!({"dependency":"self"}),
+        )
+        .unwrap();
+    assert_eq!(history["state"], "no_current_result");
+    assert_eq!(history["report_history"][0]["result_ref"], blocked.id);
+    let old = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &reader.id,
+            "read_dependency_result",
+            &json!({"dependency":"self", "result_ref":blocked.id}),
+        )
+        .unwrap();
+    assert_eq!(old["historical"], true);
+    assert_eq!(old["result_type"], "blocked");
+    assert!(core.store.completed_task_result(&fresh).is_err());
+    let (role, consumer) = start(&core, &conversation, &tasks[1], false);
+    assert!(
+        core.agent_tool(
+            &conversation,
+            &role,
+            &consumer.id,
+            "read_dependency_result",
+            &json!({"dependency":"baseline", "result_ref":blocked.id})
+        )
+        .is_err()
+    );
 }

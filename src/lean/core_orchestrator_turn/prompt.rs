@@ -48,6 +48,7 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     );
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
     append_ledger(context.ledger_context, &mut prompt);
+    prompt.insert_str(0, "\nRuntime capability boundary: only you can call revise_plan. Use deferred=true on future tasks that must remain stopped until a later authorized phase; this is enforced by scheduling and launch checks. Keep permitted independent diagnosis tasks active. Do not invent a producer that cannot run under current authority, approve a proposal as permission, or delete future obligations. Release deferred only through a reviewed revision after actual authorization. For incremental changes to the accepted plan, call revise_plan yourself with only changed/added contracts and an explicit retire list. Do not ask the planner to call revise_plan: request_replan delegates a complete replacement draft via submit_plan, not incremental edits. If the planner reports this capability mismatch, apply the incremental revision yourself; do not repeat the same delegation. Unchanged historical contracts need not be redeclared to obey a newly imposed execution limit; changed/new/redo work and each task launch remain constrained.\n");
     prompt
 }
 

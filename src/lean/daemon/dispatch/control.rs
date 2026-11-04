@@ -6,6 +6,8 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         request,
         &[
             identity,
+            authorize_task_execution,
+            runtime_notice,
             shutdown,
             force_shutdown,
             conversations_and_start,
@@ -136,6 +138,63 @@ fn trust(context: &Context<'_>, request: Request) -> Result<Route> {
                     "trusted": trusted,
                 })
             })
+        }
+        request => Route::Unmatched(request),
+    })
+}
+
+fn authorize_task_execution(context: &Context<'_>, request: Request) -> Result<Route> {
+    Ok(match request {
+        Request::Control(crate::lean::daemon::ControlRequest::AuthorizeTaskExecution {
+            authorization,
+        }) => {
+            let _guard = context
+                .core
+                .graph_updates
+                .lock()
+                .expect("graph update mutex");
+            let result = context
+                .core
+                .store
+                .authorize_task_execution(&authorization)?;
+            let text = format!(
+                "Explicit user/client execution authorization registered for task {} under answered decision {}. Only this exact contract and its next input generation receive a scoped exception to requirement {}'s NoNewExecutions; all other constraints and deferred work remain enforced. The writer is not yet released or approved: submit the independently reviewed revision. Preserve the following contract exactly; change only revision.reason to a fresh reason naming the scoped authorization so an immutable rejected receipt is not replayed. Do not ask the user for the same permission again. Authorized contract:\n{}",
+                authorization.contract.id,
+                authorization.decision,
+                authorization.requirement,
+                serde_json::to_string(&authorization.contract)?
+            );
+            context.core.store.add_message(
+                &authorization.conversation,
+                crate::lean::RUNTIME,
+                &text,
+            )?;
+            drop(_guard);
+            context.core.wake(&authorization.conversation);
+            Route::Handled(result)
+        }
+        request => Route::Unmatched(request),
+    })
+}
+
+fn runtime_notice(context: &Context<'_>, request: Request) -> Result<Route> {
+    Ok(match request {
+        Request::Control(crate::lean::daemon::ControlRequest::RuntimeNotice {
+            conversation,
+            text,
+        }) => {
+            validate_project_conversation(context.core, context.project, &conversation)?;
+            require(
+                !text.trim().is_empty() && text.len() <= 8192,
+                "runtime notice must contain 1–8192 bytes",
+            )?;
+            let message =
+                context
+                    .core
+                    .store
+                    .add_message(&conversation, crate::lean::RUNTIME, &text)?;
+            context.core.wake(&conversation);
+            Route::Handled(json!({"recorded":true,"message":message.seq}))
         }
         request => Route::Unmatched(request),
     })

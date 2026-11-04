@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WireRequest {
+    /// Trusted-client operational information, never an execution grant.
+    RuntimeNotice {
+        conversation: String,
+        text: String,
+    },
+    AuthorizeTaskExecution {
+        authorization: Box<crate::lean::store::ExecutionAuthorization>,
+    },
     TerminalOpen {
         conversation: String,
         role: String,

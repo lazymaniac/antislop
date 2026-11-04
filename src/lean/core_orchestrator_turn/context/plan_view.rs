@@ -75,14 +75,14 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
         .transpose()?
         .unwrap_or_default();
     let states = graph.iter().map(|task| json!({
-        "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round,
+        "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round, "deferred":task.spec["deferred"] == true,
         "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
-        "recovery":match task.status.as_str() {
+        "recovery":if task.spec["deferred"] == true { "execution held by runtime; release only by reviewed revision after authorization" } else { match task.status.as_str() {
             status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
             status::COORDINATING => "revise_plan to repair the stalled contract or dependencies",
             status::WAITING => "answer_agent for the existing question, respecting its disposition",
             _ => "do not retry; preserve approved work and let queued/running tasks proceed",
-        }
+        }}
     })).collect::<Vec<_>>();
     serde_json::to_string(&json!({"plan":graph.first().map(|task|&task.plan_id),"base_revision":base_revision,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>(),"task_states":states,"unfinished_checkpoints":checkpoints})).map_err(Error::from)
 }

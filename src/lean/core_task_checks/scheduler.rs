@@ -148,6 +148,7 @@ impl<'a> Scheduler<'a> {
 
     fn is_runnable(&self, task: &Task, id: &str) -> bool {
         matches!(task.status.as_str(), status::QUEUED | status::SKIPPED)
+            && task.spec["deferred"] != true
             && !self.reservations.contains(id)
     }
 
@@ -221,7 +222,11 @@ fn task_states(tasks: &[Task]) -> HashMap<String, String> {
         .map(|task| {
             (
                 task.spec["id"].as_str().unwrap_or_default().to_owned(),
-                task.status.clone(),
+                if task.spec["deferred"] == true {
+                    status::NEEDS_USER.into()
+                } else {
+                    task.status.clone()
+                },
             )
         })
         .collect()
@@ -291,5 +296,87 @@ mod tests {
         assert!(reservations.contains("second-writer"));
         reservations.release("second-writer");
         assert!(reservations.is_empty());
+    }
+    #[test]
+    fn deferred_tasks_cannot_schedule_or_launch_but_independent_work_is_runnable() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let mut tasks = core.store.add_plan(&conversation, &[
+            json!({"id":"future","title":"Future","goal":"Preserve future obligation","kind":"implementation","writes":true,"deferred":true}),
+            json!({"id":"consumer","title":"Consumer","goal":"Wait for future result","kind":"analysis","depends_on":["future"]}),
+            json!({"id":"diagnose","title":"Diagnose","goal":"Inspect current files","kind":"analysis"})
+        ]).unwrap();
+        tasks.sort_by_key(|task| match task.spec["id"].as_str() {
+            Some("future") => 0,
+            Some("consumer") => 1,
+            _ => 2,
+        });
+        for task in &mut tasks {
+            task.status = status::QUEUED.into();
+            core.store.update_task(task).unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let scheduler = Scheduler::new(&core, &conversation, &tasks[0].plan_id, &cancel);
+        assert!(!scheduler.is_runnable(&tasks[0], "future"));
+        assert!(scheduler.is_runnable(&tasks[2], "diagnose"));
+        tasks[2].status = status::APPROVED.into();
+        core.store.update_task(&tasks[2]).unwrap();
+        tasks[0].status = status::APPROVED.into();
+        core.store.update_task(&tasks[0]).unwrap();
+        assert!(
+            !dependencies_approved(&tasks[1], &task_states(&tasks)),
+            "a held historical approval cannot unlock its consumers"
+        );
+        let plan = tasks[0].plan_id.clone();
+        run(&core, &conversation, &plan, &cancel);
+        assert!(
+            core.store
+                .last_turn(&conversation, &format!("worker:{}", tasks[0].id))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            core.store
+                .last_turn(&conversation, &format!("worker:{}", tasks[1].id))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            core.run_task(&conversation, &mut tasks[0], &cancel)
+                .unwrap_err()
+                .to_string()
+                .contains("deferred")
+        );
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Codex,
+            binary: dir.path().join("must-not-launch"),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().to_path_buf(),
+            add_dirs: vec![],
+            access: agent::Access::Write,
+            resume: None,
+        };
+        let role = format!("worker:{}", tasks[0].id);
+        assert!(
+            core.native
+                .prepare_scoped(&core, &conversation, &role, &spec, "")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("deferred"),
+            "a restored writable CLI must not bypass the hold"
+        );
+        assert!(
+            !core.state.join("worktrees").exists(),
+            "even direct execution cannot allocate a writer checkout"
+        );
     }
 }

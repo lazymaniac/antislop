@@ -11,3 +11,6 @@ mod schema_and_comments;
 
 #[path = "tests/plan_revision.rs"]
 mod plan_revision;
+
+#[path = "tests/execution_authorizations.rs"]
+mod execution_authorizations;

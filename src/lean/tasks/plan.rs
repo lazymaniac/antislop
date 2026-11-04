@@ -23,6 +23,8 @@ pub struct PlannedTask {
     _legacy_scope: Option<serde_json::Value>,
     #[serde(default)]
     pub writes: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred: bool,
     #[serde(default)]
     pub change_kind: Option<ChangeKind>,
     #[serde(default)]
@@ -54,6 +56,7 @@ impl PlannedTask {
             summary: self.summary,
             section: self.section,
             writes,
+            deferred: self.deferred,
             change_kind: self.change_kind,
             outputs: self.outputs,
             delivery: self.delivery,

@@ -49,6 +49,9 @@ fn prepare_agent(
             .store
             .task_by_id(id)?
             .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+        let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
+        contract.require_not_deferred()?;
+        core.store.validate_task_execution_constraints(&task)?;
         let directory = crate::lean::core_task_runtime::directory(&core.state, &task)?;
         if !reviewer && spec.access == agent::Access::Write && !spec.add_dirs.contains(&directory) {
             spec.add_dirs.push(directory);

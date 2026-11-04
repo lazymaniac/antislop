@@ -41,3 +41,13 @@ CREATE TABLE IF NOT EXISTS task_resume_results(
  task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL,
  source_task TEXT NOT NULL REFERENCES tasks(id), result_turn TEXT REFERENCES agent_results(turn_id),
  PRIMARY KEY(task_id,generation));
+
+-- A trusted client binds one answered execution decision to one exact contract.
+CREATE TABLE IF NOT EXISTS execution_authorizations(
+ decision_id TEXT NOT NULL, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+ plan_id TEXT NOT NULL REFERENCES plans(id), task_id TEXT NOT NULL REFERENCES tasks(id),
+ local_task TEXT NOT NULL, generation INTEGER NOT NULL, requirement_id TEXT NOT NULL,
+ requirement_version INTEGER NOT NULL, contract_hash TEXT NOT NULL,
+ answer_seq INTEGER NOT NULL REFERENCES messages(seq), base_revision INTEGER NOT NULL,
+ created_ms INTEGER NOT NULL, PRIMARY KEY(conversation_id,decision_id));
+CREATE INDEX IF NOT EXISTS execution_authorizations_by_task ON execution_authorizations(plan_id,task_id,generation);

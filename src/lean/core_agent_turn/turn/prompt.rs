@@ -41,6 +41,7 @@ fn append_task_context(
         .store
         .task_by_id(id)?
         .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+    text.push_str(&format!("Authoritative runtime launch metadata: {}\nUse these current fields to determine plan acceptance, the applied reviewed revision and exact scoped execution authorization. They do not approve your code or establish a successful build or qualification. Historical rejections, old blocker reports and retry guidance describe earlier states; do not infer that current prerequisites are missing from those records. Follow the current contract's non-renewable budgets. Report only a current, concrete failure; do not ask again for permissions the runtime has verified.\n",serde_json::to_string(&core.store.task_execution_approval_context(&task)?)?));
     if git::is_repository(&spec.cwd) {
         text.push_str(&format!(
             "Input revision: {}; source commit: {}\n",
@@ -51,6 +52,22 @@ fn append_task_context(
     if let Some(run) = core.store.plan_run(&task.plan_id)? {
         let entries = core.store.ledger_entries(state.conversation, &run, None)?;
         let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
+        let restricted_count: usize = entries.iter().map(|e| e.spec.constraints.len()).sum();
+        let entries = core.store.authorized_task_constraints(
+            state.conversation,
+            &task,
+            &contract,
+            task.input_generation,
+            &entries,
+        )?;
+        if entries
+            .iter()
+            .map(|e| e.spec.constraints.len())
+            .sum::<usize>()
+            < restricted_count
+        {
+            text.push_str("Runtime verified an explicit user/client execution authorization bound to this exact contract and input generation. Only the executions and non-renewable budgets stated in this contract are permitted. This does not release other tasks, authorize retries, or waive other requirements. Preserve the cumulative execution budget in durable runtime state and MCP reports across turns.\n");
+        }
         crate::lean::ledger::validate_runtime_constraints(
             std::slice::from_ref(&contract),
             &entries,

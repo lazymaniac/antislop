@@ -50,7 +50,7 @@ impl Core {
         let mut specs = self.submitted_graph(conversation, tasks, keep)?;
         if let Some(run) = self.store.planning_run(conversation)? {
             let entries = self.store.ledger_entries(conversation, &run.id, None)?;
-            super::ledger::validate_runtime_constraints(&specs, &entries)?;
+            super::ledger::validate_plan_runtime_constraints(&specs, &[], &[], &entries)?;
             if !entries.is_empty() {
                 for spec in &mut specs {
                     super::ledger::resolve_covers(spec, &entries)?;
@@ -155,10 +155,37 @@ fn restore_requirement_links(spec: &mut TaskContract, baseline: &[Task]) -> Resu
     if !spec.covers.is_empty() {
         return Ok(());
     }
-    if let Some(old) = baseline.iter().find(|old| old.id == spec.id) {
+    if let Some(old) = baseline.iter().find(|old| old.spec["id"] == spec.id) {
         let old: TaskContract = serde_json::from_value(old.spec.clone())?;
         spec.requirement_ids = old.requirement_ids;
         spec.criterion_ids = old.criterion_ids;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod revision_link_tests {
+    use super::*;
+    #[test]
+    fn omitted_covers_inherit_by_local_task_name_not_runtime_uuid() {
+        let old: Task = serde_json::from_value(json!({
+            "id":"4fd97226-b9b9-4129-9398-643377939932","plan_id":"plan","status":"queued","round":0,
+            "spec":{"id":"baseline","title":"Baseline","goal":"Future work","kind":"implementation","writes":true,"requirement_ids":["R1"],"criterion_ids":["R1.1"]}
+        })).unwrap();
+        let planned: PlannedTask = serde_json::from_value(json!({"id":"baseline","title":"Baseline","goal":"Future work","kind":"implementation","deferred":true})).unwrap();
+        let linked =
+            Core::link_revised_task(planned.clone(), std::slice::from_ref(&old), &[]).unwrap();
+        assert_eq!(linked.requirement_ids, vec!["R1"]);
+        assert_eq!(linked.criterion_ids, vec!["R1.1"]);
+        assert!(linked.deferred);
+        let mut unrelated = planned;
+        unrelated.id = old.id.clone();
+        assert!(
+            Core::link_revised_task(unrelated, &[old], &[])
+                .unwrap_err()
+                .to_string()
+                .contains("covers"),
+            "an unrelated local name must not inherit through a matching runtime UUID"
+        );
+    }
 }

@@ -1,5 +1,26 @@
 use super::super::super::{Request, WireRequest};
 
+fn encode_runtime_notice(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Control(crate::lean::daemon::ControlRequest::RuntimeNotice {
+            conversation,
+            text,
+        }) => Ok(WireRequest::RuntimeNotice { conversation, text }),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn encode_authorize_task_execution(
+    request: Request,
+) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Control(crate::lean::daemon::ControlRequest::AuthorizeTaskExecution {
+            authorization,
+        }) => Ok(WireRequest::AuthorizeTaskExecution { authorization }),
+        other => Err(Box::new(other)),
+    }
+}
+
 fn encode_identity(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     match request {
         Request::Control(crate::lean::daemon::ControlRequest::Identity) => {
@@ -97,7 +118,9 @@ fn encode_trust(request: Request) -> std::result::Result<WireRequest, Box<Reques
 }
 
 pub(super) fn encode_group_all(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    encode_identity(request)
+    encode_runtime_notice(request)
+        .or_else(|request| encode_authorize_task_execution(*request))
+        .or_else(|request| encode_identity(*request))
         .or_else(|request| encode_get_config(*request))
         .or_else(|request| encode_set_config(*request))
         .or_else(|request| encode_shutdown(*request))

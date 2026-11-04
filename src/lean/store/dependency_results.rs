@@ -113,7 +113,11 @@ impl Store {
         Ok(DependencyReports {
             producer: source,
             current: current.map(|(_, output)| output).filter(|_| {
-                retained.is_some() || reports.is_empty() || reports.iter().any(|r| r.current_inputs)
+                retained.is_some()
+                    || reports.is_empty()
+                    || reports
+                        .iter()
+                        .any(|r| r.current_inputs && r.result_type == "completed")
             }),
             retained,
             reports,
@@ -126,7 +130,7 @@ impl Store {
         current: &Task,
     ) -> Result<Vec<ReportReference>> {
         let db = self.db();
-        let mut query = db.prepare("SELECT t.id,s.round,x.generation,length(cast(json_extract(r.result,'$.report') as blob)) FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation<=?3 AND t.status='done' AND t.role='worker:'||?1 AND json_extract(r.result,'$.type')='completed' ORDER BY x.generation DESC,s.round DESC,t.started_ms DESC,t.rowid DESC")?;
+        let mut query = db.prepare("SELECT t.id,s.round,x.generation,length(cast(json_extract(r.result,'$.report') as blob)),json_extract(r.result,'$.type') FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation<=?3 AND t.status='done' AND t.role='worker:'||?1 AND json_extract(r.result,'$.type') IN ('completed','blocked') ORDER BY x.generation DESC,s.round DESC,t.started_ms DESC,t.rowid DESC")?;
         Ok(query
             .query_map(
                 params![ancestor.id, ancestor.round, ancestor.input_generation],
@@ -137,6 +141,7 @@ impl Store {
                         round: row.get(1)?,
                         input_generation: generation,
                         bytes: row.get::<_, i64>(3)? as u64,
+                        result_type: row.get(4)?,
                         producer_task: ancestor.id.clone(),
                         current_inputs: ancestor.id == current.id
                             && generation == current.input_generation,
@@ -165,6 +170,7 @@ pub(in crate::lean) struct ReportReference {
     pub round: u32,
     pub input_generation: i64,
     pub bytes: u64,
+    pub result_type: String,
     pub producer_task: String,
     pub current_inputs: bool,
 }

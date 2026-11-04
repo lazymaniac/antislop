@@ -333,7 +333,7 @@ src
      complete_report(core,conversation,task,spec,worktree,raw):Result<Option<(String,(String,bool))>> > update_task,finish_report
      - save_checkpoint
     worker.rs
-     is_recheck(core,conversation,task,worker,reviewer):Result<bool> > pending_mail
+     is_recheck(core,conversation,task,worker,reviewer):Result<bool> > completed_task_output,pending_mail
      run(input):Result<Option<String>> > completed_task_output,run_worker_round
      task_directories(core,task,spec,project,worktree):Result<(PathBuf,Vec<PathBuf>)> > observation_worktree
      writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~49 > prepare_artifact_outputs,writer_base,combine_saved_checkpoint,worktree_path
@@ -425,7 +425,7 @@ src
        get_{config_route,config}
     control
      route(context,request):Result<Route> > route_pipeline
-     - identity,shutdown,force_shutdown,conversations_and_start,trust_status,trust
+     - identity,shutdown,force_shutdown,conversations_and_start,trust_status,trust,authorize_task_execution,runtime_notice
     conversation
      route(context,request):Result<Route> > route_pipeline
      - {comment,comment_scoped,comment_status,comments}_route,comments,comment_status_filter,load_comments,
@@ -463,7 +463,7 @@ src
    protocol
     convert
      decode_control/all
-      decode_group_all(wire):std::result::Result<Request,Box<WireRequest>> > decode_{identity,get_config,set_config,shutdown,force_shutdown,conversations,start,trust_status,trust}
+      decode_group_all(wire):std::result::Result<Request,Box<WireRequest>> > decode_{runtime_notice,authorize_task_execution,identity,get_config,set_config,shutdown,force_shutdown,conversations,start,trust_status,trust}
      decode_control.rs
       decode_control(wire):std::result::Result<Request,Box<WireRequest>>
      decode_conversation
@@ -500,7 +500,7 @@ src
      decode_terminal.rs
       decode_terminal(wire):std::result::Result<Request,Box<WireRequest>>
      encode_control/all
-      encode_group_all(request):std::result::Result<WireRequest,Box<Request>> > encode_{identity,get_config,set_config,shutdown,force_shutdown,conversations,start,start_in,trust_status,trust}
+      encode_group_all(request):std::result::Result<WireRequest,Box<Request>> > encode_{runtime_notice,authorize_task_execution,identity,get_config,set_config,shutdown,force_shutdown,conversations,start,start_in,trust_status,trust}
      encode_control.rs
       encode_control(request):WireRequest
      encode_conversation
@@ -543,7 +543,7 @@ src
      RequestEnvelope(C{protocol,request})
     request
      control
-      ControlRequest(E{Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn,TrustStatus,Trust})
+      ControlRequest(E{Identity,RuntimeNotice,AuthorizeTaskExecution,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn,TrustStatus,Trust})
      conversation
       ConversationRequest(E{Recover,CommentAt,SendToAgent,Send,SendAddressed,Accept,AcceptScoped,Reject,RejectScoped,Resume,ResumeScoped,RestartOrchestrator,Cancel,CancelScoped,Pause,Mode,ReviewComments,Plans,Plan,Comments,Comment,CommentScoped,CommentStatus,Diff,Review,ReviewScoped,Task,TaskChecks,TaskScoped})
      history
@@ -558,7 +558,7 @@ src
      terminal
       TerminalRequest(E{TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach})
     wire
-     WireRequest(E{TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,CommentAt,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Accept,Reject,Resume,ReviewComments,Recover,RestartOrchestrator,Cancel,Pause,Mode,Plans,Plan,Comments,Comment,CommentStatus,Diff,Review,TaskChecks,Task,Events,Sessions,History,Mail,TrustStatus,Trust})
+     WireRequest(E{RuntimeNotice,AuthorizeTaskExecution,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,CommentAt,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Accept,Reject,Resume,ReviewComments,Recover,RestartOrchestrator,Cancel,Pause,Mode,Plans,Plan,Comments,Comment,CommentStatus,Diff,Review,TaskChecks,Task,Events,Sessions,History,Mail,TrustStatus,Trust})
     wire_defaults
      default_true():bool ×0
   daemon.rs
@@ -724,6 +724,7 @@ src
    Launch(C{command,session,settings})
   ledger
    constraints
+    validate_plan_runtime_constraints(specs,baseline,redo,entries):Result<()> > validate_runtime_constraints
     validate_runtime_constraints(tasks,entries):Result<()> ~44 > require
    mod
     diff_hash(diff):Result<String> > diff_hash_with_after
@@ -919,7 +920,7 @@ src
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
-    read_dependency_result(conversation,role,turn,args):Result<Value> ~129 > required_text,dependency_{reader_scope,reports},report_reference_error,referenced_worker_report,result_evidence,{dependency_report,page}_text
+    read_dependency_result(conversation,role,turn,args):Result<Value> ~136 > required_text,dependency_{reader_scope,reports},report_reference_error,referenced_worker_report,result_evidence,{dependency_report,page}_text
     dependency_reader_scope(conversation,role,turn):Result<DependencyScope> ~77 > task_{role,by_id},require,plan_conversation,dependency_inputs,flatten,as_str,DependencyScope,audit_dependency_scope,dependency_plan,plan_revision
     evidence_tool(conversation,role,turn,tool,args):Result<Value> > task_role,required_text,authorized_evidence,{evidence,page}_text
     completion_evidence(conversation,turn,args,result):Result<Vec<store::EvidenceReference>> ~46 > require,{result,authorized}_evidence
@@ -1009,7 +1010,7 @@ src
     review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,revision_checkpoints,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > reserve_revision,revision_job,process_fresh_revision
     planner_turn(&Arc<Self>,conversation,upto,cancel):Result<()> > planning_requirements_ready,planner_turn_context,run_planner_turn,handle_planner_answer
-    require_refused_plan(conversation,turn):Result<()> > last_orchestration_answered,asked_since
+    require_refused_plan(conversation,turn):Result<()> > last_orchestration_answered,asked_since,messages_by
     request_replan(conversation,reason):Result<serde_json::Value> > last_orchestration_answered,messages_by,planning_run,add_message
     repeats_a_plan_that_ran(conversation,plan_id,specs):Result<bool> > last_plan_that_ran
     upstream(plan_id,spec):Result<String> > dependency_inputs
@@ -1109,7 +1110,7 @@ src
    registry/history_view
     restore_view_directory(core,context):Result<()> > turn_scope,task_by_id,plan_conversation,task_path_component,worktree_directory,queue_worktree_cleanup
    registry.rs
-    Registry: reap_idle():Result<()>; restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,pin_worktree,prepare_scoped; retire_directory(path):Result<bool> > try_lock; shutdown():Result<()> > store; prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > session_signature; get(conversation,role):Result<Option<Arc<Session>>>; claimed():Vec<String>
+    Registry: reap_idle():Result<()>; restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,pin_worktree,prepare_scoped; retire_directory(path):Result<bool> > try_lock; shutdown():Result<()> > store; prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > task_by_id,session_signature; get(conversation,role):Result<Option<Arc<Session>>>; claimed():Vec<String>
     - recorded_round,validate_profile,restored_agent_spec
    session
     Session: start(core,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop; check_active(idle):Result<()> > check_alive; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_protocol_observer(observer):Result<()>
@@ -1212,7 +1213,7 @@ src
      insert_mail_row(tx,conversation,role,mail,source_turn,stored_text):Result<Mail> > Mail,append_mail_source
    dependency_results
     DependencyReports(C{retained,producer,current,reports})
-    ReportReference(C{result_ref,round,input_generation,bytes,producer_task,current_inputs})
+    ReportReference(C{result_ref,round,input_generation,bytes,result_type,producer_task,current_inputs})
    evidence
     EvidenceReference(C{id,label,bytes,sha256,producer_turn})
     = MAX_EVIDENCE_BYTES,MAX_RESULT_EVIDENCE=64
@@ -1389,7 +1390,7 @@ src
     retained_result_ref(task):Result<Option<String>> > flatten,db
     dependency_plan(conversation,role,turn):Result<String> > db
     audit_dependency_scope(conversation,role,turn):Result<(Vec<Task>,i64)> > run_tasks
-    dependency_reports(task):Result<DependencyReports> ~62 > completed_task_result,worker_report_references,DependencyReports
+    dependency_reports(task):Result<DependencyReports> ~66 > completed_task_result,worker_report_references,DependencyReports
     referenced_worker_report(reference):Result<Value> > db
     record_evidence(turn,label,text):Result<EvidenceReference> ~50 > db,EvidenceReference
     evidence(conversation,id):Result<EvidenceReference> > db
@@ -1445,7 +1446,7 @@ src
     plan_specs(plan):Result<Vec<Value>> > db
     task_summary(task):Result<String> > completed_task_output
     completed_task_output(task):Result<Value> > completed_task_result
-    completed_task_result(task):Result<(String,Value)> ~46 > plan_conversation,retained_result_ref,as_str,task_by_id
+    completed_task_result(task):Result<(String,Value)> ~53 > plan_conversation,retained_result_ref,as_str,task_by_id
     plan(plan_id):Result<Vec<Task>> > db,plan_task_rows,decode_plan_task
     checks(task,round):Result<Vec<Value>> > db
     reserve_revision_job(conversation,key,revision):Result<(String,bool)> > db,resume_revision_job,require_no_review,insert_revision_job
@@ -1509,7 +1510,7 @@ src
    - append_failed_turn
   tasks
    agents/gates
-    GatePlan(C{prerequisites,prior_gates,refactoring,ids,{requirement,criterion}_ids,ordered})
+    GatePlan(C{prerequisites,deferred,prior_gates,refactoring,ids,{requirement,criterion}_ids,ordered})
      new(tasks,ordered):Self > upstream_tasks,{writer,union}_ids
      next():Option<TaskContract> > remove,reserve_task_id,dependencies,gate_{description,task}
     - GateDescription,gate_summaries,is_audit,gate_goal
@@ -1563,7 +1564,7 @@ src
     planned_graph_with(tasks,kept):Result<Vec<TaskContract>> > resolve_gate_dependencies,order_authored_graph
     validate(tasks):Result<()> > validate_{task_id,change,dependencies},as_str
     validate_task_id(id):Result<()> > all
-    PlannedTask(C{id,title,goal,kind,depends_on,_legacy_scope,writes,change_kind,outputs,delivery,covers,section,summary})
+    PlannedTask(C{id,title,goal,kind,depends_on,_legacy_scope,writes,deferred,change_kind,outputs,delivery,covers,section,summary})
      into_contract():TaskContract > writes_by_default,TaskContract,ReviewerSpec,reviewer_summary
     - known_authored_dependency
    prompts
@@ -1618,7 +1619,8 @@ src
    ChangeKind(E{None,Artifact,Code})
    DeliveryMode(E{Untracked})
    ReviewerSpec(C{summary})
-   TaskContract(C{quality_gate,options_for,id,{requirement,criterion}_ids,title,goal,summary,section,writes,change_kind,outputs,delivery,depends_on,kind,covers,reviewer})
+   TaskContract(C{quality_gate,options_for,id,{requirement,criterion}_ids,title,goal,summary,section,deferred,writes,change_kind,outputs,delivery,depends_on,kind,covers,reviewer})
+    require_not_deferred():Result<()>
     change_kind():ChangeKind
     changes_code():bool > change_kind
     validate_change_paths(paths):Result<()> > change_kind
@@ -2941,6 +2943,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-· 120,166 LOC · input 1,055,122 · output 42,593 tokens · state ba0b984c0ea1
+· 121,025 LOC · input 1,065,327 · output 42,699 tokens · state e788c2b666c5
 ```
 <!-- hologram:end -->

@@ -5,7 +5,7 @@ use crate::lean::tasks::TaskContract;
 use serde_json::json;
 use std::collections::BTreeSet;
 
-fn fixture() -> (tempfile::TempDir, Store, String, String, Vec<Task>) {
+pub(super) fn fixture() -> (tempfile::TempDir, Store, String, String, Vec<Task>) {
     fixture_for(false)
 }
 

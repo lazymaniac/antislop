@@ -11,6 +11,7 @@ impl Core {
     ) -> Result<Value> {
         let requested = required_text(args, "dependency")?;
         let scope = self.dependency_reader_scope(conversation, role, turn)?;
+        let coordinating = matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR);
         let task = scope.tasks.iter().rev().find(|task| {
             if task_role(role).is_some_and(|(id, _)| id == task.id) && requested != "self" { return false; }
             (task.id == requested || (requested == "self" && task_role(role).is_some_and(|(id, _)| id == task.id)))
@@ -25,7 +26,9 @@ impl Core {
             Error::Invalid(format!("dependency {requested:?} is not an input of this task or is unknown in its bound scope; available results: {available}"))
         })?;
         require(
-            task.status == status::APPROVED || task_role(role).is_some_and(|(id, _)| id == task.id),
+            task.status == status::APPROVED
+                || coordinating
+                || task_role(role).is_some_and(|(id, _)| id == task.id),
             "dependency is not approved",
         )?;
         let requested_round = args
@@ -47,6 +50,10 @@ impl Core {
                     .ok_or_else(|| Error::Invalid("result_ref: expected a report reference".into()))
             })
             .transpose()?;
+        let own_history = task_role(role).is_some_and(|(id, _)| id == task.id);
+        let readable_default = |r: &&store::dependency_results::ReportReference| {
+            r.current_inputs && (r.result_type == "completed" || own_history || coordinating)
+        };
         let selected = if let Some(reference) = result_ref {
             Some(
                 history
@@ -61,18 +68,14 @@ impl Core {
             history
                 .reports
                 .iter()
-                .find(|r| r.round == round && r.current_inputs)
+                .find(|r| r.round == round && readable_default(r))
         } else {
-            history
-                .reports
-                .iter()
-                .find(|r| r.current_inputs)
-                .or_else(|| {
-                    history
-                        .reports
-                        .iter()
-                        .find(|r| Some(&r.result_ref) == history.retained.as_ref())
-                })
+            history.reports.iter().find(readable_default).or_else(|| {
+                history
+                    .reports
+                    .iter()
+                    .find(|r| Some(&r.result_ref) == history.retained.as_ref())
+            })
         };
         if let Some(selected) = selected {
             require(
@@ -83,7 +86,7 @@ impl Core {
         let mut available_rounds = history
             .reports
             .iter()
-            .filter(|r| r.current_inputs)
+            .filter(|r| r.current_inputs && r.result_type == "completed")
             .map(|r| r.round)
             .collect::<Vec<_>>();
         available_rounds.dedup();
@@ -91,6 +94,7 @@ impl Core {
         let generation = selected.map_or(history.producer.input_generation, |r| r.input_generation);
         let historical = selected.is_some_and(|r| !r.current_inputs);
         let selected_producer = selected.map(|r| r.producer_task.clone());
+        let result_type = selected.map_or("completed", |r| r.result_type.as_str());
         let selected_ref = selected.map(|r| r.result_ref.clone());
         let producer = history.producer.id.clone();
         let output = if let Some(reference) = selected {
@@ -110,7 +114,10 @@ impl Core {
                 }
             }
         };
-        if available_rounds.is_empty() && generation == history.producer.input_generation {
+        if result_type == "completed"
+            && available_rounds.is_empty()
+            && generation == history.producer.input_generation
+        {
             available_rounds.push(round);
         }
         let evidence = selected_ref
@@ -134,7 +141,7 @@ impl Core {
         ))?);
         let (page, cursor) = page_text(&report, &binding, args)?;
         Ok(
-            json!({"dependency":requested,"result_id":producer,"round":round,"available_rounds":available_rounds,"report_history":history.reports,"result_ref":selected_ref,"input_generation":generation,"historical":historical,"retained_for_review":history.retained.is_some(),"compatibility_reviewed":history.retained.is_some() && task.status == status::APPROVED,"report_producer":selected_producer,"evidence":evidence,"report":page,"complete":cursor.is_none(),"cursor":cursor}),
+            json!({"dependency":requested,"task_status":task.status,"task_approved":task.status == status::APPROVED,"result_type":result_type,"result_id":producer,"round":round,"available_rounds":available_rounds,"report_history":history.reports,"result_ref":selected_ref,"input_generation":generation,"historical":historical,"retained_for_review":history.retained.is_some(),"compatibility_reviewed":result_type == "completed" && history.retained.is_some() && task.status == status::APPROVED,"report_producer":selected_producer,"evidence":evidence,"report":page,"complete":cursor.is_none(),"cursor":cursor}),
         )
     }
 

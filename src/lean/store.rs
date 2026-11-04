@@ -287,3 +287,7 @@ pub use turn_status::TurnStatus;
 #[cfg(test)]
 #[path = "store/tests.rs"]
 mod tests;
+
+#[path = "store/execution_authorizations.rs"]
+mod execution_authorizations;
+pub use execution_authorizations::ExecutionAuthorization;

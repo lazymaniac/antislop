@@ -298,6 +298,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         change_kind: None,
         outputs: Vec::new(),
         delivery: None,
+        deferred: task.deferred,
         quality_gate: false,
         options_for: Some(task.id.clone()),
         id,

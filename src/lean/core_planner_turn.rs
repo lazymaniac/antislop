@@ -239,9 +239,16 @@ impl Core {
             .asked_since(conversation, answered, upto as u64)?
             .iter()
             .any(|message| message.author == PLAN_REVIEWER);
+        // A requested replan may itself demand an unavailable capability.
+        // Hand that blocker back instead of requiring a fabricated submission.
+        let replanning = self
+            .store
+            .messages_by(conversation, REPLAN, answered)?
+            .iter()
+            .any(|message| message.seq <= upto as u64);
         require(
-            refused > 0 || reviewed,
-            "submit the plan with submit_plan; finish_turn only reports a blocker after submit_plan or the plan reviewer refused a plan and you cannot correct what it names",
+            refused > 0 || reviewed || replanning,
+            "submit the plan with submit_plan; finish_turn reports a concrete blocker after a refusal or during a requested replan; only the orchestrator can call revise_plan",
         )
     }
 
@@ -329,6 +336,42 @@ mod tests {
             .unwrap();
         core.agent_tool(&id, PLANNER, &turn.id, "finish_turn", &blocker)
             .unwrap();
+    }
+
+    #[test]
+    fn requested_replan_can_return_a_capability_blocker_without_faking_a_submission() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let tasks = core.store.add_plan(&conversation, &[task()]).unwrap();
+        let request = core
+            .store
+            .add_message(
+                &conversation,
+                REPLAN,
+                "Incrementally revise the existing plan with revise_plan",
+            )
+            .unwrap();
+        let turn = core
+            .store
+            .start_turn(&conversation, PLANNER, "fixture", request.seq, None)
+            .unwrap();
+        core.agent_tool(&conversation, PLANNER, &turn.id, "finish_turn", &json!({"text":"revise_plan belongs to the orchestrator; it must submit this incremental revision itself"})).unwrap();
+        assert_eq!(
+            core.store.latest_plan(&conversation).unwrap()[0].id,
+            tasks[0].id
+        );
+        assert!(
+            core.store
+                .latest_role_result(&conversation, PLANNER)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

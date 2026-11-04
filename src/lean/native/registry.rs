@@ -117,6 +117,15 @@ impl Registry {
         spec: &agent::Spec,
         scope: &str,
     ) -> Result<Arc<Session>> {
+        if spec.access == agent::Access::Write
+            && let Some((id, _)) = super::super::task_role(role)
+            && let Some(task) = core.store.task_by_id(id)?
+        {
+            let contract: super::super::tasks::TaskContract =
+                serde_json::from_value(task.spec.clone())?;
+            contract.require_not_deferred()?;
+            core.store.validate_task_execution_constraints(&task)?;
+        }
         let signature = session_signature(role, spec, scope);
         let key = (conversation.to_owned(), role.to_owned());
         let mut sessions = self.sessions.lock().map_err(invalid)?;

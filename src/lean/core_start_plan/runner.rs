@@ -50,9 +50,11 @@ impl Core {
 
     fn has_runnable_dependents(&self, plan_id: &str) -> bool {
         self.store.plan(plan_id).is_ok_and(|tasks| {
-            tasks
-                .iter()
-                .any(|task| task.status == status::QUEUED && dependencies_approved(task, &tasks))
+            tasks.iter().any(|task| {
+                task.status == status::QUEUED
+                    && task.spec["deferred"] != true
+                    && dependencies_approved(task, &tasks)
+            })
         })
     }
 
@@ -281,8 +283,48 @@ fn dependencies_approved(task: &Task, tasks: &[Task]) -> bool {
         .is_some_and(|dependencies| {
             dependencies.iter().all(|dependency| {
                 tasks.iter().any(|upstream| {
-                    upstream.spec["id"] == *dependency && upstream.status == status::APPROVED
+                    upstream.spec["id"] == *dependency
+                        && upstream.status == status::APPROVED
+                        && upstream.spec["deferred"] != true
                 })
             })
         })
+}
+
+#[cfg(test)]
+mod deferred_tests {
+    use super::*;
+    #[test]
+    fn held_work_returns_control_instead_of_spinning_the_plan_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let mut tasks = core.store.add_plan(&conversation, &[json!({"id":"future","title":"Future","goal":"Preserve future work","kind":"implementation","deferred":true})]).unwrap();
+        tasks[0].status = status::QUEUED.into();
+        core.store.update_task(&tasks[0]).unwrap();
+        // Suppress only notification delivery; no real provider is started by the test.
+        core.running
+            .lock()
+            .unwrap()
+            .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));
+        assert!(!core.has_runnable_dependents(&tasks[0].plan_id));
+        assert!(core.run_plan_cycle(&conversation, &tasks[0].plan_id, &AtomicBool::new(false)));
+        let reports = core.store.messages_by(&conversation, RUNTIME, 0).unwrap();
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.text.contains("\"deferred\":true"))
+        );
+        assert!(
+            core.store
+                .last_turn(&conversation, &format!("worker:{}", tasks[0].id))
+                .unwrap()
+                .is_none()
+        );
+    }
 }

@@ -49,6 +49,42 @@ pub(crate) fn validate_runtime_constraints(
     Ok(())
 }
 
+/// A revision is not an execution of every unchanged historical contract.
+/// Launch-time validation still checks every task before it can run.
+pub(crate) fn validate_plan_runtime_constraints(
+    specs: &[TaskContract],
+    baseline: &[crate::lean::store::Task],
+    redo: &[String],
+    entries: &[LedgerEntry],
+) -> Result<()> {
+    let changed = specs
+        .iter()
+        .filter(|spec| {
+            !spec.deferred
+                && (redo.contains(&spec.id)
+                    || !baseline.iter().any(|old| {
+                        let Ok(mut previous) =
+                            serde_json::from_value::<TaskContract>(old.spec.clone())
+                        else {
+                            return false;
+                        };
+                        if previous.quality_gate && spec.quality_gate {
+                            // Finalization rewires existing gates and refreshes their
+                            // coverage when an earlier writer becomes a read-only task.
+                            // This retains a future obligation, not permission to run it.
+                            previous.depends_on.clone_from(&spec.depends_on);
+                            previous.requirement_ids.clone_from(&spec.requirement_ids);
+                            previous.criterion_ids.clone_from(&spec.criterion_ids);
+                            previous.covers.clone_from(&spec.covers);
+                        }
+                        previous == **spec
+                    }))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    validate_runtime_constraints(&changed, entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,11 +145,158 @@ mod tests {
         assert!(validate_runtime_constraints(&finalized, std::slice::from_ref(&entry)).is_ok());
         let mut code = task;
         code.change_kind = Some(ChangeKind::Code);
-        let message = validate_runtime_constraints(&[code], &[entry])
-            .unwrap_err()
-            .to_string();
+        let message =
+            validate_runtime_constraints(std::slice::from_ref(&code), std::slice::from_ref(&entry))
+                .unwrap_err()
+                .to_string();
         for field in ["report", "R1", "user-message"] {
             assert!(message.contains(field), "{message}");
         }
+        let baseline: crate::lean::store::Task = serde_json::from_value(json!({
+            "id":"runtime-task", "plan_id":"plan", "spec":code,
+            "status":"approved", "round":1
+        }))
+        .unwrap();
+        let analysis: TaskContract = serde_json::from_value(json!({
+            "id":"diagnose", "title":"Diagnose", "goal":"Inspect retained results only", "kind":"analysis", "writes":false
+        })).unwrap();
+        let proposed = vec![code.clone(), analysis];
+        assert!(
+            validate_plan_runtime_constraints(
+                &proposed,
+                std::slice::from_ref(&baseline),
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_runtime_constraints(std::slice::from_ref(&code), std::slice::from_ref(&entry))
+                .is_err(),
+            "unchanged historical work still cannot execute under the new restriction"
+        );
+        assert!(
+            validate_plan_runtime_constraints(
+                &proposed,
+                std::slice::from_ref(&baseline),
+                std::slice::from_ref(&code.id),
+                std::slice::from_ref(&entry)
+            )
+            .is_err(),
+            "redo is a new execution"
+        );
+        let mut changed = proposed.clone();
+        changed[0].goal = "Change the implementation".into();
+        assert!(
+            validate_plan_runtime_constraints(
+                &changed,
+                std::slice::from_ref(&baseline),
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_err()
+        );
+        let mut pending = baseline.clone();
+        pending.status = "queued".into();
+        let mut gated = proposed.clone();
+        gated[0].depends_on.push("diagnose".into());
+        gated[0].goal = "Future obligation; stop until separate authorization".into();
+        assert!(
+            validate_plan_runtime_constraints(
+                &gated,
+                std::slice::from_ref(&pending),
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_err(),
+            "a textual condition is not a runtime hold"
+        );
+        gated[0].deferred = true;
+        assert!(
+            validate_plan_runtime_constraints(
+                &gated,
+                std::slice::from_ref(&pending),
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_ok()
+        );
+        assert!(gated[0].require_not_deferred().is_err());
+        assert!(
+            validate_runtime_constraints(
+                std::slice::from_ref(&gated[0]),
+                std::slice::from_ref(&entry)
+            )
+            .is_err()
+        );
+        let mut released = gated.clone();
+        released[0].deferred = false;
+        pending.spec = serde_json::to_value(&gated[0]).unwrap();
+        assert!(
+            validate_plan_runtime_constraints(
+                &released,
+                &[pending],
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_err(),
+            "clearing the hold cannot override the active execution restriction"
+        );
+        // Reproduce the real revision pipeline: narrowing one writer rebuilds
+        // existing gates, changing edges/coverage while preserving their behavior.
+        let mut future = code.clone();
+        future.id = "future-writer".into();
+        let original = crate::lean::tasks::with_required_agents(vec![code.clone(), future.clone()]);
+        let history = original.iter().map(|spec| serde_json::from_value::<crate::lean::store::Task>(json!({
+            "id":format!("runtime-{}", spec.id),"plan_id":"plan","spec":spec,"status":"queued","round":0
+        })).unwrap()).collect::<Vec<_>>();
+        let mut readonly = proposed[1].clone();
+        readonly.id = code.id.clone();
+        let mut diagnosis = proposed[1].clone();
+        diagnosis.requirement_ids = vec!["R26".into()];
+        let later = crate::lean::tasks::with_required_agents(vec![readonly, future, diagnosis]);
+        let gate = later
+            .iter()
+            .find(|task| task.id == "quality-refactoring")
+            .unwrap();
+        let old_gate = original.iter().find(|task| task.id == gate.id).unwrap();
+        assert_ne!(gate.depends_on, old_gate.depends_on);
+        assert!(
+            validate_plan_runtime_constraints(&later, &history, &[], std::slice::from_ref(&entry))
+                .is_ok()
+        );
+        assert!(
+            validate_runtime_constraints(std::slice::from_ref(gate), std::slice::from_ref(&entry))
+                .is_err()
+        );
+        assert!(
+            validate_plan_runtime_constraints(
+                &later,
+                &history,
+                std::slice::from_ref(&gate.id),
+                std::slice::from_ref(&entry)
+            )
+            .is_err()
+        );
+        let mut changed_gate = later.clone();
+        changed_gate
+            .iter_mut()
+            .find(|task| task.id == gate.id)
+            .unwrap()
+            .goal = "Execute a different gate".into();
+        assert!(
+            validate_plan_runtime_constraints(
+                &changed_gate,
+                &history,
+                &[],
+                std::slice::from_ref(&entry)
+            )
+            .is_err()
+        );
+        let mut added = proposed;
+        let mut new_code = code.clone();
+        new_code.id = "new-code".into();
+        added.push(new_code);
+        assert!(validate_plan_runtime_constraints(&added, &[baseline], &[], &[entry]).is_err());
     }
 }

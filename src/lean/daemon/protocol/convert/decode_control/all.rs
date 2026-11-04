@@ -1,5 +1,25 @@
 use super::super::super::{Request, WireRequest};
 
+fn decode_runtime_notice(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::RuntimeNotice { conversation, text } => Ok(Request::Control(
+            crate::lean::daemon::ControlRequest::RuntimeNotice { conversation, text },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn decode_authorize_task_execution(
+    wire: WireRequest,
+) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::AuthorizeTaskExecution { authorization } => Ok(Request::Control(
+            crate::lean::daemon::ControlRequest::AuthorizeTaskExecution { authorization },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
 fn decode_identity(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
         WireRequest::Identity => Ok(Request::Control(
@@ -93,7 +113,9 @@ fn decode_trust(wire: WireRequest) -> std::result::Result<Request, Box<WireReque
 pub(super) fn decode_group_all(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
-    decode_identity(wire)
+    decode_runtime_notice(wire)
+        .or_else(|wire| decode_authorize_task_execution(*wire))
+        .or_else(|wire| decode_identity(*wire))
         .or_else(|wire| decode_get_config(*wire))
         .or_else(|wire| decode_set_config(*wire))
         .or_else(|wire| decode_shutdown(*wire))

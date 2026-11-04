@@ -253,6 +253,7 @@ mod tests {
             change_kind: None,
             outputs: Vec::new(),
             delivery: None,
+            deferred: false,
             quality_gate: false,
             options_for: None,
             id: id.into(),

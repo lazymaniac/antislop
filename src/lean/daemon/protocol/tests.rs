@@ -47,6 +47,13 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
             json!({"op":"plans","conversation":"c","offset":null,"limit":null}),
         ),
         (
+            Request::Control(ControlRequest::RuntimeNotice {
+                conversation: "c".into(),
+                text: "Verified toolchain path; no new execution grant".into(),
+            }),
+            json!({"op":"runtime_notice","conversation":"c","text":"Verified toolchain path; no new execution grant"}),
+        ),
+        (
             Request::Control(ControlRequest::Trust { trusted: true }),
             json!({"op":"trust","trusted":true}),
         ),

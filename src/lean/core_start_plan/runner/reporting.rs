@@ -49,5 +49,7 @@ impl Core {
 }
 
 pub(super) fn has_blocked_tasks(tasks: &[Task]) -> bool {
-    tasks.iter().any(|task| task.status != status::APPROVED)
+    tasks
+        .iter()
+        .any(|task| task.status != status::APPROVED || task.spec["deferred"] == true)
 }

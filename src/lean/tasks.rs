@@ -92,6 +92,9 @@ pub struct TaskContract {
     /// Optional section heading in the plan document that this task implements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// Future work kept in the graph but never scheduled until a reviewed revision releases it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred: bool,
     #[serde(default)]
     pub writes: bool,
     /// Missing in legacy contracts: infer none/code from writes.
@@ -113,6 +116,16 @@ pub struct TaskContract {
 }
 
 impl TaskContract {
+    pub(crate) fn require_not_deferred(&self) -> Result<()> {
+        crate::require(
+            !self.deferred,
+            &format!(
+                "task {} execution is deferred; release it through a reviewed revision after the required authorization",
+                self.id
+            ),
+        )
+    }
+
     pub fn change_kind(&self) -> ChangeKind {
         self.change_kind.unwrap_or(if self.writes {
             ChangeKind::Code

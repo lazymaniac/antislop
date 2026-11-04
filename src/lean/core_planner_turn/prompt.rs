@@ -40,5 +40,6 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         prompt.push_str(keepable);
     }
     append_ledger(context.ledger_context, &mut prompt);
+    prompt.push_str("\nRuntime capability boundary: you are the planner. submit_plan submits a complete replacement draft, with keep for approved work. revise_plan is available ONLY to the orchestrator; request_replan does not delegate that capability. If the request requires an incremental revision of the accepted plan, report that mismatch with finish_turn so the orchestrator can call revise_plan itself. Never wait for unavailable tools or claim a revision was applied.\n");
     prompt
 }

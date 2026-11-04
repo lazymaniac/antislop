@@ -132,6 +132,7 @@ pub(super) fn planned_task() -> Value {
             "kind":{"enum":KINDS},
             "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. When that kind already has explicitly declared checks, its canonical gate id refers to all of those checks. Each dependent receives dependency summaries"},
             "writes":{"type":"boolean","description":"Omit to follow the kind: implementation, refactoring, testing, static_analysis and integration write"},
+            "deferred":{"type":"boolean","description":"True keeps future work in the graph but runtime cannot schedule or launch it. Its options and code gates are deferred too. Release only through a later reviewed revision after the required authorization; this field grants no execution permission."},
             "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Independent of writes."},
             "outputs":{"type":"array","items":{"type":"string"},"description":"Explicit relative output files, required for artifact"},
             "delivery":{"enum":["untracked"],"description":"Deliver a new artifact without modifying the project HEAD or index"},

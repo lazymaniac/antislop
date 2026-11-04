@@ -115,6 +115,12 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     assert!(first.contains("OLD GOAL") && first.contains("NEW GOAL"));
     assert_eq!(first.matches("UNCHANGED GOAL").count(), 1);
     assert!(first.contains("You review a plan"));
+    let manifest = first
+        .lines()
+        .find_map(|line| line.strip_prefix("Complete candidate task IDs: "))
+        .unwrap();
+    let candidate_ids: Vec<String> = serde_json::from_str(manifest).unwrap();
+    assert_eq!(candidate_ids, vec!["a", "b"]);
     let resumed = plan_revision_review_prompt(
         "/p",
         "",
