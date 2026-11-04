@@ -42,13 +42,36 @@ pub(super) fn readable(value: &Value) -> String {
                 values.iter().map(readable).collect::<Vec<_>>().join("; ")
             }
         }
-        Value::Object(values) => values
-            .iter()
-            .map(|(key, value)| format!("{}: {}", key.replace('_', " "), readable(value)))
-            .collect::<Vec<_>>()
-            .join("; "),
+        Value::Object(values) => readable_object(values),
         Value::Number(value) => value.to_string(),
     }
+}
+
+fn readable_object(values: &serde_json::Map<String, Value>) -> String {
+    if let (Some(id), Some(text)) = (
+        values.get("id").and_then(Value::as_str),
+        values.get("text").and_then(Value::as_str),
+    ) {
+        if values.contains_key("mandatory") || values.contains_key("integration") {
+            let req = if values.get("mandatory").and_then(Value::as_bool) == Some(false) {
+                "optional"
+            } else {
+                "required"
+            };
+            let int = if values.get("integration").and_then(Value::as_bool) == Some(true) {
+                ", integration"
+            } else {
+                ""
+            };
+            return format!("{} ({req}{int}): {}", sanitize(id), sanitize(text));
+        }
+        return format!("{}: {}", sanitize(id), sanitize(text));
+    }
+    values
+        .iter()
+        .map(|(key, value)| format!("{}: {}", key.replace('_', " "), readable(value)))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 // Match lists independently; criterion identity survives edits to its text.

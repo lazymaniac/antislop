@@ -14,8 +14,8 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     let (notice, card) = integrate_changes(core, work, &base, &change)?;
     work.integrated_files = work.req.consent_files.take().unwrap_or(all_changed.clone());
     mark_remaining_changes(work, &change, &all_changed)?;
-    cleanup_approved(core, work)?;
     finish_integration(core, work, &notice, card)?;
+    core.queue_worktree_cleanup(&work.task.id);
     work.notice = Some(notice);
     Ok(())
 }
@@ -136,21 +136,6 @@ fn mark_remaining_changes(work: &mut RecoveryWork, change: &str, all: &[String])
     let snapshot = git::snapshot(&work.project, "Check remaining task changes")?;
     if git::matching_paths(&work.project, &snapshot, change, all)?.len() != all.len() {
         work.task.status = status::NEEDS_USER.into();
-    }
-    Ok(())
-}
-
-fn cleanup_approved(core: &Core, work: &RecoveryWork) -> Result<()> {
-    if work.task.status != status::APPROVED {
-        return Ok(());
-    }
-    let path = worktree_path(&core.state, &work.task)?;
-    if path.exists() {
-        git::remove_worktree(
-            &work.project,
-            &path,
-            &worktree_branch(&core.state, &work.task)?,
-        )?;
     }
     Ok(())
 }

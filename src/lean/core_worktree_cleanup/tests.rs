@@ -74,8 +74,6 @@ fn approved_tasks_release_clean_views_and_keep_dirty_and_other_task_views() {
     let clean = checkout(&core, &task, "observation-g0", &commit);
     let dirty = checkout(&core, &task, "review-g0-1", &commit);
     let other = checkout(&core, &tasks[1], "observation-g0", &commit);
-    std::fs::create_dir(clean.join("cache")).unwrap();
-    std::fs::write(clean.join("cache/build-output"), "cache").unwrap();
     std::fs::write(dirty.join("unsaved"), "preserve this work").unwrap();
     let head = git::head(&root).unwrap();
     let index = std::fs::read(root.join(".git/index")).unwrap();
@@ -265,4 +263,79 @@ fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
         current.exists() && observation.exists(),
         "a stalled task retains its current views"
     );
+}
+
+#[test]
+fn retired_checkouts_preserve_undeclared_ignored_experiment_state() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let mut task = tasks[0].clone();
+    let writer = checkout(&core, &task, "g0", &commit);
+    let view = checkout(&core, &task, "observation-g0", &commit);
+    for path in [&writer, &view] {
+        let state = path.join(".antislop/qualification/generation-19");
+        std::fs::create_dir_all(&state).unwrap();
+        for file in ["journal", "snapshot", "training.json"] {
+            std::fs::write(state.join(file), file).unwrap();
+        }
+        assert!(
+            git::is_clean(path),
+            "Git does not protect ignored experiment data"
+        );
+    }
+    core.set_status(&conversation, &mut task, "superseded")
+        .unwrap();
+    core.drain_worktree_cleanup();
+    // Both live cleanup and the daemon startup sweep must retain these files.
+    assert!(
+        super::super::core_path_helpers::release_settled_views(&core.store, &core.state)
+            .unwrap_err()
+            .to_string()
+            .contains("ignored files")
+    );
+    for path in [&writer, &view] {
+        for file in ["journal", "snapshot", "training.json"] {
+            assert_eq!(
+                std::fs::read_to_string(
+                    path.join(".antislop/qualification/generation-19")
+                        .join(file)
+                )
+                .unwrap(),
+                file
+            );
+        }
+    }
+    assert_eq!(
+        core.store.task_by_id(&task.id).unwrap().unwrap().status,
+        "superseded"
+    );
+}
+
+#[test]
+fn durable_runtime_survives_checkout_cleanup_and_is_discovered_by_successor() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let mut source = tasks[0].clone();
+    let writer = checkout(&core, &source, "g0", &commit);
+    let runtime = super::super::core_task_runtime::directory(&core.state, &source).unwrap();
+    for file in ["journal", "snapshot", "training.json"] {
+        std::fs::write(runtime.join(file), file).unwrap();
+    }
+    core.store.db().execute("INSERT INTO task_resume_results(task_id,generation,source_task,result_turn) VALUES(?1,0,?2,NULL)", rusqlite::params![tasks[1].id,source.id]).unwrap();
+    core.set_status(&conversation, &mut source, "superseded")
+        .unwrap();
+    drain_until(&core, || !writer.exists());
+    super::super::core_path_helpers::release_settled_views(&core.store, &core.state).unwrap();
+    let handoff = super::super::core_task_runtime::sources(&core, &tasks[1]).unwrap();
+    assert_eq!(handoff.len(), 1);
+    assert_eq!(handoff[0]["task"], source.id);
+    assert_eq!(handoff[0]["available"], true);
+    assert_eq!(
+        handoff[0]["directory"],
+        runtime.parent().unwrap().to_string_lossy().as_ref()
+    );
+    source.input_generation += 1;
+    let next = super::super::core_task_runtime::directory(&core.state, &source).unwrap();
+    assert_ne!(runtime, next);
+    for file in ["journal", "snapshot", "training.json"] {
+        assert_eq!(std::fs::read_to_string(runtime.join(file)).unwrap(), file);
+    }
 }

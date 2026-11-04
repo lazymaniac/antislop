@@ -1540,6 +1540,14 @@ fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
     assert!(app.view.controls().resume_paused && !app.view.controls().pause);
     assert!(header_text(&app, 60).contains("[▶]"));
     assert!(!header_text(&app, 60).contains("[‖]"));
+    // Wide bars show one toggle too: never Pause and Continue side by side.
+    for width in [100, 160] {
+        let text = header_text(&app, width);
+        assert!(
+            text.contains("Continue") && !text.contains("Pause"),
+            "{text}"
+        );
+    }
     // Compact mode token at the narrowest widths.
     app.view.autonomous = Some(true);
     assert!(header_text(&app, 40).contains("[auto]"));

@@ -70,8 +70,14 @@ impl LedgerView {
         } else {
             " "
         };
+        // Child requirements sit under their parent.
+        let indent = if entry.spec.parent.is_some() {
+            if theme.ascii { "`- " } else { "└ " }
+        } else {
+            ""
+        };
         let text = theme.fit(
-            &format!(" {pointer} {}", entry.spec.interpretation),
+            &format!(" {pointer} {indent}{}", entry.spec.interpretation),
             self.list_area.width as usize,
         );
         Line::from(Span::styled(text, style))
@@ -86,7 +92,17 @@ impl LedgerView {
             &format!("   {}  ", entry.spec.id),
             self.list_area.width as usize / 2,
         );
-        let label = format!("{} {}", theme.status_glyph(&entry.status), entry.status);
+        let criteria = entry.spec.criteria.len();
+        let criteria = match criteria {
+            0 => String::new(),
+            1 => "  · 1 criterion".into(),
+            n => format!("  · {n} criteria"),
+        };
+        let label = format!(
+            "{} {}{criteria}",
+            theme.status_glyph(&entry.status),
+            entry.status
+        );
         Line::from(vec![
             Span::styled(id, theme.dim()),
             Span::styled(label, theme.status(&entry.status)),

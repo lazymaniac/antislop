@@ -211,15 +211,12 @@ fn agent_lines(key: &str, agent: &Agent, theme: &Theme, width: usize) -> Vec<Lin
 }
 
 fn agent_identity(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'static>> {
-    let mut text = theme.clean(&format!(
+    let text = theme.clean(&format!(
         "{} · {} · {}",
         agent.provider,
         agent.model.as_deref().unwrap_or("default model"),
         agent.effort.as_deref().unwrap_or("default effort")
     ));
-    if let Some(pid) = agent.pid {
-        text.push_str(&format!(" · pid {pid}"));
-    }
     para(theme, &text, width, theme.dim())
 }
 
@@ -227,28 +224,24 @@ fn agent_usage(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'static>>
     if agent.turns == 0 {
         return Vec::new();
     }
-    let tokens = if agent.reported == 0 {
-        "not reported by the CLI".to_owned()
+    let turns = format!(
+        "{} turn{}",
+        agent.turns,
+        if agent.turns == 1 { "" } else { "s" }
+    );
+    let text = if agent.reported == 0 {
+        turns
     } else {
         format!(
-            "{} in / {} out",
+            "{turns} · tokens: {} in / {} out",
             compact(agent.tokens_in.unwrap_or(0)),
             compact(agent.tokens_out.unwrap_or(0))
         )
     };
-    para(
-        theme,
-        &format!(
-            "{} turn{} · tokens: {tokens}",
-            agent.turns,
-            if agent.turns == 1 { "" } else { "s" }
-        ),
-        width,
-        theme.dim(),
-    )
+    para(theme, &text, width, theme.dim())
 }
 
-fn agent_activity(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+fn agent_activity(agent: &Agent, theme: &Theme, _width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(last) = agent.last_ms {
         lines.push(Line::styled(
@@ -259,9 +252,6 @@ fn agent_activity(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'stati
             ),
             theme.dim(),
         ));
-    }
-    if let Some(branch) = &agent.branch {
-        lines.extend(para(theme, &format!("branch {branch}"), width, theme.dim()));
     }
     lines
 }

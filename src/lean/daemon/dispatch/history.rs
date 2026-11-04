@@ -1,6 +1,4 @@
 use super::*;
-mod requirements;
-use requirements::task_requirement_texts;
 
 pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
     route_pipeline(
@@ -61,11 +59,8 @@ fn task_round(context: &Context<'_>, request: Request) -> Result<Route> {
                 "task history requires a task UUID",
             )?;
             validate_plan_task(core, &plan, &id)?;
-            let mut record =
-                core.store
-                    .task_round_with_references(&id, round, references.unwrap_or(false))?;
-            record["requirements"] = task_requirement_texts(core, &plan, &record)?;
-            record
+            core.store
+                .task_round_with_references(&id, round, references.unwrap_or(false))?
         }),
         request => Route::Unmatched(request),
     })

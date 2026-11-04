@@ -68,11 +68,6 @@ impl<'a> Integration<'a> {
             "integration",
             "no file changes",
         );
-        git::remove_worktree(
-            self.project,
-            self.worktree,
-            &worktree_branch(&self.core.state, self.task)?,
-        )?;
         land(
             self.task,
             Outcome::NoChanges,
@@ -204,11 +199,6 @@ impl<'a> Integration<'a> {
             &landing.text,
         );
         if landing.status == status::APPROVED {
-            git::remove_worktree(
-                self.project,
-                self.worktree,
-                &worktree_branch(&self.core.state, self.task)?,
-            )?;
             return self
                 .core
                 .set_status(self.conversation, self.task, landing.status);

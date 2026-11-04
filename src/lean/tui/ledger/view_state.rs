@@ -117,7 +117,7 @@ impl LedgerView {
         self.missing_only = state.missing;
         self.task = state.task;
         self.selected = state.selected;
-        self.tab = state.tab;
+        self.tab = state.tab.min(super::model::TABS.len() - 1);
         self.scroll = state.scroll;
         self.detail = None;
         self.source = None;

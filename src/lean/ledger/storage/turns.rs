@@ -16,8 +16,13 @@ impl Store {
             params![id, change.run_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        let saved: LedgerChange = serde_json::from_str(&request)?;
+        let diff = saved_proposal_diff(&db, id, &saved)?;
+        let valid_hash = expected == hash
+            || (super::matches_proposal_hash(&diff, &request, &expected)?
+                && super::diff_hash(&diff)? == hash);
         require(
-            expected == hash && serde_json::from_str::<LedgerChange>(&request)? == *change,
+            valid_hash && saved == *change,
             "approval must identify the exact proposed ledger diff",
         )
     }
@@ -128,11 +133,12 @@ impl Store {
         let change: LedgerChange = serde_json::from_str(&request)?;
         let diff = saved_proposal_diff(&db, &id, &change)?;
         require(
-            super::diff_hash(&diff)? == hash,
+            super::matches_proposal_hash(&diff, &request, &hash)?,
             "proposal impact changed; prepare a new proposal from the preserved changes",
         )?;
+        let current_hash = super::diff_hash(&diff)?;
         Ok(
-            serde_json::json!({"change":change,"proposal":{"proposal_id":id,"diff_hash":hash,"diff":diff}}),
+            serde_json::json!({"change":change,"proposal":{"proposal_id":id,"diff_hash":current_hash,"diff":diff}}),
         )
     }
     pub(super) fn check_analyst_author(&self, change: &LedgerChange, turn: &str) -> Result<()> {

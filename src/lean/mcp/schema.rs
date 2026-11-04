@@ -88,8 +88,7 @@ pub(super) fn ledger_entry() -> Value {
             "parent":{"type":"string","description":"Id of the requirement this one refines"},
             "depends_on":{"type":"array","items":{"type":"string"}},
             "mandatory":{"type":"boolean","description":"Omit for true; false for a preference"},
-            "criteria":{"type":"array","items":criterion},
-            "task_ids":{"type":"array","items":{"type":"string"},"description":"Planned task ids, if a plan exists"}
+            "criteria":{"type":"array","items":criterion}
         }),
         &["id", "quote", "interpretation", "criteria"],
     )

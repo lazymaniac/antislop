@@ -30,7 +30,10 @@ pub(super) fn results(details: &mut Details, view: &View, records: &mut Vec<Rc<D
 
 fn reviewer_result(verdict: &Value) -> Rc<DetailRecord> {
     if verdict.is_null() {
-        return record(vec![(dim(), "Reviewer has not evaluated the task yet (verdict will appear after review). [no historical verdict data]".into())], " ");
+        return record(
+            vec![(dim(), "Reviewer has not evaluated the task yet.".into())],
+            " ",
+        );
     }
     let mut lines = crate::lean::cli::review_lines("verdict", verdict)
         .into_iter()
@@ -49,7 +52,7 @@ fn append_findings(lines: &mut Vec<(Style, String)>, verdict: &Value) {
             lines.push(label("Reviewer findings"));
             lines.extend(findings.iter().map(finding_line));
         }
-        None => lines.push((dim(), "Findings: [no historical findings data]".into())),
+        None => {}
     }
 }
 
@@ -64,25 +67,22 @@ fn finding_line(finding: &Value) -> (Style, String) {
 }
 
 fn worker_results(stored: &Value, records: &mut Vec<Rc<DetailRecord>>) {
-    records.push(artifact_record(stored));
+    if let (Some(base), Some(result)) = (stored["base"].as_str(), stored["result"].as_str()) {
+        records.push(artifact_record(base, result));
+    }
     records.push(report_record(stored));
 }
 
-fn artifact_record(stored: &Value) -> Rc<DetailRecord> {
-    let mut lines = vec![label("Artifacts and changes")];
-    if let (Some(base), Some(result)) = (stored["base"].as_str(), stored["result"].as_str()) {
-        lines.push(plain(format!(
+fn artifact_record(base: &str, result: &str) -> Rc<DetailRecord> {
+    let lines = vec![
+        label("Artifacts and changes"),
+        plain(format!(
             "Git changes: {}..{}",
             short_hash(base),
             short_hash(result)
-        )));
-    } else {
-        lines.push((
-            dim(),
-            "Artifacts: no recorded git changes [historical data unavailable]".into(),
-        ));
-    }
-    lines.push(plain(String::new()));
+        )),
+        plain(String::new()),
+    ];
     record(lines, " ")
 }
 
@@ -100,7 +100,7 @@ fn report_record(stored: &Value) -> Rc<DetailRecord> {
                 .lines()
                 .map(|line| plain(line.to_owned())),
         ),
-        None => lines.push((dim(), "Worker has not submitted a report yet (work in progress or waiting to start) [no historical report data].".into())),
+        None => lines.push((dim(), "Worker has not submitted a report yet.".into())),
     }
     lines.push(plain(String::new()));
     record(lines, "\n")

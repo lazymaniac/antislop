@@ -213,7 +213,7 @@ def source_text(prompt, source_id):
     return re.split(r"\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)", rest, maxsplit=1)[0].rstrip("\n")
 
 
-SUBMITTED_ENTRY = ("id", "interpretation", "qualifiers", "parent", "depends_on", "mandatory", "criteria", "task_ids")
+SUBMITTED_ENTRY = ("id", "interpretation", "qualifiers", "parent", "depends_on", "mandatory", "criteria")
 
 
 def ledger_args(payload, prompt):

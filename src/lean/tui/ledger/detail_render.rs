@@ -3,8 +3,8 @@ mod content;
 use super::*;
 use crate::lean::tui::Theme;
 use content::{
-    append_evidence, append_linked_tasks, criteria_lines, history_entries, overview_lines,
-    push_section, section_lines, task_owner_lines,
+    append_coverage, append_criteria_with_evidence, history_entries, overview_lines, push_section,
+    section_lines,
 };
 use ratatui::text::Line;
 
@@ -19,67 +19,32 @@ impl LedgerView {
             return section_lines("Original source", source, theme, width);
         }
         match self.tab {
-            0 => overview_lines(entry, theme, width),
-            1 => criteria_lines(entry, theme, width),
-            2 => self.task_lines(entry, theme, width),
-            3 => self.evidence_lines(theme, width),
+            0 => self.spec_lines(entry, theme, width),
             _ => self.history_lines(theme, width),
         }
     }
 
-    fn task_lines(
+    /// One sheet: intent, criteria with the evidence that settles each one,
+    /// and the tasks that implement the requirement.
+    fn spec_lines(
         &self,
         entry: &crate::lean::ledger::LedgerEntry,
         theme: &Theme,
         width: usize,
     ) -> Vec<Line<'static>> {
-        let mut lines = task_owner_lines(entry, theme, width);
-        let Some(tasks) = self
-            .detail
-            .as_ref()
-            .and_then(|value| value["tasks"].as_array())
-        else {
-            push_section(
-                &mut lines,
-                "Linked tasks",
-                "Press Enter to load task coverage.",
-                theme,
-                width,
-            );
-            return lines;
-        };
-        append_linked_tasks(&mut lines, tasks, theme, width);
-        lines
-    }
-
-    fn evidence_lines(&self, theme: &Theme, width: usize) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let Some(evidence) = self
+        let mut lines = overview_lines(entry, theme, width);
+        let evidence = self
             .detail
             .as_ref()
             .and_then(|value| value["evidence"].as_array())
-        else {
-            push_section(
-                &mut lines,
-                "Review evidence",
-                "Press Enter to load independent checks.",
-                theme,
-                width,
-            );
-            return lines;
-        };
-        if evidence.is_empty() {
-            push_section(
-                &mut lines,
-                "Review evidence",
-                "No independent evidence yet. Approval of requirements does not review implementation.",
-                theme,
-                width,
-            );
-        }
-        for item in evidence {
-            append_evidence(&mut lines, item, theme, width);
-        }
+            .map(Vec::as_slice);
+        append_criteria_with_evidence(&mut lines, entry, evidence, theme, width);
+        let tasks = self
+            .detail
+            .as_ref()
+            .and_then(|value| value["tasks"].as_array())
+            .map(Vec::as_slice);
+        append_coverage(&mut lines, entry, tasks, evidence, theme, width);
         lines
     }
 
@@ -89,12 +54,7 @@ impl LedgerView {
             .as_ref()
             .and_then(|value| value["history"].as_array())
         else {
-            return section_lines(
-                "History",
-                "Press Enter to load immutable versions.",
-                theme,
-                width,
-            );
+            return section_lines("History", "Loading versions…", theme, width);
         };
         let mut lines = history_entries(history, theme, width);
         if history.is_empty() {

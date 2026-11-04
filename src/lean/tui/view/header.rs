@@ -218,17 +218,19 @@ fn append_full_actions(
 ) {
     let big = width >= BIG_BUTTONS;
     spans.push(Span::styled(" · ", secondary));
-    let labels = if big {
-        [PAUSE, CONTINUE, RESUME, CANCEL]
-    } else {
-        [PAUSE_SHORT, CONTINUE_SHORT, RESUME_SHORT, CANCEL_SHORT]
+    // Pause and Continue share one slot: only the action the state allows is shown.
+    let toggle = match (controls.resume_paused, big) {
+        (true, true) => (CONTINUE, true),
+        (true, false) => (CONTINUE_SHORT, true),
+        (false, true) => (PAUSE, controls.pause),
+        (false, false) => (PAUSE_SHORT, controls.pause),
     };
-    let enabled = [
-        controls.pause,
-        controls.resume_paused,
-        controls.resume_plan,
-        controls.cancel,
-    ];
+    let labels = if big {
+        [toggle.0, RESUME, CANCEL]
+    } else {
+        [toggle.0, RESUME_SHORT, CANCEL_SHORT]
+    };
+    let enabled = [toggle.1, controls.resume_plan, controls.cancel];
     for (label, enabled) in labels.into_iter().zip(enabled) {
         spans.push(button(label, enabled, theme, secondary));
         spans.push(Span::raw(" "));

@@ -1,3 +1,4 @@
+use super::super::model::TABS;
 use super::*;
 
 impl LedgerView {
@@ -11,8 +12,15 @@ impl LedgerView {
                 self.task_filter_edit = true;
             }
             KeyCode::Char('m') => return self.toggle_missing(),
-            KeyCode::Down | KeyCode::Up => self.move_record(key.code == KeyCode::Down),
+            KeyCode::Down | KeyCode::Up => return self.move_record(key.code == KeyCode::Down),
             KeyCode::Right | KeyCode::Left => return self.change_tab(key.code == KeyCode::Right),
+            KeyCode::Char(']' | '[') => return self.change_tab(key.code == KeyCode::Char(']')),
+            KeyCode::Char(ch @ '1'..='9') => {
+                let tab = (ch as usize) - ('1' as usize);
+                if tab < TABS.len() {
+                    return self.select_tab(tab);
+                }
+            }
             KeyCode::Enter => return Action::Detail,
             KeyCode::Char('s') => return Action::Source,
             KeyCode::Char('e') => self.edit(),
@@ -36,29 +44,44 @@ impl LedgerView {
         Action::Fetch
     }
 
-    fn move_record(&mut self, down: bool) {
+    fn move_record(&mut self, down: bool) -> Action {
         self.invalidate_read();
         let count = self.filtered().len().saturating_sub(1);
+        let previous = self.selected;
         self.selected = if down {
             (self.selected + 1).min(count)
         } else {
             self.selected.saturating_sub(1)
         };
+        if self.selected == previous && self.detail.is_some() {
+            return Action::None;
+        }
         self.detail = None;
         self.source = None;
         self.scroll = 0;
+        Action::Detail
     }
 
     fn change_tab(&mut self, right: bool) -> Action {
-        self.invalidate_read();
-        self.tab = if right {
-            (self.tab + 1) % 5
+        let count = TABS.len();
+        let next = if right {
+            (self.tab + 1) % count
         } else {
-            (self.tab + 4) % 5
+            (self.tab + count - 1) % count
         };
+        self.select_tab(next)
+    }
+
+    fn select_tab(&mut self, tab: usize) -> Action {
+        self.invalidate_read();
+        self.tab = tab.min(TABS.len() - 1);
         self.source = None;
         self.scroll = 0;
-        Action::Detail
+        if self.detail.is_some() {
+            Action::None
+        } else {
+            Action::Detail
+        }
     }
 
     fn change_page(&mut self, down: bool) -> Action {

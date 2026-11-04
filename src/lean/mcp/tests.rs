@@ -249,6 +249,8 @@ mod role_tests {
             "position",
             "disposition",
             "implementation_owners",
+            "review_owners",
+            "task_ids",
         ] {
             assert!(entry["properties"][gone].is_null(), "{gone}");
         }

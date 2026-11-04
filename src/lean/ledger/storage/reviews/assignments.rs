@@ -65,41 +65,6 @@ fn bind_requirement_inputs(
     Ok(())
 }
 
-fn validate_assignments(all: &[LedgerEntry], current: &[Task], prior: &[Task]) -> Result<()> {
-    let approved: Vec<_> = prior
-        .iter()
-        .filter(|task| task.status == "approved")
-        .collect();
-    for entry in all
-        .iter()
-        .filter(|entry| entry.spec.disposition == Disposition::Active)
-    {
-        for assigned in &entry.spec.task_ids {
-            require(
-                assignment_is_present(assigned, &entry.spec.id, current, &approved),
-                &format!(
-                    "ledger assignment {} -> {assigned} is not honored by the task plan",
-                    entry.spec.id
-                ),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn assignment_is_present(
-    assigned: &str,
-    requirement: &str,
-    current: &[Task],
-    prior: &[&Task],
-) -> bool {
-    current.iter().chain(prior.iter().copied()).any(|task| {
-        (task.id == assigned || task.spec["id"].as_str() == Some(assigned))
-            && serde_json::from_value::<TaskContract>(task.spec.clone())
-                .is_ok_and(|spec| spec.requirement_ids.iter().any(|id| id == requirement))
-    })
-}
-
 impl Store {
     pub fn bind_task_ledger(&self, conversation: &str, run_id: &str, plan: &str) -> Result<()> {
         let all = self.ledger_entries(conversation, run_id, None)?;
@@ -109,7 +74,6 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         bind_current_tasks(&tx, run_id, &tasks, &all, &mut covered)?;
-        validate_assignments(&all, &tasks, &prior)?;
         crate::lean::ledger::validate_criterion_coverage(&all, &covered)?;
         tx.commit()?;
         Ok(())

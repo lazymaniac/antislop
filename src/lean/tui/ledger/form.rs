@@ -5,37 +5,27 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum FormField {
-    Id,
     Interpretation,
     Qualifiers,
     Criteria,
     Parent,
     Dependencies,
-    ImplementationOwners,
-    ReviewOwners,
-    Tasks,
     Disposition,
     Reason,
     Source,
     Mandatory,
-    Position,
 }
 impl FormField {
-    pub const ALL: [Self; 14] = [
-        Self::Id,
+    pub const ALL: [Self; 9] = [
         Self::Interpretation,
         Self::Qualifiers,
         Self::Criteria,
         Self::Parent,
         Self::Dependencies,
-        Self::ImplementationOwners,
-        Self::ReviewOwners,
-        Self::Tasks,
         Self::Disposition,
         Self::Reason,
         Self::Source,
         Self::Mandatory,
-        Self::Position,
     ];
     pub(super) fn next(self, backwards: bool) -> Self {
         Self::ALL
@@ -74,11 +64,6 @@ impl Form {
     }
 
     fn update_identity_and_text(&self, spec: &mut EntrySpec) -> crate::Result<()> {
-        spec.id = self.field_text(FormField::Id);
-        crate::require(
-            self.base.source.source_id == "new" || spec.id == self.base.id,
-            "existing record identity is immutable",
-        )?;
         spec.interpretation = self.field_text(FormField::Interpretation);
         spec.qualifiers = self
             .field_text(FormField::Qualifiers)
@@ -97,9 +82,6 @@ impl Form {
 
     fn update_links(&self, spec: &mut EntrySpec) {
         spec.depends_on = self.field_ids(FormField::Dependencies);
-        spec.implementation_owners = self.field_ids(FormField::ImplementationOwners);
-        spec.review_owners = self.field_ids(FormField::ReviewOwners);
-        spec.task_ids = self.field_ids(FormField::Tasks);
     }
 
     fn update_policy(&self, spec: &mut EntrySpec) -> crate::Result<()> {
@@ -110,10 +92,6 @@ impl Form {
             "mandatory must be yes or no",
         )?;
         spec.mandatory = self.field_text(FormField::Mandatory) == "yes";
-        spec.position = self
-            .field_text(FormField::Position)
-            .parse()
-            .map_err(|_| crate::Error::Invalid("position must be a nonnegative integer".into()))?;
         Ok(())
     }
 
@@ -133,7 +111,6 @@ impl Form {
 
 fn form_values(spec: &EntrySpec) -> Vec<String> {
     vec![
-        spec.id.clone(),
         spec.interpretation.clone(),
         spec.qualifiers.join("\n"),
         spec.criteria
@@ -143,9 +120,6 @@ fn form_values(spec: &EntrySpec) -> Vec<String> {
             .join("\n"),
         spec.parent.clone().unwrap_or_default(),
         spec.depends_on.join(", "),
-        spec.implementation_owners.join(", "),
-        spec.review_owners.join(", "),
-        spec.task_ids.join(", "),
         serde_json::to_value(spec.disposition)
             .unwrap()
             .as_str()
@@ -154,7 +128,6 @@ fn form_values(spec: &EntrySpec) -> Vec<String> {
         String::new(),
         String::new(),
         if spec.mandatory { "yes" } else { "no" }.into(),
-        spec.position.to_string(),
     ]
 }
 
@@ -214,18 +187,10 @@ mod tests {
     }
 
     #[test]
-    fn form_round_trip_validates_identity_criteria_and_position() {
+    fn form_round_trip_preserves_identity_and_validates_criteria_and_mandatory() {
         let original = spec();
         let mut form = Form::new(original.clone(), 7);
         assert_eq!(form.spec().unwrap(), original);
-        form.fields[FormField::Id as usize].text = "changed".into();
-        assert!(
-            form.spec()
-                .unwrap_err()
-                .to_string()
-                .contains("identity is immutable")
-        );
-        form.fields[FormField::Id as usize].text = original.id;
         form.fields[FormField::Criteria as usize].text = "C2 | required | check".into();
         assert!(
             form.spec()
@@ -234,7 +199,7 @@ mod tests {
                 .contains("criterion format")
         );
         form.fields[FormField::Criteria as usize].text = "C2 | required | check | Works".into();
-        form.fields[FormField::Position as usize].text = "-1".into();
+        form.fields[FormField::Mandatory as usize].text = "maybe".into();
         assert!(form.spec().is_err());
     }
 }

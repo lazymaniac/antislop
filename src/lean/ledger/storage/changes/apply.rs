@@ -165,10 +165,7 @@ fn insert_entry_relations(
     let relations = [
         ("parent", entry.parent.iter().cloned().collect()),
         ("dependency", entry.depends_on.clone()),
-        ("task", entry.task_ids.clone()),
         ("qualifier", entry.qualifiers.clone()),
-        ("implementer", entry.implementation_owners.clone()),
-        ("reviewer", entry.review_owners.clone()),
     ];
     for (kind, values) in relations {
         for value in values {

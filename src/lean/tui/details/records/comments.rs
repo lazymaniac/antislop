@@ -18,7 +18,7 @@ pub(super) fn comments(details: &mut Details, view: &View, records: &mut Vec<Rc<
 
 fn empty_comments() -> Rc<DetailRecord> {
     Rc::new(DetailRecord {
-        lines: vec![(dim(), "No comments. [no comments in history for this element]. Press 'c' to add a comment to this element.".into())],
+        lines: vec![(dim(), "No comments yet. Press 'c' to add a comment.".into())],
         search_text: "no comments".into(),
     })
 }

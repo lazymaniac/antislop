@@ -1,5 +1,5 @@
 use super::core_feedback_helpers::{event_files, land, note};
-use super::core_path_helpers::{worktree_branch, worktree_path};
+use super::core_path_helpers::worktree_branch;
 use super::*;
 
 mod actions;

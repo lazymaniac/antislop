@@ -92,6 +92,7 @@ pub(crate) fn remove_clean_view(project: &Path, path: &Path, branch: &str) -> Re
             path.display()
         ),
     )?;
+    require_no_ignored_files(path)?;
     let snapshot = view_snapshot_ref(path);
     let commit = head(path)?;
     ok(project, &["update-ref", &snapshot, &commit])?;
@@ -124,6 +125,7 @@ pub(crate) fn remove_clean_writer(
     outputs: &[String],
 ) -> Result<()> {
     require_worktree_branch(path, branch)?;
+    require_no_ignored_files(path)?;
     for output in outputs {
         crate::require(
             !output.is_empty()
@@ -144,6 +146,31 @@ pub(crate) fn remove_clean_writer(
         }
     }
     ok(project, &["worktree", "remove", &path.to_string_lossy()]).map(|_| ())
+}
+
+/// Git cleanliness excludes ignored files, including irreplaceable runtime state.
+/// Never infer that an undeclared ignored file is a disposable build cache.
+fn require_no_ignored_files(path: &Path) -> Result<()> {
+    let ignored = ok(
+        path,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+            "-z",
+        ],
+    )?;
+    crate::require(
+        ignored.is_empty(),
+        &format!(
+            "ignored files are not preserved by the Git checkpoint; worktree {} preserved ({}). Declare durable outputs before handoff; remove only verified disposable files explicitly",
+            path.display(),
+            crate::lean::agent::clip(ignored.split('\0').next().unwrap_or_default(), 300)
+        ),
+    )
 }
 
 /// The repository a linked worktree belongs to, read from the worktree itself.

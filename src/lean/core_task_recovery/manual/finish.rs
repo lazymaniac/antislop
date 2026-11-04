@@ -20,8 +20,8 @@ pub(super) fn approve(
         fixed,
     );
     note(&mut work.task, notice.clone());
-    cleanup_manual(core, work)?;
     persist_manual(core, work, &notice, &review.snapshot, None)?;
+    core.queue_worktree_cleanup(&work.task.id);
     core.unblock_dependent_tasks(&work.req.conversation, &work.req.plan, &work.task.id)?;
     core.maybe_continue_plan(&work.req.conversation, &work.req.plan)?;
     work.notice = Some(notice);
@@ -47,18 +47,6 @@ fn approval_notice(snapshot: &str, commit: Option<&str>) -> String {
         Some(commit) => format!("manual fixes reviewed and committed as {commit}"),
         None => format!("manual fixes reviewed and applied on snapshot {snapshot}"),
     }
-}
-
-fn cleanup_manual(core: &Core, work: &RecoveryWork) -> Result<()> {
-    let path = worktree_path(&core.state, &work.task)?;
-    if path.exists() {
-        git::remove_worktree(
-            &work.project,
-            &path,
-            &worktree_branch(&core.state, &work.task)?,
-        )?;
-    }
-    Ok(())
 }
 
 pub(super) fn reject(

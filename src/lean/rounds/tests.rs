@@ -963,6 +963,18 @@ fn same_round_cli_turns_keep_known_identity_when_resumed_output_omits_it() {
                 .unwrap()
                 .unwrap();
             assert_eq!(allocation["cwd"], recorded.cwd.to_string_lossy().as_ref());
+            let durable = prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("Durable task runtime allocation: "))
+                .unwrap();
+            let expected = core
+                .state
+                .join("task-state")
+                .join(&task.id)
+                .join(format!("g{}", task.input_generation));
+            assert_eq!(PathBuf::from(durable), expected);
+            assert!(expected.is_dir());
+            assert!(!expected.starts_with(core.state.join("worktrees")));
         }
     }
 }

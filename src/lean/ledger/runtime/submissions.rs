@@ -72,8 +72,7 @@ mod tests {
             "status": "active",
             "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
                 "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
-                "parent": null, "task_ids": [], "implementation_owners": [],
-                "review_owners": [],
+                "parent": null,
                 "source": {"source_id": "s1", "start": 0, "end": 7},
                 "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
                     "integration": false}]}
@@ -105,8 +104,7 @@ mod tests {
             "status": "active",
             "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
                 "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
-                "parent": null, "task_ids": [], "implementation_owners": [],
-                "review_owners": [],
+                "parent": null,
                 "source": {"source_id": "s1", "start": 0, "end": 7},
                 "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
                     "integration": false}]}

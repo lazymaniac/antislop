@@ -25,8 +25,6 @@ fn keep_branch(core: &Core, work: &mut RecoveryWork) -> Result<()> {
         Some(&branch),
         &[],
     );
-    let path = worktree_path(&core.state, &work.task)?;
-    let _ = git::remove_worktree_keep_branch(&work.project, &path);
     note(&mut work.task, notice.clone());
     persist_simple(
         core,

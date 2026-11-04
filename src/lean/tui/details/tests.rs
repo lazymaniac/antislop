@@ -274,13 +274,10 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             .map(|tab| tab_name(key, tab))
             .collect()
     };
-    assert_eq!(
-        names("worker:t1"),
-        ["Worker", "Results", "Comments", "Requirements"]
-    );
+    assert_eq!(names("worker:t1"), ["Worker", "Results", "Comments"]);
     assert_eq!(
         names("reviewer:t1"),
-        ["Reviewer", "Review", "Checks", "Comments", "Requirements"]
+        ["Reviewer", "Review", "Checks", "Comments"]
     );
     assert_eq!(names("auditor"), ["Overview", "Audit", "Comments"]);
     assert_eq!(names("plan-reviewer"), ["Overview", "Review", "Comments"]);
@@ -297,7 +294,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             assert_eq!(details.tab, *tab);
         }
         details.switch_tab(details.neighbour_tab(-1));
-        assert_eq!(details.tab, REQUIREMENTS);
+        assert_eq!(details.tab, COMMENTS);
         for (n, tab) in tabs.iter().enumerate() {
             assert_eq!(details.nth_tab(n), Some(*tab));
         }
@@ -308,7 +305,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             PLAN
         };
         details.switch_tab(hidden);
-        assert_eq!(details.tab, REQUIREMENTS, "hidden tabs cannot be selected");
+        assert_eq!(details.tab, COMMENTS, "hidden tabs cannot be selected");
         let rendered = format_tabs(key, tabs[0], 120)
             .spans
             .iter()

@@ -7,9 +7,14 @@ pub(super) fn checks(details: &mut Details, view: &View, records: &mut Vec<Rc<De
         .and_then(|id| view.tasks.iter().find(|task| task.id == id));
     let task_id = details.task_id().unwrap_or_default().to_owned();
     match (&details.task, task) {
-        (_, None) => records.push(record(vec![(dim(), "Tasks have checks: the goal, its acceptance criteria and its kind's risks, accounted for by the reviewer. [no check data in history]".into())], " ")),
+        (_, None) => records.push(record(
+            vec![(dim(), "No checks recorded for this task.".into())],
+            " ",
+        )),
         (None, Some(_)) => records.push(record(vec![(dim(), "Loading…".into())], " ")),
-        (Some(stored), Some(_)) => append_checks(&mut details.check, view, &task_id, stored, records),
+        (Some(stored), Some(_)) => {
+            append_checks(&mut details.check, view, &task_id, stored, records)
+        }
     }
 }
 
@@ -58,7 +63,10 @@ fn summary_record(stored: &Value, rows: &[CheckRow]) -> Rc<DetailRecord> {
 
 fn append_not_started(lines: &mut Vec<(Style, String)>, stored: &Value) {
     if stored["verdict"].is_null() && stored["checks"].as_array().is_none_or(Vec::is_empty) {
-        lines.push((dim(), "Reviewer has not started yet; checks appear here as it settles them [no historical data]".into()));
+        lines.push((
+            dim(),
+            "Reviewer has not started yet; checks appear here as they are settled.".into(),
+        ));
     }
 }
 
@@ -115,11 +123,8 @@ fn evidence_lines(row: &CheckRow) -> Vec<(Style, String)> {
     let line = match (&row.note, row.state) {
         (Some(note), _) => (Style::default(), format!("    evidence: {note}")),
         (None, "checking") => (dim(), "    checking… no evidence yet".into()),
-        (None, "settled") => (
-            dim(),
-            "    settled without evidence [none given in history]".into(),
-        ),
-        (None, "unaccounted") => (dim(), "    unaccounted for [no evidence in history]".into()),
+        (None, "settled") => (dim(), "    settled without evidence".into()),
+        (None, "unaccounted") => (dim(), "    unaccounted for".into()),
         _ => (dim(), "    not checked yet".into()),
     };
     vec![line]

@@ -39,10 +39,6 @@ fn append_agent_records(details: &Details, view: &View, records: &mut Vec<Rc<Det
 
 fn conversation_record(view: &View) -> Rc<DetailRecord> {
     let mut lines = vec![label("Conversation details")];
-    lines.push(plain(format!(
-        "Project: {}",
-        view.plan.as_deref().unwrap_or("current")
-    )));
     lines.push(plain(format!("Mode: {}", mode_label(view.autonomous))));
     lines.push(plain(format!("Status: {}", conversation_status(view))));
     if let Some(plan) = &view.plan {
@@ -55,10 +51,6 @@ fn conversation_record(view: &View) -> Rc<DetailRecord> {
         .filter(|task| status::finished(&task.status))
         .count();
     lines.push(plain(format!("Tasks: total {total}, completed {done}")));
-    lines.push(plain(format!(
-        "Task reports: {done}/{total} ready (explicitly missing: {} in progress)",
-        total.saturating_sub(done)
-    )));
     record(lines, " ")
 }
 

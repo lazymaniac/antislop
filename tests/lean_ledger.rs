@@ -103,7 +103,7 @@ impl Fixture {
         }
     }
     fn entry(&self, id: &str) -> EntrySpec {
-        serde_json::from_value(json!({"id":id,"source":{"source_id":self.source.id,"start":0,"end":self.text.len()},"interpretation":format!("Deliver {id} with all qualifiers"),"qualifiers":["except offline","never send secrets"],"criteria":[{"id":format!("{id}.accept"),"text":"independently reproduce the acceptance check","mandatory":true}],"task_ids":[]})).unwrap()
+        serde_json::from_value(json!({"id":id,"source":{"source_id":self.source.id,"start":0,"end":self.text.len()},"interpretation":format!("Deliver {id} with all qualifiers"),"qualifiers":["except offline","never send secrets"],"criteria":[{"id":format!("{id}.accept"),"text":"independently reproduce the acceptance check","mandatory":true}]})).unwrap()
     }
     fn change(&self, revision: i64, entries: Vec<EntrySpec>) -> LedgerChange {
         LedgerChange {
@@ -604,6 +604,17 @@ fn removed_entry_and_task_fields_are_rejected() {
         let mut old = entry.clone();
         old[field] = value;
         assert!(serde_json::from_value::<EntrySpec>(old).is_err(), "{field}");
+    }
+    // Stored entries and live daemon replies from earlier runs keep loading
+    // when legacy owner/task_ids fields are present, and drop them on save.
+    let mut legacy_entry = entry.clone();
+    legacy_entry["implementation_owners"] = json!([]);
+    legacy_entry["review_owners"] = json!([]);
+    legacy_entry["task_ids"] = json!([]);
+    let parsed = serde_json::from_value::<EntrySpec>(legacy_entry).unwrap();
+    let reserialized = serde_json::to_value(&parsed).unwrap();
+    for field in ["implementation_owners", "review_owners", "task_ids"] {
+        assert!(reserialized.get(field).is_none(), "{field}");
     }
     for disposition in ["withdrawn_by_user", "replaced_by_user"] {
         let mut old = entry.clone();

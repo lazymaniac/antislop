@@ -1,12 +1,13 @@
 use crate::lean::tui::{Theme, sanitize, view::wrap};
 use ratatui::text::{Line, Span};
+use serde_json::Value;
 
 pub(super) fn overview_lines(
     entry: &crate::lean::ledger::LedgerEntry,
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let mut lines = vec![badge_line(entry, theme, width), Line::from("")];
     push_section(
         &mut lines,
         "Intent",
@@ -14,81 +15,262 @@ pub(super) fn overview_lines(
         theme,
         width,
     );
-    let qualifiers = qualifiers_text(&entry.spec.qualifiers);
-    push_section(
-        &mut lines,
-        "Constraints & qualifiers",
-        &qualifiers,
-        theme,
-        width,
-    );
-    append_dependencies(&mut lines, entry, theme, width);
-    append_source_reference(&mut lines, entry, theme, width);
-    lines
-}
-
-pub(super) fn criteria_lines(
-    entry: &crate::lean::ledger::LedgerEntry,
-    theme: &Theme,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    append_criteria(&mut lines, entry, theme, width);
-    lines
-}
-
-pub(super) fn task_owner_lines(
-    entry: &crate::lean::ledger::LedgerEntry,
-    theme: &Theme,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    push_section(
-        &mut lines,
-        "Assigned task IDs",
-        &entry.spec.task_ids.join(", "),
-        theme,
-        width,
-    );
-    push_section(
-        &mut lines,
-        "Implementation owners",
-        &entry.spec.implementation_owners.join(", "),
-        theme,
-        width,
-    );
-    push_section(
-        &mut lines,
-        "Review owners",
-        &entry.spec.review_owners.join(", "),
-        theme,
-        width,
-    );
-    lines
-}
-
-pub(super) fn append_linked_tasks(
-    lines: &mut Vec<Line<'static>>,
-    tasks: &[serde_json::Value],
-    theme: &Theme,
-    width: usize,
-) {
-    if tasks.is_empty() {
+    if !entry.spec.qualifiers.is_empty() {
+        let qualifiers = qualifiers_text(&entry.spec.qualifiers);
         push_section(
-            lines,
-            "Linked tasks",
-            "No task mapping yet. Tasks are connected when a reviewed plan is prepared.",
+            &mut lines,
+            "Constraints & qualifiers",
+            &qualifiers,
             theme,
             width,
         );
     }
-    for task in tasks {
-        append_task(lines, task, theme, width);
+    append_dependencies(&mut lines, entry, theme, width);
+    lines
+}
+
+/// `R1 · required · active · identified`: what the record is, on one line.
+fn badge_line(
+    entry: &crate::lean::ledger::LedgerEntry,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let kind = if entry.spec.mandatory {
+        "required"
+    } else {
+        "optional"
+    };
+    let disposition = match entry.spec.disposition {
+        crate::lean::ledger::Disposition::Active => "active",
+        crate::lean::ledger::Disposition::SupersededByUser => "superseded by user",
+    };
+    let parent = entry
+        .spec
+        .parent
+        .as_deref()
+        .map(|parent| format!(" · under {parent}"))
+        .unwrap_or_default();
+    let text = theme.fit(
+        &sanitize(&format!(
+            "{} · {kind} · {disposition}{parent} · ",
+            entry.spec.id
+        )),
+        width,
+    );
+    Line::from(vec![
+        Span::styled(text, theme.dim()),
+        Span::styled(
+            format!("{} {}", theme.status_glyph(&entry.status), entry.status),
+            theme.status(&entry.status),
+        ),
+    ])
+}
+
+/// Criteria with the evidence that settles each one directly beneath it.
+pub(super) fn append_criteria_with_evidence(
+    lines: &mut Vec<Line<'static>>,
+    entry: &crate::lean::ledger::LedgerEntry,
+    evidence: Option<&[Value]>,
+    theme: &Theme,
+    width: usize,
+) {
+    let criteria = &entry.spec.criteria;
+    let reviewed = evidence.map(|items| {
+        criteria
+            .iter()
+            .filter(|criterion| {
+                items
+                    .iter()
+                    .any(|item| evidence_for(item, &criterion.id) && approved(item))
+            })
+            .count()
+    });
+    let heading = match reviewed {
+        Some(reviewed) if !criteria.is_empty() => {
+            format!(
+                "Acceptance criteria · {reviewed}/{} reviewed",
+                criteria.len()
+            )
+        }
+        _ => "Acceptance criteria".into(),
+    };
+    lines.push(Line::from(Span::styled(heading, theme.title())));
+    if criteria.is_empty() {
+        lines.extend(
+            wrap("No criteria have been recorded yet.", width)
+                .into_iter()
+                .map(|line| Line::styled(line, theme.dim())),
+        );
+    }
+    for criterion in criteria {
+        append_criterion(lines, criterion, evidence, theme, width);
+    }
+    lines.push(Line::from(""));
+}
+
+fn append_criterion(
+    lines: &mut Vec<Line<'static>>,
+    criterion: &crate::lean::ledger::Criterion,
+    evidence: Option<&[Value]>,
+    theme: &Theme,
+    width: usize,
+) {
+    let matching: Vec<&Value> = evidence
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| evidence_for(item, &criterion.id))
+        .collect();
+    let mark = if matching.iter().any(|item| approved(item)) {
+        theme.status_glyph("approved")
+    } else if matching.is_empty() {
+        theme.status_glyph("queued")
+    } else {
+        theme.status_glyph("reviewing")
+    };
+    let required = if criterion.mandatory {
+        "required"
+    } else {
+        "optional"
+    };
+    let integration = if criterion.integration {
+        " · integration"
+    } else {
+        ""
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("{mark} "), theme.accent()),
+        Span::styled(
+            sanitize(&format!("{} · {required}{integration}", criterion.id)),
+            theme.accent(),
+        ),
+    ]));
+    push_indented(lines, &criterion.text, theme.text(), width);
+    for item in matching {
+        push_indented(lines, &evidence_summary(item), theme.dim(), width);
     }
 }
 
+fn evidence_for(item: &Value, criterion: &str) -> bool {
+    item["proposal"]["criterion_id"].as_str() == Some(criterion)
+}
+
+fn approved(item: &Value) -> bool {
+    item["approved"].as_bool() == Some(true)
+}
+
+fn evidence_summary(item: &Value) -> String {
+    let state = if approved(item) {
+        "Evidence (reviewed)"
+    } else {
+        "Evidence (needs review)"
+    };
+    let parts = [
+        item["proposal"]["result"].as_str(),
+        item["proposal"]["artifact"].as_str(),
+        item["assessment"].as_str(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>();
+    if parts.is_empty() {
+        state.into()
+    } else {
+        format!("{state}: {}", parts.join(" · "))
+    }
+}
+
+fn push_indented(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    style: ratatui::style::Style,
+    width: usize,
+) {
+    for line in text.lines() {
+        lines.extend(
+            wrap(&sanitize(line), width.saturating_sub(4).max(1))
+                .into_iter()
+                .map(|line| Line::styled(format!("    {line}"), style)),
+        );
+    }
+}
+
+/// Linked tasks, plus evidence that names no criterion of this record.
+pub(super) fn append_coverage(
+    lines: &mut Vec<Line<'static>>,
+    entry: &crate::lean::ledger::LedgerEntry,
+    tasks: Option<&[Value]>,
+    evidence: Option<&[Value]>,
+    theme: &Theme,
+    width: usize,
+) {
+    lines.push(Line::from(Span::styled("Linked tasks", theme.title())));
+    match tasks {
+        None => lines.push(Line::styled("Loading coverage…", theme.dim())),
+        Some([]) => lines.extend(
+            wrap(
+                "None yet. Tasks are linked when a reviewed plan is prepared.",
+                width,
+            )
+            .into_iter()
+            .map(|line| Line::styled(line, theme.dim())),
+        ),
+        Some(tasks) => {
+            for task in tasks {
+                append_task(lines, task, theme, width);
+            }
+        }
+    }
+    lines.push(Line::from(""));
+    let other: Vec<&Value> = evidence
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| {
+            !entry
+                .spec
+                .criteria
+                .iter()
+                .any(|criterion| evidence_for(item, &criterion.id))
+        })
+        .collect();
+    if !other.is_empty() {
+        lines.push(Line::from(Span::styled("Other evidence", theme.title())));
+        for item in other {
+            push_indented(lines, &evidence_summary(item), theme.dim(), width);
+        }
+        lines.push(Line::from(""));
+    }
+}
+
+fn append_task(lines: &mut Vec<Line<'static>>, task: &Value, theme: &Theme, width: usize) {
+    let id = task["task"]
+        .as_str()
+        .or_else(|| task["id"].as_str())
+        .unwrap_or("");
+    let title = task["title"].as_str().unwrap_or("Task");
+    let status = task["status"].as_str().unwrap_or("pending");
+    let heading = if id.is_empty() {
+        title.to_owned()
+    } else {
+        format!("{id} · {title}")
+    };
+    let text = theme.fit(
+        &sanitize(&format!("{heading} ")),
+        width.saturating_sub(status.len() + 2),
+    );
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", theme.status_glyph(status)),
+            theme.status(status),
+        ),
+        Span::styled(text, theme.text()),
+        Span::styled(status.to_owned(), theme.status(status)),
+    ]));
+}
+
 pub(super) fn history_entries(
-    history: &[serde_json::Value],
+    history: &[Value],
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -101,22 +283,43 @@ pub(super) fn history_entries(
 
 fn append_history_entry(
     lines: &mut Vec<Line<'static>>,
-    version: &serde_json::Value,
+    version: &Value,
     theme: &Theme,
     width: usize,
 ) {
+    let spec = &version["spec"];
+    let kind = if spec["mandatory"].as_bool() == Some(false) {
+        "optional"
+    } else {
+        "required"
+    };
+    let disposition = spec["disposition"].as_str().unwrap_or("active");
     let title = format!(
-        "Version {} · revision {}",
+        "Version {} · revision {} · {kind} · {disposition}",
         version["version"], version["spec_revision"]
     );
-    let text = version["spec"]["interpretation"].as_str().unwrap_or("");
-    push_section(lines, &title, text, theme, width);
+    let body = history_entry_body(spec);
+    push_section(lines, &title, &body, theme, width);
+}
+
+fn history_entry_body(spec: &Value) -> String {
+    let mut parts = vec![spec["interpretation"].as_str().unwrap_or("").to_owned()];
+    if let Some(qualifiers) = spec["qualifiers"].as_array().filter(|q| !q.is_empty()) {
+        for q in qualifiers.iter().filter_map(|q| q.as_str()) {
+            parts.push(format!("- {q}"));
+        }
+    }
+    if let Some(criteria) = spec["criteria"].as_array().filter(|c| !c.is_empty()) {
+        for c in criteria {
+            let id = c["id"].as_str().unwrap_or("");
+            let text = c["text"].as_str().unwrap_or("");
+            parts.push(format!("{id}: {text}"));
+        }
+    }
+    parts.join("\n")
 }
 
 fn qualifiers_text(qualifiers: &[String]) -> String {
-    if qualifiers.is_empty() {
-        return "No additional qualifiers.".into();
-    }
     qualifiers
         .iter()
         .map(|qualifier| format!("- {qualifier}"))
@@ -140,99 +343,6 @@ fn append_dependencies(
         );
     }
     push_section(lines, "Original wording", &entry.original, theme, width);
-}
-
-fn append_source_reference(
-    lines: &mut Vec<Line<'static>>,
-    entry: &crate::lean::ledger::LedgerEntry,
-    theme: &Theme,
-    width: usize,
-) {
-    let source = format!(
-        "{} · bytes {}..{} · entry v{}",
-        entry.spec.source.source_id, entry.spec.source.start, entry.spec.source.end, entry.version
-    );
-    push_section(lines, "Source reference", &source, theme, width);
-}
-
-fn append_criteria(
-    lines: &mut Vec<Line<'static>>,
-    entry: &crate::lean::ledger::LedgerEntry,
-    theme: &Theme,
-    width: usize,
-) {
-    if entry.spec.criteria.is_empty() {
-        push_section(
-            lines,
-            "Acceptance criteria",
-            "No criteria have been recorded yet.",
-            theme,
-            width,
-        );
-    }
-    for criterion in &entry.spec.criteria {
-        append_criterion(lines, criterion, theme, width);
-    }
-}
-
-fn append_criterion(
-    lines: &mut Vec<Line<'static>>,
-    criterion: &crate::lean::ledger::Criterion,
-    theme: &Theme,
-    width: usize,
-) {
-    let required = if criterion.mandatory {
-        "Required"
-    } else {
-        "Optional"
-    };
-    let integration = if criterion.integration {
-        " · Integration"
-    } else {
-        ""
-    };
-    let title = format!("{} · {}{}", criterion.id, required, integration);
-    push_section(lines, &title, &criterion.text, theme, width);
-}
-
-pub(super) fn append_task(
-    lines: &mut Vec<Line<'static>>,
-    task: &serde_json::Value,
-    theme: &Theme,
-    width: usize,
-) {
-    let title = format!(
-        "{} · {}",
-        task["title"].as_str().unwrap_or("Task"),
-        task["status"].as_str().unwrap_or("pending")
-    );
-    let detail = format!(
-        "{} · input v{} · generation {}",
-        task["id"].as_str().unwrap_or(""),
-        task["entry_version"],
-        task["generation"]
-    );
-    push_section(lines, &title, &detail, theme, width);
-}
-
-pub(super) fn append_evidence(
-    lines: &mut Vec<Line<'static>>,
-    item: &serde_json::Value,
-    theme: &Theme,
-    width: usize,
-) {
-    let title = if item["approved"].as_bool() == Some(true) {
-        "Reviewed evidence"
-    } else {
-        "Evidence needs review"
-    };
-    let detail = format!(
-        "{}\n{}\n{}",
-        item["proposal"]["criterion_id"].as_str().unwrap_or(""),
-        item["proposal"]["result"].as_str().unwrap_or(""),
-        item["assessment"].as_str().unwrap_or("")
-    );
-    push_section(lines, title, &detail, theme, width);
 }
 
 pub(super) fn section_lines(

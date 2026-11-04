@@ -43,11 +43,18 @@ fn key(code: KeyCode) -> KeyEvent {
 fn unicode_editor_preserves_clusters_and_network_conflict_drafts() {
     let mut view = browser();
     view.key(key(KeyCode::Char('e')), "c1");
-    view.form_mut().unwrap().fields[1] = InputBuffer::with_text("a👩‍💻e\u{301}");
+    view.form_mut().unwrap().fields[FormField::Interpretation as usize] =
+        InputBuffer::with_text("a👩‍💻e\u{301}");
     view.key(key(KeyCode::Backspace), "c1");
-    assert_eq!(view.form_mut().unwrap().fields[1].text, "a👩‍💻");
+    assert_eq!(
+        view.form_mut().unwrap().fields[FormField::Interpretation as usize].text,
+        "a👩‍💻"
+    );
     view.key(key(KeyCode::Backspace), "c1");
-    assert_eq!(view.form_mut().unwrap().fields[1].text, "a");
+    assert_eq!(
+        view.form_mut().unwrap().fields[FormField::Interpretation as usize].text,
+        "a"
+    );
     view.paste("👨‍👩‍👧‍👦ż\u{301}");
     let saved = view.form_mut().unwrap().clone();
     view.reply("preview", Err("spec revision conflict".into()));
@@ -74,13 +81,13 @@ fn fields_support_mouse_selection_and_small_viewports() {
     view.mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 2,
-        row: 6,
+        row: 5,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(view.form_mut().unwrap().field, FormField::Qualifiers);
     view.paste("all qualifiers\nexcept offline");
     assert_eq!(
-        view.form_mut().unwrap().fields[2].text,
+        view.form_mut().unwrap().fields[FormField::Qualifiers as usize].text,
         "all qualifiers\nexcept offline"
     );
     view.mouse(MouseEvent {
@@ -89,7 +96,7 @@ fn fields_support_mouse_selection_and_small_viewports() {
         row: 4,
         modifiers: KeyModifiers::NONE,
     });
-    let input = &view.form_mut().unwrap().fields[2];
+    let input = &view.form_mut().unwrap().fields[FormField::Qualifiers as usize];
     assert_eq!(input.cursor, 2);
 }
 #[test]
@@ -188,7 +195,11 @@ fn successful_save_preserves_text_typed_while_the_mutation_was_in_flight() {
     view.paste(" new text during save");
     view.reply("applied", Ok(json!({"spec_revision":3})));
     let draft = view.drafts.get(&origin).unwrap();
-    assert!(draft.fields[1].text.ends_with("new text during save"));
+    assert!(
+        draft.fields[FormField::Interpretation as usize]
+            .text
+            .ends_with("new text during save")
+    );
     assert_eq!(draft.revision, 3);
     assert_ne!(draft.operation_id, snapshot.operation_id);
 }
@@ -213,7 +224,13 @@ fn requirements_workspace_separates_records_details_and_preserves_small_terminal
     let mut view = browser();
     let wide = screen(&mut view, 120, 30);
     assert!(wide.contains("Records") && wide.contains("Details"));
-    assert!(wide.contains("Constraints & qualifiers") && wide.contains("Original wording"));
+    assert!(wide.contains("Intent") && wide.contains("Original wording"));
+    assert!(wide.contains("Spec & coverage") && wide.contains("c1 · required"));
+    assert!(
+        !wide.contains("Constraints & qualifiers"),
+        "empty sections stay hidden"
+    );
+    assert!(!wide.contains("Source reference"));
     assert!(view.list_area.right() <= view.detail_area.x);
     for size in [(12, 5), (24, 8), (60, 18), (80, 24), (120, 30)] {
         screen(&mut view, size.0, size.1);
@@ -256,6 +273,9 @@ fn semantic_review_shows_before_after_and_keeps_failed_approval_actionable() {
     assert!(rendered.contains("+ Preserve every qualifier"));
     assert!(rendered.contains("Enter Approve"));
     assert!(!rendered.contains("\"interpretation\""));
+    assert!(!rendered.contains("Affected tasks"));
+    assert!(!rendered.contains("start:"));
+    assert!(!rendered.contains("position"));
     view.reply("applied", Err("connection lost".into()));
     assert!(screen(&mut view, 120, 30).contains("connection lost"));
     assert!(matches!(
@@ -373,14 +393,10 @@ fn simplified_form_maps_named_requirement_fields() {
         ),
         (FormField::Parent, "parent"),
         (FormField::Dependencies, "dependency"),
-        (FormField::ImplementationOwners, "worker"),
-        (FormField::ReviewOwners, "reviewer"),
-        (FormField::Tasks, "task"),
         (FormField::Disposition, "superseded_by_user"),
         (FormField::Reason, "user correction"),
         (FormField::Source, "new source"),
         (FormField::Mandatory, "no"),
-        (FormField::Position, "7"),
     ] {
         form.fields[field as usize] = InputBuffer::with_text(text);
     }
@@ -392,12 +408,9 @@ fn simplified_form_maps_named_requirement_fields() {
     assert!(spec.criteria[0].mandatory && spec.criteria[0].integration);
     assert_eq!(spec.parent.as_deref(), Some("parent"));
     assert_eq!(spec.depends_on, ["dependency"]);
-    assert_eq!(spec.implementation_owners, ["worker"]);
-    assert_eq!(spec.review_owners, ["reviewer"]);
-    assert_eq!(spec.task_ids, ["task"]);
     assert_eq!(spec.disposition, Disposition::SupersededByUser);
     assert!(!spec.mandatory);
-    assert_eq!(spec.position, 7);
+    assert_eq!(spec.position, 0);
     let Action::Prepare { change, source } = view.key(
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
         "c1",
@@ -406,4 +419,65 @@ fn simplified_form_maps_named_requirement_fields() {
     };
     assert_eq!(change.reason, "user correction");
     assert_eq!(source, "new source");
+
+    let mut view = browser();
+    view.detail = Some(json!({
+        "tasks": [{"id": "uuid-internal", "task": "impl-auth", "title": "Implement auth", "status": "approved", "entry_version": 1, "generation": 0}],
+        "evidence": [{"approved": true, "proposal": {"criterion_id": "c1", "result": "14 tests passed", "artifact": "tests/auth.rs"}, "assessment": ""}],
+        "history": [{
+            "version": 2,
+            "spec_revision": 3,
+            "spec": {
+                "interpretation": "Keep the source",
+                "mandatory": false,
+                "disposition": "superseded_by_user",
+                "qualifiers": ["except offline"],
+                "criteria": [{"id": "c1", "text": "Check actual behavior"}]
+            }
+        }]
+    }));
+    view.tab = 0;
+    let tasks = screen(&mut view, 120, 30);
+    assert!(tasks.contains("impl-auth · Implement auth"));
+    assert!(tasks.contains("approved"));
+    assert!(tasks.contains("1/1 reviewed"), "{tasks}");
+    assert!(tasks.contains("Evidence (reviewed): 14 tests passed · tests/auth.rs"));
+    assert!(!tasks.contains("uuid-internal"));
+    assert!(!tasks.contains("generation"));
+    assert!(!tasks.contains("Assigned task IDs"));
+    assert!(!tasks.contains("Implementation owners"));
+    assert!(!tasks.contains("Review owners"));
+
+    assert!(matches!(
+        view.key(key(KeyCode::Char('2')), "c1"),
+        Action::None
+    ));
+    assert_eq!(view.tab, 1);
+    let history = screen(&mut view, 120, 30);
+    assert!(history.contains("Version 2 · revision 3 · optional · superseded_by_user"));
+    assert!(history.contains("- except offline"));
+    assert!(history.contains("c1: Check actual behavior"));
+
+    view.key(key(KeyCode::Char('[')), "c1");
+    assert_eq!(view.tab, 0);
+    view.detail = None;
+    assert!(matches!(
+        view.key(key(KeyCode::Char(']')), "c1"),
+        Action::Detail
+    ));
+    assert_eq!(view.tab, 1);
+
+    view.key(key(KeyCode::Char('e')), "c1");
+    view.form_mut().unwrap().field = FormField::Mandatory;
+    view.key(key(KeyCode::Char(' ')), "c1");
+    assert_eq!(
+        view.form_mut().unwrap().fields[FormField::Mandatory as usize].text,
+        "no"
+    );
+    view.form_mut().unwrap().field = FormField::Disposition;
+    view.key(key(KeyCode::Char(' ')), "c1");
+    assert_eq!(
+        view.form_mut().unwrap().fields[FormField::Disposition as usize].text,
+        "superseded_by_user"
+    );
 }

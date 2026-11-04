@@ -22,7 +22,23 @@ pub const MISSING_LEDGER: &str = "the requirements analyst ended its turn withou
 /// Approvals bind semantic edits, immutable version identities and their impact;
 /// source documents are never rehashed as part of an approval token.
 pub fn diff_hash(diff: &LedgerDiff) -> Result<String> {
+    diff_hash_with_after(diff, &serde_json::to_value(&diff.after)?)
+}
+
+pub(crate) fn matches_proposal_hash(
+    diff: &LedgerDiff,
+    request: &str,
+    expected: &str,
+) -> Result<bool> {
+    if diff_hash(diff)? == expected {
+        return Ok(true);
+    }
+    let raw: serde_json::Value = serde_json::from_str(request)?;
+    Ok(diff_hash_with_after(diff, &raw["entries"])? == expected)
+}
+
+fn diff_hash_with_after(diff: &LedgerDiff, after: &serde_json::Value) -> Result<String> {
     Ok(crate::hash(serde_json::to_vec(
-        &serde_json::json!({"run_id":diff.run_id,"from_revision":diff.from_revision,"to_revision":diff.to_revision,"before":diff.before.iter().map(|e|serde_json::json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision})).collect::<Vec<_>>(),"after":diff.after,"affected_tasks":diff.affected_tasks}),
+        &serde_json::json!({"run_id":diff.run_id,"from_revision":diff.from_revision,"to_revision":diff.to_revision,"before":diff.before.iter().map(|e|serde_json::json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision})).collect::<Vec<_>>(),"after":after,"affected_tasks":diff.affected_tasks}),
     )?))
 }

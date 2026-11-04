@@ -66,6 +66,11 @@ impl LedgerView {
                 KeyCode::Up => form.fields[field].move_up(width),
                 KeyCode::Down => form.fields[field].move_down(width),
                 KeyCode::Enter => form.fields[field].insert_char('\n'),
+                KeyCode::Char(' ')
+                    if matches!(form.field, FormField::Mandatory | FormField::Disposition) =>
+                {
+                    toggle_enum_field(form.field, &mut form.fields[field]);
+                }
                 _ => form.fields[field].edit_key(key),
             }
         }
@@ -124,4 +129,26 @@ impl LedgerView {
             Some(self.task_filter.text.trim().into())
         };
     }
+}
+
+fn toggle_enum_field(field: FormField, input: &mut InputBuffer) {
+    let current = input.text.trim();
+    let next = match field {
+        FormField::Mandatory => {
+            if current.eq_ignore_ascii_case("no") || current.eq_ignore_ascii_case("false") {
+                "yes"
+            } else {
+                "no"
+            }
+        }
+        FormField::Disposition => {
+            if current == "active" {
+                "superseded_by_user"
+            } else {
+                "active"
+            }
+        }
+        _ => return,
+    };
+    *input = InputBuffer::with_text(next);
 }

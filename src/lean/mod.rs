@@ -31,6 +31,7 @@ mod core_task_execution;
 mod core_task_freshness;
 mod core_task_inputs;
 mod core_task_recovery;
+mod core_task_runtime;
 mod core_task_state;
 mod core_unanswered;
 mod core_unblock_dependents;

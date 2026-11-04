@@ -3,7 +3,6 @@ mod checks;
 mod comments;
 mod overview;
 mod plan;
-mod requirements;
 mod results;
 mod review;
 
@@ -12,7 +11,6 @@ impl Details {
         let mut records = Vec::new();
         match self.tab {
             PLAN => plan::plan(self, view, &mut records),
-            REQUIREMENTS => requirements::requirements(self, view, &mut records),
             0 | REVIEWER => overview::overview(self, view, &mut records),
             REVIEW => review::review(self, view, &mut records),
             COMMENTS => comments::comments(self, view, &mut records),

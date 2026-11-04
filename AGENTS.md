@@ -354,10 +354,10 @@ src
    events
     append(core,work,payload):Result<()>
    integrate
-    apply(core,work):Result<()> > require,integration_commits,validate_consent,{integrate,mark_remaining}_changes,cleanup_approved,finish_integration
+    apply(core,work):Result<()> > require,integration_commits,validate_consent,{integrate,mark_remaining}_changes,finish_integration
     - validate_consent_file,integration_result,persist_integration,integration_event
    manual/finish
-    approve(core,work,review,fixed):Result<()> > commit_manual_fixes,approval_notice,land,note,{cleanup,persist}_manual
+    approve(core,work,review,fixed):Result<()> > commit_manual_fixes,approval_notice,land,note,persist_manual
     reject(core,work,review,fixed):Result<()> > append_findings,land,persist_manual
     - manual_event
    manual.rs
@@ -373,6 +373,9 @@ src
     interrupted(work):TaskRecoveryResponse > TaskRecoveryResponse
   core_task_recovery.rs
    RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
+  core_task_runtime
+   directory(state,task):Result<PathBuf> > task_path_component,private_directory
+   sources(core,task):Result<Vec<serde_json::Value>> ~55 > task_in_plan_by_id,plan_conversation,task_path_component,private_directory
   core_task_state
    - stop_records_progress
   core_unanswered
@@ -427,9 +430,7 @@ src
      route(context,request):Result<Route> > route_pipeline
      - {comment,comment_scoped,comment_status,comments}_route,comments,comment_status_filter,load_comments,
        decorate_comment_scopes,comment_{at_route,at},validate_round_comment
-    history/requirements
-     task_requirement_texts(core,plan,record):Result<Value> > plan_{run,conversation},ledger_entries,as_str
-    history.rs
+    history
      route(context,request):Result<Route> > route_pipeline
      - task_{rounds,round},run_context,session_events,history_{content,messages},session_content,events,
        paged_events_and_sessions,history_and_mail,{handle,wait_for}_events,events_result
@@ -657,8 +658,8 @@ src
     is_clean(path):bool
     is_repository(dir):bool > git
     prune_worktrees(project):Result<()>
-    remove_clean_view(project,path,branch):Result<()> > require_worktree_branch,is_clean,view_snapshot_ref,head,delete_branch
-    remove_clean_writer(project,path,branch,outputs):Result<()> > require_worktree_branch,all
+    remove_clean_view(project,path,branch):Result<()> > require_worktree_branch,is_clean,require_no_ignored_files,view_snapshot_ref,head,delete_branch
+    remove_clean_writer(project,path,branch,outputs):Result<()> > require_{worktree_branch,no_ignored_files},all
     remove_worktree(project,path,branch):Result<()> > require_worktree_branch,git
     remove_worktree_keep_branch(project,path):Result<()> > git
     rename_branch(project,from,to):Result<()>
@@ -725,14 +726,16 @@ src
    constraints
     validate_runtime_constraints(tasks,entries):Result<()> ~44 > require
    mod
-    diff_hash(diff):Result<String>
+    diff_hash(diff):Result<String> > diff_hash_with_after
+    matches_proposal_hash(diff,request,expected):Result<bool> > diff_hash
     = MISSING_LEDGER
    model
     Assessment(C{evidence,approved,note})
     ChangeResult(C{run_id,spec_revision,affected_tasks})
     Criterion(C{id,text,mandatory,integration})
     Disposition(E{Active,SupersededByUser})
-    EntrySpec(C{id,source,interpretation,qualifiers,constraints,parent,depends_on,mandatory,{implementation,review}_owners,criteria,task_ids,position,disposition})
+    EntrySpec(C{id,source,interpretation,qualifiers,constraints,parent,depends_on,mandatory,criteria,position,disposition}) : Serialize,Deserialize
+     - serialize,deserialize
     Evidence(C{id,run_id,proposal,reviewer_turn,assessment,approved})
     EvidenceProposal(C{entry_{id,version},{criterion,task}_id,generation,attempt,producer_turn,result,artifact,integrated_fingerprint})
     Extraction(C{run_id,expected_spec_revision,entries})
@@ -813,7 +816,7 @@ src
     evidence.rs
      - audit_turns_bound,evidence_task_is_current,active_evidence_entry,validate_evidence_task_links
     reviews/assignments
-     - {bind_task,bind_requirement}_inputs,assignment_is_present
+     - {bind_task,bind_requirement}_inputs
     reviews.rs
      - validate_{review,review_session},review_turns_bound,validate_review_coverage,review_{sources_uncovered,producer},
        insert_review
@@ -1003,7 +1006,7 @@ src
     recover_task(&Arc<Self>,req):Result<TaskRecoveryResponse> > recover_task_as
     review(&Arc<Self>,conversation,role,plan_id,project,cancel,prompt):Result<std::result::Result<Verdict,String>> > config_snapshot,last_answered,messages_by,review_setup,turn,prompt,review_{request,outcome}
     turn(setup,cancel,prompt):Result<Option<String>> > turn_inner
-    review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
+    review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,revision_checkpoints,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > reserve_revision,revision_job,process_fresh_revision
     planner_turn(&Arc<Self>,conversation,upto,cancel):Result<()> > planning_requirements_ready,planner_turn_context,run_planner_turn,handle_planner_answer
     require_refused_plan(conversation,turn):Result<()> > last_orchestration_answered,asked_since
@@ -1294,7 +1297,7 @@ src
     ledger_statuses(conversation,run_id,revision,fingerprint):Result<Vec<LedgerEntry>> > ledger_{entries,evidence,status_tasks},{set_ledger,enforce_dependency}_statuses
     list_ledger(query,fingerprint):Result<LedgerPage> > linked_entry_ids,ledger_statuses,build_ledger_page,filter_ledger_entries
     requirements_gaps(conversation,run_id,fingerprint):Result<Vec<String>> > extraction_gap,ledger_statuses,entry_gaps,audit_missing
-    bind_task_ledger(conversation,run_id,plan):Result<()> > ledger_entries,run_tasks,prior_covered_criteria,bind_current_tasks,validate_assignments
+    bind_task_ledger(conversation,run_id,plan):Result<()> > ledger_entries,run_tasks,prior_covered_criteria,bind_current_tasks
     rejected_requirements_feedback(conversation,run_id):Result<Option<serde_json::Value>> > run,decode_content
     requirements_review_findings(conversation,run_id):Result<String> > run,review_verdict
     task_generation(task):Result<i64> > db
@@ -1321,7 +1324,7 @@ src
     reject_ledger_proposal(conversation,run_id,id,hash,comment):Result<()> > require,db,load_rejection,review_rejection_retry,validate_proposal_state,persist_rejection
     has_pending_ledger_proposal(run_id):Result<bool> > db
     has_rejected_ledger_proposal(run_id):Result<bool> > db
-    check_ledger_proposal(id,hash,change):Result<()> > db,require
+    check_ledger_proposal(id,hash,change):Result<()> > db,saved_proposal_diff,require
     ledger_entry_history(conversation,run_id,id):Result<Vec<LedgerEntry>> > run,entries
     bind_ledger_turn(conversation,run_id,turn,revision,phase,sources):Result<()> > db,validate_turn_{revision,owner},record_source_coverage
     task_has_ledger_inputs(task):Result<bool> > db
@@ -1356,6 +1359,9 @@ src
     artifact_input(task,path):Result<Option<Option<ArtifactReceipt>>> > db,ArtifactReceipt
     recover_artifact_input(task,path,receipt):Result<Option<ArtifactReceipt>> > artifact_input
     freeze_artifact_input(task,path,source):Result<Option<ArtifactReceipt>> > artifact_input
+    unfinished_checkpoints(conversation,plan):Result<Vec<Value>> > db,checkpoint_source
+    revision_checkpoints(conversation,revision):Result<Vec<Value>> > task_in_plan_by_id,checkpoint_source
+    inherit_revision_checkpoint(tx,conversation,plan,source,target):Result<()> > checkpoint_source
     resolve_plan_comments(conversation,upto):Result<()> > resolve_listed_plan_comments
     resolve_listed_plan_comments(conversation,upto,only):Result<()> > db,comment_rows,resolve_comments
     pending_plan_comment_ids(conversation):Result<Option<Vec<u64>>> > db
@@ -1835,7 +1841,7 @@ src
       change_round(view,direction) > task_id
       save_current_tab()
       restore_current_tab() > overview
-      records(view):Vec<Rc<DetailRecord>> > requirements,overview,comments.comments,checks,results
+      records(view):Vec<Rc<DetailRecord>> > overview,comments.comments,checks,results
       fetch_failed(error):bool
       load_task(task) > as_str
       new(key):Self > Details,tabs_for
@@ -1870,9 +1876,6 @@ src
         label
      plan
       plan(_details,view,records)
-     requirements
-      requirements(details,_view,records) > ledger_lines
-      - append_{requirements,requirement},criterion_line,plain,label
      results
       results(details,view,records) > plan,agent_results,reviewer_result,worker_results
       - append_findings,finding_line,artifact_record,short_hash,report_record,plain,label
@@ -1884,7 +1887,7 @@ src
     is_overview(tab):bool
     tab_name(key,tab):&'static str
     tabs_for(key):Vec<usize>
-    = TABS,RESULT=1,CHECKS=2,COMMENTS=3,REVIEW=4,REQUIREMENTS=5,REVIEWER=6,PLAN=7
+    = TABS,RESULT=1,CHECKS=2,COMMENTS=3,REVIEW=4,REVIEWER=5,PLAN=6
    diffview
     header
      diff_footer_hint(width):&'static str
@@ -2147,36 +2150,35 @@ src
     comparison.rs
      list_diff_lines(before,after,theme,width):Vec<Line<'static>> > append_{changed_items,added_items}
      panel(theme,title):Block<'a> > title,borders,separator
-     readable(value):String > sanitize
+     readable(value):String > sanitize,readable_object
      text_diff_lines(before,after,theme,width):Vec<Line<'static>> > changed_graphemes,render_versions
      - DiffStyle,DiffLine,same_list_item,append_{text_version,grapheme}
     detail_render/content
-     append_evidence(lines,item,theme,width) > push_section
-     append_linked_tasks(lines,tasks,theme,width) > append_task
-     append_task(lines,task,theme,width) > push_section
-     criteria_lines(entry,theme,width):Vec<Line<'static>> > append_criteria
+     append_coverage(lines,entry,tasks,evidence,theme,width) > title,Theme.dim,append_task,evidence_for,push_indented,evidence_summary
+     append_criteria_with_evidence(lines,entry,evidence,theme,width) > evidence_for,approved,title,Theme.dim,append_criterion
      history_entries(history,theme,width):Vec<Line<'static>> > append_history_entry
-     overview_lines(entry,theme,width):Vec<Line<'static>> > push_section,qualifiers_text,append_{dependencies,source_reference}
+     overview_lines(entry,theme,width):Vec<Line<'static>> > push_section,qualifiers_text,append_dependencies
      push_section(lines,title,text,theme,width) > title,sanitize
      section_lines(title,text,theme,width):Vec<Line<'static>> > push_section
-     task_owner_lines(entry,theme,width):Vec<Line<'static>> > push_section
-     - append_criterion
+     - badge_line,history_entry_body
     form
      Form(C{base,revision,fields,field,operation_id})
       new(spec,revision):Self > form_values,with_text
       spec():crate::Result<EntrySpec> > update_{identity_and_text,links,policy}
       - field_{text,ids}
-     FormField(E{Id,Interpretation,Qualifiers,Criteria,Parent,Dependencies,{Implementation,Review}Owners,Tasks,Disposition,Reason,Source,Mandatory,Position})
+     FormField(E{Interpretation,Qualifiers,Criteria,Parent,Dependencies,Disposition,Reason,Source,Mandatory})
       next(backwards):Self
      = ALL
      - criterion_text,parse_{criteria,criterion}
+    interaction/edit
+     - toggle_enum_field
     model
      Action(E{None,Fetch,Detail,Source,Prepare,Apply,Reject,Create,Runs,Proposal,Review})
      LedgerView(C{visible,page,selected,query,searching,task,missing_only,status,status_edit,task_{filter,filter_edit},tab,scroll,drafts,editing,preview,proposed_change,detail,source,error,pending,request_id,area,{list,detail}_area,list_start,confirm_new_run,notice,workflow_notice,runs,edit_scroll,pending_kind,review_run,approval_event,stale,scope_epoch,pending_{scope_epoch,run,read},rejecting,rejection,rejection_drafts,prepared_draft,run_filters}) : Default
-      detail_lines(theme,width):Vec<Line<'static>> > selected_entry,{section,overview,criteria,task,evidence,history}_lines
+      detail_lines(theme,width):Vec<Line<'static>> > selected_entry,{section,spec,history}_lines
       form_area():Rect
       draw_form(frame,area) > form_area,draw_form_{heading,labels,input,status}
-      browse_key(key):Action > toggle_missing,move_record,change_tab,edit,change_page,new_entry
+      browse_key(key):Action > toggle_missing,move_record,{change,select}_tab,edit,change_page,new_entry
       edit_key(key,ctrl,conversation):Action > prepare_edit,move_edit_cursor
       pending_action(key):bool
       pending_page_edit(key):bool
@@ -2212,7 +2214,7 @@ src
      RunFilter(C{query,status,missing,task,selected,tab,scroll})
      = LABELS,TABS
     preview_render
-     - append_field
+     - {append,is_skipped}_field
    mod
     in_ascii(buffer) > ascii
     nearest_indexed(r,g,b):u8
@@ -2939,6 +2941,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-· 119,760 LOC · input 1,050,758 · output 42,523 tokens · state b4cf7b79db11
+· 120,166 LOC · input 1,055,122 · output 42,593 tokens · state ba0b984c0ea1
 ```
 <!-- hologram:end -->

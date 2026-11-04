@@ -14,11 +14,11 @@ impl Store {
         require(!comment.trim().is_empty(), "rejection requires a comment")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let change = load_rejection(&tx, conversation, run_id, id, hash)?;
+        let (change, request, expected) = load_rejection(&tx, conversation, run_id, id, hash)?;
         if review_rejection_retry(self, &tx, id, comment)? {
             return Ok(());
         }
-        validate_proposal_state(&tx, conversation, run_id, id, hash, &change)?;
+        validate_proposal_state(&tx, conversation, run_id, id, &request, &expected, &change)?;
         persist_rejection(&tx, conversation, run_id, id, hash, comment, &change)?;
         tx.commit()?;
         Ok(())
@@ -31,23 +31,27 @@ fn load_rejection(
     run_id: &str,
     id: &str,
     hash: &str,
-) -> Result<LedgerChange> {
+) -> Result<(LedgerChange, String, String)> {
     run(tx, conversation, run_id)?;
     let (request, expected): (String, String) = tx.query_row(
         "SELECT request,diff_hash FROM ledger_proposals WHERE id=?1 AND run_id=?2",
         params![id, run_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let change: LedgerChange = serde_json::from_str(&request)?;
+    let diff = saved_proposal_diff(tx, id, &change)?;
+    let valid_hash = expected == hash
+        || (crate::lean::ledger::matches_proposal_hash(&diff, &request, &expected)?
+            && crate::lean::ledger::diff_hash(&diff)? == hash);
     require(
-        expected == hash,
+        valid_hash,
         "rejection must identify the exact proposed ledger diff",
     )?;
-    let change: LedgerChange = serde_json::from_str(&request)?;
     require(
         change.conversation == conversation,
         "proposal belongs to another conversation",
     )?;
-    Ok(change)
+    Ok((change, request, expected))
 }
 
 fn validate_proposal_state(
@@ -55,7 +59,8 @@ fn validate_proposal_state(
     conversation: &str,
     run_id: &str,
     id: &str,
-    hash: &str,
+    request: &str,
+    expected: &str,
     change: &LedgerChange,
 ) -> Result<()> {
     require(
@@ -68,8 +73,9 @@ fn validate_proposal_state(
         |row| row.get(0),
     )?;
     require(!accepted, "proposal already accepted")?;
+    let diff = saved_proposal_diff(tx, id, change)?;
     require(
-        crate::lean::ledger::diff_hash(&saved_proposal_diff(tx, id, change)?)? == hash,
+        crate::lean::ledger::matches_proposal_hash(&diff, request, expected)?,
         "proposal impact changed; reload the proposal",
     )?;
     Ok(())

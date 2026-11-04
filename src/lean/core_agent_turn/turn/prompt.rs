@@ -61,6 +61,9 @@ fn append_task_context(
             }
         }
     }
+    let runtime = crate::lean::core_task_runtime::directory(&core.state, &task)?;
+    let sources = crate::lean::core_task_runtime::sources(core, &task)?;
+    text.push_str(&format!("Durable task runtime allocation: {}\nStore journals, snapshots, training state, raw measurements and files needed by later tasks in this directory, never inside the disposable checkout. It is outside worktree cleanup and survives restarts and input revisions; older generations stay in its parent. Use unique run subdirectories; never overwrite completed runs. The current task's runtime directory is an allocated write area for a writing worker. Read-only roles and reviewers may only inspect it. Build caches may stay in the checkout. Include exact runtime paths in the result; code commits and text evidence alone do not retain these files.\nRead-only runtime handoff sources (availability is directory presence, not content or digest verification): {}\nThese paths supplement the code checkout. Inspect existing files without modifying the producer's state; do not recreate missing states or repeat experiments without authorization.\n", runtime.display(), serde_json::to_string(&sources)?));
     append_questions(core, &state.turn.id, text)?;
     let evidence = core
         .store

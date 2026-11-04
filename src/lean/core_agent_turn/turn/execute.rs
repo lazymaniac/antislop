@@ -43,7 +43,17 @@ fn prepare_agent(
     state: &TurnState<'_>,
     profile: ResolvedProfile,
 ) -> Result<PreparedAgent> {
-    let (profile_name, effort, spec) = agent_spec(state, profile);
+    let (profile_name, effort, mut spec) = agent_spec(state, profile);
+    if let Some((id, reviewer)) = task_role(&state.role) {
+        let task = core
+            .store
+            .task_by_id(id)?
+            .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+        let directory = crate::lean::core_task_runtime::directory(&core.state, &task)?;
+        if !reviewer && spec.access == agent::Access::Write && !spec.add_dirs.contains(&directory) {
+            spec.add_dirs.push(directory);
+        }
+    }
     let blocked: Option<String> = core
         .store
         .db()

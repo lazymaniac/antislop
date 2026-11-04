@@ -19,7 +19,7 @@ impl LedgerView {
         let status = self.error.as_deref().unwrap_or(if self.pending {
             "Applying changes... Your review is preserved."
         } else {
-            "Requirements approval does not start implementation."
+            "Review the exact scope changes before approving."
         });
         let style = if self.error.is_some() {
             theme.error()

@@ -23,8 +23,6 @@ struct SubmittedEntry {
     mandatory: bool,
     #[serde(default)]
     criteria: Vec<Criterion>,
-    #[serde(default)]
-    task_ids: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -102,10 +100,7 @@ fn extraction_entry(
         parent: entry.parent,
         depends_on: entry.depends_on,
         mandatory: entry.mandatory,
-        implementation_owners: Vec::new(),
-        review_owners: Vec::new(),
         criteria: entry.criteria,
-        task_ids: entry.task_ids,
         position,
         disposition: Disposition::Active,
     })

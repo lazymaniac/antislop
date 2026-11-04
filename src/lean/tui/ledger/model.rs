@@ -4,23 +4,19 @@ use ratatui::layout::Rect;
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub(super) const LABELS: [&str; 14] = [
-    "ID",
+pub(super) const LABELS: [&str; 9] = [
     "Interpretation",
     "Qualifiers (one per line)",
     "Criteria (ID | required/optional | integration/check | text)",
     "Parent ID",
     "Dependency IDs (comma separated)",
-    "Implementation owners",
-    "Review owners",
-    "Task IDs",
-    "Disposition (active/superseded_by_user)",
+    "Disposition (Space toggles active/superseded)",
     "Reason for change",
     "New source / user correction (immutable)",
-    "Mandatory (yes/no)",
-    "Position (0-based order)",
+    "Mandatory (Space toggles yes/no)",
 ];
-pub(super) const TABS: [&str; 5] = ["Overview", "Criteria", "Tasks", "Evidence", "History"];
+/// Intent, criteria, linked tasks and evidence read as one sheet; history is separate.
+pub(super) const TABS: [&str; 2] = ["Spec & coverage", "History"];
 
 use super::form::Form;
 

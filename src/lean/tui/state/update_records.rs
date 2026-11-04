@@ -48,10 +48,19 @@ impl App {
         };
         let decided = reply.is_ok() && matches!(kind.as_str(), "applied" | "rejected");
         let refresh = reply.is_ok() && matches!(kind.as_str(), "created" | "runs");
+        let load_detail = reply.is_ok() && kind == "page";
         view.reply(&kind, reply);
+        let load_detail = load_detail
+            && view.preview.is_none()
+            && view.editing.is_none()
+            && view.detail.is_none()
+            && view.selected_entry().is_some();
         self.finish_ledger_decision(&conversation, active, decided);
         if refresh && active {
             self.ledger_action(ledger::Action::Fetch);
+        } else if load_detail && active {
+            // Coverage (tasks and evidence) loads with the record, not on demand.
+            self.ledger_action(ledger::Action::Detail);
         }
     }
 

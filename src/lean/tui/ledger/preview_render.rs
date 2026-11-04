@@ -31,8 +31,12 @@ fn preview_heading(theme: &Theme) -> Vec<Line<'static>> {
 }
 
 fn append_reason(lines: &mut Vec<Line<'static>>, reason: &str, width: usize) {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() || trimmed == "source extraction" {
+        return;
+    }
     lines.extend(
-        wrap(&format!("Reason: {}", sanitize(reason)), width)
+        wrap(&format!("Reason: {}", sanitize(trimmed)), width)
             .into_iter()
             .map(Line::from),
     );
@@ -70,26 +74,38 @@ fn append_field(
     theme: &Theme,
     width: usize,
 ) {
-    if field == "id" || old.and_then(|value| value.get(field)) == Some(current) {
+    if is_skipped_field(field, current, old) {
+        return;
+    }
+    let before = old.and_then(|value| value.get(field));
+    let prior_text = before.map(readable).unwrap_or_default();
+    let diff = if current.is_array() {
+        list_diff_lines(before, current, theme, width)
+    } else {
+        text_diff_lines(&prior_text, &readable(current), theme, width)
+    };
+    if diff.is_empty() {
         return;
     }
     lines.push(Line::from(Span::styled(
         field.replace('_', " "),
         theme.accent(),
     )));
-    let before = old.and_then(|value| value.get(field));
-    let prior_text = before.map(readable).unwrap_or_default();
-    if current.is_array() {
-        lines.extend(list_diff_lines(before, current, theme, width));
-    } else {
-        lines.extend(text_diff_lines(
-            &prior_text,
-            &readable(current),
-            theme,
-            width,
-        ));
-    }
+    lines.extend(diff);
     lines.push(Line::from(""));
+}
+
+fn is_skipped_field(field: &str, current: &Value, old: Option<&Value>) -> bool {
+    if matches!(field, "id" | "source" | "position")
+        || old.and_then(|value| value.get(field)) == Some(current)
+    {
+        return true;
+    }
+    old.is_none()
+        && (current.is_null()
+            || current.as_array().is_some_and(Vec::is_empty)
+            || (field == "disposition" && current.as_str() == Some("active"))
+            || (field == "mandatory" && current.as_bool() == Some(true)))
 }
 
 fn append_affected_tasks(
@@ -98,9 +114,13 @@ fn append_affected_tasks(
     theme: &Theme,
     width: usize,
 ) {
-    let tasks = preview
-        .map(|value| readable(&value["diff"]["affected_tasks"]))
-        .unwrap_or_default();
+    let Some(tasks) = preview
+        .and_then(|value| value["diff"]["affected_tasks"].as_array())
+        .filter(|tasks| !tasks.is_empty())
+    else {
+        return;
+    };
+    let text = tasks.iter().map(readable).collect::<Vec<_>>().join("; ");
     lines.push(Line::from(Span::styled("Affected tasks", theme.title())));
-    lines.extend(wrap(&tasks, width).into_iter().map(Line::from));
+    lines.extend(wrap(&text, width).into_iter().map(Line::from));
 }

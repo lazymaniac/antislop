@@ -59,20 +59,23 @@ impl LedgerView {
         if self.task_filter_edit {
             return format!("Task: {}", self.task_filter.text);
         }
-        let search = if self.query.text.is_empty() {
-            "/ Search".into()
-        } else {
-            format!("Search: {}", self.query.text)
-        };
-        let coverage = if self.missing_only {
-            "Missing coverage"
-        } else {
-            "All coverage"
-        };
-        format!(
-            " {} records  |  {search}  |  {coverage}",
+        let mut parts = vec![format!(
+            " {} records",
             self.page.as_ref().map_or(0, |page| page.total)
-        )
+        )];
+        if !self.query.text.is_empty() {
+            parts.push(format!("Search: {}", self.query.text));
+        }
+        if !self.status.text.is_empty() {
+            parts.push(format!("Status: {}", self.status.text));
+        }
+        if let Some(task) = &self.task {
+            parts.push(format!("Task: {task}"));
+        }
+        if self.missing_only {
+            parts.push("Missing coverage".into());
+        }
+        parts.join("  |  ")
     }
 
     fn draw_workflow_notice(&self, frame: &mut Frame, row: Rect, theme: &Theme) {
@@ -103,7 +106,7 @@ impl LedgerView {
         let footer = Line::from(vec![
             Span::styled(" p  Review pending changes ", theme.accent()),
             Span::styled(
-                " Up/Down Select  |  Left/Right Details  |  e Edit  |  Esc Close",
+                " Up/Down Select  |  1-2 [ ] Tabs  |  e Edit  |  s Source  |  Esc Close",
                 theme.dim(),
             ),
         ]);

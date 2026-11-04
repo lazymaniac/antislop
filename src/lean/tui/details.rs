@@ -24,24 +24,16 @@ pub use presentation::{
     CheckRow, check_rows, details_footer_hint, details_footer_hint_for, format_tabs,
 };
 
-pub const TABS: [&str; 8] = [
-    "Overview",
-    "Results",
-    "Checks",
-    "Comments",
-    "Review",
-    "Requirements",
-    "Reviewer",
-    "Plan",
+pub const TABS: [&str; 7] = [
+    "Overview", "Results", "Checks", "Comments", "Review", "Reviewer", "Plan",
 ];
 pub const RESULT: usize = 1;
 pub const CHECKS: usize = 2;
 pub const COMMENTS: usize = 3;
 pub const REVIEW: usize = 4;
-pub const REQUIREMENTS: usize = 5;
 /// The reviewer's own Overview: what it checks, and its terminal.
-pub const REVIEWER: usize = 6;
-pub const PLAN: usize = 7;
+pub const REVIEWER: usize = 5;
+pub const PLAN: usize = 6;
 
 /// The label of a tab for this agent.
 pub fn tab_name(key: &str, tab: usize) -> &'static str {
@@ -67,8 +59,8 @@ pub fn is_overview(tab: usize) -> bool {
 /// Each role exposes only its own tabs.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" => vec![0, RESULT, COMMENTS, REQUIREMENTS],
-        "reviewer" => vec![REVIEWER, RESULT, CHECKS, COMMENTS, REQUIREMENTS],
+        "worker" => vec![0, RESULT, COMMENTS],
+        "reviewer" => vec![REVIEWER, RESULT, CHECKS, COMMENTS],
         "planner" => vec![0, RESULT, COMMENTS],
         "plan-reviewer" | "auditor" => vec![0, RESULT, COMMENTS],
         "conversation" => vec![0, COMMENTS],
