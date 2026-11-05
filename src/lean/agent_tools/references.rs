@@ -20,11 +20,24 @@ pub(super) fn reference_error(
         .filter(|(distance, _, _)| *distance > 0 && *distance <= 4)
         .collect::<Vec<_>>();
     near.sort_by_key(|(distance, _, _)| *distance);
-    let suggestion = match near.as_slice() {
-        [(_, id, note)] => Some((id, note)),
-        [(first, id, note), (second, _, _), ..] if first < second => Some((id, note)),
+    let by_distance = match near.as_slice() {
+        [(_, id, note)] => Some((*id, *note)),
+        [(first, id, note), (second, _, _), ..] if first < second => Some((*id, *note)),
         _ => None,
     };
+    // Models also splice segments of different ids; a first segment shared with
+    // exactly one candidate is still a strong signal.
+    let by_prefix = || {
+        let head = requested.split('-').next().filter(|head| head.len() >= 8)?;
+        let mut shared = available
+            .iter()
+            .filter(|(id, _)| id.split('-').next() == Some(head));
+        match (shared.next(), shared.next()) {
+            (Some((id, note)), None) => Some((id, note)),
+            _ => None,
+        }
+    };
+    let suggestion = by_distance.or_else(by_prefix);
     let hint = suggestion
         .map(|(id, note)| {
             format!(
@@ -177,6 +190,49 @@ mod tests {
             );
             assert!(text.contains("nothing was substituted"));
         }
+    }
+
+    #[test]
+    fn a_unique_shared_first_segment_gets_a_suggestion() {
+        let available = vec![
+            (
+                "6c4cd4e7-5fac-4621-92fb-32c08c0e1729".to_string(),
+                "round 1".to_string(),
+            ),
+            (
+                "98baa82a-8d26-41a9-8662-2ddebf94947c".to_string(),
+                "other".to_string(),
+            ),
+        ];
+        let text = reference_error(
+            "result_ref",
+            "6c4cd4e7-0ebf-4b8b-b33e-db8c4caf549c",
+            "unknown",
+            &available,
+        )
+        .to_string();
+        assert!(
+            text.starts_with("result_ref: did you mean 6c4cd4e7-5fac-4621-92fb-32c08c0e1729"),
+            "{text}"
+        );
+        let ambiguous = vec![
+            (
+                "6c4cd4e7-5fac-4621-92fb-32c08c0e1729".to_string(),
+                "a".to_string(),
+            ),
+            (
+                "6c4cd4e7-1111-4621-92fb-32c08c0e1729".to_string(),
+                "b".to_string(),
+            ),
+        ];
+        let text = reference_error(
+            "result_ref",
+            "6c4cd4e7-0ebf-4b8b-b33e-db8c4caf549c",
+            "unknown",
+            &ambiguous,
+        )
+        .to_string();
+        assert!(!text.contains("did you mean"), "{text}");
     }
 
     #[test]
