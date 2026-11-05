@@ -979,7 +979,7 @@ src
     publish_plan(&Arc<Self>,conversation,text,addressed,plan,specs,review):Result<()> > resolve_plan_comments,plan_{revision_token,event_payload},activate_reviewed_plan
     propose(&Arc<Self>,conversation,project,text,proposal,addressed,cancel):Result<()> > prepare_{proposal,plan},complete_proposal,ProposalPublication
     plan_report(&Arc<Self>,conversation,plan_id,cancel):Result<String> > task_results,report_{compliance_gaps,intro},append_plan_audit,PlanAuditInput,append_compliance_gaps
-    resume_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> ~40 > plan_{belongs_to_conversation,run},extraction_needs_refresh,add_message,wake,start_plan
+    resume_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> ~49 > plan_{belongs_to_conversation,run},extraction_needs_refresh,add_message,wake,all,activate_reviewed_plan
     recover_task(&Arc<Self>,req):Result<TaskRecoveryResponse> > recover_task_as
     review(&Arc<Self>,conversation,role,plan_id,project,cancel,prompt):Result<std::result::Result<Verdict,String>> > config_snapshot,last_answered,messages_by,review_setup,turn,prompt,review_{request,outcome}
     turn(setup,cancel,prompt):Result<Option<String>> > turn_inner
@@ -2276,11 +2276,11 @@ src
      PlanView: draw(frame,area,view,theme) > frame_layout,draw_{banner,document,task_graph,buttons}
      - PlanView: comment_{banner,notes},task_banner,keep_cursor_visible
    planview.rs
-    BottomButton(E{Reject,CommentWholePlan,Review})
+    BottomButton(E{Accept,Reject,CommentWholePlan,Review})
      next():Self
      prev():Self
     DocLine(C{number,text,section,task_id,is_heading,state})
-    PlanAction(E{None,Close,Reject,CommentLine,CommentWholePlan,SubmitReview,ToggleResolveComment})
+    PlanAction(E{None,Close,Accept,Reject,CommentLine,CommentWholePlan,SubmitReview,ToggleResolveComment})
     PlanView(C{plan_id,cursor,scroll,button,button_rects,doc_area,row_docs,tick,graph_{focused,selected,offset,area},task_rects,graph_reveal,task_scroll})
      new(plan_id):Self
      whole_plan_comments(view):Vec<&'a Comment> > as_str
@@ -2389,6 +2389,7 @@ src
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},new_conversation,{open_conversation,open_projects}_picker
+     accept_plan() > plan_proposed,send_command
      submit() > {reject_duplicate,begin_chat}_send
      submit_agent_message() > agent_message_target,prepare_agent_message
      submit_comment() > reject_duplicate_comment,is_rejection_target,begin_comment_send
@@ -2429,7 +2430,7 @@ src
      request(request,done)
      task_row_round(key):Option<u64>
      refetch_stale_details() > details_are_stale,fetch_task
-     handle_plan_action(action) > open_plan_{rejection,comment},submit_plan_review,set_comment
+     handle_plan_action(action) > accept_plan,open_plan_{rejection,comment},submit_plan_review,set_comment
      header_line(width):Line<'static> > header_{project_label,status},controls,prepend_header_notice
      header_status():String > stage
      key(key):bool > key_inner,invalidate_context,selection_{context,blocked}
@@ -2495,11 +2496,11 @@ src
      test_app():App > Client.at
      test_app_with_client(client):(App,super::UpdateReceiver)
      test_app_with_client_and_updates(client,updates):App
-     - named_unblock_task,send_command,reset_input_cursor,{launch_chat,prepare_comment}_send,comment_context,
-       restore_conversation_draft,initialize_new_conversation,clear_conversation_overlays,
-       reset_conversation_{navigation,requests,delivery},daemon_conversation,over_graph,update_selection_context,
-       modal_blocks_mouse,click_{graph_filters,unblock},task_fetch_identity,mark_task_fetch,latest_round_for_key,
-       {checks_are,session_is}_stale,latest_round,open_comment_editor,config_save_guard,
+     - named_unblock_task,reset_input_cursor,{launch_chat,prepare_comment}_send,comment_context,restore_conversation_draft,
+       initialize_new_conversation,clear_conversation_overlays,reset_conversation_{navigation,requests,delivery},
+       daemon_conversation,over_graph,update_selection_context,modal_blocks_mouse,click_{graph_filters,unblock},
+       task_fetch_identity,mark_task_fetch,latest_round_for_key,{checks_are,session_is}_stale,latest_round,
+       open_comment_editor,config_save_guard,
        details_{jump_key,resume_round,retry_native,start_composer,toggle_info,native_focus_key,route_action,fetch_current_task},
        remove_search_grapheme,select_visible_graph_node,open_graph_comment,route_native_key,is_editing,
        route_{graph_filters,unblock,interview,plan_view,global_shortcut},chat_{paste_enabled,down_with_text},
@@ -2895,6 +2896,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-· 117,850 LOC · input 1,038,637 · output 41,666 tokens · state c738c14d8dbb
+· 117,899 LOC · input 1,039,138 · output 41,685 tokens · state 49b99456d1b5
 ```
 <!-- hologram:end -->

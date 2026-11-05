@@ -49,6 +49,11 @@ fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
                         .any(|v| v == "--dangerously-bypass-approvals-and-sandbox")
                 );
                 assert!(!args.iter().any(|v| v == "-s"));
+                assert!(args.iter().any(|v| v == "--no-daemon"));
+                assert!(
+                    args.iter()
+                        .any(|v| v == "sandbox_mode=\"danger-full-access\"")
+                );
                 assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
             }
             ProviderKind::Claude => {

@@ -7,7 +7,7 @@ impl PlanView {
         self.doc_area = Rect::default();
         self.row_docs.clear();
         self.task_rects.clear();
-        self.button_rects = [Rect::default(); 3];
+        self.button_rects = [Rect::default(); 4];
         frame.render_widget(Clear, area);
         let Some(chunks) = self.frame_layout(frame, area, view, theme) else {
             self.graph_area = Rect::default();

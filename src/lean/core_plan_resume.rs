@@ -26,6 +26,15 @@ impl Core {
                     .into(),
             ));
         }
+        let tasks = self.store.plan(plan_id)?;
+        if !tasks.is_empty()
+            && tasks
+                .iter()
+                .all(|task| task.status == crate::lean::tasks::status::PROPOSED)
+        {
+            // A plan the reviewer did not approve automatically waits for the user.
+            return self.activate_reviewed_plan(conversation, plan_id);
+        }
         self.start_plan(conversation, plan_id, |store| {
             if store.requeue_plan(conversation, plan_id)? > 0 {
                 return Ok(());

@@ -73,6 +73,26 @@ impl App {
         });
     }
 
+    pub(super) fn accept_plan(&mut self) {
+        let Some(plan) = self.view.plan.clone().filter(|_| self.view.plan_proposed()) else {
+            self.notice = Some("✗ there is no plan to accept".into());
+            return;
+        };
+        if !self.view.open_plan_comments().is_empty() {
+            self.notice =
+                Some("✗ send the draft comments (Review) and resolve the rest first".into());
+            return;
+        }
+        self.plan_view = None;
+        self.send_command(Some("plan accepted"), |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
+                conversation,
+                plan,
+                revision_token: None,
+            })
+        });
+    }
+
     fn resume_plan(&mut self) {
         let Some(plan) = self
             .view

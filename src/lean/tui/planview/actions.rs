@@ -4,6 +4,7 @@ use super::*;
 struct KeyState {
     max_cursor: usize,
     decidable: bool,
+    acceptable: bool,
     drafts: usize,
 }
 
@@ -38,6 +39,7 @@ impl PlanView {
         KeyState {
             max_cursor: self.cursor,
             decidable: view.plan_proposed(),
+            acceptable: view.plan_proposed() && view.open_plan_comments().is_empty(),
             drafts: view.draft_plan_comments().len(),
         }
     }
@@ -79,6 +81,7 @@ impl PlanView {
             KeyCode::End | KeyCode::Char('G') => self.move_cursor(state.max_cursor),
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => self.move_button(true),
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => self.move_button(false),
+            KeyCode::Char('a' | '1') if state.acceptable => PlanAction::Accept,
             KeyCode::Char('x' | '2') if state.decidable => PlanAction::Reject,
             KeyCode::Char('C' | '3') => PlanAction::CommentWholePlan,
             KeyCode::Char('R' | '4') => self.activate(BottomButton::Review, state),
@@ -187,6 +190,8 @@ impl PlanView {
         match button {
             BottomButton::Review if state.drafts > 0 => PlanAction::SubmitReview,
             BottomButton::Review => PlanAction::None,
+            BottomButton::Accept if state.acceptable => PlanAction::Accept,
+            BottomButton::Accept => PlanAction::None,
             BottomButton::Reject if state.decidable => PlanAction::Reject,
             BottomButton::Reject => PlanAction::None,
             BottomButton::CommentWholePlan => PlanAction::CommentWholePlan,
@@ -221,6 +226,7 @@ impl PlanView {
     fn click_button(&mut self, col: u16, row: u16, state: KeyState) -> Option<PlanAction> {
         let pos = ratatui::layout::Position::new(col, row);
         let buttons = [
+            BottomButton::Accept,
             BottomButton::Reject,
             BottomButton::CommentWholePlan,
             BottomButton::Review,

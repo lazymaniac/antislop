@@ -6,6 +6,9 @@ pub(super) fn codex(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway
     }
     append_codex_settings(command, spec, gateway);
     command.env(TOKEN_ENV, gateway.token());
+    // The shared Codex app server keeps its own sandbox policy and would
+    // ignore this launch's full access; run the TUI standalone.
+    command.arg("--no-daemon");
     command.arg("--dangerously-bypass-approvals-and-sandbox");
     command.arg("-C");
     command.arg(&spec.cwd);
@@ -19,6 +22,7 @@ fn append_codex_settings(command: &mut CommandBuilder, spec: &Spec, gateway: &Ga
         // A prompt to update would hold an unattended turn.
         "check_for_update_on_startup=false".to_owned(),
         "approval_policy=\"never\"".to_owned(),
+        "sandbox_mode=\"danger-full-access\"".to_owned(),
         format!("{prefix}.url={}", toml_string(gateway.url())),
         format!("{prefix}.bearer_token_env_var={}", toml_string(TOKEN_ENV)),
         format!("{prefix}.default_tools_approval_mode=\"approve\""),

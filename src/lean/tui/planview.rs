@@ -23,6 +23,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 pub enum PlanAction {
     None,
     Close,
+    Accept,
     Reject,
     CommentLine {
         line: usize,
@@ -40,6 +41,7 @@ pub enum PlanAction {
 /// Which button in the fixed bottom bar is currently highlighted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BottomButton {
+    Accept,
     Reject,
     CommentWholePlan,
     Review,
@@ -48,15 +50,17 @@ pub enum BottomButton {
 impl BottomButton {
     pub fn next(self) -> Self {
         match self {
+            Self::Accept => Self::Reject,
             Self::Reject => Self::CommentWholePlan,
             Self::CommentWholePlan => Self::Review,
-            Self::Review => Self::Reject,
+            Self::Review => Self::Accept,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Reject => Self::Review,
+            Self::Accept => Self::Review,
+            Self::Reject => Self::Accept,
             Self::CommentWholePlan => Self::Reject,
             Self::Review => Self::CommentWholePlan,
         }
@@ -97,7 +101,7 @@ pub struct PlanView {
     pub scroll: usize,
     pub button: BottomButton,
     /// Hit-boxes for the plan comment and rejection actions.
-    pub button_rects: [Rect; 3],
+    pub button_rects: [Rect; 4],
     /// Inner document area for mouse line selection.
     pub doc_area: Rect,
     /// The document line each screen row belongs to, from the last draw.
@@ -130,7 +134,7 @@ impl PlanView {
             cursor: 0,
             scroll: 0,
             button: BottomButton::CommentWholePlan,
-            button_rects: [Rect::default(); 3],
+            button_rects: [Rect::default(); 4],
             doc_area: Rect::default(),
             row_docs: Vec::new(),
             tick: 0,

@@ -4,6 +4,7 @@ impl App {
     pub fn handle_plan_action(&mut self, action: PlanAction) {
         match action {
             PlanAction::Close => self.plan_view = None,
+            PlanAction::Accept => self.accept_plan(),
             PlanAction::Reject => self.open_plan_rejection(),
             PlanAction::None => {}
             PlanAction::CommentLine { line, .. } => self.open_plan_comment(Some(line)),

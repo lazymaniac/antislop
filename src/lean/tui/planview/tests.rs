@@ -131,7 +131,7 @@ fn press(plan: &mut PlanView, view: &View, code: KeyCode) -> PlanAction {
 }
 
 #[test]
-fn enter_comments_and_old_accept_keys_do_not_start_work() {
+fn enter_comments_and_accept_keys_request_acceptance() {
     let view = proposed("# Plan\nbody");
     let mut plan = PlanView::new("p".into());
     assert_eq!(
@@ -139,7 +139,7 @@ fn enter_comments_and_old_accept_keys_do_not_start_work() {
         PlanAction::CommentWholePlan
     );
     for code in [KeyCode::Char('a'), KeyCode::Char('1')] {
-        assert_eq!(press(&mut plan, &view, code), PlanAction::None);
+        assert_eq!(press(&mut plan, &view, code), PlanAction::Accept);
     }
 }
 
@@ -239,7 +239,7 @@ fn review_sends_the_drafts_only_when_there_are_some() {
         text.contains("[draft]"),
         "the comment row says it is a draft"
     );
-    let rect = plan.button_rects[2];
+    let rect = plan.button_rects[3];
     assert_eq!(
         plan.mouse_click(rect.x + 2, rect.y + 1, &view),
         PlanAction::SubmitReview
@@ -405,7 +405,7 @@ fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
         if width <= 12 {
             assert!(plan.task_rects.is_empty());
             assert_eq!(plan.graph_area, Rect::default());
-            assert_eq!(plan.button_rects, [Rect::default(); 3]);
+            assert_eq!(plan.button_rects, [Rect::default(); 4]);
         }
     }
 }

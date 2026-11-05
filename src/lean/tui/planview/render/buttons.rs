@@ -4,6 +4,7 @@ use super::super::*;
 struct ButtonState {
     drafts: usize,
     decidable: bool,
+    acceptable: bool,
 }
 
 impl PlanView {
@@ -17,18 +18,24 @@ impl PlanView {
         let btn_cols = self.button_areas(bar_area);
         let drafts = view.draft_plan_comments().len();
         let decidable = view.plan_proposed();
-        let state = ButtonState { drafts, decidable };
+        let acceptable = decidable && view.open_plan_comments().is_empty();
+        let state = ButtonState {
+            drafts,
+            decidable,
+            acceptable,
+        };
         self.draw_button_group(frame, btn_cols, theme, state);
     }
 
     fn draw_button_group(
         &self,
         frame: &mut Frame,
-        areas: [Rect; 3],
+        areas: [Rect; 4],
         theme: &Theme,
         state: ButtonState,
     ) {
         for (index, button) in [
+            BottomButton::Accept,
             BottomButton::Reject,
             BottomButton::CommentWholePlan,
             BottomButton::Review,
@@ -40,12 +47,12 @@ impl PlanView {
         }
     }
 
-    fn button_areas(&mut self, bar_area: Rect) -> [Rect; 3] {
+    fn button_areas(&mut self, bar_area: Rect) -> [Rect; 4] {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(33); 3])
+            .constraints([Constraint::Percentage(25); 4])
             .split(bar_area);
-        self.button_rects = [cols[0], cols[1], cols[2]];
+        self.button_rects = [cols[0], cols[1], cols[2], cols[3]];
         self.button_rects
     }
 
@@ -77,6 +84,8 @@ impl PlanView {
 
     fn button_label_tone(&self, button: BottomButton, state: ButtonState) -> (&'static str, Tone) {
         match button {
+            BottomButton::Accept if state.acceptable => (" [ Accept (a) ] ", Tone::Done),
+            BottomButton::Accept => (" [ Accept: n/a ] ", Tone::Queued),
             BottomButton::Reject => self.reject_label_tone(state.decidable),
             BottomButton::CommentWholePlan => (" [ Comment plan (C) ] ", Tone::Active),
             BottomButton::Review => {
