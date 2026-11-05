@@ -7,7 +7,10 @@ use serde_json::Value;
 #[test]
 fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
     // SAFETY: all launch tests use this fixture-only bridge-check override.
-    unsafe { std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1") };
+    unsafe {
+        std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
+        std::env::set_var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK", "1");
+    };
     let gateway = Gateway::start().unwrap();
     for provider in [
         ProviderKind::Codex,
@@ -67,27 +70,23 @@ fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
             }
             ProviderKind::Gemini => {
                 assert!(args.windows(2).any(|v| v == ["--approval-mode", "yolo"]));
-                let settings_path = launch.settings.as_ref().unwrap().path();
+                assert!(launch.settings.is_none());
+                assert!(launch.command.get_env("ANTISLOP_MCP_URL").is_some());
+                assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
                 assert!(
-                    settings_path
-                        .canonicalize()
-                        .unwrap()
-                        .starts_with(specification.runtime.canonicalize().unwrap())
+                    launch
+                        .command
+                        .get_env("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+                        .is_none()
                 );
-                assert!(
-                    !settings_path
-                        .canonicalize()
-                        .unwrap()
-                        .starts_with(specification.cwd.canonicalize().unwrap())
-                );
-                assert!(!specification.cwd.join(".antislop").exists());
-                let settings: Value = serde_json::from_slice(
-                    &std::fs::read(launch.settings.as_ref().unwrap().path()).unwrap(),
-                )
-                .unwrap();
-                assert!(settings["tools"]["core"].is_null());
-                assert!(settings["tools"]["exclude"].is_null());
+                let settings: Value =
+                    serde_json::from_str(&crate::lean::launch::providers::gemini::settings_text())
+                        .unwrap();
                 assert_eq!(settings["mcpServers"]["antislop"]["trust"], true);
+                assert_eq!(
+                    settings["mcpServers"]["antislop"]["httpUrl"],
+                    "${ANTISLOP_MCP_URL}"
+                );
             }
             ProviderKind::Agy => {
                 assert!(args.iter().any(|v| v == "--dangerously-skip-permissions"));

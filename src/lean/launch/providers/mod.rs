@@ -10,7 +10,7 @@ mod claude;
 mod codex;
 #[path = "../common.rs"]
 mod common;
-mod gemini;
+pub(crate) mod gemini;
 mod opencode;
 use common::runtime_args;
 
@@ -101,8 +101,6 @@ fn configure_gemini(
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
     command.args(runtime_args(&spec.args, spec.provider));
-    Ok((
-        spec.resume.clone(),
-        Some(gemini::gemini(command, spec, gateway)?),
-    ))
+    gemini::gemini(command, spec, gateway)?;
+    Ok((spec.resume.clone(), None))
 }

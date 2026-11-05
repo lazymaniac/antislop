@@ -191,6 +191,7 @@ impl Gateway {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_names(&self) -> Vec<&'static str> {
         self.shared.state.lock().map_or_else(
             |_| vec![TOOL],

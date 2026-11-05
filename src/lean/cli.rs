@@ -184,7 +184,29 @@ pub fn setup(args: &[String]) -> Result<()> {
             );
             Ok(())
         }
-        _ => Err(crate::Error::Invalid("usage: antislop setup agy".into())),
+        [target] if target == "gemini" => {
+            use super::launch::providers::gemini::{settings_text, system_settings_path};
+            let path = system_settings_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    crate::Error::Invalid(format!(
+                        "cannot create {} (run with sudo): {error}",
+                        parent.display()
+                    ))
+                })?;
+            }
+            std::fs::write(&path, settings_text()).map_err(|error| {
+                crate::Error::Invalid(format!(
+                    "cannot write {} (run with sudo): {error}",
+                    path.display()
+                ))
+            })?;
+            println!("installed gemini system settings at {}", path.display());
+            Ok(())
+        }
+        _ => Err(crate::Error::Invalid(
+            "usage: antislop setup agy|gemini".into(),
+        )),
     }
 }
 

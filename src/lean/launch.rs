@@ -4,7 +4,7 @@
 //! files are written. The human can then use the CLI exactly as usual.
 use portable_pty::CommandBuilder;
 
-mod providers;
+pub(crate) mod providers;
 pub(crate) use providers::command;
 
 pub(crate) struct Launch {
