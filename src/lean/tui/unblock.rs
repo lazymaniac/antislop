@@ -34,7 +34,7 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         return vec![restart_choice()];
     }
     let mut choices = vec![retry_choice()];
-    if task.writes && task.status == "needs_user" {
+    if task.change_kind.has_delivery() && task.status == "needs_user" {
         choices.extend(written_recovery_choices());
     }
     choices.push(restart_choice());
@@ -301,7 +301,11 @@ mod tests {
             id: "t1".into(),
             title: "Storage".into(),
             status: status.into(),
-            writes,
+            change_kind: if writes {
+                crate::lean::tasks::ChangeKind::Code
+            } else {
+                crate::lean::tasks::ChangeKind::None
+            },
             reason: Some("the reviewer repeated the same findings".into()),
             ..TaskRow::default()
         }

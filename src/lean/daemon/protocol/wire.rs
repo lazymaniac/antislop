@@ -7,9 +7,6 @@ pub(crate) enum WireRequest {
         conversation: String,
         text: String,
     },
-    AuthorizeTaskExecution {
-        authorization: Box<crate::lean::store::ExecutionAuthorization>,
-    },
     TerminalOpen {
         conversation: String,
         role: String,
@@ -47,7 +44,7 @@ pub(crate) enum WireRequest {
         conversation: String,
         turn: String,
     },
-    CommentAt {
+    Comment {
         conversation: String,
         plan: Option<String>,
         target: String,
@@ -175,25 +172,19 @@ pub(crate) enum WireRequest {
         #[serde(default)]
         to: Option<String>,
     },
-    Accept {
-        conversation: String,
-        plan: String,
-        #[serde(default)]
-        scope_hash: Option<String>,
-    },
     Reject {
         conversation: String,
         plan: String,
         #[serde(default)]
         reason: Option<String>,
         #[serde(default)]
-        scope_hash: Option<String>,
+        revision_token: Option<String>,
     },
     Resume {
         conversation: String,
         plan: String,
         #[serde(default)]
-        scope_hash: Option<String>,
+        revision_token: Option<String>,
     },
     ReviewComments {
         conversation: String,
@@ -216,15 +207,11 @@ pub(crate) enum WireRequest {
     Cancel {
         conversation: String,
         #[serde(default)]
-        scope_hash: Option<String>,
+        revision_token: Option<String>,
     },
     Pause {
         conversation: String,
         paused: bool,
-    },
-    Mode {
-        conversation: String,
-        autonomous: bool,
     },
     Plans {
         conversation: String,
@@ -244,13 +231,6 @@ pub(crate) enum WireRequest {
         #[serde(default)]
         status: Option<String>,
     },
-    Comment {
-        conversation: String,
-        #[serde(default)]
-        plan: Option<String>,
-        target: String,
-        text: String,
-    },
     CommentStatus {
         conversation: String,
         id: u64,
@@ -266,7 +246,7 @@ pub(crate) enum WireRequest {
         plan: String,
         id: String,
         #[serde(default)]
-        scope_hash: Option<String>,
+        revision_token: Option<String>,
     },
     TaskChecks {
         #[serde(default)]
@@ -299,10 +279,5 @@ pub(crate) enum WireRequest {
     },
     Mail {
         conversation: String,
-    },
-    TrustStatus,
-    Trust {
-        #[serde(default = "super::wire_defaults::default_true")]
-        trusted: bool,
     },
 }

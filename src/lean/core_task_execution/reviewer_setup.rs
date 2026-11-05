@@ -19,7 +19,7 @@ pub(in crate::lean) fn build<'a>(
         profile,
         cwd: cwd.to_path_buf(),
         add_dirs,
-        access: agent::Access::ReadOnly,
+
         upto_message: 0,
     }
 }

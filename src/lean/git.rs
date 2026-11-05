@@ -7,9 +7,7 @@ mod recovery;
 pub use recovery::recovery_fingerprint;
 mod artifact_update;
 mod artifacts;
-pub(crate) use artifact_update::{
-    artifact_was_created, deliver_owned_artifacts, require_owned_outputs,
-};
+pub(crate) use artifact_update::{deliver_owned_artifacts, require_owned_outputs};
 mod changes;
 mod integration;
 mod snapshots;

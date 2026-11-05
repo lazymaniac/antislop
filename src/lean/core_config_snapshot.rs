@@ -18,6 +18,10 @@ impl Core {
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
         let project = project.canonicalize()?;
+        self.store.record_project_identity(
+            &project.to_string_lossy(),
+            &paths::project_identity(&project)?,
+        )?;
         let conversation = self.store.create_conversation(&project.to_string_lossy())?;
         if let Ok(branch) = git::session_branch(&project) {
             self.store.append_event(
@@ -34,21 +38,7 @@ impl Core {
     /// Records the message at once; the orchestrator answers in the background.
     pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
         self.store.conversation(conversation)?;
-        let message = if text.trim() == "/planning" {
-            require(
-                self.is_idle(conversation),
-                "wait for the orchestrator to finish before approving requirements",
-            )?;
-            self.store.approve_requirements(conversation)?
-        } else {
-            self.store.add_message(conversation, "user", text)?
-        };
-        if let Err(error) = self.apply_recovery_answers(conversation) {
-            self.notice(
-                conversation,
-                &format!("User answer recorded; recovery could not be applied: {error}"),
-            );
-        }
+        let message = self.store.add_message(conversation, "user", text)?;
         self.wake(conversation);
         Ok(message)
     }
@@ -119,7 +109,7 @@ impl Core {
         }
     }
 
-    pub fn conversation_scope_hash(&self, conversation: &str) -> Result<String> {
+    pub fn conversation_revision_token(&self, conversation: &str) -> Result<String> {
         let latest_seq = self.store.latest_event_seq(conversation)?;
         let paused = self.store.paused(conversation)?;
         let idle = self.is_idle(conversation);
@@ -137,21 +127,21 @@ impl Core {
         ))
     }
 
-    pub fn plan_scope_hash(&self, _conversation: &str, plan_id: &str) -> Result<String> {
+    pub fn plan_revision_token(&self, _conversation: &str, plan_id: &str) -> Result<String> {
         let tasks = self.store.plan(plan_id)?;
         let revision = match self.store.plan_run(plan_id)? {
             Some(id) => Some(self.store.run(_conversation, &id)?.spec_revision),
             None => None,
         };
         Ok(crate::hash(
-            format!("{}:{revision:?}", plan_scope_hash(&tasks)).as_bytes(),
+            format!("{}:{revision:?}", task_state_digest(&tasks)).as_bytes(),
         ))
     }
 
-    pub fn diff_scope_hash(&self, conversation: &str, plan: &str, id: &str) -> Result<String> {
+    pub fn diff_revision_token(&self, conversation: &str, plan: &str, id: &str) -> Result<String> {
         let task = self.task_unscoped(plan, id)?;
         let (_, base, result) = self.change(conversation, &task)?;
-        Ok(diff_scope_hash(
+        Ok(diff_revision_token(
             conversation,
             plan,
             id,
@@ -177,8 +167,8 @@ impl Core {
             .count();
         let paused = self.store.paused(&conversation.id).unwrap_or(false);
         let status = self.conversation_status(&conversation.id, paused, &tasks, &active_plan)?;
-        let scope_hash = self
-            .conversation_scope_hash(&conversation.id)
+        let revision_token = self
+            .conversation_revision_token(&conversation.id)
             .unwrap_or_default();
         Ok(ConversationSummary {
             id: conversation.id.clone(),
@@ -188,7 +178,7 @@ impl Core {
             active_plan,
             tasks_total: tasks.len(),
             tasks_done,
-            scope_hash,
+            revision_token,
         })
     }
 

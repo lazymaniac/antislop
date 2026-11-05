@@ -49,23 +49,15 @@ fn decode_review(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
             conversation,
             plan,
             id,
-            scope_hash,
-        } => Ok({
-            if scope_hash.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewScoped {
-                    conversation,
-                    plan,
-                    id,
-                    scope_hash,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Review {
-                    conversation,
-                    plan,
-                    id,
-                })
-            }
-        }),
+            revision_token,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Review {
+                conversation,
+                plan,
+                id,
+                revision_token,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -93,17 +85,13 @@ fn decode_task(wire: WireRequest) -> std::result::Result<Request, Box<WireReques
             conversation,
             plan,
             id,
-        } => Ok({
-            if conversation.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::TaskScoped {
-                    conversation,
-                    plan,
-                    id,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Task { plan, id })
-            }
-        }),
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Task {
+                conversation,
+                plan,
+                id,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }

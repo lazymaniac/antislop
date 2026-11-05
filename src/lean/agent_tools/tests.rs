@@ -68,7 +68,7 @@ fn task_tools_reject_superseded_input_generations() {
         .store
         .add_plan(
             &conversation,
-            &[json!({"id":"task","title":"Task","goal":"Do work","kind":"analysis"})],
+            &[json!({"id":"task","title":"Task","goal":"Do work","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);
@@ -116,8 +116,8 @@ fn task_tools_reject_superseded_input_generations() {
 fn full_dependency_reports_are_paged_scoped_and_follow_the_original_producer() {
     let (_directory, core, conversation) = core();
     let specs = [
-        json!({"id":"analysis","title":"Analysis","goal":"Find all issues","kind":"analysis","writes":false}),
-        json!({"id":"consumer","title":"Consume","goal":"Use all findings","kind":"analysis","depends_on":["analysis"]}),
+        json!({"id":"analysis","title":"Analysis","goal":"Find all issues","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"consumer","title":"Consume","goal":"Use all findings","change_kind": "none", "kind":"analysis","depends_on":["analysis"]}),
     ];
     let tasks = core.store.add_plan(&conversation, &specs).unwrap();
     let report = (1..=16)
@@ -127,12 +127,14 @@ fn full_dependency_reports_are_paged_scoped_and_follow_the_original_producer() {
     producer.report = Some(report.clone());
     producer.status = status::APPROVED.into();
     core.store.update_task(&producer).unwrap();
+    core.store.test_completion(&producer, &report);
     let mut carried_specs = specs.clone();
     carried_specs[0]["title"] = "Carried analysis".into();
     let new_tasks = core.store.add_plan(&conversation, &carried_specs).unwrap();
     let mut carried = new_tasks[0].clone();
     carried.status = status::APPROVED.into();
     carried.feedback = Some(json!({"carried_from":producer.id}));
+    core.store.test_result_source(&carried, &producer);
     core.store.update_task(&carried).unwrap();
     let consumer = &new_tasks[1];
     let role = format!("worker:{}", consumer.id);
@@ -207,7 +209,7 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         .store
         .add_plan(
             &owner,
-            &[json!({"id":"local","title":"Local","goal":"Report","kind":"analysis"})],
+            &[json!({"id":"local","title":"Local","goal":"Report","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);
@@ -215,7 +217,7 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         .store
         .start_turn(&owner, PLANNER, "fixture", 0, None)
         .unwrap();
-    assert!(core.agent_tool(&foreign,PLANNER,&turn.id,"submit_plan",&json!({"document":"Plan","tasks":[{"id":"other","title":"Other","goal":"Report","kind":"analysis"}]})).is_err());
+    assert!(core.agent_tool(&foreign,PLANNER,&turn.id,"submit_plan",&json!({"document":"Plan","tasks":[{"id":"other","title":"Other","goal":"Report","change_kind": "none", "kind":"analysis"}]})).is_err());
     let run = core
         .store
         .create_run(&foreign, "Foreign requirements")
@@ -250,7 +252,7 @@ fn answered_questions_return_their_answer_on_wait_and_are_not_asked_again() {
         .store
         .add_plan(
             &conversation,
-            &[json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"})],
+            &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);

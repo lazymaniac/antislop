@@ -285,7 +285,7 @@ mod tests {
                     "id": task_id,
                     "title": "Implement",
                     "goal": "Implement requirement",
-                    "kind": "implementation",
+                    "change_kind": "code", "kind": "implementation",
                     "requirement_ids": [id],
                 })
                 .to_string(),
@@ -320,7 +320,6 @@ mod tests {
             spec_revision: 1,
             original: id.into(),
             spec: EntrySpec {
-                constraints: Vec::new(),
                 id: id.into(),
                 source: SourceSpan {
                     source_id: "source".into(),

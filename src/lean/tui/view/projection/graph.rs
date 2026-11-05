@@ -72,8 +72,8 @@ pub(super) fn on_graph_updated(view: &mut View, payload: &Value) {
         return;
     }
     apply_graph_order(view, &payload["order"]);
-    view.plan_scope_hash = payload["scope_hash"].as_str().map(str::to_owned);
-    view.conversation_scope_hash = view.plan_scope_hash.clone();
+    view.plan_revision_token = payload["revision_token"].as_str().map(str::to_owned);
+    view.conversation_revision_token = view.plan_revision_token.clone();
     report_graph_amendment(view, payload["text"].as_str().unwrap_or_default());
 }
 

@@ -1,7 +1,5 @@
 use super::*;
 
-const STARTUP_RETRIES: u32 = 2;
-
 #[path = "turn/execute.rs"]
 mod execute;
 #[path = "turn/finish.rs"]
@@ -16,7 +14,7 @@ pub(super) struct TurnState<'a> {
     pub(super) profile: Result<ResolvedProfile>,
     pub(super) cwd: PathBuf,
     pub(super) add_dirs: Vec<PathBuf>,
-    pub(super) access: agent::Access,
+
     pub(super) provider: String,
     pub(super) resume: Option<String>,
     pub(super) inbox: Vec<store::Mail>,

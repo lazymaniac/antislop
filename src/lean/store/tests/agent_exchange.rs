@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, Store, String, Task, Turn) {
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap()
         .id;
-    let mut task = store.add_plan(&conversation,&[json!({"id":"local","title":"Local change","goal":"Expose an API","kind":"implementation","outputs":["api"],"reviewer":{"focus":"Inspect API"}})]).unwrap().remove(0);
+    let mut task = store.add_plan(&conversation,&[json!({"id":"local","title":"Local change","goal":"Expose an API","change_kind": "code", "kind":"implementation","outputs":["api"],"reviewer":{"summary": "Inspect API"}})]).unwrap().remove(0);
     task.round = 1;
     task.status = "working".into();
     store.update_task(&task).unwrap();
@@ -139,7 +139,7 @@ fn a_restart_resumes_a_cli_wait_but_not_a_task_waiting_for_its_answer() {
 #[test]
 fn the_accepted_plan_is_the_latest_one_the_user_accepted() {
     let (_dir, store, conversation, _, _) = fixture();
-    let spec = json!({"id":"next","title":"Next","goal":"Go on","kind":"analysis","reviewer":{"focus":"Check"}});
+    let spec = json!({"id":"next","title":"Next","goal":"Go on","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Check"}});
     let first = store
         .add_plan(&conversation, std::slice::from_ref(&spec))
         .unwrap()[0]
@@ -219,7 +219,7 @@ fn a_dependent_receives_the_summary_of_its_dependency_not_its_report() {
         .unwrap();
     producer.status = "approved".into();
     store.update_task(&producer).unwrap();
-    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"]})).unwrap();
+    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","change_kind": "code", "kind":"implementation","depends_on":["local"]})).unwrap();
     let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].id, "local");
@@ -241,14 +241,13 @@ fn a_dependent_receives_the_summary_of_its_dependency_not_its_report() {
 }
 
 #[test]
-fn a_dependency_without_a_summary_hands_over_the_opening_line_of_its_report() {
+fn a_dependency_without_a_structured_completion_cannot_supply_a_summary() {
     let (_dir, store, _conversation, mut producer, _turn) = fixture();
     producer.status = "approved".into();
     producer.report = Some("\nDefined the API\n\nPRIVATE REPORT".into());
     store.update_task(&producer).unwrap();
-    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"]})).unwrap();
-    let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
-    assert!(inputs[0].report.ends_with("Defined the API"));
+    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","change_kind": "code", "kind":"implementation","depends_on":["local"]})).unwrap();
+    assert!(store.dependency_inputs(&producer.plan_id, &spec).is_err());
 }
 
 #[test]
@@ -446,7 +445,7 @@ fn a_closing_task_also_receives_the_summaries_of_earlier_checks() {
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap()
         .id;
-    let task = |id: &str, kind: &str, depends: &[&str]| json!({"id":id,"title":id,"goal":"g","kind":kind,"depends_on":depends,"reviewer":{"focus":"f"}});
+    let task = |id: &str, kind: &str, depends: &[&str]| json!({"id":id,"title":id,"goal":"g","change_kind": "none", "kind":kind,"depends_on":depends,"reviewer":{"summary": "f"}});
     let tasks = store
         .add_plan(
             &conversation,
@@ -463,6 +462,7 @@ fn a_closing_task_also_receives_the_summaries_of_earlier_checks() {
         task.status = "approved".into();
         task.report = Some(format!("{} finished", task.spec["id"].as_str().unwrap()));
         store.update_task(&task).unwrap();
+        store.test_completion(&task, task.report.as_deref().unwrap());
     }
     let plan = &tasks[0].plan_id;
     let ids = |spec: serde_json::Value| -> Vec<String> {
@@ -563,5 +563,30 @@ fn answered_question_waits_for_its_specific_dependency_before_queueing_once() {
         store.task_by_id(&task.id).unwrap().unwrap().status,
         "waiting",
         "a consumed release never requeues again"
+    );
+}
+
+#[test]
+fn runtime_error_text_and_feedback_do_not_become_worker_completions() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let specs = [
+        serde_json::json!({"id":"failed","title":"Failed CLI","goal":"Inspect", "change_kind":"none","kind":"analysis","reviewer":{"summary":"Check actual evidence"}}),
+    ];
+    let mut task = store.add_plan(&conversation.id, &specs).unwrap().remove(0);
+    task.round = 1;
+    task.status = "waiting".into();
+    task.report = Some("[waiting] worker exited: login required".into());
+    task.feedback = Some(serde_json::json!({"resume_role":"reviewer", "carried_from":task.id}));
+    store.update_task(&task).unwrap();
+    assert!(matches!(
+        store.completed_task_output(&task),
+        Err(crate::Error::Sql(rusqlite::Error::QueryReturnedNoRows))
+    ));
+    assert!(store.task_summary(&task).is_err());
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().report,
+        task.report
     );
 }

@@ -60,7 +60,10 @@ impl Core {
                     "- {} ({}{}): {}",
                     spec["id"].as_str().unwrap_or_default(),
                     spec["kind"].as_str().unwrap_or_default(),
-                    if spec["writes"] == true {
+                    if spec["change_kind"]
+                        .as_str()
+                        .is_some_and(|kind| kind != "none")
+                    {
                         ", change integrated"
                     } else {
                         ""
@@ -122,9 +125,9 @@ mod tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let map = json!({"id":"map","title":"Map","goal":"Map the code","kind":"context","writes":false,"reviewer":{"focus":"f"}});
-        let options = json!({"id":"build-options","title":"Options","goal":"Compare","kind":"analysis","options_for":"build","reviewer":{"focus":"f"}});
-        let build = json!({"id":"build","title":"Build","goal":"Build it","kind":"implementation","writes":true,"depends_on":["map","build-options"],"reviewer":{"focus":"f"}});
+        let map = json!({"id":"map","title":"Map","goal":"Map the code","change_kind": "none", "kind":"context","reviewer":{"summary": "f"}});
+        let options = json!({"id":"build-options","title":"Options","goal":"Compare","change_kind": "none", "kind":"analysis","options_for":"build","reviewer":{"summary": "f"}});
+        let build = json!({"id":"build","title":"Build","goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map","build-options"],"reviewer":{"summary": "f"}});
         let plan = core.store.add_plan(&id, &[map, options, build]).unwrap()[0]
             .plan_id
             .clone();
@@ -142,7 +145,7 @@ mod tests {
         assert!(!note.contains("build-options"), "{note}");
 
         let check: PlannedTask = serde_json::from_value(
-            json!({"id":"check","title":"Check","goal":"Check it","kind":"testing","depends_on":["build"]}),
+            json!({"id":"check","title":"Check","goal":"Check it","change_kind": "code", "kind":"testing","depends_on":["build"]}),
         )
         .unwrap();
         let keep = ["map".to_owned(), "build".to_owned()];
@@ -191,9 +194,9 @@ mod tests {
             serde_json::from_value(value).unwrap()
         };
         let first = planned(json!([
-            {"id":"map","title":"Map","goal":"Map the code","kind":"context"},
-            {"id":"build","title":"Build","goal":"Build it","kind":"implementation","depends_on":["map"],"scope":["src/"]},
-            {"id":"later","title":"Later","goal":"Then this","kind":"implementation","depends_on":["build"],"scope":["src/"]}
+            {"id":"map","title":"Map","goal":"Map the code","change_kind": "none", "kind":"context"},
+            {"id":"build","title":"Build","goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"]},
+            {"id":"later","title":"Later","goal":"Then this","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
         let first = checked_plan(&tasks::planned_graph(first).unwrap(), &config).unwrap();
         assert!(first.iter().any(|s| s.id == "build-options"));
@@ -209,7 +212,7 @@ mod tests {
             .unwrap();
 
         let rest = planned(json!([
-            {"id":"after","title":"After","goal":"Then that","kind":"implementation","depends_on":["build"],"scope":["src/"]}
+            {"id":"after","title":"After","goal":"Then that","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
         let keep = ["map".to_owned(), "build".to_owned()];
         let second = core.submitted_graph(&id, rest, &keep).unwrap();

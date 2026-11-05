@@ -32,7 +32,7 @@ fn all_fields_round_trip_and_invalid_values_stay_in_draft() {
     let index = editor
         .fields
         .iter()
-        .position(|f| f.path.last().unwrap() == "max_parallel")
+        .position(|f| f.path.last().unwrap() == "local_commits")
         .unwrap();
     editor.fields[index].input = InputBuffer::with_text("wrong");
     assert!(editor.source().is_none());
@@ -82,21 +82,23 @@ fn optional_overrides_commands_and_field_errors_round_trip() {
     assert!(editor.fields[route].error.is_some());
 }
 #[test]
-fn document_patching_preserves_comments_and_reports_integer_overflow_at_the_field() {
-    let source = include_str!("../../../../examples/antislop.toml")
-        .replace("max_parallel = 4", "max_parallel = 4 # keep this comment");
+fn document_patching_preserves_comments_and_reports_invalid_boolean_at_the_field() {
+    let source = include_str!("../../../../examples/antislop.toml").replace(
+        "local_commits = true",
+        "local_commits = true # keep this comment",
+    );
     let mut editor = ConfigEditor::new(&source, "antislop.toml".into()).unwrap();
     let index = editor
         .fields
         .iter()
-        .position(|f| f.path == ["policy", "max_parallel"])
+        .position(|f| f.path == ["policy", "local_commits"])
         .unwrap();
-    editor.fields[index].input = InputBuffer::with_text("2");
+    editor.fields[index].input = InputBuffer::with_text("false");
     assert!(
         editor
             .source()
             .unwrap()
-            .contains("max_parallel = 2 # keep this comment")
+            .contains("local_commits = false # keep this comment")
     );
     editor.fields[index].input = InputBuffer::with_text("18446744073709551615");
     assert!(editor.source().is_none());

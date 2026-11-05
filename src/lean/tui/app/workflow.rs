@@ -4,7 +4,6 @@ impl App {
     pub fn handle_plan_action(&mut self, action: PlanAction) {
         match action {
             PlanAction::Close => self.plan_view = None,
-            PlanAction::Accept => self.accept_plan_from_view(),
             PlanAction::Reject => self.open_plan_rejection(),
             PlanAction::None => {}
             PlanAction::CommentLine { line, .. } => self.open_plan_comment(Some(line)),
@@ -13,15 +12,6 @@ impl App {
             PlanAction::ToggleResolveComment { id, next_status } => {
                 self.set_comment(id, &next_status)
             }
-        }
-    }
-
-    fn accept_plan_from_view(&mut self) {
-        if self.view.open_plan_comments().is_empty() {
-            self.plan_view = None;
-            self.run_workflow(Command::Accept);
-        } else {
-            self.notice = Some("✗ resolve all plan comments before accepting the plan".into());
         }
     }
 
@@ -81,7 +71,6 @@ impl App {
         let mut line = view::render_header_with(
             &label,
             &self.conversation,
-            self.view.autonomous,
             self.header_status().trim_end_matches(" · "),
             panel_focus,
             width,

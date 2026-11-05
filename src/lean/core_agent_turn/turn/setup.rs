@@ -38,7 +38,7 @@ struct TurnStart<'a> {
     profile: Result<ResolvedProfile>,
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
-    access: agent::Access,
+
     upto_message: u64,
     provider: String,
     resume: Option<String>,
@@ -57,7 +57,7 @@ impl<'a> TurnStart<'a> {
             profile: parts.profile,
             cwd: parts.cwd,
             add_dirs: parts.add_dirs,
-            access: parts.access,
+
             upto_message: parts.upto_message,
             provider,
             resume,
@@ -78,7 +78,7 @@ impl<'a> TurnStart<'a> {
             profile: self.profile,
             cwd: self.cwd,
             add_dirs: self.add_dirs,
-            access: self.access,
+
             provider: self.provider,
             resume: self.resume,
             inbox,
@@ -152,7 +152,7 @@ struct SetupParts<'a> {
     profile: Result<ResolvedProfile>,
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
-    access: agent::Access,
+
     upto_message: u64,
 }
 
@@ -166,7 +166,7 @@ impl<'a> SetupParts<'a> {
             profile,
             cwd,
             add_dirs,
-            access,
+
             upto_message,
         } = setup;
         Self {
@@ -177,7 +177,7 @@ impl<'a> SetupParts<'a> {
             profile,
             cwd,
             add_dirs,
-            access,
+
             upto_message,
         }
     }
@@ -199,6 +199,5 @@ fn resume_session(core: &Core, setup: &SetupParts<'_>, provider: &str) -> Result
         setup.profile.as_ref().ok(),
         &setup.cwd,
         &setup.add_dirs,
-        setup.access,
     )
 }

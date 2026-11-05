@@ -51,26 +51,17 @@ impl Core {
 
     fn run_code_review(self: Arc<Self>, work: CodeReview) {
         let review = execute_code_review(&self, &work);
+        // Keep the review-to-orchestrator handoff atomic to idle observers
+        // and cancellation, using the same outer lock as plan completion.
+        let _plans = self.plans.lock().expect("plans mutex");
         publish_code_review(&self, &work, &review);
+        if !work.cancel.load(Ordering::SeqCst) {
+            self.wake(&work.conversation);
+        }
         self.reviews
             .lock()
             .expect("reviews mutex")
             .remove(&work.conversation);
-        self.wake(&work.conversation);
-    }
-
-    pub fn review_change_scoped(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan: &str,
-        id: &str,
-        scope_hash: Option<&str>,
-    ) -> Result<()> {
-        if let Some(expected) = scope_hash {
-            let current = self.diff_scope_hash(conversation, plan, id)?;
-            require(expected == current, "stale_scope")?;
-        }
-        self.review_change(conversation, plan, id)
     }
 
     /// Open comments targeting the plan document or whole plan `plan_id`.
@@ -93,14 +84,16 @@ impl Core {
             .collect())
     }
 
-    /// Starts the proposed plan `plan_id`: exactly the one the user saw, even
-    /// if the orchestrator has proposed another since. Requires all open plan
-    /// comments on `plan_id` to be resolved first.
-    pub fn accept_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
+    /// Activates a plan after the independent plan review succeeds.
+    pub(in crate::lean) fn activate_reviewed_plan(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+    ) -> Result<Vec<Task>> {
         let open = self.open_plan_comments(conversation, plan_id)?;
         require(
             open.is_empty(),
-            "send the draft plan comments with Review and resolve all open ones before accepting the plan",
+            "send the draft plan comments with Review and resolve all open ones before activating the reviewed plan",
         )?;
         self.start_plan(conversation, plan_id, |store| {
             store.queue_plan(conversation, plan_id).map(|_| ())
@@ -147,20 +140,6 @@ impl Core {
             &format!("[rejected plan {plan_id}] {reason}"),
         )?;
         Ok(())
-    }
-
-    pub fn reject_plan_scoped(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan_id: &str,
-        reason: Option<&str>,
-        scope_hash: Option<&str>,
-    ) -> Result<()> {
-        if let Some(expected) = scope_hash {
-            let current = self.plan_scope_hash(conversation, plan_id)?;
-            require(expected == current, "stale_scope")?;
-        }
-        self.reject_plan(conversation, plan_id, reason)
     }
 }
 
@@ -223,7 +202,7 @@ fn review_turn_setup<'a>(core: &Core, work: &'a CodeReview) -> TurnSetup<'a> {
             .resolve(work.spec.kind, RoleKind::Reviewer),
         cwd: work.dir.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         upto_message: 0,
     }
 }

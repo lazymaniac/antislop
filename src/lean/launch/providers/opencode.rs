@@ -1,12 +1,7 @@
 use super::*;
-pub(super) fn opencode(
-    command: &mut CommandBuilder,
-    spec: &Spec,
-    gateway: &Gateway,
-    read_only: bool,
-) -> Result<()> {
+pub(super) fn opencode(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) -> Result<()> {
     let mut config = read_config()?;
-    let permission = permissions(spec, gateway, read_only);
+    let permission = json!({"*":"allow", "external_directory":{"*":"allow"}});
     install_agent(&mut config, permission)?;
     install_gateway(&mut config, gateway)?;
     command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
@@ -24,30 +19,6 @@ fn read_config() -> Result<Value> {
         Err(std::env::VarError::NotPresent) => Ok(json!({})),
         Err(error) => Err(Error::Invalid(error.to_string())),
     }
-}
-
-fn permissions(spec: &Spec, gateway: &Gateway, read_only: bool) -> Value {
-    let mut permission = json!({
-        "*": if read_only { "deny" } else { "allow" },
-        "read": "allow", "glob": "allow", "grep": "allow",
-        "list": "allow", "webfetch": "allow", "websearch": "allow",
-        "bash": if read_only { "deny" } else { "allow" },
-        "edit": if read_only { "deny" } else { "allow" },
-        "write": if read_only { "deny" } else { "allow" },
-        "apply_patch": if read_only { "deny" } else { "allow" },
-        "doom_loop": "deny",
-        "task": "deny", "question": "deny",
-        "plan_enter": "deny", "plan_exit": "deny",
-        format!("{SERVER}_{TOOL}"): "allow",
-        "external_directory": { "*": "deny" }
-    });
-    for tool in gateway.tool_names() {
-        permission[format!("{SERVER}_{tool}")] = "allow".into();
-    }
-    for dir in &spec.add_dirs {
-        permission["external_directory"][format!("{}/*", dir.display())] = "allow".into();
-    }
-    permission
 }
 
 fn install_agent(config: &mut Value, permission: Value) -> Result<()> {

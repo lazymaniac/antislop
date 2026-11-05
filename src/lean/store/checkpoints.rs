@@ -12,7 +12,6 @@ impl Store {
             "SELECT id FROM tasks WHERE conversation_id=?1 AND plan_id<>?2
              AND status IN ('coordinating','failed','cancelled','needs_user','waiting','stale')
              AND base IS NOT NULL AND result IS NOT NULL AND base<>result
-             AND json_extract(spec,'$.writes')=1
              AND coalesce(json_extract(spec,'$.change_kind'),'code')='code'
              AND NOT EXISTS(SELECT 1 FROM task_resume_results r JOIN tasks t ON t.id=r.task_id
                  WHERE r.source_task=tasks.id AND t.id<>tasks.id AND t.status IN ('queued','working','reviewing','approved'))
@@ -119,7 +118,7 @@ fn checkpoint_source(
     )?;
     let spec: crate::lean::tasks::TaskContract = serde_json::from_str(&spec)?;
     crate::require(
-        spec.writes && spec.changes_code(),
+        spec.changes_code(),
         "checkpoint source must contain code work",
     )?;
     let (base, result) = base

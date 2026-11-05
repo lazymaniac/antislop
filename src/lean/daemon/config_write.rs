@@ -156,7 +156,19 @@ fn temporary_path(target: &Path) -> PathBuf {
 
 impl PreparedConfigWrite {
     pub(super) fn prepare(path: &Path, text: &str) -> Result<Self> {
-        let target = path.canonicalize()?;
+        let target = match path.canonicalize() {
+            Ok(target) => target,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if path.symlink_metadata().is_ok() {
+                    return Err(error.into());
+                }
+                let name = path
+                    .file_name()
+                    .ok_or_else(|| Error::Invalid("configuration needs a file name".into()))?;
+                config_directory(path)?.canonicalize()?.join(name)
+            }
+            Err(error) => return Err(error.into()),
+        };
         let temporary = temporary_path(&target);
         let directory = std::fs::File::open(config_directory(&target)?)?;
         let directory_lease = ConfigDirectoryLease::acquire(&directory)?;
@@ -198,8 +210,11 @@ impl PreparedConfigWrite {
     }
 
     fn write_text(&mut self, text: &str) -> Result<()> {
-        self.lease
-            .set_permissions(std::fs::metadata(&self.target)?.permissions())?;
+        match std::fs::metadata(&self.target) {
+            Ok(metadata) => self.lease.set_permissions(metadata.permissions())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         self.lease.write_all(text.as_bytes())?;
         self.lease.sync_all()?;
         Ok(())
@@ -222,9 +237,55 @@ impl Drop for PreparedConfigWrite {
     }
 }
 
-#[cfg(test)]
 pub(super) fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
     let prepared = PreparedConfigWrite::prepare(path, text)?;
     prepared.publish()?;
     prepared.sync_directory()
+}
+
+/// Materialize validated runtime settings outside the source checkout.
+pub(super) fn durable_config(state: &Path, source: &Path) -> Result<PathBuf> {
+    let text = std::fs::read_to_string(source)?;
+    Config::from_toml(&text)?;
+    private_directory(state)?;
+    let selected = state.join("antislop.toml");
+    if let Ok(metadata) = selected.symlink_metadata() {
+        require(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "runtime configuration must be a regular file inside its durable state directory",
+        )?;
+    }
+    if std::fs::read_to_string(&selected).ok().as_deref() != Some(text.as_str()) {
+        atomic_config_write(&selected, &text)?;
+    }
+    Ok(selected.canonicalize()?)
+}
+
+#[cfg(test)]
+mod durable_tests {
+    use super::*;
+
+    #[test]
+    fn validated_settings_survive_source_removal_and_keep_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let source = checkout.join("antislop.toml");
+        std::fs::write(&source, include_str!("../../../examples/antislop.toml")).unwrap();
+        let state = temp.path().join("durable");
+        let retained = durable_config(&state, &source).unwrap();
+        std::fs::remove_dir_all(checkout).unwrap();
+        assert!(Config::load(&retained).is_ok());
+        assert_eq!(
+            std::fs::metadata(&retained).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(durable_config(&state, &retained).unwrap(), retained);
+        let invalid = temp.path().join("invalid.toml");
+        std::fs::write(&invalid, "broken config").unwrap();
+        let absent = temp.path().join("absent");
+        assert!(durable_config(&absent, &invalid).is_err());
+        assert!(!absent.exists());
+    }
 }

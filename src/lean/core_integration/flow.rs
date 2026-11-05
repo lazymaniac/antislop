@@ -1,5 +1,4 @@
 use super::super::core_feedback_helpers::land;
-use super::super::core_path_helpers::worktree_branch;
 use super::super::*;
 
 pub(super) struct Integration<'a> {
@@ -43,9 +42,6 @@ impl<'a> Integration<'a> {
         if result == base {
             return self.finish_no_changes();
         }
-        if !self.config.policy.local_write {
-            return self.leave_on_branch();
-        }
         let change = self.create_change(&base)?;
         let outcome = self.apply_change(&base, &change)?;
         if matches!(
@@ -79,31 +75,6 @@ impl<'a> Integration<'a> {
         );
         self.core
             .set_status(self.conversation, self.task, status::APPROVED)
-    }
-
-    fn leave_on_branch(self) -> Result<()> {
-        let branch = worktree_branch(&self.core.state, self.task)?;
-        let text = format!("local writes are not allowed; the change is on branch {branch}");
-        super::super::task_failure::append_integration_report_entry(
-            self.task,
-            "integration",
-            &text,
-        );
-        land(
-            self.task,
-            Outcome::LeftOnBranch,
-            "run",
-            &text,
-            None,
-            Some(&branch),
-            &[],
-        );
-        self.core.stop(
-            self.conversation,
-            self.task,
-            status::NEEDS_USER,
-            Some(&text),
-        )
     }
 
     fn create_change(&mut self, base: &str) -> Result<String> {

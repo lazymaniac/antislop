@@ -1,6 +1,4 @@
 use super::*;
-use crate::lean::trust::Registry;
-use std::io::Cursor;
 
 fn test_tempdir() -> tempfile::TempDir {
     let root = std::env::current_dir().unwrap().join(".antislop/tmp");
@@ -8,56 +6,14 @@ fn test_tempdir() -> tempfile::TempDir {
     tempfile::tempdir_in(root).unwrap()
 }
 
-fn ask(
-    registry: &Registry,
-    dir: &std::path::Path,
-    flag: bool,
-    tty: bool,
-    input: &str,
-) -> (Result<()>, String) {
-    let mut shown = Vec::new();
-    let result = ensure_trusted(
-        registry,
-        dir,
-        flag,
-        tty,
-        Cursor::new(input.to_owned()),
-        &mut shown,
-    );
-    (result, String::from_utf8(shown).unwrap())
+fn fixture_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
+    resolve_config_in(project, explicit, &project.join("runtime"))
 }
 
 #[test]
-fn the_directory_is_asked_about_once_and_never_without_a_terminal() {
-    let config = test_tempdir();
-    let project = test_tempdir();
-    let registry = Registry::at(config.path());
-
-    // No terminal and no flag: nobody to ask, so no.
-    let (result, shown) = ask(&registry, project.path(), false, false, "y\n");
-    assert!(result.unwrap_err().to_string().contains("--trust"));
-    assert!(shown.is_empty() && !registry.is_trusted(project.path()));
-
-    // Declining (or an empty answer) leaves it untrusted.
-    for answer in ["n\n", "\n", "maybe\n"] {
-        let (result, shown) = ask(&registry, project.path(), false, true, answer);
-        assert!(result.is_err());
-        assert!(shown.contains("Do you trust the files in this directory?"));
-        assert!(!registry.is_trusted(project.path()));
-    }
-
-    // Yes is remembered: the next start does not ask.
-    let (result, _) = ask(&registry, project.path(), false, true, "Yes\n");
-    result.unwrap();
-    let (result, shown) = ask(&registry, project.path(), false, false, "");
-    result.unwrap();
-    assert!(shown.is_empty());
-
-    // The flag answers for a directory not yet known.
-    let other = test_tempdir();
-    let (result, _) = ask(&registry, other.path(), true, false, "");
-    result.unwrap();
-    assert!(registry.is_trusted(other.path()));
+fn removed_trust_flag_is_rejected_without_a_compatibility_mode() {
+    let error = ParsedArgs::parse(&["--trust".into()]).err().unwrap();
+    assert!(error.to_string().contains("unknown option --trust"));
 }
 
 #[test]
@@ -87,16 +43,16 @@ fn explicit_config_wins_and_a_missing_explicit_path_does_not_fall_back() {
     std::fs::write(&explicit, "explicit config").unwrap();
 
     assert_eq!(
-        resolve_config(project.path(), None).unwrap(),
+        fixture_config(project.path(), None).unwrap(),
         local.canonicalize().unwrap()
     );
     assert_eq!(
-        resolve_config(project.path(), Some(Path::new("custom.toml"))).unwrap(),
+        fixture_config(project.path(), Some(Path::new("custom.toml"))).unwrap(),
         explicit.canonicalize().unwrap()
     );
 
     let missing = project.path().join("missing.toml");
-    let error = resolve_config(project.path(), Some(Path::new("missing.toml"))).unwrap_err();
+    let error = fixture_config(project.path(), Some(Path::new("missing.toml"))).unwrap_err();
     assert!(
         error
             .to_string()
@@ -118,7 +74,7 @@ fn config_symlink_is_resolved_to_its_target() {
     std::os::windows::fs::symlink_file(&target, &link).unwrap();
 
     assert_eq!(
-        resolve_config(project.path(), Some(Path::new("selected.toml"))).unwrap(),
+        fixture_config(project.path(), Some(Path::new("selected.toml"))).unwrap(),
         target.canonicalize().unwrap()
     );
 }

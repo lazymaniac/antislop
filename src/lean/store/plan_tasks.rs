@@ -101,27 +101,13 @@ impl Store {
             .collect()
     }
 
-    /// What a dependency delivered, in brief: its worker's summary, or the
-    /// opening line of its report when it was approved without one (a plan
-    /// stored before summaries, or an approval recorded by hand).
-    /// A short account of what the task's accepted execution did.
+    /// Summary of the structured completion, never operational status text.
     pub(in crate::lean) fn task_summary(&self, task: &Task) -> Result<String> {
-        let summary = self
-            .completed_task_output(task)
-            .map(Some)
-            .or_else(|error| match error {
-                Error::Sql(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                error => Err(error),
-            })?
-            .and_then(|result| result["summary"].as_str().map(str::to_owned));
-        let summary = summary.unwrap_or_else(|| {
-            task.report
-                .as_deref()
-                .and_then(|report| report.lines().find(|line| !line.trim().is_empty()))
-                .unwrap_or_default()
-                .to_owned()
-        });
-        Ok(crate::lean::tasks::bound(&summary, 2_000))
+        let result = self.completed_task_output(task)?;
+        let summary = result["summary"]
+            .as_str()
+            .ok_or_else(|| Error::Invalid("completed worker result has no summary".into()))?;
+        Ok(crate::lean::tasks::bound(summary, 2_000))
     }
 
     pub(in crate::lean) fn completed_task_output(&self, task: &Task) -> Result<Value> {
@@ -149,12 +135,7 @@ impl Store {
                 return Ok((producer, serde_json::from_str(&text)?));
             }
             let recorded: Option<String> = self.db().query_row("SELECT producer_task_id FROM task_result_sources WHERE task_id=?1 AND generation=?2",params![current.id,current.input_generation],|r|r.get(0)).optional()?;
-            if let Some(source) = recorded.as_deref().or_else(|| {
-                current
-                    .feedback
-                    .as_ref()
-                    .and_then(|f| f["carried_from"].as_str())
-            }) {
+            if let Some(source) = recorded.as_deref() {
                 let source = self.task_by_id(source)?.ok_or_else(|| {
                     Error::Invalid("carried result producer no longer exists".into())
                 })?;
@@ -164,19 +145,6 @@ impl Store {
                 )?;
                 current = source;
                 continue;
-            }
-            // Legacy text is a result only when no structured worker report exists.
-            // A blocked/needs-input checkpoint or an older input generation must not become
-            // a synthetic completion when recovering or starting another round.
-            let structured: bool = self.db().query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1)",
-                [&current.id], |row| row.get(0),
-            )?;
-            if let Some(report) = current.report.filter(|_| !structured) {
-                return Ok((
-                    current.id,
-                    serde_json::json!({"type":"completed","summary":report.lines().find(|line| !line.trim().is_empty()).unwrap_or_default(),"report":report}),
-                ));
             }
             return Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows));
         }

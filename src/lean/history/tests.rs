@@ -5,53 +5,6 @@ mod mail_tests {
     use super::*;
 
     #[test]
-    fn only_new_valid_user_work_lifts_the_recipients_provider_block() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(&directory.path().join("core.db")).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        let turn = store
-            .start_turn(&conversation.id, "auditor", "codex", 0, None)
-            .unwrap();
-        store.db().execute(
-            "INSERT INTO run_contexts(turn_id,profile,cwd,add_dirs,access) VALUES(?1,'audit','project','[]','read_only')",
-            [&turn.id],
-        ).unwrap();
-        let block = || {
-            store.db().execute("INSERT OR REPLACE INTO provider_blocks VALUES('codex','audit','login required',0),('codex','other','quota',0)", []).unwrap();
-        };
-        let count = || {
-            store
-                .db()
-                .query_row("SELECT count(*) FROM provider_blocks", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .unwrap()
-        };
-        let mut request = AgentMessage {
-            conversation: conversation.id,
-            plan: None,
-            recipient: "auditor".into(),
-            operation_id: crate::id(),
-            expected_round: None,
-            expected_run: Some(turn.id.clone()),
-            text: "Retry after logging in".into(),
-        };
-        block();
-        store.enqueue_agent_message(&request).unwrap();
-        assert_eq!(count(), 1, "other profiles stay blocked");
-        block();
-        store.enqueue_agent_message(&request).unwrap();
-        assert_eq!(count(), 2, "an acknowledgement retry is not new work");
-        request.operation_id = crate::id();
-        request.expected_run = None;
-        assert!(store.enqueue_agent_message(&request).is_err());
-        assert_eq!(count(), 2, "invalid work cannot lift a block");
-        request.expected_run = Some(turn.id);
-        store.enqueue_agent_message(&request).unwrap();
-        assert_eq!(count(), 1);
-    }
-
-    #[test]
     fn queued_mail_survives_reopen_and_delivery_is_read_back() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("core.db");

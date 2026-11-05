@@ -7,8 +7,8 @@ mod buffer;
 mod app {
     mod commands;
     mod compose;
-    mod confirmation;
     mod conversation;
+    mod diff;
     mod graph;
     mod interview;
     mod picker;
@@ -72,12 +72,10 @@ pub use theme::{
     CardProps, Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
 };
 pub use update_queue::{QueueClosed, QueueEmpty, UpdateReceiver, UpdateSender, update_channel};
-pub use view::{
-    ConfirmationAction, ConfirmationCard, ConfirmationStatus, MessageEntry, TranscriptCard,
-};
+pub use view::{MessageEntry, TranscriptCard};
 
 use super::daemon::{Client, Request};
-use super::{projects, trust};
+use super::projects;
 use crate::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use details::{CHECKS, COMMENTS, RESULT};
@@ -268,6 +266,7 @@ fn recovery_token(client: &Client, plan: &str, task: &str) -> std::result::Resul
             crate::lean::daemon::ConversationRequest::Task {
                 plan: plan.to_owned(),
                 id: task.to_owned(),
+                conversation: None,
             },
         ))
         .map_err(|e| e.to_string())?;

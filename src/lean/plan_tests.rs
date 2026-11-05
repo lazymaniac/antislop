@@ -19,9 +19,8 @@ fn task_role_recognizes_only_explicit_worker_and_reviewer_addresses() {
 fn finalization_leaves_out_options_when_local_options_are_off() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
-        "kind": "implementation", "writes": true, "scope": ["src/"],
-        "reviewer": {"focus": "Check change"}
-    }))
+        "change_kind": "code", "kind": "implementation",
+        "reviewer": {"summary": "Check change"}}))
     .unwrap();
     for required_gates in [false, true] {
         let with = finalize_plan(vec![writer.clone()], required_gates, true);
@@ -47,9 +46,8 @@ fn finalization_leaves_out_options_when_local_options_are_off() {
 fn finalization_adds_options_with_and_without_required_gates() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
-        "kind": "implementation", "writes": true, "scope": ["src/"],
-        "reviewer": {"focus": "Check change"}
-    }))
+        "change_kind": "code", "kind": "implementation",
+        "reviewer": {"summary": "Check change"}}))
     .unwrap();
     for required_gates in [false, true] {
         let input = vec![writer.clone()];
@@ -58,16 +56,24 @@ fn finalization_adds_options_with_and_without_required_gates() {
         assert_eq!(specs, finalize_plan(specs.clone(), required_gates, true));
         if required_gates {
             assert!(tasks::missing_quality_agents(&specs).is_empty());
-            assert!(specs.iter().filter(|spec| spec.writes).count() > 1);
+            assert!(
+                specs
+                    .iter()
+                    .filter(|spec| spec.change_kind.has_delivery())
+                    .count()
+                    > 1
+            );
         } else {
             assert_eq!(specs.len(), 2);
             assert!(!tasks::missing_quality_agents(&specs).is_empty());
         }
-        for writer in specs.iter().filter(|spec| spec.writes) {
+        for writer in specs.iter().filter(|spec| spec.change_kind.has_delivery()) {
             assert!(writer.depends_on.iter().any(|id| {
-                specs
-                    .iter()
-                    .any(|spec| spec.id == *id && spec.kind == WorkKind::Options && !spec.writes)
+                specs.iter().any(|spec| {
+                    spec.id == *id
+                        && spec.kind == WorkKind::Options
+                        && !spec.change_kind.has_delivery()
+                })
             }));
         }
     }
@@ -98,9 +104,8 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     .into_iter()
     .map(|(id, deps)| {
         json!({
-            "id": id, "title": id, "goal": "test", "kind": "implementation",
-            "writes": true, "depends_on": deps, "reviewer": {"focus": "inspect diff"}
-        })
+            "id": id, "title": id, "goal": "test", "change_kind": "code", "kind": "implementation",
+             "depends_on": deps, "reviewer": {"summary": "inspect diff"}})
     })
     .collect();
     let specs = finalize_plan(
@@ -121,14 +126,18 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         .filter(|task| task.spec["kind"] == "options")
         .cloned()
     {
-        assert_eq!(options.spec["writes"], false);
+        assert_eq!(options.spec["change_kind"], "none");
         assert!(options.base.is_none() && options.result.is_none());
         options.status = status::APPROVED.into();
         core.store.update_task(&options).unwrap();
     }
     let mut tasks: Vec<_> = stored
         .into_iter()
-        .filter(|task| task.spec["writes"] == true)
+        .filter(|task| {
+            task.spec["change_kind"]
+                .as_str()
+                .is_some_and(|kind| kind != "none")
+        })
         .collect();
     for index in 0..4 {
         let base = if index % 2 == 0 {
@@ -226,9 +235,8 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
         .into_iter()
         .map(|(id, deps)| {
             json!({
-                "id": id, "title": id, "goal": "test", "kind": "implementation",
-                "writes": true, "depends_on": deps, "reviewer": {"focus": "inspect diff"}
-            })
+                "id": id, "title": id, "goal": "test", "change_kind": "code", "kind": "implementation",
+                 "depends_on": deps, "reviewer": {"summary": "inspect diff"}})
         })
         .collect();
     let mut tasks = core.store.add_plan(&conversation.id, &specs).unwrap();
@@ -271,8 +279,7 @@ fn the_owner_goal_reaches_its_generated_options_task() {
     let mut writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change",
         "goal": "Keep the public API source compatible",
-        "kind": "implementation", "writes": true, "scope": ["src/"]
-    }))
+        "change_kind": "code", "kind": "implementation", }))
     .unwrap();
     let options_goal = |writer: &TaskContract| {
         finalize_plan(vec![writer.clone()], false, true)
@@ -290,15 +297,15 @@ fn the_owner_goal_reaches_its_generated_options_task() {
 #[test]
 fn explicit_quality_checks_precede_the_final_task_after_finalization() {
     let submitted = json!([
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
-        {"id":"t12", "title":"Document", "goal":"Document change", "kind":"writing", "writes":true, "depends_on":["t11"]},
-        {"id":"quality", "title":"Simplify", "goal":"Review and simplify change", "kind":"refactoring", "depends_on":["t11","t12"]},
-        {"id":"static", "title":"Lint", "goal":"Run static checks", "kind":"static_analysis", "depends_on":["quality"]},
-        {"id":"tests", "title":"Test", "goal":"Run regression tests", "kind":"testing", "depends_on":["quality"]},
-        {"id":"security", "title":"Audit security", "goal":"Audit changed paths", "kind":"security", "depends_on":["quality"]},
-        {"id":"performance", "title":"Audit performance", "goal":"Audit changed paths", "kind":"performance", "depends_on":["quality"]},
-        {"id":"integration", "title":"Integrate", "goal":"Check combined results", "kind":"integration", "depends_on":["static","tests","security","performance"]},
-        {"id":"t13", "title":"Summarize", "goal":"Summarize checked results", "kind":"analysis", "depends_on":["integration"]}
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Document", "goal":"Document change", "change_kind": "code", "kind":"writing",  "depends_on":["t11"]},
+        {"id":"quality", "title":"Simplify", "goal":"Review and simplify change", "change_kind": "code", "kind":"refactoring", "depends_on":["t11","t12"]},
+        {"id":"static", "title":"Lint", "goal":"Run static checks", "change_kind": "code", "kind":"static_analysis", "depends_on":["quality"]},
+        {"id":"tests", "title":"Test", "goal":"Run regression tests", "change_kind": "code", "kind":"testing", "depends_on":["quality"]},
+        {"id":"security", "title":"Audit security", "goal":"Audit changed paths", "change_kind": "none", "kind":"security", "depends_on":["quality"]},
+        {"id":"performance", "title":"Audit performance", "goal":"Audit changed paths", "change_kind": "none", "kind":"performance", "depends_on":["quality"]},
+        {"id":"integration", "title":"Integrate", "goal":"Check combined results", "change_kind": "code", "kind":"integration", "depends_on":["static","tests","security","performance"]},
+        {"id":"t13", "title":"Summarize", "goal":"Summarize checked results", "change_kind": "none", "kind":"analysis", "depends_on":["integration"]}
     ]);
     let tasks = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     for required_gates in [false, true] {
@@ -338,11 +345,11 @@ fn explicit_quality_checks_precede_the_final_task_after_finalization() {
 #[test]
 fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     let submitted = json!([
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
-        {"id":"t12", "title":"Review", "goal":"Review change", "kind":"analysis", "depends_on":["t11"]},
-        {"id":"t13", "title":"Report", "goal":"Report checked results", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]},
-        {"id":"t14", "title":"Deliver", "goal":"Prepare delivery", "kind":"writing", "writes":true, "depends_on":["t13"]},
-        {"id":"t15", "title":"Close", "goal":"Close delivery", "kind":"analysis", "depends_on":["t14","integration-gate"]}
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]},
+        {"id":"t14", "title":"Deliver", "goal":"Prepare delivery", "change_kind": "code", "kind":"writing",  "depends_on":["t13"]},
+        {"id":"t15", "title":"Close", "goal":"Close delivery", "change_kind": "none", "kind":"analysis", "depends_on":["t14","integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
@@ -388,7 +395,7 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
 #[test]
 fn generated_gate_references_do_not_hide_unknown_dependencies() {
     let submitted = json!([
-        {"id":"t1", "title":"Report", "goal":"Report", "kind":"analysis", "depends_on":["static-analyzer", "typo"]}
+        {"id":"t1", "title":"Report", "goal":"Report", "change_kind": "none", "kind":"analysis", "depends_on":["static-analyzer", "typo"]}
     ]);
     assert!(
         tasks::planned_graph(serde_json::from_value(submitted).unwrap())
@@ -401,11 +408,11 @@ fn generated_gate_references_do_not_hide_unknown_dependencies() {
 #[test]
 fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     let submitted = json!([
-        {"id":"writer", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
-        {"id":"tests-a", "title":"Test A", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
-        {"id":"tests-b", "title":"Test B", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
-        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "kind":"integration", "depends_on":["review-testing"]},
-        {"id":"final-report", "title":"Report", "goal":"Report checks", "kind":"analysis", "depends_on":["integration-gate"]}
+        {"id":"writer", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"tests-a", "title":"Test A", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
+        {"id":"tests-b", "title":"Test B", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
+        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "change_kind": "code", "kind":"integration", "depends_on":["review-testing"]},
+        {"id":"final-report", "title":"Report", "goal":"Report checks", "change_kind": "none", "kind":"analysis", "depends_on":["integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
@@ -444,7 +451,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
 #[test]
 fn a_gate_alias_cannot_hide_a_self_dependency() {
     let submitted = json!([
-        {"id":"tests", "title":"Test", "goal":"Run tests", "kind":"testing", "depends_on":["review-testing"]}
+        {"id":"tests", "title":"Test", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["review-testing"]}
     ]);
     let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");
@@ -452,10 +459,10 @@ fn a_gate_alias_cannot_hide_a_self_dependency() {
 
 #[test]
 fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
-    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","goal":"Preserve code work","kind":"implementation","deferred":true})).unwrap();
+    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","goal":"Preserve code work","change_kind": "code", "kind":"implementation","deferred":true})).unwrap();
     let writer = planned.into_contract();
     assert!(writer.deferred);
-    let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","goal":"Read retained results","kind":"analysis"})).unwrap();
+    let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","goal":"Read retained results","change_kind": "none", "kind":"analysis"})).unwrap();
     assert!(!diagnostic.deferred);
     assert!(
         serde_json::to_value(&diagnostic)

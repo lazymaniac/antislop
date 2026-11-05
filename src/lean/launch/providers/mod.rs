@@ -1,5 +1,5 @@
-use super::super::agent::{Access, Spec};
-use super::super::mcp::{Gateway, SERVER, TOOL};
+use super::super::agent::Spec;
+use super::super::mcp::{Gateway, SERVER};
 use super::Launch;
 use crate::config::ProviderKind;
 use crate::{Error, Result};
@@ -62,10 +62,7 @@ fn configure_claude(
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
     command.args(runtime_args(&spec.args, spec.provider));
-    Ok((
-        claude::claude(command, spec, gateway, is_read_only(spec)),
-        None,
-    ))
+    Ok((claude::claude(command, spec, gateway), None))
 }
 
 fn configure_codex(
@@ -74,7 +71,7 @@ fn configure_codex(
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
     command.args(runtime_args(&spec.args, spec.provider));
-    codex::codex(command, spec, gateway, is_read_only(spec));
+    codex::codex(command, spec, gateway);
     Ok((spec.resume.clone(), None))
 }
 
@@ -84,7 +81,7 @@ fn configure_opencode(
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
     command.args(runtime_args(&spec.args, spec.provider));
-    opencode::opencode(command, spec, gateway, is_read_only(spec))?;
+    opencode::opencode(command, spec, gateway)?;
     Ok((spec.resume.clone(), None))
 }
 
@@ -94,7 +91,7 @@ fn configure_agy(
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
     command.args(runtime_args(&spec.args, spec.provider));
-    agy::agy(command, spec, gateway, is_read_only(spec))?;
+    agy::agy(command, spec, gateway)?;
     Ok((spec.resume.clone(), None))
 }
 
@@ -106,10 +103,6 @@ fn configure_gemini(
     command.args(runtime_args(&spec.args, spec.provider));
     Ok((
         spec.resume.clone(),
-        Some(gemini::gemini(command, spec, gateway, is_read_only(spec))?),
+        Some(gemini::gemini(command, spec, gateway)?),
     ))
-}
-
-fn is_read_only(spec: &Spec) -> bool {
-    spec.access == Access::ReadOnly
 }

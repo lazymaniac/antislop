@@ -91,10 +91,10 @@ fn recipient_items(view: &View) -> Vec<(String, Action)> {
 }
 
 fn append_task_recipients(items: &mut Vec<(String, Action)>, task: &super::super::view::TaskRow) {
-    let access = if task.writes {
+    let access = if task.change_kind.has_delivery() {
         "modifies files"
     } else {
-        "read-only"
+        "report"
     };
     items.push((
         format!("worker:{} · {} ({access})", task.id, task.title),

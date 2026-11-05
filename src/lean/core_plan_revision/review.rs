@@ -137,7 +137,7 @@ impl Core {
             };
             let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
             let path = crate::lean::core_path_helpers::worktree_path(&self.state, &task)?;
-            if spec.writes && path.exists() {
+            if spec.change_kind.has_delivery() && path.exists() {
                 if task.base.is_none() {
                     task.base = Some(git::head(&path)?);
                 }
@@ -365,7 +365,7 @@ mod tests {
             .store
             .add_plan(
                 &conversation.id,
-                &[json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"})],
+                &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap()
             .remove(0);
@@ -433,7 +433,7 @@ mod tests {
             .store
             .create_conversation(project.to_str().unwrap())
             .unwrap();
-        let task=core.store.add_plan(&conversation.id,&[json!({"id":"work","title":"Work","goal":"Change source","kind":"implementation","writes":true})]).unwrap().remove(0);
+        let task=core.store.add_plan(&conversation.id,&[json!({"id":"work","title":"Work","goal":"Change source","change_kind": "code", "kind":"implementation"})]).unwrap().remove(0);
         let path = crate::lean::core_path_helpers::worktree_path(&core.state, &task).unwrap();
         let branch = crate::lean::core_path_helpers::worktree_branch(&core.state, &task).unwrap();
         git::add_worktree(&project, &path, &branch, &base).unwrap();

@@ -131,38 +131,16 @@ fn press(plan: &mut PlanView, view: &View, code: KeyCode) -> PlanAction {
 }
 
 #[test]
-fn enter_needs_a_second_press_to_accept_and_reads_only_once_decided() {
+fn enter_comments_and_old_accept_keys_do_not_start_work() {
     let view = proposed("# Plan\nbody");
     let mut plan = PlanView::new("p".into());
-    // Comment is the default button, so Enter never accepts by accident.
     assert_eq!(
         press(&mut plan, &view, KeyCode::Enter),
         PlanAction::CommentWholePlan
     );
-    plan.button = BottomButton::Accept;
-    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
-    assert!(plan.confirm_accept);
-    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::Accept);
-    // Any other key withdraws the first press.
-    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
-    press(&mut plan, &view, KeyCode::Down);
-    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
-    // The explicit shortcut accepts at once.
-    assert_eq!(
-        press(&mut plan, &view, KeyCode::Char('a')),
-        PlanAction::Accept
-    );
-
-    let mut decided = view_of("# Plan\nbody");
-    decided.tasks.push(TaskRow {
-        id: "t1".into(),
-        status: "working".into(),
-        ..TaskRow::default()
-    });
-    for code in [KeyCode::Char('a'), KeyCode::Char('x'), KeyCode::Char('1')] {
-        assert_eq!(press(&mut plan, &decided, code), PlanAction::None);
+    for code in [KeyCode::Char('a'), KeyCode::Char('1')] {
+        assert_eq!(press(&mut plan, &view, code), PlanAction::None);
     }
-    assert_eq!(press(&mut plan, &decided, KeyCode::Esc), PlanAction::Close);
 }
 
 fn task_in(id: &str, section: &str, status: &str) -> TaskRow {
@@ -261,7 +239,7 @@ fn review_sends_the_drafts_only_when_there_are_some() {
         text.contains("[draft]"),
         "the comment row says it is a draft"
     );
-    let rect = plan.button_rects[3];
+    let rect = plan.button_rects[2];
     assert_eq!(
         plan.mouse_click(rect.x + 2, rect.y + 1, &view),
         PlanAction::SubmitReview
@@ -427,7 +405,7 @@ fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
         if width <= 12 {
             assert!(plan.task_rects.is_empty());
             assert_eq!(plan.graph_area, Rect::default());
-            assert_eq!(plan.button_rects, [Rect::default(); 4]);
+            assert_eq!(plan.button_rects, [Rect::default(); 3]);
         }
     }
 }

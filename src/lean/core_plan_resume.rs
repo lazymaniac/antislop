@@ -27,7 +27,6 @@ impl Core {
             ));
         }
         self.start_plan(conversation, plan_id, |store| {
-            store.db().execute("DELETE FROM provider_blocks WHERE (provider,profile) IN (SELECT t.provider,r.profile FROM run_contexts r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.plan_id=?2)", rusqlite::params![conversation,plan_id])?;
             if store.requeue_plan(conversation, plan_id)? > 0 {
                 return Ok(());
             }
@@ -45,32 +44,6 @@ impl Core {
                 },
             )
         })
-    }
-
-    pub fn accept_plan_scoped(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan_id: &str,
-        scope_hash: Option<&str>,
-    ) -> Result<Vec<Task>> {
-        if let Some(expected) = scope_hash {
-            let current = self.plan_scope_hash(conversation, plan_id)?;
-            require(expected == current, "stale_scope")?;
-        }
-        self.accept_plan(conversation, plan_id)
-    }
-
-    pub fn resume_plan_scoped(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan_id: &str,
-        scope_hash: Option<&str>,
-    ) -> Result<Vec<Task>> {
-        if let Some(expected) = scope_hash {
-            let current = self.plan_scope_hash(conversation, plan_id)?;
-            require(expected == current, "stale_scope")?;
-        }
-        self.resume_plan(conversation, plan_id)
     }
 
     pub fn recover_task(

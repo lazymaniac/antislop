@@ -54,8 +54,7 @@ impl Core {
             let mut progress = super::super::progress::Progress::default();
             progress.record(before.clone());
             if before.is_empty() || now.is_empty() || progress.record(now) {
-                self.notice(conversation,"plan review has not confirmed closure of a previous finding; preserve stable finding ids and provide a new basis before retrying");
-                return Ok(false);
+                self.notice(conversation,"plan review has not confirmed closure of a previous finding; preserve stable finding ids and change the approach while continuing the plan correction");
             }
         }
         self.record_proposed_plan_rejection(conversation, plan, verdict)?;

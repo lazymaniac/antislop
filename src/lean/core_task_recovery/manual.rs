@@ -43,7 +43,11 @@ fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> 
     let verdict = run_reviewer(core, work, &snapshot, &changes)?;
     let obligations = tasks::obligations(&work.spec);
     let mut verdict = verdict;
-    tasks::settle(&mut verdict, &obligations, !work.spec.writes);
+    tasks::settle(
+        &mut verdict,
+        &obligations,
+        !work.spec.change_kind.has_delivery(),
+    );
     Ok(ManualReview {
         snapshot,
         base,

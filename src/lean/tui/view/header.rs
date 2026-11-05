@@ -63,7 +63,6 @@ impl View {
 pub fn render_header(
     project: &str,
     conversation: &str,
-    mode: Option<bool>,
     status: &str,
     focus: PanelFocus,
     width: u16,
@@ -71,7 +70,6 @@ pub fn render_header(
     render_header_with(
         project,
         conversation,
-        mode,
         status,
         focus,
         width,
@@ -82,7 +80,6 @@ pub fn render_header(
 pub fn render_header_with(
     project: &str,
     conversation: &str,
-    mode: Option<bool>,
     status: &str,
     focus: PanelFocus,
     width: u16,
@@ -101,7 +98,7 @@ pub fn render_header_with(
         label_style,
     )];
     append_panels(&mut spans, width, focus, &theme, secondary);
-    append_identity(&mut spans, short, mode, width, secondary, active);
+    append_identity(&mut spans, short, width, secondary, active);
     append_status_and_actions(&mut spans, status, controls, width, &theme, secondary);
     Line::from(spans)
 }
@@ -149,28 +146,15 @@ fn append_panels(
 fn append_identity(
     spans: &mut Vec<Span<'static>>,
     short: &str,
-    mode: Option<bool>,
     width: u16,
     secondary: Style,
     active: Style,
 ) {
     if width >= 50 {
-        let mode = match mode {
-            Some(true) => " · [Mode: autonomous]",
-            Some(false) => " · [Mode: supervised]",
-            None => "",
-        };
-        spans.push(Span::styled(format!(" · {short}{mode} "), secondary));
+        spans.push(Span::styled(format!(" · {short} "), secondary));
     }
     if (50..95).contains(&width) {
         spans.push(Span::styled(format!("{PLAN} "), active));
-    }
-    if (35..50).contains(&width) {
-        match mode {
-            Some(true) => spans.push(Span::styled("[auto] ", secondary)),
-            Some(false) => spans.push(Span::styled("[sup] ", secondary)),
-            None => {}
-        }
     }
 }
 

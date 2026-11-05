@@ -30,7 +30,7 @@ pub(super) fn recovery_fixture() -> (tempfile::TempDir, Arc<Core>, String, Task,
     core.store
         .apply_ledger_change(&change, &core.state, true)
         .unwrap();
-    let spec = json!({"id":"integration-gate","title":"Integration","goal":"Validate","kind":"analysis","scope":["results"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]});
+    let spec = json!({"id":"integration-gate","title":"Integration","goal":"Validate","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]});
     let mut accepted = core
         .store
         .add_plan(&conversation, &[spec])
@@ -45,7 +45,13 @@ pub(super) fn recovery_fixture() -> (tempfile::TempDir, Arc<Core>, String, Task,
     accepted.status = status::FAILED.into();
     core.store.update_task(&accepted).unwrap();
     let authorize = |plan: &str| {
-        core.store.db().execute("INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,'[\"results\"]','[]')",rusqlite::params![plan,conversation]).unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
+                rusqlite::params![plan, conversation],
+            )
+            .unwrap();
     };
     authorize(&accepted.plan_id);
     let upto = core

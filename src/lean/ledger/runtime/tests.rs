@@ -60,7 +60,7 @@ fn full_sources_keep_source_question_and_summary_order() {
 }
 
 #[test]
-fn extraction_repairs_invalid_parent_once_and_preserves_atomicity() {
+fn extraction_repairs_or_retries_until_cancelled_without_partial_ledger_writes() {
     for repairs in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("analyst");
@@ -121,15 +121,48 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         // Orchestration routing text must never become analyst instructions.
         core.store.add_message(&conversation, "requirements-approval",
                 "ORCHESTRATOR_ROUTE_ONLY: Return the complete task plan; do not emit a ledger block.").unwrap();
-        let result = core.ensure_requirements(&conversation, &AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker = core.clone();
+        let worker_conversation = conversation.clone();
+        let worker_cancel = cancel.clone();
+        let joining = std::thread::spawn(move || {
+            worker.ensure_requirements(&worker_conversation, &worker_cancel)
+        });
+        if !repairs {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let mut reached = false;
+            while std::time::Instant::now() < deadline {
+                if std::fs::read_to_string(dir.path().join("attempts"))
+                    .ok()
+                    .and_then(|text| text.parse::<u32>().ok())
+                    .unwrap_or(0)
+                    >= 5
+                {
+                    reached = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            cancel.store(true, Ordering::SeqCst);
+            if !reached {
+                let _ = joining.join();
+                panic!("analyst stopped correcting before five attempts");
+            }
+        }
+        let result = joining.join().unwrap();
         assert!(
             dir.path().join("attempts").exists(),
             "analyst did not run: {result:?}"
         );
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
-            if repairs { "2" } else { "3" }
-        );
+        let attempts: u32 = std::fs::read_to_string(dir.path().join("attempts"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        if repairs {
+            assert_eq!(attempts, 2);
+        } else {
+            assert!(attempts >= 5);
+        }
         let run = core.store.latest_run(&conversation).unwrap().unwrap();
         let entries = core
             .store
@@ -202,10 +235,14 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 "3"
             );
         } else {
+            let error = result.unwrap_err().to_string();
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
+                error.contains("cancel") || error.contains("interrupt"),
+                "{error}"
+            );
+            assert!(
+                std::fs::read_to_string(dir.path().join("analyst.rejections"))
+                    .unwrap()
                     .contains("entry p has unknown parent missing")
             );
             assert!(entries.is_empty());

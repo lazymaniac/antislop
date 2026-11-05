@@ -8,19 +8,7 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        let found: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        let nonempty: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
-            [],
-            |row| row.get(0),
-        )?;
-        crate::require(
-            found == SCHEMA || (found == 0 && !nonempty),
-            &format!(
-                "{} has incompatible schema {found}; this build requires {SCHEMA}. Stop the daemon, manually archive the project's .antislop/ directory, then restart to create fresh state. No data was migrated or deleted; client and daemon must be restarted together.",
-                path.display()
-            ),
-        )?;
+        let found = validate_database(&connection, path)?;
         if found == 0 {
             Self::initialize(&connection)?;
         }
@@ -33,6 +21,26 @@ impl Store {
             connection: Mutex::new(connection),
             content: crate::lean::content::Content::new(path),
         })
+    }
+
+    pub(in crate::lean) fn check_runtime_repository(path: &Path, identity: &str) -> Result<()> {
+        if !path.try_exists()? {
+            return Ok(());
+        }
+        let connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        if validate_database(&connection, path)? == 0 {
+            return Ok(());
+        }
+        let foreign: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_identities WHERE identity<>?1)",
+            [identity],
+            |row| row.get(0),
+        )?;
+        crate::require(
+            !foreign,
+            "runtime state belongs to another repository; use that project's own state directory",
+        )
     }
 
     pub(super) fn initialize(connection: &Connection) -> Result<()> {
@@ -56,6 +64,40 @@ impl Store {
         self.connection.lock().expect("store mutex")
     }
 
+    pub(in crate::lean) fn record_project_identity(
+        &self,
+        project: &str,
+        identity: &str,
+    ) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT identity FROM project_identities WHERE project=?1",
+                [project],
+                |row| row.get(0),
+            )
+            .optional()?;
+        crate::require(
+            previous.as_deref().is_none_or(|value| value == identity),
+            "project identity changed; open the project's own runtime state",
+        )?;
+        tx.execute("INSERT INTO project_identities(project,identity) VALUES(?1,?2) ON CONFLICT(project) DO NOTHING", params![project,identity])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(in crate::lean) fn repository_id(&self, project: &str) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT identity FROM project_identities WHERE project=?1",
+                [project],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn create_conversation(&self, project: &str) -> Result<Conversation> {
         let conversation = Conversation {
             id: crate::id(),
@@ -75,41 +117,6 @@ impl Store {
         crate::lean::store::workflow::begin_interview(&tx, &conversation.id)?;
         tx.commit()?;
         Ok(conversation)
-    }
-
-    pub fn is_trusted(&self, project: &str) -> Result<bool> {
-        let count: i64 = self.db().query_row(
-            "SELECT count(*) FROM trusted_projects WHERE project=?1",
-            [project],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    pub fn trust_project(&self, project: &str) -> Result<()> {
-        self.db().execute(
-            "INSERT OR REPLACE INTO trusted_projects(project, trusted_ms) VALUES(?1, ?2)",
-            params![project, now_ms()],
-        )?;
-        Ok(())
-    }
-
-    pub fn untrust_project(&self, project: &str) -> Result<()> {
-        self.db()
-            .execute("DELETE FROM trusted_projects WHERE project=?1", [project])?;
-        Ok(())
-    }
-
-    pub fn trusted_projects(&self) -> Result<Vec<String>> {
-        let db = self.db();
-        let mut statement =
-            db.prepare("SELECT project FROM trusted_projects ORDER BY trusted_ms DESC")?;
-        let rows = statement.query_map([], |row| row.get(0))?;
-        let mut projects = Vec::new();
-        for row in rows {
-            projects.push(row?);
-        }
-        Ok(projects)
     }
 
     pub fn conversation(&self, id: &str) -> Result<Conversation> {
@@ -150,7 +157,6 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         let seq = insert_message(&tx, conversation, author, &stored_text)?;
-        super::recovery_decisions::capture_answer(&tx, conversation, author, text, seq)?;
         maybe_start_requirements_checkpoint(&tx, conversation, author, text, seq)?;
         tx.commit()?;
         Ok(Message {
@@ -301,4 +307,21 @@ fn append_run_event(
         params![conversation, kind, payload.to_string(), now_ms()],
     )?;
     Ok(())
+}
+
+fn validate_database(connection: &Connection, path: &Path) -> Result<u32> {
+    let found: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let nonempty: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
+        [],
+        |row| row.get(0),
+    )?;
+    crate::require(
+        found == SCHEMA || (found == 0 && !nonempty),
+        &format!(
+            "{} has incompatible schema {found}; this build requires {SCHEMA}. Stop the daemon, archive the runtime directory containing this database, then restart to create fresh state. No data was migrated or deleted; client and daemon must be restarted together.",
+            path.display()
+        ),
+    )?;
+    Ok(found)
 }

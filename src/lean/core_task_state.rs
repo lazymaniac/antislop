@@ -10,7 +10,7 @@ impl Core {
         task: &Task,
         reason: Option<&str>,
     ) {
-        let scope_hash = task_scope_hash(task);
+        let revision_token = task_state_digest(std::slice::from_ref(task));
         // The event's reason is the card's bounded line; the whole reason
         // is already in the task's report or in the conversation, so a cut
         // here never loses evidence the user or the orchestrator can read.
@@ -22,7 +22,7 @@ impl Core {
             "task",
             &json!({"id": task.spec["id"], "task": task.id, "title": task.spec["title"],
                     "status": task.status, "round": task.round, "reason": reason,
-                    "scope_hash": scope_hash, "feedback": task.feedback}),
+                    "revision_token": revision_token, "feedback": task.feedback}),
         );
     }
 

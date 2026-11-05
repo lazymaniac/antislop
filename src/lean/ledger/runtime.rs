@@ -11,7 +11,7 @@ mod submissions;
 use crate::{
     Error,
     config::{RoleKind, WorkKind},
-    lean::{Core, TurnSetup, agent, git, tasks},
+    lean::{Core, TurnSetup, git, tasks},
 };
 use serde_json::json;
 use std::{

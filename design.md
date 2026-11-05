@@ -37,8 +37,8 @@ The system should reduce common agent failures: superficial planning, context lo
 | Solution selection | Investigate realistic alternatives and choose the best against requirements, context, and documented criteria; independently review the choice. |
 | Independence | A separate reviewer session and context; preferably another model or CLI, with the same one allowed in a separate session. |
 | CLI routing | Profiles assigning effort and work kinds to CLIs; for example, Codex for heavy reasoning and Gemini for lighter tasks and code writing. |
-| Autonomy | Two modes: approval of every stage and every revision round, or full automation. |
-| Full automation | Local work, tests, and local commits; push, publication, external messages, and destructive operations require separate authorization. |
+| Autonomy | Reviewed plans and repairs advance automatically; manual pause and cancellation remain available. |
+| Access | All roles launch with full filesystem and tool access, without execution approvals or permission profiles. |
 | MVP limits | No limits on agent count, concurrency, time, cost, delegation depth, or revision rounds. |
 | Role pairs | A dedicated reviewer agent for every activated executor role. |
 | Orchestrator selection | Configurable CLI/model, with no default orchestrator provider. |
@@ -62,11 +62,11 @@ The system should reduce common agent failures: superficial planning, context lo
 
 1. **Every executor role has a reviewer.** This includes planning, research, test preparation, and integration, not just coding.
 2. **Review refers to a specific artifact.** Approval reports identify its version/hash, requirements, performed checks, and limitations.
-3. **The model proposes; the runtime controls.** AI reasons and proposes actions. Program code checks contracts, permissions, dependencies, and legal state transitions.
+3. **The model proposes; the runtime controls.** AI reasons and proposes actions. Program code checks contracts, ownership, dependencies, freshness and legal state transitions.
 4. **Small work units, complete goal.** Dividing work into small tasks must not lose cross-cutting requirements, integration, or user experience.
 5. **Context is versioned.** Decisions, requirements, and sources have ownership, provenance, and freshness information.
 6. **Actions and communication are observable.** The graph and chat project actual events. Users also see errors, queues, and integration limitations.
-7. **Autonomy stays within policy.** Full automation automates stage approvals but cannot grant itself new permissions.
+7. **Automation preserves evidence.** Full access does not replace independent review or prove that work is complete.
 8. **Quality requires measurement.** Compare swarm effectiveness with simpler execution on real tasks. The first version imposes no resource limits; it measures actual overhead.
 9. **The plan includes a model and correctness checks.** An activity list is insufficient. Show how the solution meets requirements, preserves invariants, and handles errors.
 10. **Every code element needs justification.** It follows from a requirement, a necessary implementation mechanism, or a documented Boy Scout Rule improvement; speculative future features are excluded.
@@ -101,7 +101,7 @@ Research was conducted on 2026-10-13. References `S01`–`S28` point to sources 
 | Run | One user request with its decision history and results. |
 | Stage | A stage with specified inputs, outputs, and an acceptance gate. |
 | Task | A small work unit with an owner, criteria, and dependencies. |
-| Role | A versioned contract of competencies, permissions, and expected outcomes. |
+| Role | A versioned contract of competencies, responsibilities and expected outcomes. |
 | Agent | A logical teammate assigned to a role. |
 | Session | A conversation in a specific CLI; an agent may have subsequent sessions after recovery or a provider change. |
 | Attempt | One attempt at a task; retries do not overwrite earlier attempts. |
@@ -130,18 +130,17 @@ Stages describe a logical cycle; a small task may have short stages and few agen
 
 Tests can be created before or alongside implementation. The later Validation stage checks the result and evidence completeness. Stage separation does not impose waterfall development.
 
-### 6.2. Two autonomy modes
+### 6.2. Automatic progression with full access
 
-**Settled semantics:**
+All roles launch with full filesystem and tool access. There are no supervised or
+restricted modes, directory-trust dialogs, execution grants or count/time/resource
+budgets. Reviewed plans and necessary repair rounds advance automatically. Roles
+and task contracts describe work and deliverables; they do not grant permissions.
 
-| Mode | Behavior |
-| --- | --- |
-| `supervised` | The user approves starting each stage, every revision round, and each stage's final result. A result-approval card may also present and approve the next stage's scope. Reviewer rejection does not automatically open another revision round. |
-| `autonomous` | The runtime opens subsequent stages and revision rounds once gates pass. Local work, tests, and local commits are allowed. Push, publication, external messages, and destructive operations require separate authorization. A missing necessary product decision may require the user. |
-
-Mode changes are explicit, recorded, and apply to subsequent actions. They do not retroactively approve changes or remove reviewer findings. Changing accepted scope invalidates relevant approvals and requires reassessment.
-
-Separate approval of a **stage** from approval of an **action**. Permission for local implementation does not authorize push, publication, an external message, or a destructive operation. Local commits include only specified task changes, not unrelated user edits.
+Independent review, dependency ordering, freshness checks, integration ownership
+and acceptance evidence remain mandatory. A product choice that cannot be inferred
+from the request may require a question; routine technical recovery does not.
+Manual pause and cancellation remain available and preserve work and history.
 
 ### 6.3. User changes to a task
 
@@ -245,15 +244,15 @@ Required process:
 5. Base assessments on sources, models, measurements, or experiments. Mark uncertainty and evidence scope. If an important unknown could change the choice, perform a spike, benchmark, or integration experiment. Experiments are separate artifacts; their temporary code does not automatically enter the product.
 6. Reject options failing mandatory conditions. Among eligible options, choose the one best meeting agreed preferences. An option dominated on every significant criterion cannot win without identifying a missing criterion or data error. Arbitrary point totals do not replace justification.
 7. Check decision sensitivity: could a reasonable change in weights, data, or conditions reverse the result? Ask the user for a preference when an unresolved trade-off matters to the goal; silence does not authorize weaker requirements. Autonomy cannot invent user goals.
-8. The Options reviewer independently seeks better alternatives and checks criteria, evidence, and rejected options. `solution_selected` follows only after this assessment. In supervised mode the choice is part of the approved plan; in autonomous mode policy approves it after successful review.
+8. The Options reviewer independently seeks better alternatives and checks criteria, evidence, and rejected options. `solution_selected` follows only after this assessment. The independently reviewed choice binds the dependent implementation.
 
 A minimal option record includes `option_id`, mechanism description, sources, requirements coverage, criterion results with evidence, dependencies, risks, unknowns, and maintenance cost. The decision identifies the chosen option, criterion version, justification, rejection reasons for each competitor, sensitivity-check result, and reopening conditions. New requirements, experimental results, or discovered libraries may invalidate the choice; sunk implementation work is not a reason to retain it.
 
-In the lean runtime, the global pre-plan comparison (`ensure_options`) is distinct
-from task-level `WorkKind::Options`. Plan finalization adds a read-only options
-prerequisite to each `writes=true` task lacking a direct one, after optional quality
-gates and independently of `policy.required_gates`. Existing shared options are
-reused and must cover every dependent writer. Startup validation always requires
+In the lean runtime, plan finalization adds a dedicated `WorkKind::Options`
+prerequisite to every `change_kind=code` owner after adding quality gates,
+independently of `policy.required_gates`. Shared architecture or options do not
+replace the local decision for a code task. Artifact and report-only tasks do not
+receive code options or code gates. Startup validation always requires
 `routing.options` with valid executor and reviewer profiles. Task options compare
 2–4 realistic alternatives under common criteria and end their report with
 `Selected: <id>`; this textual selection is an agent/reviewer contract, not a
@@ -273,7 +272,7 @@ and departure evidence independently. See [the session model](docs/session-model
 
 The orchestrator proposes a `TeamPlan` based on result type, complexity, risk, dependencies, context size, project modules, available CLIs, needed tools, and quality profile. The runtime validates it before launch. Every added agent needs a justified responsibility; no limits does not mean agents without tasks.
 
-Bootstrap uses built-in roles and an explicitly chosen orchestrator profile. Discovery and requirements analysis may run before a complete implementation plan; supervised mode requires approval for that stage. The orchestrator expands the team after gathering context and RiskCoverage. Implementation gates apply to solution work; analyses needed to create a plan have their own criteria and do not require a finished implementation plan.
+Bootstrap uses built-in roles and an explicitly chosen orchestrator profile. Discovery and requirements analysis may run before a complete implementation plan; these stages advance after their own checks without execution approval. The orchestrator expands the team after gathering context and RiskCoverage. Implementation gates apply to solution work; analyses needed to create a plan have their own criteria and do not require a finished implementation plan.
 
 Mandatory conditions:
 
@@ -418,7 +417,7 @@ Comparability comes from shared definitions, methods, and snapshots. Reports ret
 ### 8.1. Main screen
 
 ```text
- Architect  project: example  run: R-42  mode: supervised  stage: Execution
+ Architect  project: example  run: R-42  mode: automatic  stage: Execution
 ┌─ Orchestrator ───────────────────────┬─ Team: graph ──────────────────────┐
 │ Plan approved.                      │             [Orchestrator]         │
 │ Implementing import validation.     │               /        \           │
@@ -539,7 +538,7 @@ Proposed libraries beyond Ratatui: Tokio, Crossterm, Serde/serde_json, tracing, 
 
 The orchestrator is a selected-CLI session with a management role. It returns structured proposals: questions, plans, task creation/changes, role selection, messages, and completion recommendations. Prefer native structured output or a controlled tool channel where supported. Fallback: validated JSON in CLI output; free text does not execute runtime commands.
 
-The runtime checks schema, state, plan revision, and permissions. Invalid results return for repair or produce an explicit protocol error; never execute shell commands read directly from model responses. The MVP does not limit repair attempts.
+The runtime checks schema, state, plan revision and ownership. Invalid results return for repair or produce an explicit protocol error; never execute shell commands read directly from model responses. The MVP does not limit repair attempts.
 
 The orchestrator cannot remove quality gates, elevate permissions, change accepted requirements, or mark undocumented results reviewed. A dedicated Plan reviewer assesses plans and an Orchestration reviewer checks substantive management decisions; the scheduler follows tested program rules. Routine event routing and progress rendering need no separate review turn.
 
@@ -620,7 +619,7 @@ Evidence: id, kind, command_or_source, input_hashes, environment, result,
           exit_code_if_applicable, started_at, finished_at, output_hash
 Message: id, sender, recipient, task_id, content_ref, delivery_state
 DiffComment: id, run_id, path, line_number, text, author, created_at, resolved
-Approval: id, actor, scope, scope_hash, policy_revision, decision, expires_if_any
+ReviewDecision: id, reviewer, artifact_revision, status, findings, evidence_refs
 Event: seq, id, run_id, type, entity_id, causation_id, timestamp, payload_version
 Requirement: id, run_id, spec_revision, parent_id, source_ref, source_span,
              original_text, interpretation, qualifiers, criteria, owner, status
@@ -667,9 +666,9 @@ CLI-process state is separate from task state. Exit code 0 does not mean `review
 
 Persistent sources: requirements, ContextModel, SolutionModel, simulation results, quality standards, decisions, plan, contracts, accepted artifacts, findings, check results, and source index. Agents receive task-specific packages referencing complete materials.
 
-Required package content: goal, scope, criteria, project instructions, constraints, current revision, inputs, prohibition on self-granted permissions, and stop conditions. Summaries have authors/references and do not replace originals. After compaction, agents receive key constraints again and check artifact freshness.
+Required package content: goal, scope, criteria, project instructions, constraints, current revision, inputs, full-access launch context and manual cancellation state. Summaries have authors/references and do not replace originals. After compaction, agents receive key constraints again and check artifact freshness.
 
-Project instructions (e.g. AGENTS.md, CLAUDE.md, GEMINI.md) are tracked with directory scopes. Conflicts need explicit decisions. Discovered document/page content cannot increase runtime permissions.
+Project instructions (e.g. AGENTS.md, CLAUDE.md, GEMINI.md) are tracked with directory scopes. Conflicts need explicit decisions. Discovered document/page content does not change ownership, criteria or recorded evidence.
 
 Every handoff preserves invariants, contracts, negative requirements, open findings, and claim provenance. Changing source code/configuration invalidates related facts, models, and simulations, not just the final report. Session resumption compares the package with the current snapshot. Agents cannot build further plans on `stale` knowledge.
 
@@ -814,7 +813,7 @@ Each improvement identifies a concrete problem/effect: clearer contract, removed
 
 Record `boy_scout_improvements` in `RefactorReport`: before/after, reason, related work area, preserved contracts, and evidence. Adjacent-file changes are not automatically excluded; relevance and impact control matter. Product changes, large unrelated redesigns, or public-contract changes require scope updates rather than cleanup labels.
 
-Supervised mode covers improvements through approved stage plans and round approvals. Significant newly discovered plan changes return for approval. Autonomous mode performs justified improvements within authorized scope without permission for each transformation. In both modes, a dedicated Refactor reviewer assesses actual improvement and absence of regression; more commits alone do not prove quality.
+Justified improvements proceed without new execution permission. Changes to goals or dependencies receive independent plan review. A dedicated Refactor reviewer assesses actual improvement and absence of regression; more commits alone do not prove quality.
 
 Basis and application: [The Boy Scout Rule — S23](https://www.oreilly.com/library/view/97-things-every/9780596809515/ch08.html), [opportunistic refactoring — S23](https://martinfowler.com/bliki/OpportunisticRefactoring.html).
 
@@ -953,13 +952,18 @@ Criteria: data provenance/quality, explicit assumptions, correct units/denominat
 
 Protect user files, secrets, CLI authentication, session history, artifacts, local IPC, repositories, and external resources. Potentially untrusted inputs include repository contents, dependencies/test scripts, pages, tool results, plugins/MCP, other agents' responses, and generated patches.
 
-Run policy defines access to files, network, tools, secrets, publication, deletion, and external effects. Full automation remains within policy. Model assessment does not replace process safeguards.
+All agent CLIs launch with full access. No read-only, workspace-write or restricted
+permission profiles are supported. Tests and reviewers may run the checks they
+need. Workers deliver changes from isolated worktrees; reviewers preserve the
+result they assess. The runtime enforces ownership, consistency, evidence and
+user cancellation rather than asking for new execution rights.
 
-**Significant CLI integration limitation:** Architect does not automatically control every internal CLI tool call. Hard restrictions require documented provider approvals/restrictions or an external sandbox/environment. If a profile requires unenforceable restrictions, block that session or require explicit user selection of a weaker profile. Prompts/worktrees cannot replace isolation.
-
-Proposed profiles: `read-only`, `workspace-write`, `restricted-execution`, `extended-access`. macOS/Linux sandbox mechanisms require a spike; containers may be optional, without assuming they are already required or compatible with every CLI authentication method.
-
-Reviewers access pinned artifacts and may run checks in separate environments. They should not modify accepted sources. Tests are executable code and receive the same restrictions as other commands.
+Durable state lives under `ANTISLOP_STATE_ROOT`, `$XDG_STATE_HOME/antislop`, or
+`~/.local/state/antislop`, keyed by canonical common Git directory (canonical root
+without Git). Databases, logs, checkpoints and session settings are outside
+worktrees. Configuration/protocol/database formats are 4/5/16; old formats are
+rejected rather than migrated. Provider configuration files are never modified;
+gateway and permission settings are supplied per launch.
 
 Logs/exports use secret redaction, restricted permissions, and retention policies. Redaction cannot guarantee removal of every secret; minimize collection at the source. Never copy CLI authentication stores into logs/artifacts. Sanitize unsafe terminal control sequences.
 
@@ -969,7 +973,7 @@ Logs/exports use secret redaction, restricted permissions, and retention policie
 - Checkpoint stage boundaries, tool results, and significant plan changes. Snapshots accelerate reads; events support auditing.
 - After crashes: rebuild state, determine process/session outcomes, inspect the workspace, then resume or create a new session with a handoff package.
 - After computer restart and Architect launch: identify interrupted sessions by persistent IDs, check current state, and natively resume every interrupted session. If a provider cannot resume it, report an explicit error and propose a replacement with a handoff; never pretend a new session is the same session.
-- Resume preserves pauses/pending approvals. Supervised mode cannot start unapproved rounds/stages; autonomous mode may continue authorized work. Restart alone grants no additional permissions.
+- Resume preserves manual pauses, unanswered product decisions, roles, requirements and evidence. Restart and technical recovery require no new execution permission.
 - Resume does not reproduce model generation exactly. Reconcile unknown operation effects first.
 - Provider disconnection: retry/backoff safe operations, distinguish auth/rate-limit/network states; persistent errors need cause repair rather than blind retries.
 - Inactivity: distinguish model/tool/user waiting; manual interruption remains available. The MVP imposes no turn/run completion time limit.
@@ -978,9 +982,9 @@ Logs/exports use secret redaction, restricted permissions, and retention policie
 
 **Settled:** the first version has no limits on agent count, concurrency, time, cost, delegation depth, or revision rounds. No hidden thresholds stop work either. The scheduler follows dependencies, write safety, and actual environment availability.
 
-Users may manually pause/cancel. The runtime still rejects dependency cycles, unauthorized actions, and invalid protocols. Missing authorization is not a budget limit. OS, throughput, and provider limitations are reported as actual errors/waiting, not claims that providers have no limits.
+Users may manually pause/cancel. The runtime still rejects dependency cycles, wrong owners, stale revisions and invalid protocols. OS, throughput, and provider limitations are reported as actual errors/waiting, not claims that providers have no limits.
 
-Stream buffering and message-size validation support transport resilience; they do not set task/agent budgets. Token/cost data is marked `reported`, `estimated`, or `unavailable`; missing data is not zero. Configurable budgets may come later.
+Stream buffering and message-size validation support transport resilience; they do not set task/agent budgets. Token/cost data is marked `reported`, `estimated`, or `unavailable`; missing data is not zero. There is no budget configuration or compatibility mode.
 
 ## 15. Observability and effectiveness assessment
 
@@ -1003,7 +1007,7 @@ Product requirements include all three providers and all agreed task kinds. The 
 | --- | --- | --- |
 | M0: integration spike | Probe three CLIs, capabilities, auth, streaming/resume/cancel, permissions, and environments. | Documented version/limitation matrix; selected transport per CLI. |
 | M1: local runtime | Daemon, IPC, SQLite, events, fake provider, start/stop/reattach. | State recovery without lost approvals or duplicate actions. |
-| M2: vertical slice | One real adapter, plan → executor → reviewer → result, supervised. | Evidence-based completion and rejection of weak results. |
+| M2: vertical slice | One real adapter, plan → executor → reviewer → result, automatically. | Evidence-based completion and rejection of weak results. |
 | M2Q: quality contracts | Requirements, tasks and evidence, ContextModel, model/simulations, option comparison, checklists, RiskCoverage, evidence-validity graph. | Fake providers cannot close tasks with omitted requirements, risks, or gates. Part of MVP, not a post-release extension. |
 | M3: team and TUI | Two panels, spatial node/edge graph, current-step overlay, details, sessions, direct messages, and element comments. | Actual events, correct navigation, truthful delivery states, independently checked orchestrator comment responses. |
 | M4: complete MVP | Three adapters, effort/TOML profiles, two modes, worktree/in-place, integration, restart resume, software/research/document/analysis templates. | Dedicated review for every activated role; passing acceptance scenarios. |
@@ -1035,15 +1039,15 @@ Runtime tests are critical: incorrect acceptance or repeated external effects ca
 4. An executor copies an existing module or adds an unnecessary layer: the reviewer identifies concrete duplication and a simpler solution.
 5. Parallel tasks touch a shared contract: the scheduler/integrator resolves dependencies and retests the whole.
 6. A user messages an active agent: exact delivery mode/status is visible and the orchestrator knows the change.
-7. Supervised mode stops at gates and resumes after appropriate approval.
-8. Autonomous mode advances stages without approval within policy; missing capabilities are not bypassed.
+7. Reviewed plans and repairs start without execution-approval questions.
+8. All roles have full access; unavailable OS/provider capabilities are reported as raw failures.
 9. Closing the TUI does not stop the run; reattachment restores current graph/chat state.
 10. A daemon crash between execution and confirmation does not cause blind repetition.
 11. Research finds a nonexistent or unsupported source; the report does not receive `pass`.
 12. An analysis with incorrect units/denominators is corrected after independent recalculation.
 13. Changes after successful review invalidate relevant reports pending re-review.
 14. A CLI needs login or exhausts quota: explicit waiting state, with preserved history/artifacts.
-15. Repository/page/agent text attempting permission escalation is rejected by the runtime.
+15. Repository/page/agent reference material cannot change turn ownership, acceptance evidence or quality verdicts.
 16. After computer restart, Architect resumes the correct sessions by ID, preserving pending approvals and roles.
 17. TOML changes do not implicitly overwrite profiles of active runs.
 18. In-place mode preserves existing user changes; conflicts are reported rather than overwritten.
@@ -1053,7 +1057,7 @@ Runtime tests are critical: incorrect acceptance or repeated external effects ca
 22. An agent suppresses a warning or changes a baseline: the Static analysis reviewer detects the workaround; the original finding remains in history.
 23. Preexisting findings remain in agreed scope: preexisting status does not approve them; scope conflicts require explicit resolution.
 24. Functionality works but necessary refactoring or unnecessary abstractions remain: `refactor_complete` blocks delivery.
-25. A task encounters adjacent structural debt: a Boy Scout improvement fixes it with preservation evidence; supervised rounds need approval.
+25. A task encounters adjacent structural debt: a Boy Scout improvement fixes it with preservation evidence; repairs continue after independent review.
 26. Code is already well maintained: RefactorReport justifies no transformations, without a forced cosmetic patch.
 27. A long plan has 100 obligations but only 99 are implemented: independent ComplianceAudit detects the omission and blocks completion.
 28. A requirement has multiple qualifiers but a test covers one: status remains partial and the parent is not reviewed.

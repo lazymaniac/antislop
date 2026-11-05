@@ -14,7 +14,7 @@ fn requirements_reach_only_reviewers_as_readable_id_and_text() {
     .unwrap();
     let handoff = crate::lean::rounds::RoundHandoff {
         round: 1,
-        writes: false,
+        change_kind: crate::lean::tasks::ChangeKind::None,
         worktree: "/wt".into(),
         report: None,
         verdict: None,
@@ -42,7 +42,7 @@ fn requirements_reach_only_reviewers_as_readable_id_and_text() {
 fn handoff_with_findings_repeats_neither_report_nor_task() {
     let mut handoff = crate::lean::rounds::RoundHandoff {
         round: 2,
-        writes: true,
+        change_kind: crate::lean::tasks::ChangeKind::Code,
         worktree: "/wt".into(),
         report: Some((1, "PREVIOUS REPORT BODY".into())),
         verdict: Some(serde_json::json!({"approved":false,"findings":[{"id":"f1"}]})),
@@ -74,13 +74,11 @@ fn contract(value: serde_json::Value) -> TaskContract {
 #[test]
 fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     let writer = contract(serde_json::json!({
-        "id":"w","title":"Writer","goal":"WRITER GOAL","kind":"implementation","writes":true,
-        "reviewer":{"focus":"f"}
-    }));
+        "id":"w","title":"Writer","goal":"WRITER GOAL","change_kind": "code", "kind":"implementation",
+        "reviewer":{"summary": "f"}}));
     let options = contract(serde_json::json!({
-        "id":"w-options","title":"Options for Writer","goal":"OPTIONS BOILERPLATE","kind":"options",
-        "options_for":"w","reviewer":{"focus":"f"}
-    }));
+        "id":"w-options","title":"Options for Writer","goal":"OPTIONS BOILERPLATE","change_kind": "none", "kind":"options",
+        "options_for":"w","reviewer":{"summary": "f"}}));
     let prompt = plan_review_prompt("/p", "request", &[options, writer]);
     assert!(prompt.contains("WRITER GOAL"));
     assert!(!prompt.contains("OPTIONS BOILERPLATE"));
@@ -89,22 +87,19 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
         !prompt.contains("\n  \"id\""),
         "plan JSON is not pretty-printed"
     );
-    // Only reviewers are read-only; a writing worker runs what its goal names.
-    assert!(prompt.contains("This limits reviewers, not workers"));
+    // Review independence does not restrict CLI access.
+    assert!(prompt.contains("All agents have full access"));
     assert!(!prompt.contains("never by execution or edits"));
 }
 
 #[test]
 fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     let same = contract(serde_json::json!({
-        "id":"a","title":"A","goal":"UNCHANGED GOAL","kind":"analysis","reviewer":{"focus":"f"}
-    }));
+        "id":"a","title":"A","goal":"UNCHANGED GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let before = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"OLD GOAL","kind":"analysis","reviewer":{"focus":"f"}
-    }));
+        "id":"b","title":"B","goal":"OLD GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let after = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"NEW GOAL","kind":"analysis","reviewer":{"focus":"f"}
-    }));
+        "id":"b","title":"B","goal":"NEW GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let baseline = [&same, &before].map(|task| serde_json::to_value(task).unwrap());
     let plan = [same, after];
     let none = || ApprovedWork {
@@ -202,7 +197,7 @@ fn upstream_data_cannot_forge_boundaries_or_metadata_lines() {
 #[test]
 fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
     let report = contract(
-        serde_json::json!({"id":"report","title":"Report","goal":"Run existing cargo through ASDF_RUST_VERSION and report checks","kind":"analysis","writes":true,"change_kind":"artifact","outputs":["results/validation.json"],"scope":["results"]}),
+        serde_json::json!({"id":"report","title":"Report","goal":"Run existing cargo through ASDF_RUST_VERSION and report checks","kind":"analysis","change_kind":"artifact","outputs":["results/validation.json"]}),
     );
     for initial in [true, false] {
         let prompt = plan_revision_review_prompt(
@@ -225,16 +220,16 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
         );
         assert!(prompt.contains("separate path grant"));
         assert!(prompt.contains("ASDF_RUST_VERSION"));
-        assert!(prompt.contains("writing outside the allocated worktree"));
+        assert!(prompt.contains("Writers deliver changes from isolated worktrees"));
     }
     assert!(
         crate::lean::feasibility::check(std::slice::from_ref(&report))
             .iter()
             .all(|finding| finding.rule != "writer-scope-outside-project")
     );
-    assert!(worker_prompt("/project", &report).contains("separate path grant"));
+    assert!(worker_prompt("/project", &report).contains("All agents have full access"));
     for prompt in [planner_instructions(), orchestrator_instructions()] {
-        assert!(prompt.contains("separate path grant"));
-        assert!(prompt.contains("does not authorize reading unrelated external data"));
+        assert!(prompt.contains("no path grant"));
+        assert!(prompt.contains("All agents launch with full filesystem and tool access"));
     }
 }

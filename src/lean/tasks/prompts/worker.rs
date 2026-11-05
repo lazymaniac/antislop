@@ -152,12 +152,12 @@ fn worker_checks(task: &TaskContract) -> String {
 }
 
 fn worker_change_rules(task: &TaskContract) -> &'static str {
-    if task.writes {
-        "Work only in this allocated worktree, within the task goal and user constraints. Do not commit; the runtime records changes. Ask the orchestrator before any change outside the contract.\n\n"
+    if task.change_kind.has_delivery() {
+        "Work only in this allocated worktree, within the task goal and user constraints. Do not commit; the runtime records changes. Resolve technical blockers autonomously; use plan revision when the task goal or dependencies need to change.\n\n"
     } else if task.kind == WorkKind::Context {
-        "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, since the reviewer cannot rerun it.\n\n"
+        "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, so the reviewer can verify it.\n\n"
     } else {
-        "Work read-only; do not modify anything.\n\n"
+        "Deliver the analysis in your report; inspect files and run checks as needed. Incidental checkout changes are not delivered by this task.\n\n"
     }
 }
 

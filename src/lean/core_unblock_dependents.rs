@@ -74,6 +74,17 @@ impl Core {
         plan_id: &str,
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
+        // A current writer may hold integration while waiting for orchestration.
+        // Reject replacement start before waiting for that lock. The inner
+        // check still closes the race with another start.
+        require(
+            !self
+                .plans
+                .lock()
+                .expect("plans mutex")
+                .contains_key(conversation),
+            "a plan is already running; revise the active plan instead",
+        )?;
         let _integration = self.integrating.lock().expect("integration mutex");
         self.start_plan_with_scope_lock(conversation, plan_id, queue)
     }
@@ -113,4 +124,42 @@ fn dependency_approved(tasks: &[Task], id: &str, approved: &str) -> bool {
                 || task.id == approved
                 || task.spec["id"] == approved)
     })
+}
+
+#[cfg(test)]
+mod start_tests {
+    use super::*;
+
+    #[test]
+    fn another_plan_start_does_not_wait_for_an_active_writers_integration_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap();
+        core.plans
+            .lock()
+            .unwrap()
+            .insert(conversation.id.clone(), Arc::new(AtomicBool::new(false)));
+        let held = core.integrating.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = core.clone();
+        let id = conversation.id.clone();
+        let joining = std::thread::spawn(move || {
+            let result =
+                worker.start_plan(&id, "replacement", |_| panic!("replacement was queued"));
+            tx.send(result.map_err(|error| error.to_string())).unwrap();
+        });
+        let immediate = rx.recv_timeout(std::time::Duration::from_secs(2));
+        drop(held);
+        joining.join().unwrap();
+        let error = immediate
+            .expect("replacement start waited on active integration")
+            .unwrap_err();
+        assert!(error.contains("a plan is already running"), "{error}");
+        assert!(core.plans.lock().unwrap().contains_key(&conversation.id));
+        core.plans.lock().unwrap().remove(&conversation.id);
+    }
 }

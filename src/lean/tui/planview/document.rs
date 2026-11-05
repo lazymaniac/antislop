@@ -34,7 +34,11 @@ fn append_task_facts(out: &mut String, task: &TaskRow) {
     out.push_str(&format!(
         "- **Kind**: `{}` ({})\n",
         task.kind,
-        if task.writes { "writes" } else { "read-only" }
+        if task.change_kind.has_delivery() {
+            "file changes"
+        } else {
+            "report"
+        }
     ));
     out.push_str(&format!("- **Goal**: {}\n", task.goal));
     out.push_str(&format!("- **Depends on**: {}\n", dependency_label(task)));

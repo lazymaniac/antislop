@@ -1,9 +1,8 @@
 //! Helpers shared by the integration tests.
 #![allow(dead_code)]
 
-use antislop::lean::trust::Registry;
 use std::path::Path;
-use std::sync::{Mutex, Once};
+use std::sync::Once;
 
 /// Creates a relative fixture root so daemon socket paths stay under this
 /// checkout, even when its absolute worktree path is too long for Unix sockets.
@@ -31,26 +30,21 @@ pub fn assert_test_socket(state: &Path, process_cwd: &Path) {
     );
 }
 
-/// Points the list of trusted directories at a private temporary place for
-/// this test process (so nothing touches the user's own list) and trusts
-/// `project` in it.
-pub fn trust(project: &Path) {
+/// Isolates user configuration and global runtime for this test process.
+pub fn runtime_environment(_project: &Path) {
     static ONCE: Once = Once::new();
-    let dir = std::env::current_dir()
-        .unwrap()
-        .join(".antislop/tmp")
-        .join(format!("antislop-test-config-{}", std::process::id()));
     ONCE.call_once(|| {
-        std::fs::create_dir_all(&dir).unwrap();
-        // SAFETY: set once, before any test of this process starts a daemon.
-        unsafe { std::env::set_var("ANTISLOP_CONFIG_DIR", &dir) };
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(".antislop/tmp")
+            .join(format!("antislop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // SAFETY: set once before this process starts its test daemons.
+        unsafe {
+            std::env::set_var("ANTISLOP_CONFIG_DIR", root.join("config"));
+            std::env::set_var("ANTISLOP_STATE_ROOT", root.join("state"));
+        }
     });
-    // The tests of a process run on several threads; the list is rewritten whole.
-    static WRITING: Mutex<()> = Mutex::new(());
-    let _writing = WRITING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Registry::at(&dir).trust(project).unwrap();
 }
 
 pub fn install_probe_cli(path: &Path, source: &str) {

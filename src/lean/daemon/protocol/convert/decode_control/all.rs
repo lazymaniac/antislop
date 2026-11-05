@@ -9,17 +9,6 @@ fn decode_runtime_notice(wire: WireRequest) -> std::result::Result<Request, Box<
     }
 }
 
-fn decode_authorize_task_execution(
-    wire: WireRequest,
-) -> std::result::Result<Request, Box<WireRequest>> {
-    match wire {
-        WireRequest::AuthorizeTaskExecution { authorization } => Ok(Request::Control(
-            crate::lean::daemon::ControlRequest::AuthorizeTaskExecution { authorization },
-        )),
-        other => Err(Box::new(other)),
-    }
-}
-
 fn decode_identity(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
         WireRequest::Identity => Ok(Request::Control(
@@ -92,29 +81,10 @@ fn decode_start(wire: WireRequest) -> std::result::Result<Request, Box<WireReque
     }
 }
 
-fn decode_trust_status(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
-    match wire {
-        WireRequest::TrustStatus => Ok(Request::Control(
-            crate::lean::daemon::ControlRequest::TrustStatus,
-        )),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn decode_trust(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
-    match wire {
-        WireRequest::Trust { trusted } => Ok(Request::Control(
-            crate::lean::daemon::ControlRequest::Trust { trusted },
-        )),
-        other => Err(Box::new(other)),
-    }
-}
-
 pub(super) fn decode_group_all(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
     decode_runtime_notice(wire)
-        .or_else(|wire| decode_authorize_task_execution(*wire))
         .or_else(|wire| decode_identity(*wire))
         .or_else(|wire| decode_get_config(*wire))
         .or_else(|wire| decode_set_config(*wire))
@@ -122,6 +92,4 @@ pub(super) fn decode_group_all(
         .or_else(|wire| decode_force_shutdown(*wire))
         .or_else(|wire| decode_conversations(*wire))
         .or_else(|wire| decode_start(*wire))
-        .or_else(|wire| decode_trust_status(*wire))
-        .or_else(|wire| decode_trust(*wire))
 }

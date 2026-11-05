@@ -50,6 +50,7 @@ impl App {
                     crate::lean::daemon::ConversationRequest::Send {
                         conversation: conversation.clone(),
                         text: sent_text.clone(),
+                        to: None,
                     },
                 ))
                 .map(|_| ())
@@ -267,7 +268,6 @@ impl App {
         self.plan_history = None;
         self.help = None;
         self.picker = None;
-        self.confirmation = None;
         self.unblock = None;
     }
 

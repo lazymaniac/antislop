@@ -2,30 +2,21 @@
 # Copy to your project as antislop.toml and adjust binaries and models.
 # Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
 # and a reviewer profile; every reviewer gets its own session.
-schema_version = 3
+schema_version = 4
 
 # Every writer uses an isolated Git worktree. Reviewed changes are integrated
 # through the runtime; direct writes in the primary checkout are unsupported.
 
-# supervised: you accept every plan. autonomous: a checked plan runs on its own.
-# This is the default; `/mode` changes it for one conversation.
-# local_write lets workers change files (in their own worktrees); with
-# local_commits each approved change is committed on your branch, otherwise it
-# is left as uncommitted changes in the project.
+# Full access and automatic progression are always enabled.
+# These policy settings select quality checks and delivery behavior.
 [policy]
-mode = "supervised"
-local_write = true
 local_commits = true
 # Plans that change code always get the static analysis, testing and
 # integration gates they lack from the predefined agent pool.
 required_gates = true
-# Most tasks of a plan that run at the same time.
-max_parallel = 4
-# Every writer gets a read-only options task that compares approaches first.
+# Every writer gets a options task that compares approaches first.
 # Turn it off for mechanical work where the comparison decides nothing.
 local_options = true
-# Most tasks a plan is drafted with; a larger one is sent back to be grouped.
-max_tasks = 100
 
 [providers.codex]
 binary = "codex"
@@ -89,8 +80,8 @@ effort = "high"
 # execution: worker settings for producing and checking deliverables:
 # implementation, refactoring, static analysis, test design/execution,
 # integration, research, writing and delivery. Like reasoning, it is an
-# executor. A task's writes flag determines write access; the profile name
-# itself does not grant it. writers always work in isolated task worktrees.
+# executor. Every role has full access; the profile name
+# itself does not grant it. Writers always work in isolated task worktrees.
 [profiles.execution]
 provider = "agy"
 # model = "gemini-3.8-flash-high"

@@ -409,7 +409,11 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
     let calls: Vec<_> = calls.split("\n---\n").filter(|c| !c.is_empty()).collect();
     assert_eq!(calls.len(), 2);
-    assert!(calls[0].contains("-s read-only"), "{}", calls[0]);
+    assert!(
+        calls[0].contains("--dangerously-bypass-approvals-and-sandbox"),
+        "{}",
+        calls[0]
+    );
     assert!(calls[0].contains("Nothing from it is pasted here"));
     assert!(
         calls[1].contains("resume"),
@@ -530,7 +534,7 @@ fn a_cli_that_dies_while_starting_is_started_again_and_the_turn_completes() {
 }
 
 fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> String {
-    common::trust(project);
+    common::runtime_environment(project);
     common::assert_test_socket(std::path::Path::new("../state"), project);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(project)
@@ -606,6 +610,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
             antislop::lean::daemon::ConversationRequest::Send {
                 conversation: conversation.clone(),
                 text: "sleepy".into(),
+                to: None,
             },
         ))
         .unwrap();
@@ -628,6 +633,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         &project,
         &dir.join("antislop.toml"),
         &dir.join("state"),
+        &std::env::current_exe().unwrap(),
     )
     .unwrap();
     let forced = stop(true);
@@ -803,7 +809,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
             .unwrap()
     };
 
-    common::trust(&project);
+    common::runtime_environment(&project);
     let mut first = run(
         if rebuilt { &old_build } else { current_build },
         "sleepy: first",
@@ -822,20 +828,37 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         assert!(Instant::now() < deadline, "the daemon never got busy");
         std::thread::sleep(Duration::from_millis(10));
     };
-    // Other projects and configuration paths must not silently use this daemon.
+    // A foreign repository cannot change the active runtime configuration.
     let other_project = dir.join("other-project");
     std::fs::create_dir(&other_project).unwrap();
+    let initialized = std::process::Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(&other_project)
+        .output()
+        .unwrap();
+    assert!(initialized.status.success());
+    let retained = std::fs::read(state.join("antislop.toml")).unwrap();
+    let error = antislop::lean::daemon::Client::connect(
+        &other_project,
+        &dir.join("antislop.toml"),
+        &state,
+        current_build,
+    )
+    .err()
+    .expect("foreign repository must be rejected");
+    assert!(error.to_string().contains("another repository"));
+    assert_eq!(
+        std::fs::read(state.join("antislop.toml")).unwrap(),
+        retained
+    );
+    // Selecting another source config for the same repository still uses its
+    // one durable configuration and preserves the busy daemon.
     let other_config = dir.join("other.toml");
     std::fs::write(&other_config, &text).unwrap();
-    for (project, config) in [
-        (other_project.as_path(), dir.join("antislop.toml")),
-        (project.as_path(), other_config),
-    ] {
-        let error = antislop::lean::daemon::Client::connect(project, &config, &state)
-            .err()
-            .expect("a busy daemon must reject another project or configuration path");
-        assert!(error.to_string().contains("different --state directory"));
-    }
+    antislop::lean::daemon::Client::connect(&project, &other_config, &state, current_build)
+        .unwrap();
+    assert_eq!(identity().unwrap()["pid"], daemon);
     if edit_config {
         // The user edits the configuration while the work runs.
         std::thread::sleep(Duration::from_millis(20));
@@ -970,7 +993,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         ),
     )
     .unwrap();
-    common::trust(&project);
+    common::runtime_environment(&project);
     common::assert_test_socket(std::path::Path::new("../state"), &project);
     let frontend = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(&project)
@@ -1024,10 +1047,8 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     let dir = common::tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("proj").unwrap();
-    let specs = [
-        json!({"id": "t1", "title": "x", "goal": "g", "writes": true,
-        "kind": "implementation", "reviewer": {"focus": "f"}}),
-    ];
+    let specs = [json!({"id": "t1", "title": "x", "goal": "g",
+        "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "f"}})];
     let mut task = store.add_plan(&conversation.id, &specs).unwrap().remove(0);
 
     let obligations = vec![("R1".to_owned(), "risk".to_owned())];
@@ -1161,7 +1182,7 @@ fn configuration_snapshots_survive_live_replacement() {
     let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
     let in_flight = core.config_snapshot();
     let mut updated = initial.clone();
-    updated.policy.max_parallel = 1;
+
     updated.orchestrator.profile = "review".into();
     core.replace_config(updated.clone());
     assert_eq!(*in_flight, initial);
@@ -1186,7 +1207,7 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     let mut updated = initial;
     updated.profiles.get_mut("orchestrator").unwrap().model = Some("live-model".into());
     updated.profiles.get_mut("orchestrator").unwrap().effort = antislop::config::Effort::Low;
-    updated.policy.max_parallel = 1;
+
     assert!(!core.is_idle(&conversation.id));
     core.replace_config(updated);
     wait_idle(&core, &conversation.id);

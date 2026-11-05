@@ -3,15 +3,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
     route_pipeline(
         context,
         request,
-        &[
-            plans_and_plan,
-            task,
-            scoped_task,
-            task_checks,
-            task_diff,
-            review_task,
-            scoped_task_review,
-        ],
+        &[plans_and_plan, task, task_checks, task_diff, review_task],
     )
 }
 
@@ -45,23 +37,7 @@ fn task(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::Task { plan, id }) => {
-            Route::Handled({
-                let conv = core.store.plan_conversation(&plan)?;
-                validate_project_conversation(core, project, &conv)?;
-                validate_plan_task(core, &plan, &id)?;
-                json!(core.task(&plan, &id)?)
-            })
-        }
-        request => Route::Unmatched(request),
-    })
-}
-
-fn scoped_task(context: &Context<'_>, request: Request) -> Result<Route> {
-    let core = context.core;
-    let project = context.project;
-    Ok(match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Task {
             conversation,
             plan,
             id,
@@ -129,32 +105,13 @@ fn review_task(context: &Context<'_>, request: Request) -> Result<Route> {
             conversation,
             plan,
             id,
+            revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            validate_plan_task(core, &plan, &id)?;
-            core.review_change(&conversation, &plan, &id)?;
-            Value::Null
-        }),
-        request => Route::Unmatched(request),
-    })
-}
-
-fn scoped_task_review(context: &Context<'_>, request: Request) -> Result<Route> {
-    let core = context.core;
-    let project = context.project;
-    Ok(match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewScoped {
-            conversation,
-            plan,
-            id,
-            scope_hash,
-        }) => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            if let Some(expected) = &scope_hash {
-                match core.diff_scope_hash(&conversation, &plan, &id) {
-                    Ok(current) => require(expected == &current, "stale_scope")?,
-                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+            if let Some(expected) = &revision_token {
+                match core.diff_revision_token(&conversation, &plan, &id) {
+                    Ok(current) => require(expected == &current, "stale_revision")?,
+                    Err(_) => return Err(Error::Invalid("stale_revision".into())),
                 }
             }
             validate_conversation_plan(core, &conversation, &plan)?;

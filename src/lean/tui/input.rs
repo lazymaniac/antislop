@@ -140,7 +140,7 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Esc => self.chat_escape(),
-            KeyCode::Char('a') if control => self.chat_home_or_accept(),
+            KeyCode::Char('a') if control => self.input.move_home(),
             KeyCode::Char('r') if control => self.chat_history_or_resume(),
             KeyCode::Char('x') if control => self.run_workflow(Command::Cancel),
             KeyCode::Char('u') if control && self.input.is_empty() => self.scroll += 5,
@@ -177,17 +177,6 @@ impl App {
             self.history_draft_preferred_col = self.input.preferred_col;
             self.input.clear();
             self.input_shown = 0;
-        }
-    }
-
-    fn chat_home_or_accept(&mut self) {
-        if self.input.is_empty()
-            && (self.view.plan_proposed()
-                || self.view.workflow_phase.as_deref() == Some("interview"))
-        {
-            self.run_workflow(Command::Accept);
-        } else {
-            self.input.move_home();
         }
     }
 

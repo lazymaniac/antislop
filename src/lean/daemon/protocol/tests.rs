@@ -53,10 +53,6 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
             }),
             json!({"op":"runtime_notice","conversation":"c","text":"Verified toolchain path; no new execution grant"}),
         ),
-        (
-            Request::Control(ControlRequest::Trust { trusted: true }),
-            json!({"op":"trust","trusted":true}),
-        ),
     ];
 
     for (request, expected) in cases {
@@ -85,12 +81,6 @@ fn grouped_protocol_keeps_defaults_and_rejects_malformed_or_unknown_fields() {
     );
     let encoded = serde_json::to_value(decoded).unwrap();
     assert_eq!(encoded["retry"], false);
-    let trust: Request = serde_json::from_value(json!({"op":"trust"})).unwrap();
-    assert_eq!(
-        trust,
-        Request::Control(ControlRequest::Trust { trusted: true })
-    );
-
     for malformed in [
         json!({"op":"terminal_open","conversation":"c"}),
         json!({"op":"trust","trusted":"yes"}),
@@ -110,7 +100,7 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"terminal_resize","conversation":"c","role":"writer","handle":"h","columns":100,"rows":30}),
         json!({"op":"terminal_detach","conversation":"c","role":"writer","handle":"h"}),
         json!({"op":"run_context","conversation":"c","turn":"t"}),
-        json!({"op":"comment_at","conversation":"c","plan":null,"target":"T1","text":"note","round":null,"run":null}),
+        json!({"op":"comment","conversation":"c","plan":null,"target":"T1","text":"note","round":null,"run":null}),
         json!({"op":"send_to_agent","message":{"conversation":"c","plan":null,"recipient":"worker","operation_id":"op","expected_round":null,"expected_run":null,"text":"hello"}}),
         json!({"op":"task_rounds","conversation":"c","plan":"p","id":"task"}),
         json!({"op":"task_round","conversation":"c","plan":"p","id":"task","round":1}),
@@ -138,7 +128,6 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"conversations"}),
         json!({"op":"start"}),
         json!({"op":"send","conversation":"c","text":"hello"}),
-        json!({"op":"accept","conversation":"c","plan":"p"}),
         json!({"op":"reject","conversation":"c","plan":"p"}),
         json!({"op":"resume","conversation":"c","plan":"p"}),
         json!({"op":"review_comments","conversation":"c","plan":"p"}),
@@ -146,7 +135,6 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"restart_orchestrator","conversation":"c"}),
         json!({"op":"cancel","conversation":"c"}),
         json!({"op":"pause","conversation":"c","paused":true}),
-        json!({"op":"mode","conversation":"c","autonomous":false}),
         json!({"op":"plans","conversation":"c"}),
         json!({"op":"plan","conversation":"c","plan":"p"}),
         json!({"op":"comments","conversation":"c"}),
@@ -160,8 +148,6 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"sessions","conversation":"c"}),
         json!({"op":"history","conversation":"c"}),
         json!({"op":"mail","conversation":"c"}),
-        json!({"op":"trust_status"}),
-        json!({"op":"trust"}),
     ];
 
     for input in inputs {
@@ -202,7 +188,6 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         | "get_ledger_source" => "ledger",
         "send_to_agent"
         | "send"
-        | "accept"
         | "reject"
         | "resume"
         | "review_comments"
@@ -210,7 +195,6 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         | "restart_orchestrator"
         | "cancel"
         | "pause"
-        | "mode"
         | "plans"
         | "plan"
         | "comments"
@@ -219,11 +203,46 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         | "diff"
         | "review"
         | "task_checks"
-        | "task"
-        | "comment_at" => "conversation",
+        | "task" => "conversation",
         "identity" | "get_config" | "set_config" | "shutdown" | "force_shutdown"
-        | "conversations" | "start" | "trust_status" | "trust" => "control",
+        | "conversations" | "start" => "control",
         unknown => panic!("unmapped wire operation: {unknown}"),
     };
     assert_eq!(actual, expected, "operation: {operation}");
+}
+
+#[test]
+fn removed_mode_and_execution_authorization_operations_are_not_decoded() {
+    for operation in [
+        "mode",
+        "authorize_task_execution",
+        "accept",
+        "comment_at",
+        "trust",
+        "trust_status",
+    ] {
+        let error =
+            serde_json::from_value::<WireRequest>(json!({"op":operation,"conversation":"fixture"}))
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("unknown variant"), "{error}");
+    }
+}
+
+#[test]
+fn removed_scope_fingerprint_field_is_rejected_in_favor_of_revision_token() {
+    assert!(
+        serde_json::from_value::<WireRequest>(json!({
+            "op":"resume", "conversation":"c", "plan":"p", "scope_hash":"old"
+        }))
+        .is_err()
+    );
+    let request: Request = serde_json::from_value(json!({
+        "op":"resume", "conversation":"c", "plan":"p", "revision_token":"current"
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(request).unwrap()["revision_token"],
+        "current"
+    );
 }

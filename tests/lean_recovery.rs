@@ -20,8 +20,8 @@ prompt = sys.argv[-1]
 prompt = prompt.split("\nCurrent task contracts for plan ",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "writes": writes, "scope": ["."], "kind": "implementation" if writes else "analysis",
-            "reviewer": {"focus": "f"}}
+              "change_kind": ("code" if writes else "none"), "kind": "implementation" if writes else "analysis",
+            "reviewer": {"summary": "f"}}
 plans = {
   "chain": [task("t1", "Fail"), task("t2", "Second", ["t1"]), task("t3", "Third", ["t2"])],
   "first": [task("a1", "First plan")],
@@ -141,10 +141,6 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
 }
 
 fn open(dir: &Path) -> std::sync::Arc<Core> {
-    open_in_mode(dir, "supervised")
-}
-
-fn open_in_mode(dir: &Path, mode: &str) -> std::sync::Arc<Core> {
     let (codex, agy) = fake_clis(dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -160,7 +156,6 @@ fn open_in_mode(dir: &Path, mode: &str) -> std::sync::Arc<Core> {
         &format!("binary = {:?}", agy.to_string_lossy()),
     )
     .replace("required_gates = true", "required_gates = false");
-    let text = text.replace("mode = \"supervised\"", &format!("mode = {mode:?}"));
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
 }
 
@@ -196,8 +191,13 @@ fn wait_idle(core: &Core, conversation: &str) {
 }
 
 fn propose(core: &std::sync::Arc<Core>, conversation: &str, name: &str) -> String {
+    let before = core.store.accepted_plan(conversation).unwrap();
     core.send(conversation, name).unwrap();
-    wait_idle(core, conversation);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while core.store.accepted_plan(conversation).unwrap() == before {
+        assert!(Instant::now() < deadline, "reviewed plan was not activated");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     core.store.latest_plan(conversation).unwrap()[0]
         .plan_id
         .clone()
@@ -222,7 +222,6 @@ fn a_failure_keeps_every_dependent_task_pending_and_says_why() {
         .unwrap()
         .id;
     let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
@@ -240,7 +239,6 @@ fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
         .unwrap()
         .id;
     let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
@@ -269,7 +267,7 @@ fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
 }
 
 #[test]
-fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
+fn reviewed_plans_start_automatically_and_keep_distinct_results() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
@@ -277,34 +275,34 @@ fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
         .unwrap()
         .id;
     let first = propose(&core, &conversation, "first");
+    wait_idle(&core, &conversation);
     let second = propose(&core, &conversation, "second");
     assert_ne!(first, second);
 
-    core.accept_plan(&conversation, &first).unwrap();
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &first), ["approved"]);
-    assert_eq!(statuses(&core, &second), ["proposed"]);
-    // The results the orchestrator receives are the accepted plan's.
+    assert_eq!(statuses(&core, &second), ["approved"]);
+    // The latest result belongs to the independently reviewed second plan.
     let messages = core.store.messages_after(&conversation, 0).unwrap();
     let results = messages
         .iter()
         .rfind(|message| message.author == "runtime")
         .unwrap();
-    assert!(results.text.contains("First plan") && !results.text.contains("Second plan"));
+    assert!(results.text.contains("Second plan") && !results.text.contains("First plan"));
     // A plan already run cannot be started again.
-    assert!(core.accept_plan(&conversation, &first).is_err());
+    assert!(core.resume_plan(&conversation, &first).is_err());
 }
 
 #[test]
-fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
+fn tasks_without_a_requirements_run_cannot_resume_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
-    let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
-                      "reviewer": {"focus": "f"}});
+    let spec = json!({"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis",
+                      "reviewer": {"summary": "f"}});
     let mut second = spec.clone();
     second["id"] = json!("t2");
     second["depends_on"] = json!(["t1"]);
@@ -335,12 +333,12 @@ fn autonomous_plan_without_requirements_cannot_resume() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
-    let core = open_in_mode(dir.path(), "autonomous");
+    let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
-    let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
-                      "reviewer": {"focus": "f"}});
+    let spec = json!({"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis",
+                      "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
         .queue_plan(&conversation, &tasks[0].plan_id)
@@ -351,7 +349,7 @@ fn autonomous_plan_without_requirements_cannot_resume() {
     core.store.update_task(&working).unwrap();
     drop(core);
 
-    let core = open_in_mode(dir.path(), "autonomous");
+    let core = open(dir.path());
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &tasks[0].plan_id), ["queued"]);
     assert!(
@@ -389,10 +387,9 @@ fn test_freshness_token_staleness_and_rejection() {
         "id": "t1",
         "title": "T1",
         "goal": "g",
-        "kind": "analysis",
-        "scope": ["README"],
-        "reviewer": {"focus": "f"}
-    });
+        "change_kind": "none", "kind": "analysis",
+
+        "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
         .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
@@ -495,7 +492,6 @@ fn test_blocked_task_prevents_premature_audit() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
@@ -534,7 +530,6 @@ fn a_task_that_stops_wakes_the_orchestrator_while_others_still_run() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "parallel");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     assert_eq!(statuses(&core, &plan), ["waiting", "approved"]);
@@ -559,7 +554,6 @@ fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "requeue");
-    core.accept_plan(&conversation, &plan).unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     let failed = loop {
         let tasks = core.store.plan(&plan).unwrap();
@@ -596,13 +590,29 @@ fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
 }
 
 #[test]
-fn a_stalled_task_keeps_its_count_in_the_event_log_until_it_stops() {
+fn repeated_findings_keep_running_until_explicit_cancellation() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "stubborn");
-    core.accept_plan(&conversation, &plan).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let records = core.store.events_since(&conversation, 0, 100000).unwrap();
+        if records.iter().any(|event| {
+            event.kind == "task_progress"
+                && event.payload["run"]["rejections"].as_u64().unwrap_or(0) >= 4
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "repeated findings stopped the task"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!core.is_idle(&conversation));
+    core.cancel(&conversation);
     wait_idle(&core, &conversation);
 
     let task = core
@@ -612,7 +622,11 @@ fn a_stalled_task_keeps_its_count_in_the_event_log_until_it_stops() {
         .into_iter()
         .find(|t| t.spec["id"] == "x1")
         .unwrap();
-    assert_eq!((task.status.as_str(), task.round), ("coordinating", 2));
+    assert_eq!(
+        task.status, "queued",
+        "cancellation retains a resumable checkpoint"
+    );
+    assert!(task.round >= 4);
     let records: Vec<_> = core
         .store
         .events_since(&conversation, 0, 100_000)
@@ -621,13 +635,13 @@ fn a_stalled_task_keeps_its_count_in_the_event_log_until_it_stops() {
         .filter(|e| e.kind == "task_progress" && e.payload["task"] == task.id.as_str())
         .map(|e| e.payload["run"].clone())
         .collect();
-    assert_eq!(records.len(), 3, "{records:?}");
+    assert!(records.len() >= 4, "{records:?}");
     assert_eq!(records[0]["rejections"], 1);
     assert_eq!(records[1]["rejections"], 2);
     assert_eq!(records[1]["findings"][0]["check"], "goal");
     assert!(
-        records[2].is_null(),
-        "the stop for coordination closes the run"
+        records.last().unwrap()["rejections"].as_u64().unwrap() >= 4,
+        "cancellation preserves recorded progress for a later explicit resume"
     );
 }
 
@@ -642,7 +656,6 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     // w1 stopped because of user edit, w2 was skipped
@@ -721,7 +734,6 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     assert_eq!(statuses(&core, &plan), ["waiting", "queued"]);
@@ -773,7 +785,6 @@ fn test_recover_task_review_manual_snapshot() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     // Set task to needs_user
@@ -829,7 +840,6 @@ fn test_recover_task_retry_with_guidance() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
@@ -879,8 +889,8 @@ fn test_mechanical_audit_gate_prevents_false_success() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "reviewer": {"focus": "f"}});
-    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "reviewer": {"focus": "f"}});
+    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
+    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
     let plan = &tasks[0].plan_id;
 
@@ -930,7 +940,6 @@ fn manual_snapshot_delivers_options_and_rejects_a_silent_variant_switch() {
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
     let mut task = core
         .store
@@ -1078,10 +1087,9 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
         .add_plan(
             &conversation,
             &[json!({
-                "id": "a1", "title": "First plan", "goal": "Check restart", "kind": "analysis",
-                "scope": ["README"], "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
-                "reviewer": {"focus": "Check restart"}
-            })],
+                "id": "a1", "title": "First plan", "goal": "Check restart", "change_kind": "none", "kind": "analysis",
+                 "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
+                "reviewer": {"summary": "Check restart"}})],
         )
         .unwrap();
     let plan = tasks[0].plan_id.clone();
@@ -1091,7 +1099,8 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
     core.store
         .bind_task_ledger(&conversation, &run.id, &plan)
         .unwrap();
-    core.accept_plan(&conversation, &plan).unwrap();
+    core.store.queue_plan(&conversation, &plan).unwrap();
+    core.resume_plan(&conversation, &plan).unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while !dir.path().join("restart-started").exists() {
         assert!(Instant::now() < deadline, "worker did not start");

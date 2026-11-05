@@ -12,7 +12,7 @@ pub struct Client {
     pub notice: Option<String>,
     /// Project, configuration and state, to start the daemon again if it
     /// dies under a frontend that is following events.
-    origin: Option<(PathBuf, PathBuf, PathBuf)>,
+    origin: Option<(PathBuf, PathBuf, PathBuf, PathBuf)>,
 }
 
 impl Client {
@@ -31,6 +31,14 @@ impl Client {
         &self.state
     }
 
+    /// The frontend binary selected for launches and reconnects.
+    pub(in crate::lean) fn frontend_binary(&self) -> Result<PathBuf> {
+        match &self.origin {
+            Some((_, _, _, executable)) => Ok(executable.clone()),
+            None => Ok(std::env::current_exe()?),
+        }
+    }
+
     /// Stops the daemon and waits for it to release its state lock.
     /// With force, running agents are cancelled before the daemon exits.
     /// Returns false if none is running; never creates state or starts a daemon.
@@ -45,8 +53,8 @@ impl Client {
     /// from another build or configuration) as needed. For the same project
     /// and configuration path, a busy daemon keeps the build and configuration
     /// its work started with; the frontend reconnects and explains the delay.
-    pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
-        let (mut client, config, executable) = prepare_client(project, config, state)?;
+    pub fn connect(project: &Path, config: &Path, state: &Path, executable: &Path) -> Result<Self> {
+        let (mut client, config, executable) = prepare_client(project, config, state, executable)?;
         if reuse_existing(&mut client, project, &config, state, &executable)? {
             return Ok(client);
         }
@@ -62,14 +70,14 @@ impl Client {
     pub fn call(&self, request: &Request) -> Result<Value> {
         let result = self.call_once(request);
         match (result, &self.origin) {
-            (Err(error), Some((project, config, state)))
+            (Err(error), Some((project, config, state, executable)))
                 // State the user deleted stays deleted.
                 if matches!(request, Request::History(crate::lean::daemon::HistoryRequest::Events { .. }) | Request::History(crate::lean::daemon::HistoryRequest::EventsPaged { .. }))
                     && lost(&error)
                     && state.join("core.db").exists()
                     && !state.join("stopped").exists() =>
             {
-                Self::connect(project, config, state).map_err(|_| error)?;
+                Self::connect(project, config, state, executable).map_err(|_| error)?;
                 self.call_once(request)
             }
             (result, _) => result,
@@ -145,15 +153,25 @@ fn prepare_client(
     project: &Path,
     config: &Path,
     state: &Path,
+    executable: &Path,
 ) -> Result<(Client, PathBuf, PathBuf)> {
-    let config = config.canonicalize()?;
-    private_directory(state)?;
+    let executable = executable.canonicalize()?;
+    super::super::Store::check_runtime_repository(
+        &state.join("core.db"),
+        &super::super::paths::project_identity(project)?,
+    )?;
+    let config = super::config_write::durable_config(state, config)?;
     let mut client = Client::at(state);
-    client.origin = Some((project.into(), config.clone(), state.into()));
+    client.origin = Some((
+        project.into(),
+        config.clone(),
+        state.into(),
+        executable.clone(),
+    ));
     if let Some(parent) = client.socket.parent() {
         private_directory(parent)?;
     }
-    Ok((client, config, std::env::current_exe()?))
+    Ok((client, config, executable))
 }
 
 fn reuse_existing(
@@ -185,9 +203,15 @@ fn reuse_existing(
     Ok(false)
 }
 
+fn same_origin(identity: &Value, project: &Path, config: &Path) -> bool {
+    super::super::paths::project_identity(project)
+        .ok()
+        .is_some_and(|key| identity["project_identity"].as_str() == Some(key.as_str()))
+        && identity["config"].as_str() == config.to_str()
+}
+
 fn same_daemon_context(identity: &Value, project: &Path, config: &Path, same_build: bool) -> bool {
-    let same_context = identity["project"].as_str() == project.to_str()
-        && identity["config"].as_str() == config.to_str();
+    let same_context = same_origin(identity, project, config);
     let config_current = identity["config_modified"].as_u64() == Some(modified(config));
     same_context && same_build && config_current
 }
@@ -199,8 +223,7 @@ fn reuse_busy_daemon(
     config: &Path,
     same_build: bool,
 ) -> bool {
-    let same_context = identity["project"].as_str() == project.to_str()
-        && identity["config"].as_str() == config.to_str();
+    let same_context = same_origin(identity, project, config);
     if !same_context || identity["busy"] != true {
         return false;
     }

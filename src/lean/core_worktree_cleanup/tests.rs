@@ -30,8 +30,8 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>, String) {
         .add_plan(
             &conversation,
             &[
-                json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"}),
-                json!({"id":"other","title":"Other","goal":"Other","kind":"analysis"}),
+                json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"}),
+                json!({"id":"other","title":"Other","goal":"Other","change_kind": "none", "kind":"analysis"}),
             ],
         )
         .unwrap();

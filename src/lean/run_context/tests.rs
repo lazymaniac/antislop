@@ -13,7 +13,7 @@ fn context(store: &Store, provider: &str) -> RunContext {
         profile: "default".into(),
         cwd: std::env::current_dir().unwrap(),
         add_dirs: vec![],
-        access: RunAccess::ReadOnly,
+
         provider_thread_id: None,
         provider_session_id: None,
     }
@@ -74,14 +74,7 @@ fn context_cannot_change_scope_profile_or_directory() {
             .unwrap()
             .is_none()
     );
-    for field in [
-        "conversation",
-        "role",
-        "provider",
-        "profile",
-        "cwd",
-        "access",
-    ] {
+    for field in ["conversation", "role", "provider", "profile", "cwd"] {
         let mut changed = original.clone();
         match field {
             "conversation" => changed.conversation = other.id.clone(),
@@ -89,7 +82,6 @@ fn context_cannot_change_scope_profile_or_directory() {
             "provider" => changed.provider = "opencode".into(),
             "profile" => changed.profile = "foreign".into(),
             "cwd" => changed.cwd = original.cwd.join("foreign"),
-            "access" => changed.access = RunAccess::Write,
             _ => unreachable!(),
         }
         assert!(store.record_run_context(&changed).is_err(), "{field}");

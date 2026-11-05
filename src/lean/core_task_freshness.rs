@@ -60,17 +60,6 @@ impl Core {
         Ok(task)
     }
 
-    pub fn task_scoped(&self, conversation: &str, plan: &str, id: &str) -> Result<Task> {
-        let mut task = self.task_unscoped(plan, id)?;
-        task.freshness_token = self.freshness_for_task(conversation, plan, &task).ok();
-        task.checks = self
-            .store
-            .checks(&task.id, task.round)
-            .ok()
-            .map(serde_json::Value::from);
-        Ok(task)
-    }
-
     /// Where a writer's change can be read: its worktree while it works (the
     /// working tree against its base), else the project's repository between
     /// its base and result commits.
@@ -103,7 +92,7 @@ impl Core {
         let (dir, base, result) = self.change(conversation, &task)?;
         let patch = git::patch(&dir, &base, result.as_deref())?;
         let (patch, truncated) = truncate_patch(patch);
-        let scope_hash = diff_scope_hash(conversation, plan, id, &base, result.as_deref());
+        let revision_token = diff_revision_token(conversation, plan, id, &base, result.as_deref());
         let reviewer = reviewer_profile(&config, &task.spec);
         Ok(json!({
             "task": id,
@@ -111,7 +100,7 @@ impl Core {
             "head": result,
             "files": diff::parse(&patch),
             "truncated": truncated,
-            "scope_hash": scope_hash,
+            "revision_token": revision_token,
             "reviewer": reviewer,
         }))
     }

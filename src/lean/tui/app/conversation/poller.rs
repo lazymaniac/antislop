@@ -56,7 +56,6 @@ impl Poller {
             generation: self.generation,
             events,
             idle: reply["idle"] == true,
-            autonomous: reply["autonomous"] == true,
         }
     }
 }

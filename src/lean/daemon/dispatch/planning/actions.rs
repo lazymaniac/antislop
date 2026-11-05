@@ -6,15 +6,13 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         request,
         &[
             send,
-            addressed_send_and_accept,
-            scoped_accept,
+            addressed_send,
             reject_plan,
-            scoped_reject,
             review_recovery_and_resume,
-            scoped_resume,
+            resume_plan,
             restart_and_cancel,
-            scoped_cancel,
-            pause_and_mode,
+            cancel_work,
+            pause,
         ],
     )
 }
@@ -23,12 +21,6 @@ fn send(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::Send { conversation, text }) => {
-            Route::Handled({
-                validate_project_conversation(core, project, &conversation)?;
-                core.submit_addressed(&conversation, &text, None)?
-            })
-        }
         Request::Conversation(ConversationRequest::SendToAgent { message }) => Route::Handled({
             validate_project_conversation(core, project, &message.conversation)?;
             if let Some(plan) = &message.plan {
@@ -40,47 +32,17 @@ fn send(context: &Context<'_>, request: Request) -> Result<Route> {
     })
 }
 
-fn addressed_send_and_accept(context: &Context<'_>, request: Request) -> Result<Route> {
+fn addressed_send(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::SendAddressed {
+        Request::Conversation(ConversationRequest::Send {
             conversation,
             text,
             to,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.submit_addressed(&conversation, &text, to.as_deref())?
-        }),
-        Request::Conversation(ConversationRequest::Accept { conversation, plan }) => {
-            Route::Handled({
-                validate_project_conversation(core, project, &conversation)?;
-                validate_conversation_plan(core, &conversation, &plan)?;
-                json!(core.accept_plan(&conversation, &plan)?.len())
-            })
-        }
-        request => Route::Unmatched(request),
-    })
-}
-
-fn scoped_accept(context: &Context<'_>, request: Request) -> Result<Route> {
-    let core = context.core;
-    let project = context.project;
-    Ok(match request {
-        Request::Conversation(ConversationRequest::AcceptScoped {
-            conversation,
-            plan,
-            scope_hash,
-        }) => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            if let Some(expected) = &scope_hash {
-                match core.plan_scope_hash(&conversation, &plan) {
-                    Ok(current) => require(expected == &current, "stale_scope")?,
-                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
-                }
-            }
-            validate_conversation_plan(core, &conversation, &plan)?;
-            json!(core.accept_plan(&conversation, &plan)?.len())
         }),
         request => Route::Unmatched(request),
     })
@@ -94,31 +56,13 @@ fn reject_plan(context: &Context<'_>, request: Request) -> Result<Route> {
             conversation,
             plan,
             reason,
+            revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            core.reject_plan(&conversation, &plan, reason.as_deref())?;
-            Value::Null
-        }),
-        request => Route::Unmatched(request),
-    })
-}
-
-fn scoped_reject(context: &Context<'_>, request: Request) -> Result<Route> {
-    let core = context.core;
-    let project = context.project;
-    Ok(match request {
-        Request::Conversation(ConversationRequest::RejectScoped {
-            conversation,
-            plan,
-            reason,
-            scope_hash,
-        }) => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            if let Some(expected) = &scope_hash {
-                match core.plan_scope_hash(&conversation, &plan) {
-                    Ok(current) => require(expected == &current, "stale_scope")?,
-                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+            if let Some(expected) = &revision_token {
+                match core.plan_revision_token(&conversation, &plan) {
+                    Ok(current) => require(expected == &current, "stale_revision")?,
+                    Err(_) => return Err(Error::Invalid("stale_revision".into())),
                 }
             }
             validate_conversation_plan(core, &conversation, &plan)?;
@@ -146,31 +90,24 @@ fn review_recovery_and_resume(context: &Context<'_>, request: Request) -> Result
             validate_plan_task(core, &req.plan, &req.task)?;
             json!(core.recover_task(req)?)
         }),
-        Request::Conversation(ConversationRequest::Resume { conversation, plan }) => {
-            Route::Handled({
-                validate_project_conversation(core, project, &conversation)?;
-                validate_conversation_plan(core, &conversation, &plan)?;
-                json!(core.resume_plan(&conversation, &plan)?.len())
-            })
-        }
         request => Route::Unmatched(request),
     })
 }
 
-fn scoped_resume(context: &Context<'_>, request: Request) -> Result<Route> {
+fn resume_plan(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::ResumeScoped {
+        Request::Conversation(ConversationRequest::Resume {
             conversation,
             plan,
-            scope_hash,
+            revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            if let Some(expected) = &scope_hash {
-                match core.plan_scope_hash(&conversation, &plan) {
-                    Ok(current) => require(expected == &current, "stale_scope")?,
-                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+            if let Some(expected) = &revision_token {
+                match core.plan_revision_token(&conversation, &plan) {
+                    Ok(current) => require(expected == &current, "stale_revision")?,
+                    Err(_) => return Err(Error::Invalid("stale_revision".into())),
                 }
             }
             validate_conversation_plan(core, &conversation, &plan)?;
@@ -191,28 +128,23 @@ fn restart_and_cancel(context: &Context<'_>, request: Request) -> Result<Route> 
                 json!("restarting the orchestrator in a fresh session")
             })
         }
-        Request::Conversation(ConversationRequest::Cancel { conversation }) => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            core.cancel(&conversation);
-            Value::Null
-        }),
         request => Route::Unmatched(request),
     })
 }
 
-fn scoped_cancel(context: &Context<'_>, request: Request) -> Result<Route> {
+fn cancel_work(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::CancelScoped {
+        Request::Conversation(ConversationRequest::Cancel {
             conversation,
-            scope_hash,
+            revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            if let Some(expected) = &scope_hash {
-                match core.conversation_scope_hash(&conversation) {
-                    Ok(current) => require(expected == &current, "stale_scope")?,
-                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+            if let Some(expected) = &revision_token {
+                match core.conversation_revision_token(&conversation) {
+                    Ok(current) => require(expected == &current, "stale_revision")?,
+                    Err(_) => return Err(Error::Invalid("stale_revision".into())),
                 }
             }
             core.cancel(&conversation);
@@ -222,7 +154,7 @@ fn scoped_cancel(context: &Context<'_>, request: Request) -> Result<Route> {
     })
 }
 
-fn pause_and_mode(context: &Context<'_>, request: Request) -> Result<Route> {
+fn pause(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
@@ -232,14 +164,6 @@ fn pause_and_mode(context: &Context<'_>, request: Request) -> Result<Route> {
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.pause(&conversation, paused)?;
-            Value::Null
-        }),
-        Request::Conversation(ConversationRequest::Mode {
-            conversation,
-            autonomous,
-        }) => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            core.set_mode(&conversation, autonomous)?;
             Value::Null
         }),
         request => Route::Unmatched(request),

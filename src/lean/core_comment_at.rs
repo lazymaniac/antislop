@@ -108,28 +108,7 @@ impl Core {
         Ok(comment)
     }
 
-    /// Stops the orchestrator's turn and any running plan; queued messages stay.
-    /// Pausing starts no new plan work (worker, reviewer and audit turns):
-    /// turns already running finish, the orchestrator still answers, and
-    /// everything waiting goes on when the user continues. It survives a
-    /// restart.
-    /// Whether the conversation runs on by itself: the mode the user set for
-    /// it, else the configured one.
-    pub fn autonomous(&self, conversation: &str) -> Result<bool> {
-        let config = self.config_snapshot();
-        Ok(self
-            .store
-            .mode(conversation)?
-            .unwrap_or_else(|| config.policy.automatic_progression()))
-    }
-
-    /// Changes the conversation's mode for what it does next (design §6.2);
-    /// it approves nothing that already happened.
-    pub fn set_mode(&self, conversation: &str, autonomous: bool) -> Result<()> {
-        self.store.conversation(conversation)?;
-        self.store.set_mode(conversation, autonomous)
-    }
-
+    /// Pauses starting new work; running turns can finish and drafts remain intact.
     pub fn pause(&self, conversation: &str, paused: bool) -> Result<()> {
         self.store.conversation(conversation)?;
         self.store.set_paused(conversation, paused)
@@ -138,10 +117,9 @@ impl Core {
     /// Cancels only orchestration; task workers keep their own cancellation flags.
     pub fn restart_orchestrator(self: &Arc<Self>, conversation: &str) -> Result<()> {
         self.store.conversation(conversation)?;
-        self.store.db().execute("DELETE FROM provider_blocks WHERE (provider,profile) IN (SELECT t.provider,r.profile FROM run_contexts r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.role IN ('orchestrator','comment-orchestrator','planner'))",[conversation])?;
         let running = self.running.lock().expect("running mutex");
         self.store.add_message(conversation, RUNTIME,
-            "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations, existing execution authorizations and cumulative budgets; this restart grants no new executions or permissions. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing data, repeat an experiment to recover history or ask again for an answered decision.")?;
+            "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. All agents have full access without execution budgets. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
         self.orchestrator_restarts
             .lock()
             .expect("orchestrator restart mutex")
@@ -166,8 +144,8 @@ impl Core {
             }
         }
         for flags in [
-            &self.running,
             &self.plans,
+            &self.running,
             &self.reviews,
             &self.revision_jobs,
             &self.agent_reviews,
@@ -176,15 +154,6 @@ impl Core {
                 flag.store(true, Ordering::SeqCst);
             }
         }
-    }
-
-    pub fn cancel_scoped(&self, conversation: &str, scope_hash: Option<&str>) -> Result<()> {
-        if let Some(expected) = scope_hash {
-            let current = self.conversation_scope_hash(conversation)?;
-            require(expected == current, "stale_scope")?;
-        }
-        self.cancel(conversation);
-        Ok(())
     }
 
     pub fn is_idle(&self, conversation: &str) -> bool {

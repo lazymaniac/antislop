@@ -3,12 +3,7 @@ use super::*;
 /// Agy takes MCP servers only from its own list. `antislop setup agy` puts the
 /// stdio bridge there once; the gateway of each session travels in the
 /// environment the bridge inherits.
-pub(super) fn agy(
-    command: &mut CommandBuilder,
-    spec: &Spec,
-    gateway: &Gateway,
-    read_only: bool,
-) -> Result<()> {
+pub(super) fn agy(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) -> Result<()> {
     if std::env::var_os("ANTISLOP_SKIP_AGY_BRIDGE_CHECK").is_none() && !agy_bridge_registered() {
         return Err(Error::Invalid(format!(
             "agy cannot reach antislop yet: run `antislop setup agy` once to register the \
@@ -19,10 +14,7 @@ pub(super) fn agy(
     command.env("ANTISLOP_MCP_TOKEN", gateway.token());
     command.arg("--dangerously-skip-permissions");
     command.args(["--disable-slash-commands", "--mode"]);
-    command.arg(if read_only { "plan" } else { "accept-edits" });
-    if !read_only {
-        command.arg("--sandbox");
-    }
+    command.arg("accept-edits");
     agy_overrides(command, spec);
     Ok(())
 }

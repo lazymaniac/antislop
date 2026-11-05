@@ -25,8 +25,8 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
-  "writes": True, "scope": ["."], "kind": "implementation", "reviewer": {"focus": "file content"}}]}
-answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
+    "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}
+answer = "Plan.\n```plan\n" + json.dumps(plan) + "\n```" if "You are the planner" in prompt else "done"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
@@ -123,8 +123,8 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
-  "writes": True, "scope": ["."], "kind": "implementation", "reviewer": {"focus": "file content"}}]}
-answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
+    "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}
+answer = "Plan.\n```plan\n" + json.dumps(plan) + "\n```" if "You are the planner" in prompt else "done"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
@@ -230,10 +230,6 @@ fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
     let conversation = support::fixture_conversation(core, project).unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
     wait_idle(core, &conversation.id);
-    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
-        .plan_id
-        .clone();
-    core.accept_plan(&conversation.id, &plan).unwrap();
     wait_idle(core, &conversation.id);
     conversation.id
 }
@@ -286,16 +282,29 @@ fn required_gates_join_plans_that_write() {
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while core.store.latest_plan(&conversation.id).unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "generated graph was not persisted"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    core.cancel(&conversation.id);
     wait_idle(&core, &conversation.id);
     let plan = core.store.latest_plan(&conversation.id).unwrap();
     let kinds: Vec<String> = plan
         .iter()
         .map(|task| task.spec["kind"].as_str().unwrap().to_owned())
         .collect();
-    for writer in plan.iter().filter(|task| task.spec["writes"] == true) {
+    for writer in plan.iter().filter(|task| {
+        task.spec["change_kind"]
+            .as_str()
+            .is_some_and(|kind| kind != "none")
+    }) {
         let dependencies = writer.spec["depends_on"].as_array().unwrap();
         assert!(plan.iter().any(|task| task.spec["kind"] == "options"
-            && task.spec["writes"] == false
+            && task.spec["change_kind"] == "none"
             && dependencies.contains(&task.spec["id"])));
     }
     let plan: Vec<_> = plan
@@ -308,7 +317,7 @@ fn required_gates_join_plans_that_write() {
     for gate in &plan[1..] {
         // The security and performance audits only read.
         let audit = matches!(gate.spec["kind"].as_str(), Some("security" | "performance"));
-        assert_eq!(gate.spec["writes"], !audit);
+        assert_eq!(gate.spec["change_kind"] != "none", !audit);
         assert!(
             gate.spec["depends_on"]
                 .as_array()
@@ -380,7 +389,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
         )
         .replace(
             "session = \"reviewer\"",
-            "session = \"reviewer\"\n    assert open(\".antislop/worker-cache\").read() == \"prepared environment\"",
+            "session = \"reviewer\"\n    if \"You review a plan\" not in prompt and \"You audit\" not in prompt:\n        assert open(\".antislop/worker-cache\").read() == \"prepared environment\"",
         );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
@@ -428,7 +437,11 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
         "reviewer uses the worker worktree"
     );
     let worker_args = agents[0]["args"].to_string();
-    assert!(worker_args.contains("accept-edits") && worker_args.contains("--sandbox"));
+    assert!(
+        worker_args.contains("accept-edits")
+            && worker_args.contains("--dangerously-skip-permissions")
+            && !worker_args.contains("--sandbox")
+    );
     // A writer is never given a directory to write outside the project.
     let shared = dir.path().join("shared").canonicalize().unwrap();
     let shared = shared.to_str().unwrap();
@@ -449,7 +462,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() 
         &format!("primary.write(\"user draft\\n\")\n        with open({:?}, \"w\") as unrelated:\n            unrelated.write(\"concurrent README\\n\")", project.join("README")),
     ).replace(
         "session = \"reviewer\"",
-        &format!("session = \"reviewer\"\n    assert open({:?}).read() == \"user draft\\n\", \"unreviewed repair touched primary tree\"", project.join("hello.txt")),
+        &format!("session = \"reviewer\"\n    if \"You review a plan\" not in prompt and \"You audit\" not in prompt:\n        assert open({:?}).read() == \"user draft\\n\", \"unreviewed repair touched primary tree\"", project.join("hello.txt")),
     );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
@@ -830,40 +843,6 @@ fn a_committed_change_names_its_commit_on_the_card() {
 }
 
 #[test]
-fn without_write_permission_the_card_says_the_branch_and_keeps_the_project_clean() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = project(dir.path());
-    let head = git(&project, &["rev-parse", "HEAD"]);
-    let (codex, agy) = fake_clis(dir.path());
-    let core = Core::open(
-        &project.join(".antislop"),
-        config_with(&codex, &agy, |text| {
-            text.replace("local_write = true", "local_write = false")
-        }),
-    )
-    .unwrap();
-    let conversation = run_plan(&core, &project);
-
-    let task = &original_tasks(&core, &conversation)[0];
-    assert_eq!(task.status, "needs_user", "{:?}", task.report);
-    let (feedback, _) = card(&core, &conversation, "t1");
-    assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
-    assert_eq!(
-        feedback["integration"]["branch"],
-        format!("antislop/{}-g{}", task.id, task.input_generation)
-    );
-    assert!(
-        feedback["integration"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("local writes are not allowed"),
-        "the raw reason reaches the card"
-    );
-    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
-    assert_eq!(git(&project, &["status", "--porcelain"]), "");
-}
-
-#[test]
 fn a_writer_that_changes_nothing_reports_no_changes() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
@@ -1107,10 +1086,10 @@ fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     // The plan now has a second task waiting on the first.
     let script = std::fs::read_to_string(&codex).unwrap().replace(
-        r#""reviewer": {"focus": "file content"}}]}"#,
-        r#""reviewer": {"focus": "file content"}}, {"id": "t2", "title": "Extend greeting",
-           "goal": "Extend the greeting", "writes": True, "scope": ["."],
-           "kind": "implementation", "reviewer": {"focus": "file content"},
+        r#""reviewer": {"summary": "file content"}}]}"#,
+        r#""reviewer": {"summary": "file content"}}, {"id": "t2", "title": "Extend greeting",
+           "goal": "Extend the greeting",
+           "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"},
            "depends_on": ["t1"]}]}"#,
     );
     std::fs::write(&codex, script).unwrap();
@@ -1294,7 +1273,7 @@ fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::Path
     let (codex, agy) = fake_clis(dir);
     let plan = serde_json::json!({"tasks": [
         {"id": "t1", "title": "Audit greetings", "goal": "Report on README",
-         "kind": "analysis"}
+         "change_kind": "none", "kind": "analysis"}
     ]});
     let script = std::fs::read_to_string(&codex).unwrap();
     let start = script.find("plan = ").unwrap();
@@ -1335,7 +1314,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
     let start = script.find("plan = {\"tasks\":").unwrap();
     let end = start + script[start..].find("\nanswer = ").unwrap();
     let plan = r#"plan = {"tasks": [{"id": id, "title": "Add greeting " + id,
-        "goal": "Create hello-" + id + ".txt", "kind": "implementation"}
+        "goal": "Create hello-" + id + ".txt", "change_kind": "code", "kind": "implementation"}
         for id in ["first", "second"]]}"#;
     std::fs::write(
         &codex,
@@ -1365,7 +1344,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
     std::fs::write(&agy, script).unwrap();
     let mut config = config(&codex, &agy);
     config.policy.local_options = false;
-    config.policy.max_parallel = 2;
+
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = run_plan(&core, &project);
     let tasks = original_tasks(&core, &conversation);

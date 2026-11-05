@@ -20,8 +20,6 @@ impl App {
         controls: crate::lean::tui::view::Controls,
     ) {
         match token {
-            "[Mode: autonomous]" | "[auto]" => self.run_workflow(Command::Supervised),
-            "[Mode: supervised]" | "[sup]" => self.run_workflow(Command::Autonomous),
             PAUSE | PAUSE_SHORT | PAUSE_ICON if controls.pause => {
                 self.run_workflow(Command::Pause);
             }

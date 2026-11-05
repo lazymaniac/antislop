@@ -205,7 +205,7 @@ fn set_feedback(
     let obligations = tasks::obligations(spec);
     let effect = summary_effect
         .or_else(|| changes.map(|change| (change.to_owned(), false)))
-        .or_else(|| (!spec.writes).then(|| tasks::report_effect(report)));
+        .or_else(|| (!spec.change_kind.has_delivery()).then(|| tasks::report_effect(report)));
     let (effect, effect_cut) = tasks::effect_keys(&effect);
     let carried = task
         .feedback

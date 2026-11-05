@@ -45,7 +45,7 @@ fn task_request(conversation: &str, plan: &str, id: &str, checks_only: bool) -> 
             id: id.into(),
         })
     } else {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Task {
             conversation,
             plan: plan.into(),
             id: id.into(),

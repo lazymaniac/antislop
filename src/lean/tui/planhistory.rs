@@ -258,7 +258,7 @@ mod tests {
         app.input.insert_str("draft 👩‍💻");
         app.view
             .apply(&json!({"seq":1,"kind":"plan_proposed","payload":{
-                "plan":"live", "tasks":[{"id":"current","title":"Current task"}]
+                "plan":"live", "tasks":[{"change_kind":"none","id":"current","title":"Current task"}]
             }}));
         app.plan_history = Some(Browser::new());
         app.paste("must not reach the draft");
@@ -279,8 +279,8 @@ mod tests {
             .add_plan(
                 &conversation.id,
                 &[
-                    json!({"id":"implementation","title":"Implement"}),
-                    json!({"id":"security","title":"Security","depends_on":["implementation"]}),
+                    json!({"change_kind":"none","id":"implementation","title":"Implement"}),
+                    json!({"change_kind":"none","id":"security","title":"Security","depends_on":["implementation"]}),
                 ],
             )
             .unwrap();

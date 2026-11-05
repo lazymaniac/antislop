@@ -28,19 +28,6 @@ pub(crate) fn artifact_bytes(project: &Path, commit: &str, path: &str) -> Result
     Ok(output.stdout)
 }
 
-/// A legacy landing can prove ownership only for a newly created file,
-/// never for arbitrary user files merely present in its starting snapshot.
-pub(crate) fn artifact_was_created(project: &Path, commit: &str, path: &str) -> Result<bool> {
-    crate::lean::tasks::validate_artifact_output(path)?;
-    let parent = ok(project, &["rev-parse", &format!("{commit}^")])?;
-    Ok(ok(
-        project,
-        &["--literal-pathspecs", "ls-tree", &parent, "--", path],
-    )?
-    .is_empty()
-        && artifact_bytes(project, commit, path).is_ok())
-}
-
 pub(crate) fn require_owned_outputs(
     project: &Path,
     outputs: &[String],

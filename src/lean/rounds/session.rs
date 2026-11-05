@@ -12,7 +12,6 @@ impl Core {
         profile: Option<&ResolvedProfile>,
         cwd: &Path,
         add_dirs: &[PathBuf],
-        access: agent::Access,
     ) -> Result<Option<String>> {
         let Some((turn, Some(session))) = self.scoped_turn(conversation, role, task, round)? else {
             return Ok(None);
@@ -25,7 +24,6 @@ impl Core {
             profile,
             cwd,
             add_dirs,
-            access,
         )
     }
 
@@ -39,7 +37,6 @@ impl Core {
         profile: Option<&ResolvedProfile>,
         cwd: &Path,
         add_dirs: &[PathBuf],
-        access: agent::Access,
     ) -> Result<Option<String>> {
         let Some(context) = self.store.run_context(conversation, turn)? else {
             return Ok(None);
@@ -51,7 +48,6 @@ impl Core {
             profile,
             cwd,
             add_dirs,
-            access,
             &context,
         )
         .map(|matches| matches.then_some(session))
@@ -87,22 +83,17 @@ impl Core {
         profile: Option<&ResolvedProfile>,
         cwd: &Path,
         add_dirs: &[PathBuf],
-        access: agent::Access,
+
         context: &store::RunContext,
     ) -> Result<bool> {
         let signature = self.execution_signature(conversation, turn)?;
         let expected = profile.map(execution_signature).transpose()?;
-        let access = match access {
-            agent::Access::ReadOnly => store::RunAccess::ReadOnly,
-            agent::Access::Write => store::RunAccess::Write,
-        };
         Ok(signature.is_some()
             && signature == expected
             && context.provider == provider
             && profile.is_some_and(|profile| profile.profile == context.profile)
             && context.cwd == cwd
-            && context.add_dirs == add_dirs
-            && context.access == access)
+            && context.add_dirs == add_dirs)
     }
 
     fn execution_signature(&self, conversation: &str, turn: &str) -> Result<Option<String>> {

@@ -36,9 +36,8 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Task) {
             &conversation.id,
             &[json!({
                 "requirement_ids":["R1"], "criterion_ids":["R1.accept"],
-            "id":"task", "title":"Round task", "goal":"Keep all context", "writes":false,
-                "kind":"implementation", "reviewer":{"focus":"Check everything", "risks":[]}
-            })],
+            "id":"task", "title":"Round task", "goal":"Keep all context",
+                "change_kind": "none", "kind":"implementation", "reviewer":{"summary": "Check everything"}})],
         )
         .unwrap()
         .remove(0);
@@ -84,7 +83,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
                 profile: profile.profile.clone(),
                 cwd: cwd.clone(),
                 add_dirs: vec![],
-                access: store::RunAccess::ReadOnly,
+
                 provider_thread_id: None,
                 provider_session_id: None,
             })
@@ -101,7 +100,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
         core.store
             .set_session(&turn.id, "round-one-session")
             .unwrap();
-        let lookup = |round, cwd: &Path, access| {
+        let lookup = |round, cwd: &Path| {
             core.session_for_turn(
                 &conversation,
                 &role,
@@ -113,17 +112,12 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
                 Some(&profile),
                 cwd,
                 &[],
-                access,
             )
             .unwrap()
         };
-        assert_eq!(
-            lookup(1, &cwd, agent::Access::ReadOnly).as_deref(),
-            Some("round-one-session")
-        );
-        assert_eq!(lookup(2, &cwd, agent::Access::ReadOnly), None);
-        assert_eq!(lookup(1, &cwd.join("other"), agent::Access::ReadOnly), None);
-        assert_eq!(lookup(1, &cwd, agent::Access::Write), None);
+        assert_eq!(lookup(1, &cwd).as_deref(), Some("round-one-session"));
+        assert_eq!(lookup(2, &cwd), None);
+        assert_eq!(lookup(1, &cwd.join("other")), None);
         let mut changed_profile = profile.clone();
         changed_profile.profile.push_str("-changed");
         assert!(
@@ -137,8 +131,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
                 },
                 Some(&changed_profile),
                 &cwd,
-                &[],
-                agent::Access::ReadOnly
+                &[]
             )
             .unwrap()
             .is_none()
@@ -170,8 +163,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
                     },
                     Some(&changed),
                     &cwd,
-                    &[],
-                    agent::Access::ReadOnly
+                    &[]
                 )
                 .unwrap()
                 .is_none(),
@@ -199,7 +191,7 @@ fn sessions_follow_persisted_round_and_compatible_execution_context() {
         context.provider_session_id = None;
         core.store.record_run_context(&context).unwrap();
         core.store.set_session(&other.id, "other-session").unwrap();
-        assert_eq!(lookup(1, &cwd, agent::Access::ReadOnly), None);
+        assert_eq!(lookup(1, &cwd), None);
     }
 }
 
@@ -314,7 +306,7 @@ echo '{"type":"turn.completed"}'
                     profile: Ok(profile),
                     cwd: dir.path().into(),
                     add_dirs: vec![],
-                    access: agent::Access::ReadOnly,
+
                     upto_message: 0,
                 };
                 assert_eq!(
@@ -365,8 +357,7 @@ echo '{"type":"turn.completed"}'
                 },
                 Some(&profile),
                 dir.path(),
-                &[],
-                agent::Access::ReadOnly
+                &[]
             )
             .unwrap()
             .is_some(),
@@ -612,7 +603,7 @@ fn execute(
             ),
             cwd: PathBuf::from(core.store.conversation(conversation).unwrap().project),
             add_dirs: vec![],
-            access: agent::Access::ReadOnly,
+
             profile: Ok(profile),
             upto_message: 0,
         },
@@ -848,7 +839,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
     git(&["add", ".gitignore", "user.txt"]);
     git(&["commit", "-m", "base"]);
     std::fs::write(dir.path().join("user.txt"), "user draft").unwrap();
-    task.spec["writes"] = true.into();
+    task.spec["change_kind"] = "code".into();
     core.store
         .db()
         .execute(
@@ -869,8 +860,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
 fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() {
     let (_dir, core, conversation, mut task) = fixture();
     let extra_specs: Vec<_>=["dep","unrelated"].into_iter().map(|id|json!({
-        "id":id,"title":id,"goal":"Provide evidence","kind":"analysis","reviewer":{"focus":"Check evidence"}
-    })).collect();
+        "id":id,"title":id,"goal":"Provide evidence","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Check evidence"}})).collect();
     let mut others = core.store.add_plan(&conversation, &extra_specs).unwrap();
     let full_report = "FULL DEPENDENCY REPORT\n".repeat(2000);
     for (index, other) in others.iter_mut().enumerate() {

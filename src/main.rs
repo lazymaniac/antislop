@@ -13,15 +13,15 @@ With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
 
 options:
-  --config FILE        configuration (else ./antislop.toml, then ~/.config/antislop/antislop.toml)
-  --state DIR          private state directory (default: ./.antislop)
+  --config FILE        seed/override the project runtime configuration
+  --state DIR          explicit runtime directory (default: global project state)
   --conversation ID    continue this conversation
   --new                start a new conversation
-  --trust              trust the current working directory without prompting
   --version            print the version
 
 The user config directory follows ANTISLOP_CONFIG_DIR, then XDG_CONFIG_HOME/antislop,
-then ~/.config/antislop, just like the list of trusted directories.
+then ~/.config/antislop. Runtime follows ANTISLOP_STATE_ROOT, then
+XDG_STATE_HOME/antislop, then ~/.local/state/antislop. Linked worktrees share state.
 ";
 
 fn main() {

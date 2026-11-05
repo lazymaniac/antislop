@@ -11,7 +11,6 @@ impl App {
     pub(super) fn route_graph(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('a') => return self.graph_command(Command::Accept),
                 KeyCode::Char('x') => return self.graph_command(Command::Cancel),
                 KeyCode::Char('r') => return self.graph_command(Command::Resume),
                 _ => {}

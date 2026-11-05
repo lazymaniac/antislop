@@ -69,22 +69,6 @@ pub(super) fn on_notice(view: &mut View, event: &Value, payload: &Value, key: St
     );
 }
 
-pub(super) fn on_mode(view: &mut View, event: &Value, payload: &Value, key: String, turn: &str) {
-    let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
-    let _ = (event, &key, turn, &text);
-    view.autonomous = Some(payload["autonomous"] == true);
-    let text = if payload["autonomous"] == true {
-        "⚙ autonomous mode: next plans and rounds start automatically"
-    } else {
-        "⚙ supervised mode: next plans wait for approval (Ctrl+A)"
-    };
-    view.push(
-        Style::default().fg(crate::lean::tui::theme::ayu::YELLOW),
-        text,
-    );
-    view.system_card("Mode", text.into(), crate::lean::tui::theme::Tone::Queued);
-}
-
 pub(super) fn on_audit(view: &mut View, event: &Value, payload: &Value, key: String, turn: &str) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);

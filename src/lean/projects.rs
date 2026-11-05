@@ -20,10 +20,9 @@ pub struct Projects {
 }
 
 impl Projects {
-    /// Beside the list of trusted directories.
+    /// In the shared user configuration directory.
     pub fn from_env() -> Result<Self> {
-        let registry = super::trust::Registry::from_env()?;
-        Ok(Self::at(registry.path().parent().unwrap_or(Path::new("."))))
+        Ok(Self::at(&super::paths::config_dir()?))
     }
 
     pub fn at(dir: &Path) -> Self {

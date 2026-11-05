@@ -229,7 +229,7 @@ fn replanning_prefers_the_latest_unfinished_checkpoint_over_an_older_exact_contr
 fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement() {
     let (_dir, store, conversation, run, mut previous) = fixture();
     let source = &mut previous[1];
-    source.spec["writes"] = true.into();
+    source.spec["change_kind"] = "code".into();
     source.spec["change_kind"] = "code".into();
     source.status = "coordinating".into();
     source.round = 3;
@@ -325,7 +325,7 @@ fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement(
             .contains("already has an active")
     );
     let mut read_only = revision.clone();
-    read_only.tasks[0].writes = false;
+    read_only.tasks[0].change_kind = crate::lean::tasks::ChangeKind::None;
     assert!(read_only.merge(&baseline).is_err());
     for state in ["approved", "working"] {
         let mut unavailable = source.clone();
@@ -343,7 +343,7 @@ fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement(
 #[test]
 fn a_checkpoint_that_changed_during_review_cannot_partially_apply_a_revision() {
     let (_dir, store, conversation, run, mut old) = fixture();
-    old[1].spec["writes"] = true.into();
+    old[1].spec["change_kind"] = "code".into();
     old[1].spec["change_kind"] = "code".into();
     old[1].status = "coordinating".into();
     old[1].base = Some("base".into());

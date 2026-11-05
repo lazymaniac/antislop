@@ -166,18 +166,39 @@ fn repeated_events_keep_distinct_sequences_and_exclusive_cursor_order() {
 }
 
 #[test]
-fn workspace_trust_round_trips() {
+fn project_identity_metadata_survives_reopen_without_permission_tables() {
     let dir = test_tempdir();
-    let store = Store::open(&dir.path().join("core.db")).unwrap();
-    assert!(!store.is_trusted("/workspace/proj1").unwrap());
-    store.trust_project("/workspace/proj1").unwrap();
-    assert!(store.is_trusted("/workspace/proj1").unwrap());
-    assert_eq!(
-        store.trusted_projects().unwrap(),
-        vec!["/workspace/proj1".to_string()]
+    let path = dir.path().join("core.db");
+    let store = Store::open(&path).unwrap();
+    store
+        .record_project_identity("/workspace/project", "git-key")
+        .unwrap();
+    store
+        .record_project_identity("/workspace/project", "git-key")
+        .unwrap();
+    assert!(
+        store
+            .record_project_identity("/workspace/project", "other-key")
+            .is_err()
     );
-    store.untrust_project("/workspace/proj1").unwrap();
-    assert!(!store.is_trusted("/workspace/proj1").unwrap());
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(
+        store
+            .repository_id("/workspace/project")
+            .unwrap()
+            .as_deref(),
+        Some("git-key")
+    );
+    let obsolete: i64 = store
+        .db()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='trusted_projects'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(obsolete, 0);
 }
 
 #[test]
@@ -186,11 +207,11 @@ fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     let mut tasks = store.add_plan(&conversation.id, &[
-        serde_json::json!({"id":"fresh","title":"Fresh","goal":"Run","kind":"analysis"}),
-        serde_json::json!({"id":"legacy","title":"Legacy","goal":"Run","kind":"analysis"}),
-        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","kind":"analysis"}),
-        serde_json::json!({"id":"working","title":"Working","goal":"Continue","kind":"analysis"}),
-        serde_json::json!({"id":"reviewing","title":"Reviewing","goal":"Continue","kind":"analysis"})
+        serde_json::json!({"id":"fresh","title":"Fresh","goal":"Run","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"legacy","title":"Legacy","goal":"Run","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"working","title":"Working","goal":"Continue","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"reviewing","title":"Reviewing","goal":"Continue","change_kind": "none", "kind":"analysis"})
     ]).unwrap();
     for task in &mut tasks {
         task.status = "queued".into();

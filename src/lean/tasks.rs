@@ -55,12 +55,20 @@ use worker::dependency_metadata;
 pub use worker::*;
 
 /// The delivered change, independent of filesystem access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
+    #[default]
     None,
     Artifact,
     Code,
+}
+
+impl ChangeKind {
+    /// Whether the result includes changed files, independent of CLI access.
+    pub fn has_delivery(self) -> bool {
+        self != Self::None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -69,11 +77,9 @@ pub enum DeliveryMode {
     Untracked,
 }
 
-/// A task as the runtime stores it. Agents never write this form: plans arrive
-/// as [`PlannedTask`]s and the runtime fills in the rest. Fields of earlier
-/// contracts (declared inputs, reviewer focus and risks) are ignored, so
-/// stored plans keep loading. Legacy write access infers the change kind.
+/// A task as the runtime stores it, with an explicit delivery purpose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskContract {
     #[serde(default)]
     pub quality_gate: bool,
@@ -95,11 +101,7 @@ pub struct TaskContract {
     /// Future work kept in the graph but never scheduled until a reviewed revision releases it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred: bool,
-    #[serde(default)]
-    pub writes: bool,
-    /// Missing in legacy contracts: infer none/code from writes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub change_kind: Option<ChangeKind>,
+    pub change_kind: ChangeKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,19 +122,16 @@ impl TaskContract {
         crate::require(
             !self.deferred,
             &format!(
-                "task {} execution is deferred; release it through a reviewed revision after the required authorization",
+                "task {} execution is deferred; release it through a reviewed revision to make it current",
                 self.id
             ),
         )
     }
 
     pub fn change_kind(&self) -> ChangeKind {
-        self.change_kind.unwrap_or(if self.writes {
-            ChangeKind::Code
-        } else {
-            ChangeKind::None
-        })
+        self.change_kind
     }
+
     pub fn changes_code(&self) -> bool {
         self.change_kind() == ChangeKind::Code
     }
@@ -161,6 +160,7 @@ impl TaskContract {
 /// What the graph shows about a task's reviewer. Its obligations follow from
 /// the task itself: the goal, the assigned criteria and its kind's risk catalog.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewerSpec {
     /// One concise sentence describing what the reviewer checks on the graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,8 +181,6 @@ pub struct Verdict {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved: Vec<String>,
 }
-
-pub const FORMAT_REPAIR_ATTEMPTS: u32 = 3;
 
 pub mod status {
     pub const STALE: &str = "stale";

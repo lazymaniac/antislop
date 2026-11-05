@@ -83,7 +83,7 @@ pub(super) fn ledger_entry() -> Value {
             "quote":{"type":"string","description":"The user's words this comes from, copied exactly; long enough to occur once in its source"},
             "source":{"type":"string","description":"The source id the quote is in; omit for the first source that has it"},
             "interpretation":{"type":"string","description":"The obligation in full sentences"},
-            "constraints":{"type":"array","items":{"enum":["no_new_executions","no_file_changes","no_existing_file_changes","artifact_only","untracked_delivery"]},"description":"Run-wide limits explicitly stated in this entry's source quote. Preserve across extraction; generated tasks cannot weaken them. no_file_changes forbids every file write; no_existing_file_changes permits only named new untracked documents and forbids modifying or overwriting existing files. no_new_executions forbids builds/tests/benchmarks/starting the inspected project; reading files remains allowed."},
+
             "qualifiers":{"type":"array","items":{"type":"string"},"description":"Exceptions, limits and conditions the user gave"},
             "parent":{"type":"string","description":"Id of the requirement this one refines"},
             "depends_on":{"type":"array","items":{"type":"string"}},
@@ -131,16 +131,16 @@ pub(super) fn planned_task() -> Value {
             "goal":{"type":"string","description":"What the task must achieve, in full sentences"},
             "kind":{"enum":KINDS},
             "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. When that kind already has explicitly declared checks, its canonical gate id refers to all of those checks. Each dependent receives dependency summaries"},
-            "writes":{"type":"boolean","description":"Omit to follow the kind: implementation, refactoring, testing, static_analysis and integration write"},
-            "deferred":{"type":"boolean","description":"True keeps future work in the graph but runtime cannot schedule or launch it. Its options and code gates are deferred too. Release only through a later reviewed revision after the required authorization; this field grants no execution permission."},
-            "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Independent of writes."},
+
+            "deferred":{"type":"boolean","description":"True keeps future work in the graph but runtime cannot schedule or launch it. Its options and code gates are deferred too. Release through a reviewed plan revision when its prerequisites are ready."},
+            "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Describes the result; all agents have full filesystem access."},
             "outputs":{"type":"array","items":{"type":"string"},"description":"Explicit relative output files, required for artifact"},
             "delivery":{"enum":["untracked"],"description":"Deliver a new artifact without modifying the project HEAD or index"},
             "covers":{"type":"array","items":{"type":"string"},"description":"Acceptance criterion ids (or requirement ids) from the requirements this task delivers"},
             "section":{"type":"string"},
             "summary":{"type":"string"}
         }),
-        &["id", "title", "goal", "kind"],
+        &["id", "title", "goal", "kind", "change_kind"],
     )
 }
 

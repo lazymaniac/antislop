@@ -7,13 +7,6 @@ use std::path::PathBuf;
 #[path = "run_context/tests.rs"]
 mod tests;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunAccess {
-    ReadOnly,
-    Write,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunContext {
@@ -24,7 +17,7 @@ pub struct RunContext {
     pub profile: String,
     pub cwd: PathBuf,
     pub add_dirs: Vec<PathBuf>,
-    pub access: RunAccess,
+
     pub provider_thread_id: Option<String>,
     pub provider_session_id: Option<String>,
 }
@@ -35,7 +28,6 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS run_contexts(
                 turn_id TEXT PRIMARY KEY REFERENCES turns(id),
                 profile TEXT NOT NULL, cwd TEXT NOT NULL, add_dirs TEXT NOT NULL,
-                access TEXT NOT NULL CHECK(access IN ('read_only','write')),
                 provider_thread_id TEXT, provider_session_id TEXT);
              CREATE TABLE IF NOT EXISTS native_processes(
                 pid INTEGER PRIMARY KEY,started_ms INTEGER NOT NULL,provider TEXT NOT NULL);",
@@ -70,7 +62,7 @@ impl Store {
         let raw = db.query_row(
             "SELECT json_object('turn_id',t.id,'conversation',t.conversation_id,
                 'role',t.role,'provider',t.provider,'profile',r.profile,'cwd',r.cwd,
-                'add_dirs',json(r.add_dirs),'access',r.access,
+                'add_dirs',json(r.add_dirs),
                 'provider_thread_id',r.provider_thread_id,'provider_session_id',r.provider_session_id)
              FROM run_contexts r JOIN turns t ON t.id=r.turn_id
              WHERE t.conversation_id=?1 AND t.id=?2",
@@ -84,7 +76,6 @@ impl Store {
 struct EncodedContext<'a> {
     cwd: &'a str,
     add_dirs: String,
-    access: serde_json::Value,
 }
 
 fn encode_context(context: &RunContext) -> Result<EncodedContext<'_>> {
@@ -103,7 +94,6 @@ fn encode_context(context: &RunContext) -> Result<EncodedContext<'_>> {
     Ok(EncodedContext {
         cwd,
         add_dirs: serde_json::to_string(&context.add_dirs)?,
-        access: serde_json::to_value(context.access)?,
     })
 }
 
@@ -131,15 +121,14 @@ fn insert_context(
     encoded: &EncodedContext<'_>,
 ) -> Result<()> {
     transaction.execute(
-        "INSERT INTO run_contexts(turn_id,profile,cwd,add_dirs,access,
+        "INSERT INTO run_contexts(turn_id,profile,cwd,add_dirs,
                 provider_thread_id,provider_session_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(turn_id) DO NOTHING",
+             VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(turn_id) DO NOTHING",
         params![
             context.turn_id,
             context.profile,
             encoded.cwd,
             encoded.add_dirs,
-            encoded.access.as_str(),
             context.provider_thread_id,
             context.provider_session_id
         ],

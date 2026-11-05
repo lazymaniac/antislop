@@ -7,7 +7,7 @@ impl PlanView {
         self.doc_area = Rect::default();
         self.row_docs.clear();
         self.task_rects.clear();
-        self.button_rects = [Rect::default(); 4];
+        self.button_rects = [Rect::default(); 3];
         frame.render_widget(Clear, area);
         let Some(chunks) = self.frame_layout(frame, area, view, theme) else {
             self.graph_area = Rect::default();
@@ -33,7 +33,7 @@ impl PlanView {
             self.draw_document(frame, inner, view, theme);
             self.draw_task_graph(frame, tasks, view, theme);
         }
-        self.draw_buttons(frame, chunks[2], view, theme, &open_comments);
+        self.draw_buttons(frame, chunks[2], view, theme);
         // Apply the same terminal fallbacks when this viewer is drawn directly.
         if !theme.color {
             crate::lean::tui::without_color(frame.buffer_mut());

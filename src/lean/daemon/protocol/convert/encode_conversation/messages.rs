@@ -14,54 +14,11 @@ fn encode_send(request: Request) -> std::result::Result<WireRequest, Box<Request
         Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
             conversation,
             text,
-        }) => Ok(WireRequest::Send {
-            conversation,
-            text,
-            to: None,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_send_addressed(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::SendAddressed {
-            conversation,
-            text,
             to,
         }) => Ok(WireRequest::Send {
             conversation,
             text,
             to,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_accept(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
-            conversation,
-            plan,
-        }) => Ok(WireRequest::Accept {
-            conversation,
-            plan,
-            scope_hash: None,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_accept_scoped(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::AcceptScoped {
-            conversation,
-            plan,
-            scope_hash,
-        }) => Ok(WireRequest::Accept {
-            conversation,
-            plan,
-            scope_hash,
         }),
         other => Err(Box::new(other)),
     }
@@ -73,28 +30,12 @@ fn encode_reject(request: Request) -> std::result::Result<WireRequest, Box<Reque
             conversation,
             plan,
             reason,
+            revision_token,
         }) => Ok(WireRequest::Reject {
             conversation,
             plan,
             reason,
-            scope_hash: None,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_reject_scoped(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::RejectScoped {
-            conversation,
-            plan,
-            reason,
-            scope_hash,
-        }) => Ok(WireRequest::Reject {
-            conversation,
-            plan,
-            reason,
-            scope_hash,
+            revision_token,
         }),
         other => Err(Box::new(other)),
     }
@@ -105,25 +46,11 @@ fn encode_resume(request: Request) -> std::result::Result<WireRequest, Box<Reque
         Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
             conversation,
             plan,
+            revision_token,
         }) => Ok(WireRequest::Resume {
             conversation,
             plan,
-            scope_hash: None,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_resume_scoped(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::ResumeScoped {
-            conversation,
-            plan,
-            scope_hash,
-        }) => Ok(WireRequest::Resume {
-            conversation,
-            plan,
-            scope_hash,
+            revision_token,
         }),
         other => Err(Box::new(other)),
     }
@@ -169,22 +96,10 @@ fn encode_cancel(request: Request) -> std::result::Result<WireRequest, Box<Reque
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
             conversation,
+            revision_token,
         }) => Ok(WireRequest::Cancel {
             conversation,
-            scope_hash: None,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_cancel_scoped(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::CancelScoped {
-            conversation,
-            scope_hash,
-        }) => Ok(WireRequest::Cancel {
-            conversation,
-            scope_hash,
+            revision_token,
         }),
         other => Err(Box::new(other)),
     }
@@ -203,36 +118,16 @@ fn encode_pause(request: Request) -> std::result::Result<WireRequest, Box<Reques
     }
 }
 
-fn encode_mode(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
-            conversation,
-            autonomous,
-        }) => Ok(WireRequest::Mode {
-            conversation,
-            autonomous,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
 pub(super) fn encode_group_messages(
     request: Request,
 ) -> std::result::Result<WireRequest, Box<Request>> {
     encode_send_to_agent(request)
         .or_else(|request| encode_send(*request))
-        .or_else(|request| encode_send_addressed(*request))
-        .or_else(|request| encode_accept(*request))
-        .or_else(|request| encode_accept_scoped(*request))
         .or_else(|request| encode_reject(*request))
-        .or_else(|request| encode_reject_scoped(*request))
         .or_else(|request| encode_resume(*request))
-        .or_else(|request| encode_resume_scoped(*request))
         .or_else(|request| encode_review_comments(*request))
         .or_else(|request| encode_recover(*request))
         .or_else(|request| encode_restart_orchestrator(*request))
         .or_else(|request| encode_cancel(*request))
-        .or_else(|request| encode_cancel_scoped(*request))
         .or_else(|request| encode_pause(*request))
-        .or_else(|request| encode_mode(*request))
 }

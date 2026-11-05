@@ -4,7 +4,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
     format!(
         "You review a plan before any of it runs or the user sees it. The \
          project is your current working directory: {project}. Read the files \
-         you need yourself; work read-only. {OUTSIDE}\n\n\
+         you need yourself to verify the plan. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
          The proposed plan:\n{}\n\n{}{}{}",
         request,
@@ -36,19 +36,16 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      the same files or contract are not unordered); no ordering or intermediate \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
-     checkable. Every prerequisite must either have an executable producer task and dependency edge, already available evidence, or a concrete user decision outside the team's authority. Reject a task that merely waits for an absent review/input while forbidding anyone to produce it. Distinguish the user's acceptance criteria from methods introduced by earlier agents: do not promote a suggested method, similarity flag, unknown provenance or generic caution into a new mandatory external attestation. Audit flags need a defined assessment and disposition, not an assumption that each proves failure. Preserve actual requirements and thresholds; if a real scope change is necessary, ask for the concrete decision. A task declaring an audit must perform it using authorized sources; independent review may use a separate agent and does not inherently require unavailable external material. Check that preserved reports also preserve any unintegrated code needed by their successors, using runtime checkpoint transfers when necessary. Tasks and reviewer criteria do not gate work on commit or tree hashes, \
+     checkable. Every prerequisite must either have an executable producer task and dependency edge, already available evidence, or a concrete user decision outside the team's authority. Reject a task that merely waits for an absent review/input while forbidding anyone to produce it. Distinguish the user's acceptance criteria from methods introduced by earlier agents: do not promote a suggested method, similarity flag, unknown provenance or generic caution into a new mandatory external attestation. Audit flags need a defined assessment and disposition, not an assumption that each proves failure. Preserve actual requirements and thresholds; if a real scope change is necessary, ask for the concrete decision. A task declaring an audit must perform it using authorized sources; independent review may use a separate agent and does not inherently require unavailable external material. The runtime records completed writer code as base/result commits and automatically combines approved dependency changes into successor writer and observation checkouts. Ordinary depends_on edges therefore transfer code as well as reports; do not require manual patch export/application or a separate checkpoint-transfer task for these edges. Recover a checkpoint explicitly only for historical or interrupted work outside that dependency lineage; preserving its report alone does not recover its code. Tasks and reviewer criteria do not gate work on commit or tree hashes, \
      snapshot adoption, a clean tree or unchanged input paths: agents use their allocated \
      checkout as it is; task.summary, where given, is a concise single-sentence \
      semantic summary (about 60–80 characters) in the user's language, rather than the \
      first sentence of the goal; standard descriptions of built-in roles and automatically \
-     added quality gates may use the interface language; filesystem access follows the allocated checkout and CLI permissions, not task path lists. Writers stay within their worktrees. Existing toolchain executables need no separate path grant. Tasks that change files are marked `writes`; only change_kind=code requires quality and \
+     added quality gates may use the interface language; filesystem access follows the allocated checkout and CLI permissions, not task path lists. Writers stay within their worktrees. Existing toolchain executables need no separate path grant. Tasks declare change_kind explicitly; only change_kind=code requires quality and \
      review agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
-     is left in a better state; each goal's result can be checked by its reviewer from \
-     the files and the worker's recorded evidence, without the reviewer executing or editing \
-     anything. This limits reviewers, not workers: a task whose kind writes (implementation, \
-     refactoring, testing, static analysis, integration) runs the builds, tests, audits and \
-     commands its goal names and records their output, so never flag a goal for requiring \
-     its worker to execute. Each reviewer checks its task's goal, \
+     is left in a better state; each goal's result can be independently verified from
+     the files, retained evidence and any checks the reviewer needs. All agents have full access.
+     Workers execute the commands their goal needs and retain raw results. Each reviewer checks its task's goal,
      assigned acceptance criteria and its kind's risk catalog. ";
 
 /// The plan as the reviewer reads it: compact JSON. Tasks the runtime adds
@@ -67,7 +64,6 @@ fn plan_entry(task: &TaskContract) -> Value {
         "id": task.id,
         "title": task.title,
         "kind": task.kind,
-        "writes": task.writes,
         "change_kind": task.change_kind(),
         "depends_on": task.depends_on,
         "options_for": task.options_for,
@@ -110,7 +106,7 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nComplete candidate task IDs: {}\nThis index and the proposed graph above are authoritative. Earlier contracts below are comparison history, not the candidate graph. Before claiming a task is absent or a removed options edge still exists, check the candidate graph rather than the earlier contracts.\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. deferred=true is a scheduler-enforced hold: the task, its generated options/gates and dependent work cannot run. It preserves future obligations without authorizing them; a later reviewed revision under the required permission must release it. An independent permitted diagnosis can proceed while future execution is deferred. Do not treat a proposal report as authorization or require a pretend producer of an authorization that has not yet been requested. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates; writes=true alone does not require them. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
+        "{head}\nComplete candidate task IDs: {}\nThis index and the proposed graph above are authoritative. Earlier contracts below are comparison history, not the candidate graph. Before claiming a task is absent or a removed options edge still exists, check the candidate graph rather than the earlier contracts.\nReview a revision within accepted requirements. Preserve every obligation. deferred=true is a deliberate scheduling hold for the task, its generated options/gates and dependent work; a reviewed revision releases it when its prerequisite is resolved. All agents already have full access. Do not introduce permission decisions or execution budgets. Independent work can proceed while a prerequisite remains unavailable. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
         serde_json::to_string(&plan.iter().map(|task| &task.id).collect::<Vec<_>>())
             .unwrap_or_default(),
         serde_json::to_string(&previous).unwrap_or_default(),
@@ -140,7 +136,7 @@ pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
     format!(
         "You audit whether the user's request was fully delivered. The project \
          is your current working directory: {project}. Read the files yourself \
-         to check what the results claim; work read-only. {OUTSIDE}\n\n\
+         to check what the results claim to verify the plan. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
          Results of the plan that ran:\n{results}\n\n{}{}",
         request, AUDIT_CHECKS, REVIEW_FORMAT

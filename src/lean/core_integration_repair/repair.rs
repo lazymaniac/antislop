@@ -170,7 +170,7 @@ impl<'a> Repair<'a> {
                 .resolve(self.spec.kind, RoleKind::Executor),
             cwd: self.worktree.to_path_buf(),
             add_dirs: vec![],
-            access: agent::Access::Write,
+
             upto_message: 0,
         }
     }

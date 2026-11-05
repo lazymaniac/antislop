@@ -80,7 +80,6 @@ pub struct App {
     pub graph_revealed: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
-    pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
@@ -89,7 +88,6 @@ pub struct App {
     pub phase_action_command: Option<Command>,
     pub chat_area: Rect,
     pub graph_viewport: Option<(u16, u16)>,
-    pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
     /// The graph filter menu, while it is open.
@@ -98,8 +96,6 @@ pub struct App {
     /// `client`.
     pub projects: Vec<workspace::ProjectConn>,
     pub active_project: usize,
-    /// A directory the user is asked about before it is opened.
-    pub project_trust: Option<std::path::PathBuf>,
 }
 
 macro_rules! initial_app {
@@ -170,7 +166,6 @@ macro_rules! initial_app {
             graph_revealed: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
-            confirmation: None,
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
@@ -178,12 +173,10 @@ macro_rules! initial_app {
             phase_action_area: None,
             phase_action_command: None,
             chat_area: Rect::default(),
-            trust_prompt: None,
             unblock: None,
             graph_filters: None,
             projects: Vec::new(),
             active_project: 0,
-            project_trust: None,
         }
     };
 }

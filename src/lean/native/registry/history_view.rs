@@ -29,8 +29,7 @@ pub(super) fn restore_view_directory(core: &Core, context: &store::RunContext) -
     let expected_observation = format!("{id}-observation-g{generation}");
     let directory = crate::lean::core_path_helpers::worktree_directory(&core.state)?;
     require(
-        context.access == store::RunAccess::ReadOnly
-            && context.cwd.parent() == Some(directory.as_path())
+        context.cwd.parent() == Some(directory.as_path())
             && (name == expected_review || name == expected_observation),
         "the session directory is not a retained task view",
     )?;
@@ -69,7 +68,7 @@ mod tests {
             .store
             .create_conversation(root.to_str().unwrap())
             .unwrap();
-        let mut task=core.store.add_plan(&conversation.id,&[serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report","kind":"analysis"})]).unwrap().remove(0);
+        let mut task=core.store.add_plan(&conversation.id,&[serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
         task.status = "approved".into();
         task.round = 1;
         core.store.update_task(&task).unwrap();
@@ -90,7 +89,7 @@ mod tests {
             profile: "fixture".into(),
             cwd: path.clone(),
             add_dirs: vec![],
-            access: store::RunAccess::ReadOnly,
+
             provider_thread_id: Some("fixture-session".into()),
             provider_session_id: None,
         };
@@ -102,9 +101,6 @@ mod tests {
         let foreign = core.store.create_conversation("foreign").unwrap();
         let mut wrong = context.clone();
         wrong.conversation = foreign.id;
-        assert!(restore_view_directory(&core, &wrong).is_err());
-        wrong = context.clone();
-        wrong.access = store::RunAccess::Write;
         assert!(restore_view_directory(&core, &wrong).is_err());
         wrong = context.clone();
         wrong.cwd = root.join(&name);

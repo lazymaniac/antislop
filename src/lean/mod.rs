@@ -54,6 +54,7 @@ pub mod ledger;
 mod mail;
 pub mod mcp;
 pub mod native;
+pub mod paths;
 #[cfg(test)]
 mod plan_tests;
 mod process_tree;
@@ -67,7 +68,6 @@ pub mod store;
 mod task_failure;
 pub mod tasks;
 pub mod terminal;
-pub mod trust;
 pub mod tui;
 pub mod turn_result;
 
@@ -103,7 +103,7 @@ pub struct ConversationSummary {
     pub active_plan: Option<String>,
     pub tasks_total: usize,
     pub tasks_done: usize,
-    pub scope_hash: String,
+    pub revision_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -142,8 +142,9 @@ pub struct TaskRecoveryResponse {
     pub notice: String,
 }
 
-/// Scope hash of a plan, capturing its task ids, specs, statuses and rounds.
-pub fn plan_scope_hash(tasks: &[Task]) -> String {
+/// Digest of normalized task metadata for change detection. The stored plan
+/// revision is a separate monotonic counter, not a metadata fingerprint.
+pub fn task_state_digest(tasks: &[Task]) -> String {
     let mut data = String::new();
     for task in tasks {
         data.push_str(&task.id);
@@ -165,8 +166,8 @@ pub fn plan_scope_hash(tasks: &[Task]) -> String {
     }
 }
 
-/// Scope hash of a diff, capturing the commit range and file changes.
-pub fn diff_scope_hash(
+/// Optimistic-concurrency token for the reviewed commit range.
+pub fn diff_revision_token(
     conversation: &str,
     plan: &str,
     id: &str,
@@ -174,17 +175,6 @@ pub fn diff_scope_hash(
     head: Option<&str>,
 ) -> String {
     crate::hash(format!("{conversation}\0{plan}\0{id}\0{base}\0{:?}", head).as_bytes())
-}
-
-/// Scope hash of a task stage.
-pub fn task_scope_hash(task: &Task) -> String {
-    crate::hash(
-        format!(
-            "{}:{}:{}:{}:{}",
-            task.id, task.status, task.round, task.input_generation, task.spec
-        )
-        .as_bytes(),
-    )
 }
 
 const ORCHESTRATOR: &str = "orchestrator";
@@ -285,6 +275,6 @@ struct TurnSetup<'a> {
     profile: Result<ResolvedProfile>,
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
-    access: agent::Access,
+
     upto_message: u64,
 }

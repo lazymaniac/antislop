@@ -15,44 +15,13 @@ fn decode_send(wire: WireRequest) -> std::result::Result<Request, Box<WireReques
             conversation,
             text,
             to,
-        } => Ok({
-            if to.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::SendAddressed {
-                    conversation,
-                    text,
-                    to,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
-                    conversation,
-                    text,
-                })
-            }
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn decode_accept(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
-    match wire {
-        WireRequest::Accept {
-            conversation,
-            plan,
-            scope_hash,
-        } => Ok({
-            if scope_hash.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::AcceptScoped {
-                    conversation,
-                    plan,
-                    scope_hash,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
-                    conversation,
-                    plan,
-                })
-            }
-        }),
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Send {
+                conversation,
+                text,
+                to,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -63,23 +32,15 @@ fn decode_reject(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
             conversation,
             plan,
             reason,
-            scope_hash,
-        } => Ok({
-            if scope_hash.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::RejectScoped {
-                    conversation,
-                    plan,
-                    reason,
-                    scope_hash,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Reject {
-                    conversation,
-                    plan,
-                    reason,
-                })
-            }
-        }),
+            revision_token,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Reject {
+                conversation,
+                plan,
+                reason,
+                revision_token,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -89,21 +50,14 @@ fn decode_resume(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
         WireRequest::Resume {
             conversation,
             plan,
-            scope_hash,
-        } => Ok({
-            if scope_hash.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::ResumeScoped {
-                    conversation,
-                    plan,
-                    scope_hash,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
-                    conversation,
-                    plan,
-                })
-            }
-        }),
+            revision_token,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Resume {
+                conversation,
+                plan,
+                revision_token,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -162,19 +116,13 @@ fn decode_cancel(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
     match wire {
         WireRequest::Cancel {
             conversation,
-            scope_hash,
-        } => Ok({
-            if scope_hash.is_some() {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::CancelScoped {
-                    conversation,
-                    scope_hash,
-                })
-            } else {
-                Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
-                    conversation,
-                })
-            }
-        }),
+            revision_token,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Cancel {
+                conversation,
+                revision_token,
+            },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -194,27 +142,11 @@ fn decode_pause(wire: WireRequest) -> std::result::Result<Request, Box<WireReque
     }
 }
 
-fn decode_mode(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
-    match wire {
-        WireRequest::Mode {
-            conversation,
-            autonomous,
-        } => Ok(Request::Conversation(
-            crate::lean::daemon::ConversationRequest::Mode {
-                conversation,
-                autonomous,
-            },
-        )),
-        other => Err(Box::new(other)),
-    }
-}
-
 pub(super) fn decode_group_messages(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
     decode_send_to_agent(wire)
         .or_else(|wire| decode_send(*wire))
-        .or_else(|wire| decode_accept(*wire))
         .or_else(|wire| decode_reject(*wire))
         .or_else(|wire| decode_resume(*wire))
         .or_else(|wire| decode_review_comments(*wire))
@@ -222,5 +154,4 @@ pub(super) fn decode_group_messages(
         .or_else(|wire| decode_restart_orchestrator(*wire))
         .or_else(|wire| decode_cancel(*wire))
         .or_else(|wire| decode_pause(*wire))
-        .or_else(|wire| decode_mode(*wire))
 }

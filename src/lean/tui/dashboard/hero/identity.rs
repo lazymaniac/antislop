@@ -70,10 +70,10 @@ fn identity_summary(theme: &Theme, row: &super::super::super::view::TaskRow) -> 
 }
 
 fn identity_kind(theme: &Theme, row: &super::super::super::view::TaskRow) -> Span<'static> {
-    let access = if row.writes {
-        "writes files"
+    let access = if row.change_kind.has_delivery() {
+        "delivers files"
     } else {
-        "read-only"
+        "report"
     };
     Span::styled(
         format!("  {} · {access}", theme.clean(&row.kind)),

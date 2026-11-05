@@ -185,13 +185,6 @@ impl App {
         }
     }
 
-    pub(super) fn apply_project_trust(&mut self, update: Update) {
-        match update {
-            Update::ProjectTrust(path) => self.project_trust = Some(path),
-            _ => unreachable!("update routed to wrong handler"),
-        }
-    }
-
     pub(super) fn apply_project_status(&mut self, update: Update) {
         match update {
             Update::ProjectStatus {
@@ -210,40 +203,13 @@ impl App {
         let Update::Notice(text) = update else {
             unreachable!("update routed to wrong handler");
         };
-        if text.contains("stale_scope") {
-            self.mark_stale_confirmations();
-        }
         self.notice = Some(text);
-    }
-
-    fn mark_stale_confirmations(&mut self) {
-        if let Some(mut card) = self.confirmation.take() {
-            card.status = ConfirmationStatus::Stale;
-            mark_confirmation(&mut self.view.cards, &card.id);
-        }
-        if let Some(card) = self
-            .view
-            .cards
-            .iter_mut()
-            .rev()
-            .find_map(|card| match card {
-                TranscriptCard::Confirmation(card)
-                    if card.status == ConfirmationStatus::Confirmed =>
-                {
-                    Some(card)
-                }
-                _ => None,
-            })
-        {
-            card.status = ConfirmationStatus::Stale;
-        }
     }
 }
 
 fn clear_background_ledger_review(state: &mut ConversationState, conversation: &str) {
     state.diff = None;
     state.plan_view = None;
-    state.confirmation = None;
     if let Some(details) = state.details.take() {
         state
             .details_scroll_memory
@@ -289,15 +255,4 @@ fn apply_saved_config(
     }
     editor.applied(&saved.base_source);
     Ok(value)
-}
-
-fn mark_confirmation(cards: &mut [TranscriptCard], id: &str) {
-    for card in cards.iter_mut().rev() {
-        if let TranscriptCard::Confirmation(card) = card
-            && card.id == id
-        {
-            card.status = ConfirmationStatus::Stale;
-            break;
-        }
-    }
 }

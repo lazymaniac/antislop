@@ -193,10 +193,10 @@ fn append_task_heading(document: &mut String, index: usize, task: &TaskContract)
 fn append_task_details(document: &mut String, task: &TaskContract) {
     document.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
     document.push_str(&format!("- **Kind**: `{}`", work_kind_name(task.kind)));
-    document.push_str(if task.writes {
-        " (writes)\n"
+    document.push_str(if task.change_kind.has_delivery() {
+        " (file changes)\n"
     } else {
-        " (read-only)\n"
+        " (report)\n"
     });
     document.push_str(&format!("- **Goal**: {}\n", task.goal));
 }

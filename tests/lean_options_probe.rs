@@ -65,7 +65,7 @@ fn options_visibility_for_writer_and_writing_gate() {
         std::fs::write(project.join("mode.txt"), "7\n11\n").unwrap();
         git(&project, &["add", "."]);
         git(&project, &["commit", "--quiet", "-m", "initial"]);
-        common::trust(&project);
+        common::runtime_environment(&project);
         let codex = dir.path().join("codex");
         let agy = dir.path().join("agy");
         let source = r#"#!/usr/bin/env python3
@@ -76,10 +76,10 @@ if prompt == 'fixture W1':
     sys.exit(0)
 if os.path.basename(sys.argv[0]) == 'codex':
     plan = {'tasks': [
-        {'id':'W1','title':'Change mode','goal':'Change mode','kind':'implementation','writes':True,'scope':['mode.txt'],'reviewer':{'focus':'mode'}},
-        {'id':'W2','title':'Use mode','goal':'Choose mode consumer','kind':'implementation','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'reviewer':{'focus':'mode'}},
-        {'id':'gate','title':'Test mode','goal':'Choose mode checks','kind':'testing','writes':True,'depends_on':['W1'],'scope':['mode.txt'],'reviewer':{'focus':'mode'}}]}
-    answer = 'done' if '[runtime]' in prompt else '```plan\n'+json.dumps(plan)+'\n```'
+        {'id':'W1','title':'Change mode','goal':'Change mode','kind':'implementation','change_kind':'code','reviewer':{'summary':'mode'}},
+        {'id':'W2','title':'Use mode','goal':'Choose mode consumer','kind':'implementation','change_kind':'code','depends_on':['W1'],'reviewer':{'summary':'mode'}},
+        {'id':'gate','title':'Test mode','goal':'Choose mode checks','kind':'testing','change_kind':'code','depends_on':['W1'],'reviewer':{'summary':'mode'}}]}
+    answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else '```plan\n'+json.dumps(plan)+'\n```'
     print(json.dumps({'type':'thread.started','thread_id':'planner'}))
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
     print(json.dumps({'type':'turn.completed','usage':{}}))
@@ -101,6 +101,11 @@ else:
         answer='Compare focused mode change with a broader migration. Selected: A'
     elif 'You are a worker' in prompt:
         task = re.search(r'Task id: ([^\n]+)', prompt).group(1)
+        root=os.path.dirname(sys.argv[0])
+        if task == 'W1' and os.path.exists(os.path.join(root,'hold-W1')):
+            import time
+            open(os.path.join(root,'W1-entered'),'w').close()
+            while not os.path.exists(os.path.join(root,'release-W1')):time.sleep(0.01)
         with open(os.path.join(os.path.dirname(sys.argv[0]),'writers.jsonl'),'a') as log:
             log.write(json.dumps({'task':task,'version':open('mode.txt').read().strip(),'cwd':os.getcwd()})+'\n')
         if task == 'W1':
@@ -130,14 +135,27 @@ else:
         )
         .unwrap();
         let conversation = support::fixture_conversation(&core, &project).unwrap();
+        if unmerged {
+            std::fs::write(dir.path().join("hold-W1"), "").unwrap();
+        }
         core.send(&conversation.id, "Probe dependent mode choices")
             .unwrap();
+        if unmerged {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while !dir.path().join("W1-entered").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "W1 did not reach the publication barrier"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            core.cancel(&conversation.id);
+        }
         idle(&core, &conversation.id);
         let tasks = core.store.latest_plan(&conversation.id).unwrap();
         assert!(!tasks.is_empty(), "planner produced no tasks");
         let plan = tasks[0].plan_id.clone();
         if unmerged {
-            core.store.queue_plan(&conversation.id, &plan).unwrap();
             let base = git(&project, &["rev-parse", "HEAD"]);
             let worktree = project.join(".antislop/worktrees/probe-W1");
             git(
@@ -174,6 +192,20 @@ else:
                     // dependent hears of it.
                     task.report = Some(format!("W1 changed mode.txt\n\n{report}"));
                     core.store.update_task(&task).unwrap();
+                    let turn = core
+                        .store
+                        .start_turn(
+                            &conversation.id,
+                            &format!("worker:{}", task.id),
+                            "fixture",
+                            0,
+                            Some(&plan),
+                        )
+                        .unwrap();
+                    rusqlite::Connection::open(project.join(".antislop/core.db")).unwrap().execute("INSERT INTO agent_results(turn_id,result) VALUES(?1,?2)",rusqlite::params![turn.id,json!({"type":"completed","summary":"W1 changed mode.txt","report":report}).to_string()]).unwrap();
+                    core.store
+                        .finish_turn(&turn.id, antislop::lean::store::TurnStatus::Done, None)
+                        .unwrap();
                 } else if task.spec["id"] == "W1-options" {
                     task.status = "approved".into();
                     task.round = 1;
@@ -182,8 +214,6 @@ else:
                 }
             }
             core.resume_plan(&conversation.id, &plan).unwrap();
-        } else {
-            core.accept_plan(&conversation.id, &plan).unwrap();
         }
         idle(&core, &conversation.id);
         if !unmerged {

@@ -2,10 +2,18 @@ use super::super::super::core_prompt_helpers::{blocked_report, stopped_report};
 use super::*;
 
 impl Core {
-    pub(super) fn finish_blocked_plan(self: &Arc<Self>, conversation: &str, tasks: &[Task]) {
-        let autonomous = self.autonomous(conversation).unwrap_or(false);
+    pub(super) fn finish_blocked_plan(
+        self: &Arc<Self>,
+        conversation: &str,
+        tasks: &[Task],
+        cancel: &AtomicBool,
+    ) {
         let mut plans = self.plans.lock().expect("plans mutex");
-        let report = blocked_report(tasks, autonomous);
+        if cancel.load(Ordering::SeqCst) {
+            plans.remove(conversation);
+            return;
+        }
+        let report = blocked_report(tasks);
         let told = self
             .blocked_seen
             .lock()

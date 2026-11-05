@@ -85,7 +85,7 @@ impl Core {
         spec: &tasks::TaskContract,
         handoff: &mut RoundHandoff,
     ) -> Result<()> {
-        if !spec.writes {
+        if !spec.change_kind.has_delivery() {
             return Ok(());
         }
         handoff.protected_paths = git::uncommitted(&handoff.primary)?.into_iter().collect();
@@ -177,7 +177,8 @@ impl Core {
 fn base_handoff(task: &Task, round: u32, cwd: &Path, seed: HandoffSeed) -> RoundHandoff {
     RoundHandoff {
         round,
-        writes: task.spec["writes"].as_bool().unwrap_or(false),
+        change_kind: serde_json::from_value(task.spec["change_kind"].clone())
+            .expect("stored task has a validated change_kind"),
         worktree: cwd.into(),
         report: seed.report,
         verdict: task.verdict.clone(),

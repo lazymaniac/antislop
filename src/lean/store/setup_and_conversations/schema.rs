@@ -54,12 +54,9 @@ const BASE_TABLE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS conversations(
                PRIMARY KEY(task_id, round, check_id));
              CREATE TABLE IF NOT EXISTS pauses(
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));
-             CREATE TABLE IF NOT EXISTS modes(
-               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
-               autonomous INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS trusted_projects(
+             CREATE TABLE project_identities(
                project TEXT PRIMARY KEY,
-               trusted_ms INTEGER NOT NULL);";
+               identity TEXT NOT NULL);";
 
 const PLAN_TABLE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS plans(
                id TEXT PRIMARY KEY,

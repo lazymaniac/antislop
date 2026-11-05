@@ -8,7 +8,7 @@ def record_call(call):
 
 settings = json.load(open(os.path.join(root, 'settings.json')))
 if os.path.basename(sys.argv[0]) == 'codex':
-    answer = 'done' if '[runtime]' in prompt else '```plan\n'+json.dumps(settings['plan'])+'\n```'
+    answer = 'done' if ('The plan finished. Results of each task follow.' in prompt or 'Tasks need coordination' in prompt) else '```plan\n'+json.dumps(settings['plan'])+'\n```'
 else:
     scenario = settings.get('scenario', '')
     previous = sys.argv[sys.argv.index('--conversation')+1] if '--conversation' in sys.argv else ''
@@ -37,8 +37,8 @@ else:
     if worker:
         if task.endswith('-options') or task == 'shared':
             answer = settings['report']
-        elif ('Work read-only; do not modify anything.' in prompt
-              or any(t['id'] == task and not t.get('writes', False) for t in settings['plan']['tasks'])):
+        elif ('Deliver the analysis in your report;' in prompt or 'Do not edit tracked files.' in prompt
+              or any(t['id'] == task and t['change_kind'] == 'none' for t in settings['plan']['tasks'])):
             answer = 'Inspected files read-only.'
         else:
             implementation = 'B' if scenario == 'reject-once' and count == 1 else settings['implementation']

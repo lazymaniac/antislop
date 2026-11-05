@@ -6,7 +6,6 @@ pub(crate) enum StopCause {
     ProviderLimit,
     LoginRequired,
     UnexpectedDialog,
-    Timeout,
     ProcessExit,
     Cancelled,
 }
@@ -16,7 +15,6 @@ impl StopCause {
             Self::ProviderLimit => "provider_limit",
             Self::LoginRequired => "login_required",
             Self::UnexpectedDialog => "unexpected_dialog",
-            Self::Timeout => "timeout",
             Self::ProcessExit => "process_exit",
             Self::Cancelled => "cancelled",
         }

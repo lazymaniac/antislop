@@ -1,39 +1,6 @@
 use super::*;
 
 impl Core {
-    /// Whether `specs` asks for the same work as the last plan of the
-    /// conversation that ran (ids aside).
-    pub(in crate::lean) fn repeats_a_plan_that_ran(
-        &self,
-        conversation: &str,
-        plan_id: &str,
-        specs: &[TaskContract],
-    ) -> Result<bool> {
-        let work = |spec: &TaskContract| {
-            (
-                spec.title.clone(),
-                spec.goal.clone(),
-                spec.kind,
-                spec.writes,
-                spec.change_kind(),
-                spec.outputs.clone(),
-                spec.delivery,
-            )
-        };
-        let Some(earlier) = self.store.last_plan_that_ran(conversation, plan_id)? else {
-            return Ok(false);
-        };
-        let mut before: Vec<_> = earlier
-            .iter()
-            .filter_map(|task| serde_json::from_value::<TaskContract>(task.spec.clone()).ok())
-            .map(|spec| work(&spec))
-            .collect();
-        let mut now: Vec<_> = specs.iter().map(work).collect();
-        before.sort();
-        now.sort();
-        Ok(before == now)
-    }
-
     /// The summaries of the direct dependencies and the selected local
     /// approach, as task data.
     pub(in crate::lean) fn upstream(&self, plan_id: &str, spec: &TaskContract) -> Result<String> {

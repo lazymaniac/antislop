@@ -11,7 +11,7 @@ pub(in crate::lean) fn writer_worktree(
     spec: &TaskContract,
     project: &Path,
 ) -> Result<Option<PathBuf>> {
-    if !spec.writes {
+    if !spec.change_kind.has_delivery() {
         return Ok(None);
     }
     require(
@@ -268,24 +268,15 @@ fn worker_setup<'a>(input: &WorkerRound<'a>) -> TurnSetup<'a> {
             .resolve(input.spec.kind, RoleKind::Executor),
         cwd: input.workdir.to_path_buf(),
         add_dirs: worker_dirs(input.spec, input.add_dirs),
-        access: worker_access(input.spec),
         upto_message: 0,
     }
 }
 
 fn worker_dirs(spec: &TaskContract, add_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    if spec.writes {
+    if spec.change_kind.has_delivery() {
         vec![]
     } else {
         add_dirs.to_vec()
-    }
-}
-
-fn worker_access(spec: &TaskContract) -> agent::Access {
-    if spec.writes || spec.kind == crate::config::WorkKind::Context {
-        agent::Access::Write
-    } else {
-        agent::Access::ReadOnly
     }
 }
 
@@ -331,8 +322,7 @@ mod tests {
             .unwrap();
         let spec: TaskContract = serde_json::from_value(json!({
             "id":"accept-repair", "title":"Accept repair", "goal":"Inspect the existing repair",
-            "kind":"analysis", "writes":false
-        }))
+            "change_kind": "none", "kind":"analysis"}))
         .unwrap();
         let mut task = core
             .store
@@ -360,12 +350,11 @@ mod tests {
         assert_eq!(git::head(&project).unwrap(), base);
         let owner_spec: TaskContract = serde_json::from_value(json!({
             "id":"recover", "title":"Recover", "goal":"Continue the saved repair",
-            "kind":"implementation", "writes":true
-        }))
+            "change_kind": "code", "kind":"implementation"}))
         .unwrap();
         let options_spec: TaskContract = serde_json::from_value(json!({
             "id":"recover-options", "title":"Options", "goal":"Assess recovery",
-            "kind":"options", "options_for":"recover"
+            "change_kind": "none", "kind":"options", "options_for":"recover"
         }))
         .unwrap();
         let mut tasks = core
@@ -454,7 +443,7 @@ mod tests {
                 .create_conversation(dir.path().to_str().unwrap())
                 .unwrap()
                 .id;
-            let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","goal":"Inspect saved code","kind":"analysis"})]).unwrap().remove(0);
+            let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","goal":"Inspect saved code","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
             let worker = format!("worker:{}", task.id);
             let reviewer = format!("reviewer:{}", task.id);
             let turn = core

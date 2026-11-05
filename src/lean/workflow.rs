@@ -1,5 +1,5 @@
 //! Durable interview checkpoint. Every conversation starts in its interview.
-use super::{Message, Store, now_ms};
+use super::{Store, now_ms};
 use crate::{Result, require};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -174,25 +174,6 @@ impl Store {
         tx.commit()?;
         Ok(true)
     }
-
-    /// Acceptance and its wake-up message share one transaction; new user input
-    /// invalidates the checkpoint even if it arrived while the agent answered.
-    pub fn approve_requirements(&self, conversation: &str) -> Result<Message> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        let summary = approve_current_requirements(&tx, conversation)?;
-        let text = format!(
-            "I approve the following requirements:\n\n{summary}\n\nPrepare the plan for my review; implementation requires separate plan approval."
-        );
-        let stored_text = self.content.encode(&text)?;
-        let seq = store_approval_message(&tx, conversation, &stored_text)?;
-        tx.commit()?;
-        Ok(Message {
-            seq,
-            author: "user".into(),
-            text,
-        })
-    }
 }
 
 fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<bool> {
@@ -204,7 +185,7 @@ fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str)
 }
 
 fn queue_planning_message(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
-    let text = "Interview complete. Prepare the plan from the collected requirements for review. The runtime starts implementation once the reviewed plan is accepted.";
+    let text = "Interview complete. Prepare the plan from the collected requirements for review. The runtime starts implementation automatically after successful plan review.";
     tx.execute(
         "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",
         params![conversation, text, now_ms()],
@@ -228,46 +209,6 @@ fn queue_planning_message(tx: &rusqlite::Transaction<'_>, conversation: &str) ->
         "planning_progress",
         serde_json::json!({"text":"Working on the plan draft"}),
     )
-}
-
-fn approve_current_requirements(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-) -> Result<String> {
-    require(
-        promote_current_interview(tx, conversation)?,
-        "wait for an up-to-date requirements summary before approving with /planning",
-    )?;
-    Ok(tx.query_row(
-        "SELECT summary FROM session_workflow WHERE conversation_id=?1",
-        [conversation],
-        |row| row.get(0),
-    )?)
-}
-
-fn store_approval_message(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-    text: &str,
-) -> Result<u64> {
-    tx.execute(
-        "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
-        params![conversation, text, now_ms()],
-    )?;
-    let seq = tx.last_insert_rowid() as u64;
-    record_event(
-        tx,
-        conversation,
-        "message",
-        serde_json::json!({"seq":seq,"author":"user","text":text}),
-    )?;
-    record_event(
-        tx,
-        conversation,
-        "workflow",
-        serde_json::json!({"phase":"planning"}),
-    )?;
-    Ok(seq)
 }
 
 /// Every conversation begins in its interview; planning follows from it.

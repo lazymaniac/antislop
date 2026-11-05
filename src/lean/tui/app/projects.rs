@@ -39,7 +39,7 @@ impl App {
     }
 
     /// Opens a project by directory, or switches to it if it is open. The
-    /// directory must be trusted; if it is not, the user is asked first.
+    /// selected directory supplies its own project configuration.
     pub fn open_project(&mut self, path: &str) {
         let path = expand_home(path);
         if let Ok(canonical) = path.canonicalize()
@@ -48,23 +48,24 @@ impl App {
             self.switch_project(index, None);
             return;
         }
+        let executable = match self.client.frontend_binary() {
+            Ok(executable) => executable,
+            Err(error) => {
+                self.notice = Some(format!("✗ {error}"));
+                return;
+            }
+        };
         let updates = self.updates.clone();
         std::thread::spawn(move || {
-            let update = match trust::Registry::from_env() {
-                Err(error) => Update::Notice(format!("✗ {error}")),
-                Ok(registry) => match workspace::connect(&path, &registry) {
-                    Ok(conn) => match workspace::latest_or_new(&conn) {
-                        Ok(id) => Update::ProjectReady {
-                            conn: Box::new(conn),
-                            conversation: Some(id),
-                        },
-                        Err(error) => Update::Notice(format!("✗ {error}")),
+            let update = match workspace::connect(&path, &executable) {
+                Ok(conn) => match workspace::latest_or_new(&conn) {
+                    Ok(id) => Update::ProjectReady {
+                        conn: Box::new(conn),
+                        conversation: Some(id),
                     },
-                    Err(workspace::ConnectError::NotTrusted(path)) => Update::ProjectTrust(path),
-                    Err(workspace::ConnectError::Failed(error)) => {
-                        Update::Notice(format!("✗ {error}"))
-                    }
+                    Err(error) => Update::Notice(format!("✗ {error}")),
                 },
+                Err(error) => Update::Notice(format!("✗ {error}")),
             };
             let _ = updates.send(update);
         });
@@ -117,24 +118,6 @@ impl App {
                     .filter(|path| !self.projects.iter().any(|p| p.path == *path))
                     .map(remembered_project_item),
             );
-        }
-    }
-
-    /// Keys while the user is asked whether to trust a directory to open.
-    pub(in crate::lean::tui) fn project_trust_key(&mut self, key: event::KeyEvent) {
-        match key.code {
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if let Some(path) = self.project_trust.take() {
-                    match trust::Registry::from_env().and_then(|r| r.trust(&path)) {
-                        Ok(()) => self.open_project(&path.to_string_lossy()),
-                        Err(error) => self.notice = Some(format!("✗ {error}")),
-                    }
-                }
-            }
-            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
-                self.project_trust = None;
-            }
-            _ => {}
         }
     }
 }

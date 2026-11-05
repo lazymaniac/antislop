@@ -20,9 +20,9 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>) {
         .apply_ledger_change(&change, &core.state, true)
         .unwrap();
     let tasks = core.store.add_plan(&conversation,&[
-        json!({"id":"baseline","title":"Baseline","goal":"Measure and report","kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"consumer","title":"Consumer","goal":"Read complete evidence","kind":"analysis","depends_on":["baseline"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"sibling","title":"Sibling","goal":"Other report","kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"baseline","title":"Baseline","goal":"Measure and report","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"consumer","title":"Consumer","goal":"Read complete evidence","change_kind": "none", "kind":"analysis","depends_on":["baseline"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"sibling","title":"Sibling","goal":"Other report","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
     ]).unwrap();
     core.store
         .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
@@ -125,6 +125,7 @@ fn old_input_report_and_raw_evidence_survive_amendment_replan_and_reopen() {
     let mut carried = new_tasks[0].clone();
     carried.status = status::APPROVED.into();
     carried.feedback = Some(json!({"carried_from":tasks[0].id}));
+    core.store.test_result_source(&carried, &tasks[0]);
     core.store.update_task(&carried).unwrap();
     for reviewer in [false, true] {
         let (role, reader) = start(&core, &conversation, &new_tasks[1], reviewer);
@@ -351,7 +352,6 @@ fn evidence_is_immutable_scoped_and_not_a_filesystem_or_history_backdoor() {
 #[test]
 fn evidence_tools_are_nonterminal_and_completion_links_the_wire_record() {
     use std::sync::atomic::AtomicBool;
-    use std::time::Duration;
     let (_directory, core, conversation, tasks) = fixture();
     let (role, turn) = start(&core, &conversation, &tasks[0], false);
     let gateway = mcp::Gateway::start().unwrap();
@@ -391,12 +391,7 @@ fn evidence_tools_are_nonterminal_and_completion_links_the_wire_record() {
     assert_eq!(call("complete", complete.clone())["recorded"], true);
     assert_eq!(call("complete", complete)["recorded"], true);
     let finish = gateway
-        .wait(
-            &turn.id,
-            &AtomicBool::new(false),
-            Duration::from_secs(2),
-            || Ok(()),
-        )
+        .wait(&turn.id, &AtomicBool::new(false), || Ok(()))
         .unwrap();
     let result: TurnResult = serde_json::from_str(&finish.text).unwrap();
     assert!(result.text().contains(id));
@@ -432,6 +427,7 @@ fn a_new_producers_amendment_does_not_hide_the_carried_original() {
     let mut next = core.store.add_plan(&conversation, &specs).unwrap();
     next[0].round = 1;
     next[0].feedback = Some(json!({"carried_from":tasks[0].id}));
+    core.store.test_result_source(&next[0], &tasks[0]);
     core.store.update_task(&next[0]).unwrap();
     let (_, amendment) = start(&core, &conversation, &next[0], false);
     core.store

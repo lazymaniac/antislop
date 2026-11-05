@@ -5,9 +5,8 @@ use serde_json::json;
 fn task(writes: bool) -> TaskContract {
     serde_json::from_value(json!({
         "id": "writer", "title": "Writer", "goal": "Implement chosen variant",
-        "kind": "implementation", "writes": writes, "depends_on": ["shared"],
-        "reviewer": {"focus": "Check selection"}
-    }))
+        "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",  "depends_on": ["shared"],
+        "reviewer": {"summary": "Check selection"}}))
     .unwrap()
 }
 
@@ -110,15 +109,19 @@ fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
     let context = |kind: &str| -> TaskContract {
         serde_json::from_value(json!({
             "id": "scout", "title": "Scout", "goal": "Map the project",
-            "kind": kind, "writes": false, "reviewer": {"focus": "Check the map"}
-        }))
+            "change_kind": "none", "kind": kind,  "reviewer": {"summary": "Check the map"}}))
         .unwrap()
     };
     let prompt = tasks::worker_turn_prompt("project", &context("context"), None, "");
     assert!(prompt.contains("throwaway checkout"), "{prompt}");
     assert!(prompt.contains("Record each command"), "{prompt}");
     let other = tasks::worker_turn_prompt("project", &context("analysis"), None, "");
-    assert!(other.contains("Work read-only"), "{other}");
+    assert!(
+        other.contains(
+            "Deliver the analysis in your report; inspect files and run checks as needed."
+        ),
+        "{other}"
+    );
 }
 
 #[test]

@@ -3,6 +3,11 @@ import re as _lr, os as _lo, uuid as _lu
 _ledger_prompt = prompt
 # A result the gateway refused comes back ahead of the prompt.
 _ledger_head = _lr.sub(r'^\w+ was refused: .*?\n\n', '', prompt, count=1, flags=_lr.S)
+# Execution metadata may precede the role instructions. Classify the first
+# actual role line rather than assuming it is byte zero of the prompt.
+_ledger_role_starts = ('Act as requirements analyst before planning.', 'Audit the integrated project', 'Review this audit independently')
+_ledger_head = next((line for line in _ledger_head.splitlines() if line.startswith(_ledger_role_starts)), _ledger_head)
+
 _ledger_json = json.dumps
 _ledger_context = _ledger_prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)
 _ledger_run = None

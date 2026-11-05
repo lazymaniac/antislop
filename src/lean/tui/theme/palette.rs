@@ -125,7 +125,7 @@ impl Theme {
         self.pick(card_style(ayu::LINE, ayu::FG), Style::default())
     }
 
-    /// Full-panel overlays (details, palette, confirmation).
+    /// Full-panel overlays (details, palette, dialogs).
     pub fn overlay(&self) -> Style {
         self.pick(card_style(ayu::BG, ayu::FG), Style::default())
     }

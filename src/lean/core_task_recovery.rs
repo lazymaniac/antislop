@@ -3,7 +3,6 @@ use super::core_path_helpers::worktree_branch;
 use super::*;
 
 mod actions;
-mod decisions;
 mod events;
 mod integrate;
 mod manual;
@@ -12,25 +11,6 @@ mod prepare;
 mod response;
 #[cfg(test)]
 mod test_support;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::lean) enum RecoveryScope {
-    #[default]
-    EditsOnly,
-    ExistingAuthorizedExecution,
-}
-
-pub(in crate::lean) struct RecoveryScopeBinding {
-    pub scope: RecoveryScope,
-    pub authorization_hash: Option<String>,
-}
-
-pub(in crate::lean) struct RecoveryContinuation<'a> {
-    pub expected: Option<(u32, i64)>,
-    pub guidance: &'a str,
-    pub scope: RecoveryScope,
-}
 
 pub(super) struct RecoveryWork {
     pub(super) req: TaskRecoveryRequest,

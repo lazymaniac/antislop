@@ -11,11 +11,8 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
     draw_interview(app, frame);
     draw_picker(app, frame);
     draw_help(app, frame);
-    modal::draw_confirmation(app, frame);
-    modal::draw_project_trust(app, frame);
     modal::draw_unblock(app, frame);
     modal::draw_graph_filters(app, frame);
-    modal::draw_trust_prompt(app, frame);
 }
 
 fn draw_selection(app: &mut App, frame: &mut Frame) {
@@ -34,9 +31,6 @@ fn draw_interview(app: &mut App, frame: &mut Frame) {
     if app.editor.is_some()
         || app.help.is_some()
         || app.picker.is_some()
-        || app.trust_prompt.is_some()
-        || app.project_trust.is_some()
-        || app.confirmation.is_some()
         || !app.interview_visible()
     {
         return;
@@ -48,11 +42,7 @@ fn draw_interview(app: &mut App, frame: &mut Frame) {
 
 fn draw_picker(app: &mut App, frame: &mut Frame) {
     if let Some(picker) = &mut app.picker {
-        picker.draw_with_cursor(
-            frame,
-            &app.view,
-            app.help.is_none() && app.trust_prompt.is_none(),
-        );
+        picker.draw_with_cursor(frame, &app.view, app.help.is_none());
     }
 }
 

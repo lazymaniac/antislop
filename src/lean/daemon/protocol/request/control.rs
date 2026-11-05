@@ -7,10 +7,6 @@ pub enum ControlRequest {
         conversation: String,
         text: String,
     },
-    /// Explicit trusted-client authorization; unavailable through agent MCP.
-    AuthorizeTaskExecution {
-        authorization: Box<crate::lean::store::ExecutionAuthorization>,
-    },
     GetConfig,
     SetConfig {
         toml: String,
@@ -23,9 +19,5 @@ pub enum ControlRequest {
     Start,
     StartIn {
         project: String,
-    },
-    TrustStatus,
-    Trust {
-        trusted: bool,
     },
 }

@@ -8,8 +8,6 @@ TODO list:
 - [x] Consider linking tasks to specific plan sections and highlighting completed sections appropriately.
 - [x] Agents should work in parallel where sensible.
 - [x] The --project argument is unnecessary; familiar tools do not use it. The working directory is where antislop starts, usually the project root. No project-root detection is needed: the launch directory is supplied by the user.
-- [x] Add first-use working-directory approval and trust, as in tools such as Codex.
-- [x] Display an autonomous/supervised mode toggle in the UI.
 - [x] Handle /pause /resume /continue /cancel like UI buttons.
 - [x] The agent-details session view should emulate the agent process's terminal so users can inspect every operation and message it processes.
 - [x] Support agent applications launched through commands supplied by other platforms. For example, use default Codex as orchestrator while launching workers/reviewers through commands such as omlx launch codex or ollama launch codex.
@@ -84,10 +82,13 @@ Workspace (§11):
 - [ ] File leases and separate resources (ports, databases, caches) for parallel worktrees (§11.1).
 - [ ] Research/documents/analyses without Git: versioned input/output directories and hashed artifacts (§11.2).
 
-Approvals and modes (§6.2):
+Execution model (§6.2):
 
-- [ ] Supervised: request approval for every revision round (currently the first 3 rounds proceed without asking).
-- [ ] No automatic revision rounds after rejection in supervised mode; approval per stage and round (§6.2).
+- [x] Always-full launches, automatic reviewed plans, manual pause/cancel, no execution budgets.
+- [x] Global durable runtime shared across worktrees; retained configuration and session settings.
+- [x] Remove trust, manual acceptance, execution grants and compatibility request variants.
+- [ ] Complete broad integration verification and deploy the clean formats.
+- [ ] Archive old Jane state and start a fresh monitored session from a truthful handoff.
 
 Other:
 
@@ -100,7 +101,6 @@ Other:
 - [x] TUI editor for every configuration option, applied live in the daemon (t3/t7).
 - [x] Mouse selection/copying of session text (t8).
 - [x] Refresh open Checks after round changes and check events.
-- [x] T14: global trust check before opening daemon state; no trust migration from project databases; safe registry temporary files.
 - [x] T14: bounded persisted turn errors and known-environment-secret redaction (not the entire transcript).
 - [x] T13: local Checks invalidation; single-task reads without decoding whole plans or rereading for freshness tokens.
 - [x] T13: transcript record/wrapping caches; integrated-code review.

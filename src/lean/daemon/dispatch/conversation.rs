@@ -4,55 +4,8 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
     route_pipeline(
         context,
         request,
-        &[
-            comment_route,
-            comment_scoped_route,
-            comment_status_route,
-            comments_route,
-            comment_at_route,
-        ],
+        &[comment_status_route, comments_route, comment_route],
     )
-}
-
-fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
-            conversation,
-            target,
-            text,
-        }) => {
-            validate_project_conversation(context.core, context.project, &conversation)?;
-            Ok(Route::Handled(json!(context.core.comment(
-                &conversation,
-                &target,
-                &text
-            )?)))
-        }
-        request => Ok(Route::Unmatched(request)),
-    }
-}
-
-fn comment_scoped_route(context: &Context<'_>, request: Request) -> Result<Route> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentScoped {
-            conversation,
-            plan,
-            target,
-            text,
-        }) => {
-            validate_project_conversation(context.core, context.project, &conversation)?;
-            if let Some(plan) = &plan {
-                validate_conversation_plan(context.core, &conversation, plan)?;
-            }
-            Ok(Route::Handled(json!(context.core.comment_scoped(
-                &conversation,
-                plan.as_deref(),
-                &target,
-                &text
-            )?)))
-        }
-        request => Ok(Route::Unmatched(request)),
-    }
 }
 
 fn comment_status_route(context: &Context<'_>, request: Request) -> Result<Route> {
@@ -142,9 +95,9 @@ fn decorate_comment_scopes(
     Ok(values)
 }
 
-fn comment_at_route(context: &Context<'_>, request: Request) -> Result<Route> {
+fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentAt {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
             conversation,
             plan,
             target,

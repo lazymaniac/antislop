@@ -41,7 +41,7 @@ fn fixture_for(dependent: bool) -> (tempfile::TempDir, Store, String, String, Ve
             true,
         )
         .unwrap();
-    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","goal":"Inspect A","kind":"analysis","requirement_ids":["r"],"criterion_ids":["r.accept"],"reviewer":{"focus":"Check A"}}),json!({"id":"b","title":"B","goal":"Inspect B","kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"requirement_ids":["r"],"reviewer":{"focus":"Check B"}})]).unwrap();
+    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","goal":"Inspect A","change_kind": "none", "kind":"analysis","requirement_ids":["r"],"criterion_ids":["r.accept"],"reviewer":{"summary": "Check A"}}),json!({"id":"b","title":"B","goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"requirement_ids":["r"],"reviewer":{"summary": "Check B"}})]).unwrap();
     store
         .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
@@ -570,6 +570,7 @@ fn changed_requirements_recheck_the_original_report_without_repeating_the_worker
     first[0].report = Some("All sixteen findings and evidence".into());
     first[0].round = 2;
     store.update_task(&first[0]).unwrap();
+    store.test_completion(&first[0], first[0].report.as_deref().unwrap());
     let other = store
         .create_run(&conversation, "Assess extra acceptance criteria")
         .unwrap();

@@ -1,8 +1,6 @@
-//! Mechanical checks that a proposed plan can be carried out by the agents
-//! it names, run before any agent starts. A task asked for something its
-//! permissions rule out would otherwise burn correction rounds on a blocker
-//! no round can cure; the orchestrator hears of it while the plan is still
-//! a proposal.
+//! Mechanical checks that task contracts describe a consistent delivery and
+//! dependency graph. Every agent has full tool access; a task without a file
+//! delivery may still run commands to gather evidence.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::WorkKind;
@@ -23,25 +21,6 @@ pub struct Finding {
     pub severity: Severity,
     pub detail: String,
 }
-
-/// Phrases that ask a task to execute something, which a read-only task
-/// may not do.
-const EXECUTION: [&str; 11] = [
-    "run cargo",
-    "cargo test",
-    "cargo build",
-    "cargo clippy",
-    "cargo check",
-    "cargo fmt",
-    "run the test",
-    "run tests",
-    "run the script",
-    "run the checker",
-    "execute ",
-];
-
-/// Words before a phrase that turn the request into a prohibition.
-const NEGATIONS: [&str; 5] = ["not ", "n't ", "never ", "without ", "no "];
 
 /// Phrases that leave a worker only what was handed to it. Nothing is ever
 /// pasted: every agent reads the project itself.
@@ -89,8 +68,7 @@ pub fn check(specs: &[TaskContract]) -> Vec<Finding> {
     let descendants = descendants(specs);
     let mut findings = Vec::new();
     for spec in specs {
-        read_only_writer(spec, &mut findings);
-        asks_to_execute(spec, &mut findings);
+        missing_delivery(spec, &mut findings);
         if let Some(detail) = forbids_reading(spec) {
             findings.push(finding(
                 spec,
@@ -113,31 +91,13 @@ fn finding(spec: &TaskContract, rule: &'static str, severity: Severity, detail: 
     }
 }
 
-fn read_only_writer(spec: &TaskContract, out: &mut Vec<Finding>) {
-    if !spec.writes && spec.kind == WorkKind::Implementation {
+fn missing_delivery(spec: &TaskContract, out: &mut Vec<Finding>) {
+    if !spec.change_kind.has_delivery() && spec.kind == WorkKind::Implementation {
         out.push(finding(
             spec,
-            "implementation-is-read-only",
+            "implementation-has-no-delivery",
             Severity::Block,
-            "has kind `implementation` but `writes` is false, so it cannot change anything".into(),
-        ));
-    }
-}
-
-/// An options task's goal is the runtime's: it forbids execution itself and
-/// quotes its writer's objective, commands included, as reference data.
-fn asks_to_execute(spec: &TaskContract, out: &mut Vec<Finding>) {
-    if spec.writes || spec.options_for.is_some() {
-        return;
-    }
-    let goal = spec.goal.to_lowercase();
-    let phrase = EXECUTION.iter().find(|phrase| requested(&goal, phrase));
-    if let Some(phrase) = phrase {
-        out.push(finding(
-            spec,
-            "read-only-asked-to-execute",
-            Severity::Advise,
-            format!("is read-only but its goal asks for {:?}", phrase.trim()),
+            "has kind `implementation` but `change_kind` is `none`; declare the code or artifact delivery".into(),
         ));
     }
 }
@@ -165,18 +125,6 @@ pub(in crate::lean) fn forbids_reading(spec: &TaskContract) -> Option<String> {
 }
 
 /// Whether `phrase` appears in `text` and is not preceded by a negation.
-fn requested(text: &str, phrase: &str) -> bool {
-    text.match_indices(phrase).any(|(at, _)| {
-        let start = text[..at]
-            .char_indices()
-            .rev()
-            .nth(23)
-            .map_or(0, |(i, _)| i);
-        let before = &text[start..at];
-        !NEGATIONS.iter().any(|negation| before.contains(negation))
-    })
-}
-
 fn waits_for_descendant(
     spec: &TaskContract,
     descendants: &BTreeMap<&str, BTreeSet<&str>>,
@@ -236,9 +184,9 @@ pub fn message(findings: &[&Finding]) -> String {
     format!(
         "The runtime checked the proposed plan before any agent started and found tasks that \
          cannot be carried out as written:\n{}\n\nSubmit the complete corrected plan for \
-         the same requirements, changing only what these findings require: fix the scope, \
-         `writes`, dependencies or the goal's wording, or move the work that needs it into a task that has the \
-         permission and runs first.",
+         the same requirements, changing only what these findings require: fix the delivery, \
+         `change_kind`, dependencies or the goal's wording, or assign the prerequisite to a task that \
+         runs first.",
         lines.join("\n")
     )
 }
@@ -250,7 +198,6 @@ mod tests {
 
     fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskContract {
         TaskContract {
-            change_kind: None,
             outputs: Vec::new(),
             delivery: None,
             deferred: false,
@@ -263,7 +210,11 @@ mod tests {
             goal: "Read the code and report".into(),
             summary: None,
             section: None,
-            writes,
+            change_kind: if writes {
+                crate::lean::tasks::ChangeKind::Code
+            } else {
+                crate::lean::tasks::ChangeKind::None
+            },
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
             covers: Vec::new(),
@@ -285,22 +236,17 @@ mod tests {
     }
 
     #[test]
-    fn implementation_needs_write_access() {
+    fn implementation_declares_its_delivery() {
         let plan = [task("t1", WorkKind::Implementation, false, &[])];
-        assert_eq!(rules(&plan), ["implementation-is-read-only"]);
+        assert_eq!(rules(&plan), ["implementation-has-no-delivery"]);
         assert_eq!(check(&plan)[0].severity, Severity::Block);
     }
 
     #[test]
-    fn a_read_only_task_is_not_asked_to_execute_unless_it_is_forbidden() {
-        let mut ask = task("t1", WorkKind::Analysis, false, &[]);
-        ask.goal = "Record HEAD, then run cargo test and report".into();
-        assert_eq!(rules(&[ask.clone()]), ["read-only-asked-to-execute"]);
-        ask.goal = "Record HEAD. Do not run cargo test; report only".into();
-        assert!(check(&[ask.clone()]).is_empty());
-        ask.writes = true;
-        ask.goal = "Run cargo test".into();
-        assert!(check(&[ask]).is_empty());
+    fn evidence_commands_do_not_require_a_file_delivery() {
+        let mut analysis = task("t1", WorkKind::Analysis, false, &[]);
+        analysis.goal = "Record HEAD, run cargo test and report the actual result".into();
+        assert!(check(&[analysis]).is_empty());
     }
 
     #[test]
@@ -359,7 +305,7 @@ mod tests {
         let plan = [task("t1", WorkKind::Implementation, false, &[])];
         let found = check(&plan);
         let text = message(&found.iter().collect::<Vec<_>>());
-        assert!(text.contains("- t1 [implementation-is-read-only]"));
+        assert!(text.contains("- t1 [implementation-has-no-delivery]"));
         assert!(text.contains("complete corrected plan"));
     }
 }

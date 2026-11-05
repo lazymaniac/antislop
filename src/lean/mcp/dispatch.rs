@@ -38,7 +38,7 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
                 {
                     state.protocol_rejected_at.get_or_insert_with(Instant::now);
                     reason.push_str(&format!(
-                        "; role {} requires turn = {:?} and one of {:?}; correct the call within 60 s of the first protocol rejection",
+                        "; role {} requires turn = {:?} and one of {:?}; correct the rejected call and continue",
                         state.role, state.expected.as_deref().unwrap(),
                         scoped_tools(&state.role, state.contract.as_ref())
                     ));
@@ -197,13 +197,9 @@ fn finish_dispatch(
         state.expected.as_deref() == Some(turn),
         "turn closed while the tool was executing",
     )?;
-    record_wait_time(&mut state, name);
+    finish_answer_wait(&mut state, name);
     let mut response = response?;
-    let recovery_question = matches!(name, "resume_task" | "retry_task")
-        && response["approval_required"] == true
-        && response["recorded"] == true
-        && response["result"]["type"] == "question";
-    if (is_terminal(name) || recovery_question)
+    if is_terminal(name)
         && !(name == "wait_for_answer"
             && response["state"] == "answered"
             && response["recorded"] != true)
@@ -213,11 +209,9 @@ fn finish_dispatch(
     Ok(response)
 }
 
-fn record_wait_time(state: &mut super::gateway::State, name: &str) {
-    if name == ASK
-        && let Some(at) = state.waiting.take()
-    {
-        state.waited += at.elapsed();
+fn finish_answer_wait(state: &mut super::gateway::State, name: &str) {
+    if name == ASK {
+        state.waiting = None;
     }
 }
 

@@ -41,7 +41,6 @@ pub enum Update {
         generation: u64,
         events: Vec<Value>,
         idle: bool,
-        autonomous: bool,
     },
     Conversation(String),
     Notice(String),
@@ -51,7 +50,6 @@ pub enum Update {
         conversation: Option<String>,
     },
     /// The directory must be trusted before it is opened.
-    ProjectTrust(std::path::PathBuf),
     /// The conversations of a connected project, as it last listed them.
     ProjectStatus {
         path: std::path::PathBuf,
@@ -147,7 +145,6 @@ pub struct ConversationState {
     pub graph_scope: Scope,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
-    pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
@@ -195,7 +192,6 @@ impl ConversationState {
         self.diff = app.diff.clone();
         self.plan_view = app.plan_view.clone();
         self.ledger_view = app.ledger_view.clone();
-        self.confirmation = app.confirmation.clone();
     }
 
     fn capture_requests(&mut self, app: &App) {
@@ -244,7 +240,6 @@ impl ConversationState {
         app.diff = self.diff.clone();
         app.plan_view = self.plan_view.clone();
         app.ledger_view = self.ledger_view.clone();
-        app.confirmation = self.confirmation.clone();
     }
 
     fn restore_requests(&self, app: &mut App) {

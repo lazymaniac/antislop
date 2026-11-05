@@ -47,20 +47,6 @@ pub enum WorkKind {
     Delivery, // Summarizes delivered results, usage instructions, limitations, and remaining risks.
 }
 
-impl WorkKind {
-    /// Whether work of this kind changes files unless the plan says otherwise.
-    pub fn writes_by_default(self) -> bool {
-        matches!(
-            self,
-            Self::Implementation
-                | Self::Refactoring
-                | Self::Testing
-                | Self::StaticAnalysis
-                | Self::Integration
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleKind {
@@ -69,13 +55,6 @@ pub enum RoleKind {
     Orchestrator,
     /// Drafts the first plan from the agreed requirements.
     Planner,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    Supervised,
-    Autonomous,
 }
 
 impl ProviderKind {
@@ -160,43 +139,26 @@ pub struct OrchestratorConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    pub mode: Mode,
-    pub local_write: bool,
     pub local_commits: bool,
     /// Every plan that changes code gets the required quality gates from the
     /// predefined agent pool (refactoring, static analysis, testing, security and
     /// performance audits, integration) it lacks.
     #[serde(default = "default_required_gates")]
     pub required_gates: bool,
-    /// Most tasks of a plan that run at the same time.
-    #[serde(default = "default_max_parallel")]
-    pub max_parallel: usize,
     /// Every writer gets a dedicated read-only options task that compares
     /// approaches before it starts. Off, writers start straight from their
     /// contract: for mechanical work (a refactor to fixed limits) the
     /// comparison costs two agent runs per writer and decides nothing.
     #[serde(default = "default_local_options")]
     pub local_options: bool,
-    /// Most tasks a plan may be drafted with, before the runtime adds options
-    /// and gates. A larger plan is sent back to be grouped by module.
-    #[serde(default = "default_max_tasks")]
-    pub max_tasks: usize,
 }
 
 fn default_local_options() -> bool {
     true
 }
 
-fn default_max_tasks() -> usize {
-    100
-}
-
 fn default_required_gates() -> bool {
     true
-}
-
-fn default_max_parallel() -> usize {
-    4
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -88,7 +88,11 @@ impl PlanView {
             task.id,
             task.title,
             task.kind,
-            if task.writes { "writes" } else { "read-only" },
+            if task.change_kind.has_delivery() {
+                "file changes"
+            } else {
+                "report"
+            },
         );
         for line in self
             .build_lines(view)

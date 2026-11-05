@@ -4,6 +4,9 @@ mod diagnostics;
 mod model;
 mod resolution;
 pub use model::*;
+
+/// Only configuration format accepted by this build.
+pub const SCHEMA_VERSION: u32 = 4;
 #[cfg(test)]
 #[path = "config/tests.rs"]
 mod tests;
@@ -123,12 +126,5 @@ impl Config {
         } else {
             &route.executor
         })
-    }
-}
-
-impl Policy {
-    /// Autonomous mode runs a checked plan without waiting for the user.
-    pub fn automatic_progression(&self) -> bool {
-        self.mode == Mode::Autonomous
     }
 }

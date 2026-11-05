@@ -218,11 +218,11 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
 }
 
 /// What the viewer can do next, naming only keys the frontend really
-/// handles: Ctrl+A accepts a plan, Ctrl+R resumes a settled one, `u`
+/// handles: Ctrl+R resumes a settled plan, `u`
 /// opens unblock, `c` comments, Enter opens details.
 pub fn next_step(view: &View, row: &TaskRow) -> String {
     match row.status.as_str() {
-        status::PROPOSED => "next: Ctrl+A accepts the plan".to_owned(),
+        status::PROPOSED => "next: automatic execution after plan review".to_owned(),
         status::QUEUED => {
             let waiting = waiting_on(view, row);
             if waiting.is_empty() {

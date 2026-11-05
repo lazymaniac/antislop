@@ -14,11 +14,11 @@ pub fn reviewer_prompt(
     format!(
         "You review another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
-         files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
+         files yourself with your tools. {REVIEW_RULES} {PROJECT_RULES}\n\n\
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's goal, its assigned acceptance criteria, then \
          the catalog risks of this kind of work). \
-         Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n{risks}\n\n\
+         Assess each from files, recorded evidence and any checks needed to verify it:\n{obligations}\n{risks}\n\n\
          Command results are recorded evidence: judge them by the command and the output \
          the report quotes or retains as immutable MCP execution evidence. Read the referenced \
          records with read_evidence, paging until complete=true, before judging missing raw output. \
@@ -160,7 +160,7 @@ pub fn code_review_prompt(
     format!(
         "You review a code change the user asked you to look at. The repository \
          is your current working directory: {dir}. Read the change with {range} \
-         and the surrounding files yourself; work read-only. {PROJECT_RULES}\n\n\
+         and the surrounding files yourself; {PROJECT_RULES}\n\n\
          Task: {}\nGoal: {}\nAlso check the risks of this kind of work:\n{}\n\n{comments}{}",
         task.title,
         task.goal,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::lean::core_task_recovery::{RecoveryContinuation, RecoveryScope};
 
 impl Core {
     pub(super) fn orchestrator_tool(
@@ -14,73 +13,32 @@ impl Core {
             matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),
             "only the orchestrator may use this control tool",
         )?;
-        let scope: RecoveryScope =
-            serde_json::from_value(args.get("scope").cloned().unwrap_or(json!("edits_only")))?;
-        let result = if matches!(tool, "resume_task" | "retry_task")
-            && scope == RecoveryScope::ExistingAuthorizedExecution
-        {
-            let expected = if tool == "resume_task" {
-                Some(serde_json::from_value(json!([
-                    args["round"],
-                    args["input_generation"]
-                ]))?)
-            } else {
-                None
-            };
-            self.request_recovery_approval(
+        match tool {
+            "answer_agent" => self.answer_agent_tool(conversation, args),
+            "defer_to_user" => self.defer_question_tool(conversation, args),
+            "retry_task" => self.retry_failed_task(
                 conversation,
                 role,
                 turn,
                 &required_text(args, "task")?,
-                RecoveryContinuation {
-                    expected,
-                    guidance: &required_text(
-                        args,
-                        if tool == "resume_task" {
-                            "resolution"
-                        } else {
-                            "guidance"
-                        },
-                    )?,
-                    scope,
-                },
-            )?
-        } else {
-            match tool {
-                "answer_agent" => self.answer_agent_tool(conversation, args),
-                "defer_to_user" => self.defer_question_tool(conversation, args),
-                "retry_task" => self.retry_failed_task(
+                &required_text(args, "guidance")?,
+            ),
+            "resume_task" => {
+                let expected: (u32, i64) =
+                    serde_json::from_value(json!([args["round"], args["input_generation"]]))
+                        .map_err(|error| {
+                            Error::Invalid(format!("round/input_generation: {error}"))
+                        })?;
+                self.resume_coordinating_task(
                     conversation,
                     role,
                     turn,
                     &required_text(args, "task")?,
-                    &required_text(args, "guidance")?,
-                ),
-                "resume_task" => {
-                    let expected: (u32, i64) =
-                        serde_json::from_value(json!([args["round"], args["input_generation"]]))
-                            .map_err(|error| {
-                                Error::Invalid(format!("round/input_generation: {error}"))
-                            })?;
-                    self.resume_coordinating_task(
-                        conversation,
-                        role,
-                        turn,
-                        &required_text(args, "task")?,
-                        expected,
-                        &required_text(args, "resolution")?,
-                    )
-                }
-                _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
-            }?
-        };
-        if matches!(tool, "resume_task" | "retry_task") && result["approval_required"] == true {
-            let question = serde_json::from_value(result["question"].clone())?;
-            let mut reply = self.record_result(turn, TurnResult::Question { question })?;
-            reply["approval_required"] = true.into();
-            Ok(reply)
-        } else {
-            Ok(result)
+                    expected,
+                    &required_text(args, "resolution")?,
+                )
+            }
+            _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
         }
     }
 

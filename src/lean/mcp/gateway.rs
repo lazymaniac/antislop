@@ -118,7 +118,6 @@ pub(super) struct State {
     /// acknowledged instead of refused.
     pub(super) receipt: Option<(String, Value)>,
     pub(super) waiting: Option<Instant>,
-    pub(super) waited: Duration,
     pub(super) rejected_finish: Option<(Instant, String)>,
     /// A malformed/stale result gets a bounded correction window, even if
     /// the CLI keeps redrawing its idle prompt. Repeats never extend it.
@@ -171,7 +170,6 @@ impl Gateway {
         let mut state = self.shared.state.lock().map_err(invalid)?;
         state.expected = Some(turn.into());
         state.finished = None;
-        state.waited = Duration::ZERO;
         state.waiting = None;
         state.rejected_finish = None;
         state.protocol_rejected_at = None;
@@ -219,26 +217,14 @@ impl Gateway {
         self.shared.state.lock().ok()?.session.clone()
     }
 
-    /// Whether the agent is blocked in `wait_for_answer`: silence then is the
-    /// orchestrator's, not the agent's.
-    pub(crate) fn awaiting_answer(&self) -> bool {
-        self.shared
-            .state
-            .lock()
-            .is_ok_and(|state| state.waiting.is_some())
-    }
-
-    /// Waits for the agent to end `turn`. `alive` reports a dead agent as an
-    /// error so a crashed CLI does not wait for the full timeout.
     /// Waits for the agent to end `turn`, honoring cancellation and liveness.
     pub(crate) fn wait(
         &self,
         turn: &str,
         cancel: &AtomicBool,
-        timeout: Duration,
         alive: impl Fn() -> Result<()>,
     ) -> Result<Finish> {
-        wait_loop(&self.shared, turn, cancel, timeout, alive)
+        wait_loop(&self.shared, turn, cancel, alive)
     }
 }
 
@@ -246,13 +232,11 @@ fn wait_loop(
     shared: &Shared,
     turn: &str,
     cancel: &AtomicBool,
-    timeout: Duration,
     alive: impl Fn() -> Result<()>,
 ) -> Result<Finish> {
-    let started = Instant::now();
     let mut state = shared.state.lock().map_err(invalid)?;
     loop {
-        if let Some(finish) = wait::poll_wait(&mut state, started, turn, cancel, timeout)? {
+        if let Some(finish) = wait::poll_wait(&mut state, turn, cancel)? {
             return Ok(finish);
         }
         drop(state);

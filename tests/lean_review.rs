@@ -31,14 +31,14 @@ def verdict(approved, findings=()):
     return "```verdict\n" + json.dumps({"approved": approved, "findings": list(findings)}) + "\n```"
 def task(id, title, depends=()):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "kind": "analysis", "reviewer": {"focus": "f"}}
+            "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({"tasks": list(tasks)}) + "\n```"
 "#;
 
 /// Fake codex (orchestrator) and agy (everyone else) whose answers are the
 /// given Python statements; each sets `answer` from `prompt`.
-fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Core> {
+fn open(dir: &Path, orchestrator: &str, agent: &str) -> Arc<Core> {
     let write = |name: &str, body: String| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
@@ -48,8 +48,9 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
         common::interactive(&path);
         path
     };
-    let header =
-        format!("#!/usr/bin/env python3\nimport json, sys\nprompt = sys.argv[-1]\n{AGENT}");
+    let header = format!(
+        "#!/usr/bin/env python3\nimport json, sys, os\nprompt = sys.argv[-1]\nwith open(os.path.join(os.path.dirname(__file__), \"fixture-prompts.jsonl\"), \"a\") as trace: trace.write(json.dumps({{\"cli\":os.path.basename(__file__),\"prompt\":prompt}})+\"\\n\")\n{AGENT}"
+    );
     let codex = write(
         "codex",
         format!(
@@ -58,8 +59,15 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
              print(json.dumps({{\"type\": \"turn.completed\", \"usage\": {{}}}}))\n"
         ),
     );
-    let agy = write("agy", format!("{header}{agent}\n"));
-    let mut text = std::fs::read_to_string(concat!(
+    let plan_gate = r#"
+if 'You review a plan' in prompt and os.path.exists(os.path.join(os.path.dirname(__file__),'plan-only-hold')):
+    import time
+    root=os.path.dirname(__file__)
+    open(os.path.join(root,'plan-only-entered'),'w').close()
+    while not os.path.exists(os.path.join(root,'plan-only-release')):time.sleep(0.01)
+"#;
+    let agy = write("agy", format!("{header}{plan_gate}{agent}\n"));
+    let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/examples/antislop.toml"
     ))
@@ -72,11 +80,14 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
     );
-    if autonomous {
-        text = text.replace("mode = \"supervised\"", "mode = \"autonomous\"");
-    }
     std::fs::create_dir_all(dir.join("project")).unwrap();
-    Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
+    let mut configuration = Config::from_toml(&text).unwrap();
+    configuration
+        .routing
+        .get_mut(&antislop::config::WorkKind::Planning)
+        .unwrap()
+        .executor = "orchestrator".into();
+    Core::open(&dir.join("state"), configuration).unwrap()
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
@@ -99,21 +110,6 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
         .collect()
 }
 
-fn approve_final_audit(core: &Core, conversation: &str) {
-    let plan = core.store.latest_plan(conversation).unwrap()[0]
-        .plan_id
-        .clone();
-    core.store
-        .append_event(
-            conversation,
-            None,
-            Some(&plan),
-            "audit",
-            &serde_json::json!({"approved": true, "findings": [], "plan": plan}),
-        )
-        .unwrap();
-}
-
 fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
     let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
@@ -123,12 +119,34 @@ fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
     conversation
 }
 
+/// Inspect planning with execution explicitly paused before review completes.
+fn ask_plan(core: &Arc<Core>, dir: &Path, text: &str) -> String {
+    std::fs::write(dir.join("plan-only-hold"), "").unwrap();
+    let conversation = support::fixture_conversation(core, &dir.join("project"))
+        .unwrap()
+        .id;
+    core.send(&conversation, text).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !dir.join("plan-only-entered").exists() {
+        assert!(Instant::now() < deadline, "plan review did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    core.pause(&conversation, true).unwrap();
+    std::fs::write(dir.join("plan-only-release"), "").unwrap();
+    while events(core, &conversation, "plan_proposed").is_empty() {
+        assert!(Instant::now() < deadline, "checked plan was not published");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    core.cancel(&conversation);
+    wait_idle(core, &conversation);
+    conversation
+}
+
 #[test]
 fn a_plan_the_reviewer_sends_back_is_revised_before_the_user_sees_it() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
         r#"
 if "[plan reviewer]" in prompt:
     answer = plan(task("t1", "Model"), task("t2", "Uses model, fixed", ["t1"]))
@@ -141,7 +159,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     say("plan", verdict(ok, [] if ok else [{"severity": "high", "issue": "t2 needs t1's result", "where": "t2"}]))
 "#,
     );
-    let conversation = ask(&core, dir.path(), "build a model and use it");
+    let conversation = ask_plan(&core, dir.path(), "build a model and use it");
 
     let reviews = events(&core, &conversation, "plan_review");
     assert_eq!(
@@ -156,8 +174,8 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     assert_eq!(proposed[0]["review"]["approved"], true);
     assert_eq!(proposed[0]["tasks"][1]["title"], "Uses model, fixed");
     assert_eq!(
-        proposed[0]["automatic"], false,
-        "supervised waits for the user"
+        proposed[0]["automatic"], true,
+        "checked plans start without a permission gate"
     );
 
     let messages = core.store.messages_after(&conversation, 0).unwrap();
@@ -179,7 +197,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
         "findings go directly to the planner"
     );
     let latest = core.store.latest_plan(&conversation).unwrap();
-    assert!(latest.iter().all(|task| task.status == "proposed"));
+    assert!(latest.iter().all(|task| task.status != "approved"));
     assert_ne!(
         core.store
             .plan(reviews[0]["plan"].as_str().unwrap())
@@ -195,11 +213,10 @@ fn a_plan_no_agent_can_carry_out_goes_back_before_review() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
         r#"
 broken = task("t1", "Change it")
 broken["kind"] = "implementation"
-broken["writes"] = False
+broken["change_kind"] = "none"
 if "checked the proposed plan" in prompt:
     answer = plan(task("t1", "Change it, readable"))
 else:
@@ -210,7 +227,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     say("plan", verdict(True))
 "#,
     );
-    let conversation = ask(&core, dir.path(), "change the code");
+    let conversation = ask_plan(&core, dir.path(), "change the code");
 
     // submit_plan refuses the plan within the turn, and the agent corrects it.
     let refused = ["codex", "agy"]
@@ -220,7 +237,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
         })
         .collect::<String>();
     assert!(
-        refused.contains("- t1 [implementation-is-read-only]"),
+        refused.contains("- t1 [implementation-has-no-delivery]"),
         "{refused}"
     );
     let reviews = events(&core, &conversation, "plan_review");
@@ -236,13 +253,12 @@ if "You review a plan" in prompt or "new plan:" in prompt:
 }
 
 #[test]
-fn autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps() {
+fn checked_plan_runs_automatically_and_reports_audit_gaps() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
         r#"
-if "[runtime]" in prompt:
+if "The plan finished. Results of each task follow." in prompt:
     answer = "gap noted" if "not fully delivered" in prompt else "all done"
 else:
     answer = plan(task("t1", "Analyse"))
@@ -268,7 +284,9 @@ else:
     let messages = core.store.messages_after(&conversation, 0).unwrap();
     let report = messages
         .iter()
-        .find(|message| message.author == "runtime")
+        .find(|message| {
+            message.author == "runtime" && message.text.starts_with("The plan finished.")
+        })
         .unwrap();
     assert!(
         report.text.contains("README not covered"),
@@ -279,13 +297,13 @@ else:
 }
 
 #[test]
-fn autonomous_plans_go_on_until_one_repeats_a_plan_that_ran() {
+fn repeated_checked_plans_continue_without_an_execution_count_gate() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
         // A plan sent back for ledger mapping is regenerated, not a further step.
-        r#"answer = plan(task("t1", "Step " + str(min(bump("plans", 0 if "Regenerate the task plan" in prompt else 1), 4))))"#,
+        r#"step = bump("plans", 0 if "Regenerate the task plan" in prompt else 1)
+answer = plan(task("t1", "Step " + str(min(step, 4)))) if step <= 5 else "Repeated work verified.""#,
         r#"
 if "You review" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
         or "You audit" in prompt or "next plan:" in prompt:
@@ -301,23 +319,24 @@ else:
         .iter()
         .map(|plan| plan["automatic"] == true)
         .collect();
-    // Steps 1–4 run on their own; the second "Step 4" waits for the user.
-    assert_eq!(automatic, [true, true, true, true, false]);
+    assert_eq!(automatic, [true, true, true, true, true]);
+    assert!(proposed[4]["waiting"].is_null());
+    let repeated = proposed[4]["plan"].as_str().unwrap();
     assert!(
-        proposed[4]["waiting"]
-            .as_str()
+        core.store
+            .plan(repeated)
             .unwrap()
-            .contains("same plan already ran")
+            .iter()
+            .all(|task| task.status == "approved")
     );
 }
 
 #[test]
-fn autonomous_rounds_go_on_while_the_worker_gets_closer() {
+fn rounds_continue_while_the_worker_gets_closer() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
-        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"answer = "done" if "The plan finished. Results of each task follow." in prompt and "You are the planner" not in prompt else plan(task("t1", "Fix"))"#,
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
@@ -334,56 +353,15 @@ else:
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
-    assert_eq!(task.round, 5, "more rounds than supervised mode runs alone");
+    assert_eq!(task.round, 5, "all required repair rounds run");
 }
 
 #[test]
-fn a_reviewer_repeating_its_findings_stops_the_rounds() {
+fn repeated_review_findings_do_not_stop_repairs() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
-        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "found problems" in prompt:
-    say("worker", "report")
-elif "You review" in prompt or "updated report" in prompt:
-    say("reviewer", verdict(False, [{"severity": "high", "issue": "still wrong", "where": "a"}]))
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "fix");
-
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "coordinating");
-    assert_eq!(task.round, 2);
-    assert!(
-        task.report
-            .as_deref()
-            .unwrap()
-            .contains("no previously open obligation")
-    );
-    // Frontends are told why it stopped.
-    let last = events(&core, &conversation, "task").pop().unwrap();
-    assert_eq!(last["status"], "coordinating");
-    assert!(
-        last["reason"]
-            .as_str()
-            .unwrap()
-            .contains("no previously open obligation")
-    );
-}
-
-#[test]
-fn a_reviewer_inventing_new_finding_ids_each_round_still_hands_the_task_back() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"answer = "done" if "The plan finished. Results of each task follow." in prompt and "You are the planner" not in prompt else plan(task("t1", "Fix"))"#,
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
@@ -391,7 +369,7 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("reviewer", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a%d" % n}]))
+    say("reviewer", verdict(n >= 6, [] if n >= 6 else [{"severity": "high", "issue": "still wrong", "where": "a"}]))
 else:
     say("worker", "report")
 "#,
@@ -399,24 +377,72 @@ else:
     let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "coordinating", "{:?}", task.report);
-    assert_eq!(task.round, 16, "one run takes at most sixteen rounds");
-    let last = events(&core, &conversation, "task").pop().unwrap();
-    assert!(
-        last["reason"]
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.round, 6);
+    assert!(events(&core, &conversation, "notice").iter().any(|event| {
+        event["text"]
             .as_str()
-            .unwrap()
-            .contains("correction rounds ran without approval")
-    );
+            .is_some_and(|text| text.contains("worker continues"))
+    }));
 }
 
 #[test]
-fn the_same_obligations_open_round_after_round_stop_the_rounds_however_they_are_worded() {
+fn repairs_continue_beyond_sixteen_rounds() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
-        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"answer = "done" if "The plan finished. Results of each task follow." in prompt and "You are the planner" not in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You review" in prompt or "updated report" in prompt:
+    n = bump("verdicts")
+    say("reviewer", verdict(n >= 20, [] if n >= 20 else [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a%d" % n}]))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
+    core.send(&conversation, "fix").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let task = loop {
+        let tasks = core.store.latest_plan(&conversation).unwrap();
+        if let Some(task) = tasks
+            .into_iter()
+            .find(|task| task.status == "approved" && task.round == 20)
+        {
+            break task;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "twenty approved rounds were not observed; events={:?}",
+            core.store
+                .events_since(&conversation, 0, 200)
+                .unwrap()
+                .iter()
+                .filter(|event| event.payload.get("error").is_some())
+                .collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // This test measures repair execution, not the deliberately negative final
+    // audit supplied by the worker-only fixture. Cancel after observing success.
+    core.cancel(&conversation);
+    wait_idle(&core, &conversation);
+    assert_eq!(task.status, "approved");
+    assert_eq!(task.round, 20);
+}
+
+#[test]
+fn reworded_obligations_remain_visible_without_a_stall_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"answer = "done" if "The plan finished. Results of each task follow." in prompt and "You are the planner" not in prompt else plan(task("t1", "Fix"))"#,
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
@@ -426,9 +452,9 @@ elif "You review" in prompt or "updated report" in prompt:
     n = bump("verdicts")
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
-    cov["V1"] = {"status": "issue", "note": "open %d" % n}
-    findings = [{"severity": "high", "id":"same-case","issue": "case %d" % n, "where": "a"}]
-    say("reviewer", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
+    if n < 5: cov["V1"] = {"status": "issue", "note": "open %d" % n}
+    findings = [] if n >= 5 else [{"severity": "high", "id":"same-case","issue": "case %d" % n, "where": "a"}]
+    say("reviewer", "```verdict\n" + json.dumps({"approved": n >= 5, "findings": findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
 "#,
@@ -436,13 +462,8 @@ else:
     let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "coordinating");
-    assert_eq!(
-        task.round, 2,
-        "unchanged local obligations require coordination"
-    );
-    let report = task.report.as_deref().unwrap();
-    assert!(report.contains("no previously open obligation"), "{report}");
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.round, 5);
 }
 
 #[test]
@@ -450,8 +471,7 @@ fn independently_reviewed_progress_continues_past_many_rounds() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
-        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"answer = "done" if "The plan finished. Results of each task follow." in prompt and "You are the planner" not in prompt else plan(task("t1", "Fix"))"#,
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
@@ -480,7 +500,6 @@ fn a_plan_whose_review_failed_is_shown_but_never_runs_by_itself() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
         r#"answer = plan(task("t1", "Analyse"))"#,
         r#"
 print("login required", file=sys.stderr)
@@ -503,7 +522,7 @@ sys.exit(1)
 }
 
 const RISKY_PLAN: &str = r#"
-if "[runtime]" in prompt:
+if "The plan finished. Results of each task follow." in prompt:
     answer = "done"
 else:
     answer = plan(dict(task("t1", "Revenue"), reviewer={"focus": "numbers", "risks": ["units of money"]}))
@@ -514,7 +533,6 @@ fn a_verdict_that_skips_an_obligation_is_asked_again_and_never_approves() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
         RISKY_PLAN,
         r#"
 if "You review a plan" in prompt or "You audit" in prompt:
@@ -525,17 +543,30 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "calculate revenue");
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
+    core.send(&conversation, "calculate revenue").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while std::fs::read_to_string(dir.path().join("agy.rejections"))
+        .map_or(0, |text| text.lines().count())
+        < 5
+    {
+        assert!(
+            Instant::now() < deadline,
+            "invalid review stopped correcting"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    core.cancel(&conversation);
+    wait_idle(&core, &conversation);
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "failed");
+    assert_ne!(task.status, "approved");
     assert!(
-        task.report
-            .as_deref()
+        std::fs::read_to_string(dir.path().join("agy.rejections"))
             .unwrap()
-            .contains("give a status and note for every listed check"),
-        "{:?}",
-        task.report
+            .contains("give a status and note for every listed check")
     );
     assert!(task.verdict.is_none());
 }
@@ -545,7 +576,6 @@ fn an_obligation_marked_issue_sends_its_note_to_the_worker() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        true,
         RISKY_PLAN,
         r#"
 import re
@@ -582,9 +612,8 @@ fn a_paused_conversation_starts_no_new_work_but_still_talks() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
         r#"
-if "[runtime]" in prompt or "user question marker" in prompt:
+if "The plan finished. Results of each task follow." in prompt or "user question marker" in prompt:
     answer = "answer"
 else:
     answer = plan(task("t1", "Analyse"))
@@ -596,13 +625,12 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "analysis");
+    let conversation = ask_plan(&core, dir.path(), "analysis");
+
     let plan = core.store.latest_plan(&conversation).unwrap()[0]
         .plan_id
         .clone();
-
-    core.pause(&conversation, true).unwrap();
-    core.accept_plan(&conversation, &plan).unwrap();
+    core.resume_plan(&conversation, &plan).unwrap();
     core.send(&conversation, "user question marker").unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while core
@@ -648,69 +676,10 @@ else:
 }
 
 #[test]
-fn a_mode_change_applies_to_what_the_conversation_does_next() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        false,
-        r#"
-if "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Step " + str(bump("plans"))))
-"#,
-        r#"
-if "You review" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
-        or "You audit" in prompt or "next plan:" in prompt:
-    say("reviewer", verdict(True))
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "step");
-    assert!(!core.autonomous(&conversation).unwrap());
-
-    core.set_mode(&conversation, true).unwrap();
-    core.send(&conversation, "next step").unwrap();
-    wait_idle(&core, &conversation);
-    core.set_mode(&conversation, false).unwrap();
-    // The fixture's agents cannot run the final audit; an approved one is
-    // what ends the goal.
-    approve_final_audit(&core, &conversation);
-    core.send(&conversation, "and one more").unwrap();
-    wait_idle(&core, &conversation);
-
-    let automatic: Vec<_> = events(&core, &conversation, "plan_proposed")
-        .iter()
-        .map(|plan| plan["automatic"] == true)
-        .collect();
-    // The finished autonomous plan ends the cycle: the next request starts a
-    // new interview, which the supervised mode leaves for the user to approve.
-    assert_eq!(automatic, [false, true]);
-    assert!(core.store.workflow(&conversation).unwrap().interviewing());
-    let plans = events(&core, &conversation, "plan_proposed");
-    let first = plans[0]["plan"].as_str().unwrap();
-    assert!(
-        core.store
-            .plan(first)
-            .unwrap()
-            .iter()
-            .all(|task| task.status == "proposed"),
-        "switching to autonomous starts nothing the user did not accept"
-    );
-    let modes: Vec<_> = events(&core, &conversation, "mode")
-        .iter()
-        .map(|mode| mode["autonomous"] == true)
-        .collect();
-    assert_eq!(modes, [true, false]);
-}
-
-#[test]
 fn runtime_refuses_a_cyclic_persisted_graph_before_starting_workers() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
         r#"answer = plan(task("t1", "Scout"), task("t2", "Consumer", ["t1"]))"#,
         r#"
 if "You review a plan" in prompt:
@@ -719,7 +688,7 @@ else:
     raise RuntimeError("no worker may start for an invalid graph")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "inventory and review");
+    let conversation = ask_plan(&core, dir.path(), "inventory and review");
     let mut tasks = core.store.latest_plan(&conversation).unwrap();
     tasks[0].spec["depends_on"] = serde_json::json!(["t2"]);
     let db = rusqlite::Connection::open(dir.path().join("state/core.db")).unwrap();
@@ -729,7 +698,7 @@ else:
     )
     .unwrap();
     let error = core
-        .accept_plan(&conversation, &tasks[0].plan_id)
+        .resume_plan(&conversation, &tasks[0].plan_id)
         .unwrap_err();
     assert!(error.to_string().contains("not an earlier task"), "{error}");
     assert!(
@@ -737,7 +706,7 @@ else:
             .latest_plan(&conversation)
             .unwrap()
             .iter()
-            .all(|task| task.status == "proposed" && task.round == 0)
+            .all(|task| task.status != "approved" && task.round <= 1)
     );
 }
 
@@ -746,7 +715,6 @@ fn plan_corrections_continue_beyond_three_rejections_when_findings_close() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
         r#"answer=plan(task('t1','Focused plan'))"#,
         r#"
 if 'You review a plan' in prompt or 'new plan:' in prompt:
@@ -755,7 +723,7 @@ if 'You review a plan' in prompt or 'new plan:' in prompt:
     say('plan',verdict(n>=6,findings))
 "#,
     );
-    let conversation = ask(&core, dir.path(), "Plan the local work");
+    let conversation = ask_plan(&core, dir.path(), "Plan the local work");
     let proposed = events(&core, &conversation, "plan_proposed");
     assert_eq!(proposed.len(), 1);
     assert_eq!(proposed[0]["review"]["approved"], true);
@@ -763,29 +731,28 @@ if 'You review a plan' in prompt or 'new plan:' in prompt:
 }
 
 #[test]
-fn rewording_the_same_plan_finding_stops_automatic_replanning() {
+fn reworded_plan_findings_do_not_impose_a_retry_budget() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        false,
-        r#"answer=plan(task('t1','Focused plan'))"#,
+        r#"answer="done" if "The plan finished. Results of each task follow." in prompt else plan(task('t1','Focused plan'))"#,
         r#"
 if 'You review a plan' in prompt or 'new plan:' in prompt:
     n=bump('plan-review-count')
-    say('plan',verdict(False,[{'id':'missing-input','severity':'high','issue':'Missing input, wording %d'%n,'where':'t1'}]))
+    say('plan',verdict(n>=5,[] if n>=5 else [{'id':'missing-input','severity':'high','issue':'Missing input, wording %d'%n,'where':'t1'}]))
 "#,
     );
-    let conversation = ask(&core, dir.path(), "Plan the local work");
+    let conversation = ask_plan(&core, dir.path(), "Plan the local work");
     let proposed = events(&core, &conversation, "plan_proposed");
     assert_eq!(proposed.len(), 1);
-    assert_eq!(proposed[0]["review"]["approved"], false);
+    assert_eq!(proposed[0]["review"]["approved"], true);
     let starts = events(&core, &conversation, "turn_started");
     assert_eq!(
         starts
             .iter()
             .filter(|e| e["role"] == "plan-reviewer")
             .count(),
-        2
+        5
     );
     assert!(events(&core, &conversation, "notice").iter().any(|e| {
         e["text"]

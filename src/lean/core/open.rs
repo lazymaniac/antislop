@@ -143,15 +143,7 @@ fn restore_conversations(core: &Arc<Core>) -> Result<()> {
 }
 
 fn restore_conversation(core: &Arc<Core>, conversation: &str) -> Result<()> {
-    if let Err(error) = core.apply_recovery_answers(conversation) {
-        core.notice(
-            conversation,
-            &format!("Recorded recovery answer could not be applied at startup: {error}"),
-        );
-    }
-    if core.autonomous(conversation)? {
-        core.store.finish_interview(conversation)?;
-    }
+    core.store.finish_interview(conversation)?;
     if core.unanswered(conversation)?.is_none() {
         core.store.queue_requirements_format_repair(conversation)?;
     }

@@ -24,9 +24,6 @@ impl App {
         if let Some(result) = self.route_screen(key) {
             return result;
         }
-        if let Some(result) = self.route_confirmation(key) {
-            return result;
-        }
         self.route_base_layout(key)
     }
 
@@ -126,18 +123,11 @@ impl App {
     }
 
     fn route_overlays(&mut self, key: KeyEvent) -> Option<bool> {
-        if self.trust_prompt.is_some() {
-            return Some(self.route_trust_prompt(key));
-        }
         if self.help.is_some() && self.help_key(key) {
             return Some(true);
         }
         if key.code == KeyCode::F(1) {
             self.show_help(self.help_here());
-            return Some(true);
-        }
-        if self.project_trust.is_some() {
-            self.project_trust_key(key);
             return Some(true);
         }
         if let Some(handled) = self.route_graph_filters(key) {
@@ -154,17 +144,6 @@ impl App {
             self.graph_filters = None;
         }
         Some(true)
-    }
-
-    fn route_trust_prompt(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.accept_trust();
-                true
-            }
-            KeyCode::Esc | KeyCode::Char('n' | 'N' | 'q' | 'Q') => false,
-            _ => true,
-        }
     }
 
     fn route_unblock(&mut self, key: KeyEvent) -> Option<bool> {
@@ -231,27 +210,6 @@ impl App {
         Some(true)
     }
 
-    fn route_confirmation(&mut self, key: KeyEvent) -> Option<bool> {
-        if !self
-            .confirmation
-            .as_ref()
-            .is_some_and(|card| card.status == ConfirmationStatus::Pending)
-        {
-            return None;
-        }
-        match key.code {
-            KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
-                self.confirm_action();
-                Some(true)
-            }
-            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
-                self.reject_confirmation();
-                Some(true)
-            }
-            _ => None,
-        }
-    }
-
     fn route_base_layout(&mut self, key: KeyEvent) -> bool {
         if self.route_global_shortcut(key) {
             return true;
@@ -266,7 +224,6 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('p') if control => self.picker = Some(Picker::new(Kind::Commands)),
-            KeyCode::Char('t') if control => self.run_workflow(Command::ToggleMode),
             KeyCode::Char('f') if control => self.picker = Some(Picker::new(Kind::History)),
             KeyCode::Char('n') if control => self.new_conversation(),
             KeyCode::Char('o') if control => self.open_conversation_picker(),

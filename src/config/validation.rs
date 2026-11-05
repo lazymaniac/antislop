@@ -5,16 +5,8 @@ use crate::{Error, Result, require};
 
 pub(super) fn validate(config: &Config) -> Result<()> {
     require(
-        config.schema_version == 3,
-        "schema_version is unsupported; set schema_version = 3",
-    )?;
-    require(
-        config.policy.max_parallel > 0,
-        "policy.max_parallel must be at least 1; set max_parallel to a positive integer",
-    )?;
-    require(
-        config.policy.max_tasks > 0,
-        "policy.max_tasks must be at least 1; set max_tasks to a positive integer",
+        config.schema_version == super::SCHEMA_VERSION,
+        "schema_version is unsupported; set schema_version = 4",
     )?;
     require(
         !config.providers.is_empty(),

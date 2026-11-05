@@ -4,8 +4,6 @@ mod review;
 mod rounds;
 pub(in crate::lean) mod worker;
 
-const MAX_ROUNDS_PER_RUN: u32 = 16;
-
 pub(super) struct Execution<'a> {
     core: &'a Arc<Core>,
     conversation: &'a str,
@@ -113,7 +111,6 @@ impl<'a> Execution<'a> {
     fn load_spec(core: &Core, task: &Task) -> Result<TaskContract> {
         let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
         spec.require_not_deferred()?;
-        core.store.validate_task_execution_constraints(task)?;
         core.store.assert_task_inputs(task)?;
         Ok(spec)
     }
@@ -124,9 +121,6 @@ impl<'a> Execution<'a> {
         }
         let mut state = self.round_state()?;
         for round in state.first_round.. {
-            if state.run.rejections >= MAX_ROUNDS_PER_RUN {
-                return self.round_limit();
-            }
             if !self.run_round(round, &mut state)? {
                 return Ok(());
             }
@@ -193,18 +187,6 @@ impl<'a> Execution<'a> {
             &self.task.spec,
             self.task.input_generation,
         ))
-    }
-
-    fn round_limit(&mut self) -> Result<()> {
-        let why = format!(
-            "{MAX_ROUNDS_PER_RUN} correction rounds ran without approval; the orchestrator must narrow the contract, supply a new basis or ask the user"
-        );
-        self.core.stop(
-            self.conversation,
-            self.task,
-            status::COORDINATING,
-            Some(&why),
-        )
     }
 
     fn exhausted(&mut self) -> Result<()> {

@@ -82,8 +82,10 @@ mod terminal;
 
 fn validate_project_conversation(core: &Core, project: &Path, conversation: &str) -> Result<()> {
     let conv = core.store.conversation(conversation)?;
+    let owner = core.store.repository_id(&project.to_string_lossy())?;
+    let target = core.store.repository_id(&conv.project)?;
     require(
-        conv.project == project.to_string_lossy() || core.store.is_trusted(&conv.project)?,
+        conv.project == project.to_string_lossy() || (owner.is_some() && owner == target),
         &format!(
             "conversation {conversation} does not belong to project {}",
             project.display()

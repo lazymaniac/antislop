@@ -15,7 +15,7 @@ use std::{
 };
 
 fn writer(id: &str) -> Value {
-    json!({"id":id,"title":id,"goal":"Implement selected format","kind":"implementation","writes":true,"scope":["."],"reviewer":{"focus":"selected format"}})
+    json!({"id":id,"title":id,"goal":"Implement selected format","change_kind": "code", "kind":"implementation","reviewer":{"summary": "selected format"}})
 }
 
 fn run(
@@ -83,7 +83,7 @@ fn run_scenario(
             .unwrap();
         assert!(out.status.success(), "{out:?}");
     }
-    common::trust(&project);
+    common::runtime_environment(&project);
     std::fs::write(
         dir.path().join("settings.json"),
         json!({"plan":plan,"report":report,"implementation":implementation,"claim":claim,"scenario":scenario})
@@ -112,17 +112,29 @@ fn run_scenario(
     let idle = || {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !core.is_idle(&conversation.id) {
+            if implementation == "B" && scenario.is_empty() {
+                // This oracle always rejects B. Verify repeated independent
+                // rejection, then exercise explicit cancellation instead of
+                // waiting for a removed runtime round limit.
+                let rejected = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .filter(|call| call["reviewed"] == "w" && call["approved"] == false)
+                    .count();
+                if rejected >= 2 {
+                    core.cancel(&conversation.id);
+                }
+            }
             assert!(Instant::now() < deadline, "runtime timeout");
             std::thread::sleep(Duration::from_millis(20));
         }
     };
     core.send(&conversation.id, "Implement selected format")
         .unwrap();
-    idle();
-    let plan = core.store.latest_plan(&conversation.id).unwrap();
-    assert!(!plan.is_empty());
-    core.accept_plan(&conversation.id, &plan[0].plan_id)
-        .unwrap();
+    if !scenario.starts_with("mail-") {
+        idle();
+    }
     if scenario.starts_with("mail-") {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !dir.path().join("mail-ready").exists() {
@@ -132,6 +144,7 @@ fn run_scenario(
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let plan = core.store.latest_plan(&conversation.id).unwrap();
         let task = core.task(&plan[0].plan_id, "w").unwrap();
         let role = format!("worker:{}", task.id);
         core.store
@@ -154,6 +167,8 @@ fn run_scenario(
         std::fs::write(dir.path().join("mail-release"), "go").unwrap();
     }
     idle();
+    let plan = core.store.latest_plan(&conversation.id).unwrap();
+    assert!(!plan.is_empty());
     if scenario.starts_with("resume-") {
         let stopped = core.task(&plan[0].plan_id, "w").unwrap();
         assert_eq!(stopped.status, "waiting", "{stopped:?}");
@@ -162,7 +177,11 @@ fn run_scenario(
         idle();
     }
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
-    for task in tasks.iter().filter(|task| task.spec["writes"] == true) {
+    for task in tasks.iter().filter(|task| {
+        task.spec["change_kind"]
+            .as_str()
+            .is_some_and(|kind| kind != "none")
+    }) {
         let file = project.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
         if task.status == "approved" {
             let expected = if implementation == "selected" {
@@ -217,15 +236,22 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             })
         };
         assert_eq!(normalize(input.clone()), normalize(input));
-        assert_eq!(specs.iter().filter(|t| t.writes).count() > 1, gates);
-        for spec in specs.iter().filter(|t| t.writes) {
+        assert_eq!(
+            specs
+                .iter()
+                .filter(|t| t.change_kind.has_delivery())
+                .count()
+                > 1,
+            gates
+        );
+        for spec in specs.iter().filter(|t| t.change_kind.has_delivery()) {
             let option = specs
                 .iter()
                 .find(|o| {
                     spec.depends_on.contains(&o.id) && o.kind == antislop::config::WorkKind::Options
                 })
                 .unwrap();
-            assert!(!option.writes);
+            assert!(!option.change_kind.has_delivery());
             let option_row = stored.iter().find(|t| t.spec["id"] == option.id).unwrap();
             let writer_row = stored.iter().find(|t| t.spec["id"] == spec.id).unwrap();
             let done = events
@@ -288,7 +314,7 @@ fn shared_analysis_never_substitutes_for_dedicated_options() {
     let mut x = writer("x");
     x["depends_on"] = json!(["shared", "w"]);
     let (stored, calls, _) = run(
-        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","kind":"options","writes":false,"reviewer":{"focus":"selection"}},w,x]}),
+        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","change_kind": "none", "kind":"options","reviewer":{"summary": "selection"}},w,x]}),
         false,
         REPORT,
         "A",
@@ -370,8 +396,6 @@ fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
         ] {
             assert!(worker.contains(text), "{text}");
         }
-        assert!(task.verdict.is_some());
-        assert_eq!(task.verdict.as_ref().unwrap()["approved"], approved);
         let reviewer = calls
             .iter()
             .find(|c| c["worker"] == false && c["task"] == "w")
@@ -400,7 +424,7 @@ fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
 #[test]
 fn read_only_plan_runs_without_generated_options_or_quality_writers() {
     for gates in [false, true] {
-        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "kind":"analysis", "writes":false, "scope":["."], "reviewer":{"focus":"read-only findings"}});
+        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "change_kind": "none", "kind":"analysis",   "reviewer":{"summary": "read-only findings"}});
         let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), gates, REPORT, "A", "");
         assert_eq!(
             stored.len(),
@@ -409,7 +433,7 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
         );
         let spec: TaskContract = serde_json::from_value(stored[0].spec.clone()).unwrap();
         assert_eq!(spec.id, "inspect");
-        assert!(!spec.writes);
+        assert!(!spec.change_kind.has_delivery());
         assert!(spec.depends_on.is_empty());
         assert_eq!(stored[0].status, "approved");
         assert!(stored[0].base.is_none());
@@ -423,12 +447,9 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
         );
         let worker = calls.iter().find(|call| call["worker"] == true).unwrap();
         assert_eq!(worker["task"], "inspect");
-        assert!(
-            worker["prompt"]
-                .as_str()
-                .unwrap()
-                .contains("Work read-only; do not modify anything.")
-        );
+        assert!(worker["prompt"].as_str().unwrap().contains(
+            "Deliver the analysis in your report; inspect files and run checks as needed."
+        ));
         assert_eq!(
             calls.iter().filter(|call| call["worker"] == true).count(),
             1

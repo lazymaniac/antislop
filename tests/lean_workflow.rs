@@ -19,19 +19,20 @@ fn guided_session_source(dir: &std::path::Path) -> String {
         std::fs::write(&script, r#"#!/usr/bin/env python3
 import json, sys, os, re
 prompt = sys.argv[-1]
-plan = '```plan\n' + json.dumps({'tasks':[{'id':'t1','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'reviewer':{'focus':'Check the observations','risks':[]}}]}) + '\n```'
+plan = '```plan\n' + json.dumps({'tasks':[{'id':'t1','title':'Inspect','goal':'Inspect the project','kind':'analysis','change_kind':'none','reviewer':{'summary':'Check the observations'}}]}) + '\n```'
 if 'SESSION PHASE: INTERVIEW.' in prompt:
     # A premature plan from an agent must never bypass the interview gate.
-    if 'Interview answer (' in prompt:
+    users = re.findall(r'\[user\]\n([^\n]+)', prompt)
+    if users and users[-1].startswith('Interview answer ('):
         answer = '```requirements\nGoal: inspect the project.\nScope: read only.\nAcceptance: report observations.\n```\n' + plan
     else:
         answer = '```question\n' + json.dumps({'id':'scope','context':'The scope determines what we inspect.','question':'What should we inspect?','options':[{'label':'Source code','description':'Inspect code quality first'},{'label':'Documentation','description':'Inspect documentation first'}]}) + '\n```\n' + plan
-elif any(marker in prompt for marker in ['You review a plan', 'new plan:', 'You review', 'Your reviewer found']):
+elif any(marker in prompt for marker in ['You review a plan', 'new plan:', 'You review', 'You audit', 'Your reviewer found']):
     ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
     answer = '```verdict\n' + json.dumps({'approved':True,'findings':[], 'coverage':{i:{'status':'ok','note':'checked'} for i in ids}}) + '\n```'
 elif 'Task: ' in prompt:
     answer = 'Project inspected.'
-elif '[runtime]' in prompt and 'SESSION PHASE: planning' not in prompt:
+elif 'The plan finished. Results of each task follow.' in prompt and 'SESSION PHASE: planning' not in prompt:
     answer = 'Implementation results received.'
 else:
     answer = '## Inspection\nReview the inspection task.\n' + plan
@@ -62,8 +63,28 @@ else:
         )
 }
 
+fn finish_fixture_plan(core: &std::sync::Arc<Core>, conversation: &str) {
+    // This fixture checks workflow execution. Its final audit deliberately
+    // remains negative because it supplies no integrated acceptance evidence.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let tasks = core.store.latest_plan(conversation).unwrap();
+        if !tasks.is_empty() && tasks.iter().all(|task| task.status == "approved") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "checked fixture plan did not finish: {:?}",
+            tasks
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    core.cancel(conversation);
+    idle(core, conversation);
+}
+
 #[test]
-fn approving_requirements_starts_planning_and_implementation_requires_plan_approval() {
+fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approval() {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
     let core = Core::open(
@@ -71,113 +92,7 @@ fn approving_requirements_starts_planning_and_implementation_requires_plan_appro
         Config::from_toml(&source).unwrap(),
     )
     .unwrap();
-    let conversation = core.start(dir.path()).unwrap();
-    assert!(core.send(&conversation.id, "/planning").is_err());
-    core.send(&conversation.id, "Inspect the project").unwrap();
-    idle(&core, &conversation.id);
-    assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
-    let workflow = core.store.workflow(&conversation.id).unwrap();
-    assert_eq!(workflow.phase, "interview");
-    assert!(workflow.summary.is_empty());
-    assert!(core.send(&conversation.id, "/planning").is_err());
-    let event = core
-        .store
-        .events_since(&conversation.id, 0, 100)
-        .unwrap()
-        .into_iter()
-        .find(|e| e.kind == "interview_question")
-        .unwrap();
-    let question = serde_json::from_value(event.payload).unwrap();
-    let mut form = antislop::lean::tui::interview::Form::new(event.seq, question);
-    let answer = form
-        .key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        ))
-        .unwrap();
-    assert!(answer.contains("Answer: Source code"));
-    core.send(&conversation.id, &answer).unwrap();
-    idle(&core, &conversation.id);
-    let workflow = core.store.workflow(&conversation.id).unwrap();
-    assert!(workflow.summary.contains("Acceptance:"));
-    assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
-
-    // Approving the requirements schedules the plan; it still waits for acceptance.
-    core.send(&conversation.id, "/planning").unwrap();
-    idle(&core, &conversation.id);
-    let tasks = core.store.latest_plan(&conversation.id).unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, "proposed");
-    // The planner, not the orchestrator, drafted it; the user still hears one voice.
-    let planner = core
-        .store
-        .last_turn(&conversation.id, antislop::lean::PLANNER)
-        .unwrap()
-        .expect("the planner drafted the first plan");
-    assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
-    assert!(
-        core.store
-            .messages_by(&conversation.id, "planner", 0)
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        core.store.workflow(&conversation.id).unwrap().phase,
-        "planning"
-    );
-    assert!(
-        core.store
-            .last_turn(&conversation.id, "worker:t1")
-            .unwrap()
-            .is_none()
-    );
-
-    let initial_plan = tasks[0].plan_id.clone();
-    let comment = core
-        .comment_scoped(
-            &conversation.id,
-            Some(&initial_plan),
-            &format!("plan:{initial_plan}:line:1"),
-            "Clarify inspection scope",
-        )
-        .unwrap();
-    assert_eq!(comment.status, "draft");
-    assert!(core.accept_plan(&conversation.id, &initial_plan).is_err());
-    assert_eq!(
-        core.review_comments(&conversation.id, &initial_plan)
-            .unwrap(),
-        1
-    );
-    idle(&core, &conversation.id);
-    assert!(
-        core.store
-            .comments(&conversation.id, "resolved")
-            .unwrap()
-            .iter()
-            .any(|c| c.id == comment.id)
-    );
-    let revised = core.store.latest_plan(&conversation.id).unwrap();
-    assert_ne!(revised[0].plan_id, initial_plan);
-    assert_eq!(revised[0].status, "proposed");
-    core.accept_plan(&conversation.id, &revised[0].plan_id)
-        .unwrap();
-    assert_eq!(
-        core.store.workflow(&conversation.id).unwrap().phase,
-        "implementation"
-    );
-    idle(&core, &conversation.id);
-    assert!(
-        core.store
-            .sessions(&conversation.id)
-            .unwrap()
-            .iter()
-            .any(|s| s.role.starts_with("worker:"))
-    );
-    // A completed interview left by a stopped daemon resumes without /planning.
-    // Autonomous conversations then carry on to the checked plan's acceptance;
-    // supervised ones wait for explicit requirements approval.
     let waiting = core.start(dir.path()).unwrap();
-    core.set_mode(&waiting.id, true).unwrap();
     let message = core
         .store
         .add_message(&waiting.id, "user", "Inspect the project")
@@ -185,7 +100,7 @@ fn approving_requirements_starts_planning_and_implementation_requires_plan_appro
     core.store
         .interview_summary(
             &waiting.id,
-            "Goal: inspect the project. Scope: read only. Acceptance: report observations.",
+            "Goal: inspect the project. Acceptance: report observations.",
             message.seq,
         )
         .unwrap();
@@ -195,16 +110,22 @@ fn approving_requirements_starts_planning_and_implementation_requires_plan_appro
         Config::from_toml(&source).unwrap(),
     )
     .unwrap();
-    idle(&core, &waiting.id);
-    assert!(!core.store.latest_plan(&waiting.id).unwrap().is_empty());
+    finish_fixture_plan(&core, &waiting.id);
     assert_eq!(
         core.store.workflow(&waiting.id).unwrap().phase,
         "implementation"
     );
+    assert_eq!(
+        core.store
+            .messages_by(&waiting.id, "user", 0)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
-fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
+fn checked_plan_starts_automatically_after_the_interview() {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
     let core = Core::open(
@@ -213,7 +134,6 @@ fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
     )
     .unwrap();
     let conversation = core.start(dir.path()).unwrap();
-    core.set_mode(&conversation.id, true).unwrap();
     core.send(&conversation.id, "Inspect the project").unwrap();
     idle(&core, &conversation.id);
     let event = core
@@ -228,7 +148,7 @@ fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
         event.payload["id"].as_str().unwrap()
     );
     core.send(&conversation.id, &answer).unwrap();
-    idle(&core, &conversation.id);
+    finish_fixture_plan(&core, &conversation.id);
     // Planning, the plan check and acceptance all happened without the user.
     let planner = core
         .store
@@ -255,53 +175,6 @@ fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
             .iter()
             .any(|s| s.role.starts_with("worker:"))
     );
-
-    // The finished plan ends the cycle once its final audit approves (the
-    // fixture's agents cannot run one). The next request interviews again and
-    // the planner drafts its plan too, though an older plan exists.
-    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
-        .plan_id
-        .clone();
-    core.store
-        .append_event(
-            &conversation.id,
-            None,
-            Some(&plan),
-            "audit",
-            &serde_json::json!({"approved": true, "findings": [], "plan": plan}),
-        )
-        .unwrap();
-    core.send(&conversation.id, "Inspect the documentation too")
-        .unwrap();
-    idle(&core, &conversation.id);
-    assert!(
-        core.store
-            .workflow(&conversation.id)
-            .unwrap()
-            .interviewing()
-    );
-    let question = core
-        .store
-        .events_since(&conversation.id, 0, 2000)
-        .unwrap()
-        .into_iter()
-        .rev()
-        .find(|e| e.kind == "interview_question")
-        .unwrap();
-    let answer = format!(
-        "Interview answer ({})\nAnswer: Documentation",
-        question.payload["id"].as_str().unwrap()
-    );
-    core.send(&conversation.id, &answer).unwrap();
-    idle(&core, &conversation.id);
-    let planner_turns = core
-        .store
-        .sessions(&conversation.id)
-        .unwrap()
-        .iter()
-        .filter(|s| s.role == antislop::lean::PLANNER)
-        .count();
-    assert_eq!(planner_turns, 2, "one draft per planning cycle");
 }
 
 #[test]
@@ -329,7 +202,7 @@ print(json.dumps({'type':'turn.completed'}))
         )
         .unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
-        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","kind":"analysis","reviewer":{"focus":"Inspect evidence"}})]).unwrap().remove(0);
+        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Inspect evidence"}})]).unwrap().remove(0);
         if phase == "implementation" {
             core.store
                 .queue_plan(&conversation.id, &task.plan_id)

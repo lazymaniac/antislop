@@ -1,7 +1,7 @@
 use super::super::daemon::{Client, Request};
 use super::super::tui::view::clean;
+use super::Options;
 use super::presentation::{latest_plan, print};
-use super::{Options, ensure_trusted};
 use crate::Result;
 use serde_json::Value;
 use std::io::{BufRead, IsTerminal};
@@ -22,18 +22,14 @@ pub(super) fn run(args: &[String]) -> Result<()> {
 
 fn connect(args: &[String]) -> Result<(Options, Client)> {
     let mut options = Options::parse(args)?;
-    // Before anything is created or started in this directory.
-    ensure_trusted(
-        &super::super::trust::Registry::from_env()?,
-        &options.project,
-        options.trust,
-        std::io::stdin().is_terminal(),
-        std::io::stdin().lock(),
-        std::io::stderr(),
-    )?;
     crate::config::Config::load(&options.config)?;
     options.prepare()?;
-    let client = Client::connect(&options.project, &options.config, &options.state)?;
+    let client = Client::connect(
+        &options.project,
+        &options.config,
+        &options.state,
+        &std::env::current_exe()?,
+    )?;
     Ok((options, client))
 }
 
@@ -58,7 +54,7 @@ fn events(
 
 fn stream(options: &Options, client: Client, conversation: String) -> Result<()> {
     // Only what happens from now on, but remember the latest plan so
-    // `/accept` refers to the plan that was shown.
+    // `/resume` refers to the plan that was shown.
     let mut last = 0;
     let mut plan = None;
     loop {
@@ -80,6 +76,7 @@ fn send_message(client: &Client, conversation: &str, message: &str) -> Result<()
         crate::lean::daemon::ConversationRequest::Send {
             conversation: conversation.to_owned(),
             text: message.to_owned(),
+            to: None,
         },
     ))?;
     Ok(())
@@ -151,8 +148,8 @@ fn input_request(conversation: &str, line: &str, plan: &Option<String>) -> Optio
     if text.is_empty() {
         return None;
     }
-    if matches!(text, "/accept" | "/resume") {
-        return plan_request(conversation, text, plan);
+    if text == "/resume" {
+        return plan_request(conversation, plan);
     }
     if text == "/cancel" {
         return Some(cancel_request(conversation));
@@ -160,42 +157,27 @@ fn input_request(conversation: &str, line: &str, plan: &Option<String>) -> Optio
     if matches!(text, "/pause" | "/continue") {
         return Some(pause_request(conversation, text));
     }
-    if matches!(text, "/mode autonomous" | "/mode supervised") {
-        return Some(mode_request(conversation, text));
-    }
     Some(send_request(conversation, text))
 }
 
-fn plan_request(conversation: &str, command: &str, plan: &Option<String>) -> Option<Request> {
+fn plan_request(conversation: &str, plan: &Option<String>) -> Option<Request> {
     let Some(plan) = plan else {
-        eprintln!(
-            "✗ {}",
-            if command == "/accept" {
-                "there is no proposed plan"
-            } else {
-                "there is no plan to resume"
-            }
-        );
+        eprintln!("✗ there is no plan to resume");
         return None;
     };
-    let conversation = conversation.to_owned();
-    let request = if command == "/accept" {
-        crate::lean::daemon::ConversationRequest::Accept {
-            conversation,
-            plan: plan.clone(),
-        }
-    } else {
+    Some(Request::Conversation(
         crate::lean::daemon::ConversationRequest::Resume {
-            conversation,
+            conversation: conversation.to_owned(),
             plan: plan.clone(),
-        }
-    };
-    Some(Request::Conversation(request))
+            revision_token: None,
+        },
+    ))
 }
 
 fn cancel_request(conversation: &str) -> Request {
     Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
         conversation: conversation.to_owned(),
+        revision_token: None,
     })
 }
 
@@ -206,16 +188,10 @@ fn pause_request(conversation: &str, command: &str) -> Request {
     })
 }
 
-fn mode_request(conversation: &str, command: &str) -> Request {
-    Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
-        conversation: conversation.to_owned(),
-        autonomous: command.ends_with("autonomous"),
-    })
-}
-
 fn send_request(conversation: &str, text: &str) -> Request {
     Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
         conversation: conversation.to_owned(),
         text: text.to_owned(),
+        to: None,
     })
 }

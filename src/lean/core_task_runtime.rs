@@ -28,10 +28,6 @@ pub(super) fn sources(core: &Core, task: &Task) -> Result<Vec<serde_json::Value>
             continue;
         }
         require(
-            visited.len() <= 64,
-            "runtime handoff exceeds 64 owners; narrow the task dependencies",
-        )?;
-        require(
             core.store.plan_conversation(&owner.plan_id)? == conversation,
             "runtime handoff belongs to another conversation",
         )?;
@@ -46,7 +42,7 @@ pub(super) fn sources(core: &Core, task: &Task) -> Result<Vec<serde_json::Value>
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => return Err(error.into()),
             };
-            sources.push(json!({"task":owner.id,"directory":root,"available":available,"access":"read-only"}));
+            sources.push(json!({"task":owner.id,"directory":root,"available":available}));
         }
         let prior = {
             let db = core.store.db();
@@ -66,4 +62,41 @@ pub(super) fn sources(core: &Core, task: &Task) -> Result<Vec<serde_json::Value>
         }
     }
     Ok(sources)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_sources_support_more_than_sixty_four_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let dependencies: Vec<_> = (0..70).map(|index| format!("source-{index}")).collect();
+        let mut specs: Vec<_> = dependencies.iter().map(|id| json!({
+            "id":id,"title":"Source","goal":"Provide evidence","kind":"analysis","change_kind":"none"
+        })).collect();
+        specs.push(
+            json!({"id":"consumer","title":"Consumer","goal":"Assess evidence", "kind":"analysis",
+            "change_kind":"none","depends_on":dependencies}),
+        );
+        let plan = core.store.add_plan(&conversation, &specs).unwrap();
+        let consumer = plan
+            .iter()
+            .find(|task| task.spec["id"] == "consumer")
+            .unwrap();
+        let result = sources(&core, consumer).unwrap();
+        assert_eq!(result.len(), 70);
+        let owners: std::collections::BTreeSet<_> = result
+            .iter()
+            .map(|source| source["task"].as_str().unwrap())
+            .collect();
+        assert_eq!(owners.len(), 70);
+    }
 }

@@ -83,7 +83,7 @@ impl Core {
         }
         let tasks = self.store.plan(plan_id)?;
         if has_blocked_tasks(&tasks) {
-            self.finish_blocked_plan(conversation, &tasks);
+            self.finish_blocked_plan(conversation, &tasks, cancel);
             Ok(true)
         } else {
             drop(graph);
@@ -103,13 +103,13 @@ impl Core {
         if self.audited_plan_changed(conversation, plan_id, cancel, &snapshot)? {
             return Ok(false);
         }
-        self.publish_plan_report(conversation, report);
+        self.publish_plan_report(conversation, report, cancel);
         Ok(true)
     }
 
     fn audited_plan_snapshot(&self, plan_id: &str) -> Result<AuditedPlanSnapshot> {
         let revision = self.store.plan_revision(plan_id)?;
-        let basis = plan_scope_hash(&self.store.plan(plan_id)?);
+        let basis = task_state_digest(&self.store.plan(plan_id)?);
         Ok(AuditedPlanSnapshot { revision, basis })
     }
 
@@ -127,12 +127,23 @@ impl Core {
                 .expect("revision jobs mutex")
                 .contains_key(conversation)
                 || self.store.plan_revision(plan_id)? != snapshot.revision
-                || plan_scope_hash(&self.store.plan(plan_id)?) != snapshot.basis
+                || task_state_digest(&self.store.plan(plan_id)?) != snapshot.basis
                 || self.has_runnable_dependents(plan_id)?))
     }
 
-    fn publish_plan_report(self: &Arc<Self>, conversation: &str, report: Result<String>) {
+    fn publish_plan_report(
+        self: &Arc<Self>,
+        conversation: &str,
+        report: Result<String>,
+        cancel: &AtomicBool,
+    ) {
         let mut plans = self.plans.lock().expect("plans mutex");
+        // Cancellation and the plan-to-orchestrator handoff use this same
+        // lock order, so a cancelled plan cannot wake a new uncancelled turn.
+        if cancel.load(Ordering::SeqCst) {
+            plans.remove(conversation);
+            return;
+        }
         match report.and_then(|report| self.store.add_message(conversation, RUNTIME, &report)) {
             Ok(_) => self.wake(conversation),
             Err(error) => self.notice(
@@ -318,7 +329,7 @@ mod deferred_tests {
             .store
             .add_plan(
                 &conversation,
-                &[json!({"id":"bad","title":"Bad","goal":"Do work","kind":"analysis"})],
+                &[json!({"id":"bad","title":"Bad","goal":"Do work","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap()
             .remove(0);
@@ -366,7 +377,7 @@ mod deferred_tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let mut tasks = core.store.add_plan(&conversation, &[json!({"id":"future","title":"Future","goal":"Preserve future work","kind":"implementation","deferred":true})]).unwrap();
+        let mut tasks = core.store.add_plan(&conversation, &[json!({"id":"future","title":"Future","goal":"Preserve future work","change_kind": "code", "kind":"implementation","deferred":true})]).unwrap();
         tasks[0].status = status::QUEUED.into();
         core.store.update_task(&tasks[0]).unwrap();
         // Suppress only notification delivery; no real provider is started by the test.
@@ -391,5 +402,59 @@ mod deferred_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_plan_does_not_publish_or_wake_orchestration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut configuration = Config::from_toml(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/antislop.toml"
+        )))
+        .unwrap();
+        for provider in configuration.providers.values_mut() {
+            provider.binary = directory.path().join("must-not-launch");
+            provider.command = None;
+        }
+        let core = Core::open(&directory.path().join("state"), configuration).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        for blocked in [false, true] {
+            let cancel = Arc::new(AtomicBool::new(true));
+            core.plans
+                .lock()
+                .unwrap()
+                .insert(conversation.clone(), cancel.clone());
+            if blocked {
+                core.finish_blocked_plan(&conversation, &[], &cancel);
+            } else {
+                core.publish_plan_report(
+                    &conversation,
+                    Ok("must not restart cancelled work".into()),
+                    &cancel,
+                );
+            }
+            assert!(core.is_idle(&conversation));
+            assert!(
+                core.store
+                    .messages_after(&conversation, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                core.store
+                    .last_turn(&conversation, ORCHESTRATOR)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }

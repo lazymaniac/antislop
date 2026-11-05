@@ -121,7 +121,7 @@ impl Fixture {
             .unwrap()
     }
     fn task(&self, id: &str, requirements: &[&str], depends: &[&str]) -> serde_json::Value {
-        json!({"id":id,"title":id,"goal":"implement and check scope","kind":"implementation","reviewer":{"focus":"actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"depends_on":depends})
+        json!({"id":id,"title":id,"goal":"implement and check scope","change_kind": "code", "kind":"implementation","reviewer":{"summary": "actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"depends_on":depends})
     }
     fn plan(&self, specs: Vec<serde_json::Value>) -> Vec<antislop::lean::store::Task> {
         let tasks = self.store.add_plan(&self.conversation, &specs).unwrap();
@@ -218,7 +218,22 @@ impl Fixture {
         for t in &mut tasks {
             t.status = "approved".into();
             t.round = 1;
+            t.report = Some(format!("Fixture result for {}", t.spec["id"]));
             self.store.update_task(t).unwrap();
+            let turn = self
+                .store
+                .start_turn(
+                    &self.conversation,
+                    &format!("worker:{}", t.id),
+                    "fixture",
+                    0,
+                    Some(&t.plan_id),
+                )
+                .unwrap();
+            rusqlite::Connection::open(self.dir.path().join("core.db")).unwrap().execute("INSERT INTO agent_results(turn_id,result) VALUES(?1,?2)", rusqlite::params![turn.id,json!({"type":"completed","summary":"Fixture result","report":t.report.as_deref().unwrap()}).to_string()]).unwrap();
+            self.store
+                .finish_turn(&turn.id, TurnStatus::Done, None)
+                .unwrap();
         }
         tasks
     }
@@ -605,28 +620,21 @@ fn removed_entry_and_task_fields_are_rejected() {
         old[field] = value;
         assert!(serde_json::from_value::<EntrySpec>(old).is_err(), "{field}");
     }
-    // Stored entries and live daemon replies from earlier runs keep loading
-    // when legacy owner/task_ids fields are present, and drop them on save.
-    let mut legacy_entry = entry.clone();
-    legacy_entry["implementation_owners"] = json!([]);
-    legacy_entry["review_owners"] = json!([]);
-    legacy_entry["task_ids"] = json!([]);
-    let parsed = serde_json::from_value::<EntrySpec>(legacy_entry).unwrap();
-    let reserialized = serde_json::to_value(&parsed).unwrap();
     for field in ["implementation_owners", "review_owners", "task_ids"] {
-        assert!(reserialized.get(field).is_none(), "{field}");
+        let mut old = entry.clone();
+        old[field] = json!([]);
+        assert!(serde_json::from_value::<EntrySpec>(old).is_err(), "{field}");
     }
     for disposition in ["withdrawn_by_user", "replaced_by_user"] {
         let mut old = entry.clone();
         old["disposition"] = json!(disposition);
         assert!(serde_json::from_value::<EntrySpec>(old).is_err());
     }
-    // A stored contract keeps loading with fields of earlier plans; what a
-    // planner submits may not carry them.
+    // Stored and submitted contracts both reject removed fields.
     let mut task = f.task("task", &["r"], &[]);
     task["plan_item_ids"] = json!([]);
-    assert!(serde_json::from_value::<TaskContract>(task).is_ok());
-    let planned = json!({"id": "task", "title": "Task", "goal": "Do it", "kind": "analysis"});
+    assert!(serde_json::from_value::<TaskContract>(task).is_err());
+    let planned = json!({"id": "task", "title": "Task", "goal": "Do it", "change_kind": "none", "kind": "analysis"});
     assert!(serde_json::from_value::<PlannedTask>(planned.clone()).is_ok());
     for field in ["plan_item_ids", "requirement_ids", "reviewer", "inputs"] {
         let mut old = planned.clone();
@@ -644,8 +652,21 @@ fn live_scope_edit_cancels_only_affected_process_and_rejects_late_task_updates()
     use std::time::{Duration, Instant};
     let f = Fixture::settled();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
-    let tasks = f.plan(vec![f.task("a", &["r1"], &[]), f.task("b", &["r2"], &[])]);
+    let tasks = f.plan(
+        [("a", "r1"), ("b", "r2")]
+            .iter()
+            .map(|(id, requirement)| {
+                let mut task = f.task(id, &[requirement], &[]);
+                task["change_kind"] = json!("none");
+                task["kind"] = json!("analysis");
+                task
+            })
+            .collect(),
+    );
     f.review("extraction", "", true);
+    f.store
+        .queue_plan(&f.conversation, &tasks[0].plan_id)
+        .unwrap();
     let script = f.dir.path().join("fixture-codex");
     std::fs::write(&script,r#"#!/usr/bin/env python3
 import json,sys,uuid,os,time,re
@@ -680,8 +701,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
     .replace("required_gates = true", "required_gates = false");
     std::fs::set_permissions(f.dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let core = Core::open(f.dir.path(), Config::from_toml(&config).unwrap()).unwrap();
-    core.accept_plan(&f.conversation, &tasks[0].plan_id)
-        .unwrap();
     let wait = |done: &dyn Fn() -> bool| {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !done() {
@@ -757,7 +776,7 @@ fn compliance_sessions_review_integrated_files_and_reopen_after_file_changes() {
 import json,sys,uuid,re,os
 prompt=sys.argv[-1]
 def block(tag,data):return '```'+tag+'\n'+json.dumps(data)+'\n```'
-if prompt.startswith('Audit the integrated project'):
+if ('Audit the integrated project' in prompt):
     assert open('observed-result').read()=='delivered'
     tasks,_=json.JSONDecoder().raw_decode(prompt.split('Tasks of the plan: ',1)[1])
     assert all(isinstance(t['summary'],str) for t in tasks if t['status']=='approved'),tasks
@@ -770,7 +789,7 @@ if prompt.startswith('Audit the integrated project'):
             task=next(t for t in tasks if criterion['id'] in t['covers'])
             evidence.append({'criterion_id':criterion['id'],'task_id':task['task_id'],'result':'Read observed-result in integrated project: exact expected content delivered'})
     answer=block('compliance',{'approved':not os.path.exists('audit-gap'),'findings':[{'issue':'obligation omitted during extraction'}] if os.path.exists('audit-gap') else [],'evidence':evidence})
-elif prompt.startswith('Review this audit independently'):
+elif ('Review this audit independently' in prompt):
     if os.path.exists('hold-audit-reviewer'):
         import time
         open('audit-reviewer-entered','w').close()
@@ -1213,10 +1232,12 @@ fn approving_requirements_plans_without_orchestrator_options() {
 import sys,json,uuid
 prompt = sys.argv[-1]
 assert not prompt.startswith('Act as requirements analyst'), 'approved requirements must go directly to review'
-answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'reviewer':{'focus':'Check the observations'}}]})+'\n```'
-if 'You review a plan' in prompt or 'new plan:' in prompt:
+answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','change_kind':'none','reviewer':{'summary':'Check the observations'}}]})+'\n```'
+if 'You review' in prompt or 'new plan:' in prompt:
     import os
     answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-final-plan'),'findings':[{'issue':'Plan misses an acceptance criterion'}] if os.path.exists('reject-final-plan') else []})+'\n```'
+if 'You are the planner' not in prompt and 'You review' not in prompt:
+    answer='Inspected the fixture requirements and preserved them.'
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
 print(json.dumps({'type':'turn.completed','usage':{}}))
@@ -1243,6 +1264,20 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         assert_eq!(result.spec_revision, 2);
         let deadline = Instant::now() + Duration::from_secs(120);
         while !core.is_idle(&f.conversation) {
+            if reject_plan
+                && core
+                    .store
+                    .events_since(&f.conversation, 0, 10000)
+                    .unwrap()
+                    .iter()
+                    .filter(|event| {
+                        event.kind == "plan_review" && event.payload["approved"] == false
+                    })
+                    .count()
+                    >= 2
+            {
+                core.cancel(&f.conversation);
+            }
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1259,13 +1294,12 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         assert!(option_turns.is_empty());
         if reject_plan {
             let events = core.store.events_since(&f.conversation, 0, 2000).unwrap();
-            let visible = events
-                .iter()
-                .rev()
-                .find(|event| event.kind == "plan_proposed")
-                .expect("a reviewed plan remains visible to the user");
-            assert_eq!(visible.payload["review"]["approved"], false);
-            assert_eq!(visible.payload["automatic"], false);
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.kind == "plan_review" && event.payload["approved"] == false)
+            );
+            assert!(core.store.accepted_plan(&f.conversation).unwrap().is_none());
             assert!(plan.iter().all(|task| task.round == 0));
         }
         assert_eq!(
@@ -1592,7 +1626,7 @@ fn rejected_requirements_resume_after_restart_as_a_new_unapproved_proposal() {
     std::fs::write(&script, r#"#!/usr/bin/env python3
 import sys,json,uuid,os
 prompt=sys.argv[-1]
-if prompt.startswith('Act as requirements analyst'):
+if ('Act as requirements analyst' in prompt):
     assert '"decision":"rejected"' in prompt, prompt
     assert 'Preserve the offline exception' in prompt, prompt
     lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
@@ -1603,10 +1637,11 @@ if prompt.startswith('Act as requirements analyst'):
     entry['interpretation']='Revised wording preserving the offline exception'
     with open('correction-attempts','a') as out: out.write('1\n')
     answer='```ledger\n'+json.dumps({'run_id':run['id'],'expected_spec_revision':run['spec_revision'],'entries':[entry]})+'\n```'
-elif prompt.startswith('Independently compare') or 'You review a plan' in prompt or 'new plan:' in prompt:
+elif ('Independently compare' in prompt) or 'You review' in prompt or 'new plan:' in prompt:
     answer='```verdict\n'+json.dumps({'approved':True,'findings':[]})+'\n```'
-else:
-    answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'requirement_ids':['r1'],'criterion_ids':['r1.accept'],'reviewer':{'focus':'Check the observations'}}]})+'\n```'
+elif 'You are the planner' in prompt:
+    answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','change_kind':'none','requirement_ids':['r1'],'criterion_ids':['r1.accept'],'reviewer':{'summary':'Check the observations'}}]})+'\n```'
+else:answer='Inspected the fixture.'
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
 print(json.dumps({'type':'turn.completed','usage':{}}))

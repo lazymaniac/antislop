@@ -9,10 +9,15 @@ pub(super) fn on_plan_proposed(
     _turn: &str,
 ) {
     view.plan_preview = None;
-    view.requirements_progress = Some((
-        false,
-        "Plan ready for review. Esc closes requirements so you can review the plan.".into(),
-    ));
+    view.requirements_progress = Some(if payload["automatic"] == true {
+        (false, "Reviewed plan starts automatically.".into())
+    } else if let Some(error) = payload["review"]["error"].as_str() {
+        (true, format!("Plan review failed: {error}"))
+    } else if let Some(reason) = payload["waiting"].as_str() {
+        (true, format!("Plan could not start: {reason}"))
+    } else {
+        (false, "Plan received.".into())
+    });
     view.plan = payload["plan"].as_str().map(str::to_owned);
     view.plan_doc = payload["document"].as_str().unwrap_or_default().to_owned();
     view.tasks = proposed_tasks(payload);
@@ -48,14 +53,15 @@ fn proposed_task(task: &Value, peers: &Value) -> TaskRow {
         goal: line("goal"),
         depends_on: strings(&task["depends_on"]),
         parallel_with: strings(peers),
-        writes: task["writes"] == true,
+        change_kind: serde_json::from_value(task["change_kind"].clone())
+            .expect("plan task has a validated change_kind"),
         focus: clean_line(task["reviewer"]["focus"].as_str().unwrap_or_default()),
         risks: strings(&task["reviewer"]["risks"]),
         status: "proposed".into(),
         round: 0,
-        activity: proposed_activity(task["writes"] == true),
+        activity: proposed_activity(task["change_kind"] != "none"),
         reason: None,
-        scope_hash: optional("scope_hash"),
+        revision_token: optional("revision_token"),
         effect: None,
         effect_cut: None,
         obligations: None,
@@ -122,19 +128,15 @@ fn append_plan_review(view: &mut View, payload: &Value) {
 }
 
 fn publish_plan_summary(view: &mut View, payload: &Value) {
-    view.plan_scope_hash = payload["scope_hash"].as_str().map(str::to_owned);
-    if let Some(scope) = &view.plan_scope_hash {
-        view.conversation_scope_hash = Some(scope.clone());
+    view.plan_revision_token = payload["revision_token"].as_str().map(str::to_owned);
+    if let Some(scope) = &view.plan_revision_token {
+        view.conversation_revision_token = Some(scope.clone());
     }
-    let next = if payload["automatic"] == true {
-        "running (autonomous mode).".to_owned()
-    } else {
-        let waiting = payload["waiting"]
-            .as_str()
-            .map(|reason| format!("Waiting for you: {reason}. "))
-            .unwrap_or_default();
-        format!("{waiting}Ctrl+A runs it, or type what to change.")
-    };
+    let next = view
+        .requirements_progress
+        .as_ref()
+        .map(|(_, text)| text.as_str())
+        .unwrap_or_default();
     let summary = format!("Plan: {} tasks. {next}", view.tasks.len());
     view.cards.push(TranscriptCard::Plan {
         plan: view.plan.clone().unwrap_or_default(),

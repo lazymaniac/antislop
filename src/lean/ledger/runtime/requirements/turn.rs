@@ -108,7 +108,7 @@ impl Core {
             profile: self.config_snapshot().resolve(work_kind, role_kind),
             cwd: PathBuf::from(self.store.conversation(conversation)?.project),
             add_dirs: vec![],
-            access: agent::Access::ReadOnly,
+
             upto_message: 0,
         })
     }

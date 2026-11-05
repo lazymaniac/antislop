@@ -10,17 +10,6 @@ fn encode_runtime_notice(request: Request) -> std::result::Result<WireRequest, B
     }
 }
 
-fn encode_authorize_task_execution(
-    request: Request,
-) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Control(crate::lean::daemon::ControlRequest::AuthorizeTaskExecution {
-            authorization,
-        }) => Ok(WireRequest::AuthorizeTaskExecution { authorization }),
-        other => Err(Box::new(other)),
-    }
-}
-
 fn encode_identity(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     match request {
         Request::Control(crate::lean::daemon::ControlRequest::Identity) => {
@@ -99,27 +88,8 @@ fn encode_start_in(request: Request) -> std::result::Result<WireRequest, Box<Req
     }
 }
 
-fn encode_trust_status(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Control(crate::lean::daemon::ControlRequest::TrustStatus) => {
-            Ok(WireRequest::TrustStatus)
-        }
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_trust(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Control(crate::lean::daemon::ControlRequest::Trust { trusted }) => {
-            Ok(WireRequest::Trust { trusted })
-        }
-        other => Err(Box::new(other)),
-    }
-}
-
 pub(super) fn encode_group_all(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     encode_runtime_notice(request)
-        .or_else(|request| encode_authorize_task_execution(*request))
         .or_else(|request| encode_identity(*request))
         .or_else(|request| encode_get_config(*request))
         .or_else(|request| encode_set_config(*request))
@@ -128,6 +98,4 @@ pub(super) fn encode_group_all(request: Request) -> std::result::Result<WireRequ
         .or_else(|request| encode_conversations(*request))
         .or_else(|request| encode_start(*request))
         .or_else(|request| encode_start_in(*request))
-        .or_else(|request| encode_trust_status(*request))
-        .or_else(|request| encode_trust(*request))
 }

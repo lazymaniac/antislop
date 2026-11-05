@@ -360,8 +360,14 @@ fn progress_and_failure_remain_visible_while_requirements_are_open() {
         (
             3,
             "plan_proposed",
-            json!({"plan":"plan1","tasks":[]}),
-            "Plan ready for review",
+            json!({"plan":"plan1","tasks":[],"automatic":true,"review":{"approved":true}}),
+            "Reviewed plan starts automatically.",
+        ),
+        (
+            4,
+            "plan_proposed",
+            json!({"plan":"plan2","tasks":[],"automatic":false,"waiting":"missing executable","review":{"error":"missing executable"}}),
+            "missing executable",
         ),
     ] {
         app.view

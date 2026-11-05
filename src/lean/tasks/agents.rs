@@ -293,7 +293,7 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
 fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract {
     let id = reserve_task_id(&format!("{}-options", task.id), ids);
     TaskContract {
-        change_kind: None,
+        change_kind: ChangeKind::None,
         outputs: Vec::new(),
         delivery: None,
         deferred: task.deferred,
@@ -306,7 +306,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         summary: Some("Compare feasible approaches and select the best supported variant.".into()),
         goal: options_goal(task),
         section: Some("Options".into()),
-        writes: false,
+
         depends_on: task.depends_on.clone(),
         kind: WorkKind::Options,
         covers: Vec::new(),

@@ -4,7 +4,7 @@ impl ConfigEditor {
         self.draw_with_theme(
             frame,
             &Theme::from_env(),
-            super::super::trust::config_dir()
+            crate::lean::paths::config_dir()
                 .ok()
                 .map(|p| p.join("antislop.toml"))
                 .as_deref(),

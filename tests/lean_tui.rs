@@ -5,9 +5,8 @@ use antislop::lean::{
     daemon::{Client, Request, socket as daemon_socket},
     diff::ReviewerProfile,
     tui::{
-        App, CardProps, Command, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
-        DiffView, Editor, Focus, Help, InputBuffer, Kind, Picker, Relations, Scope, Theme,
-        TranscriptCard, Update, UpdateReceiver, card,
+        App, CardProps, Command, Details, DiffView, Editor, Focus, Help, InputBuffer, Kind, Picker,
+        Relations, Scope, Theme, TranscriptCard, Update, UpdateReceiver, card,
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
@@ -125,7 +124,7 @@ fn plan_comments_show_queue_current_id_and_raw_failure_inside_the_plan() {
         seq += 1;
         json!({"seq": seq, "kind": kind, "turn_id": turn, "payload": payload})
     };
-    app.view.apply(&event("plan_proposed", None, json!({"plan":"p1", "document":"# Plan\nImplement change", "tasks":[{"id":"t1", "title":"Change", "status":"proposed"}]})));
+    app.view.apply(&event("plan_proposed", None, json!({"plan":"p1", "document":"# Plan\nImplement change", "tasks":[{"change_kind":"none","id":"t1", "title":"Change", "status":"proposed"}]})));
     for (id, text) in [(1, "First feedback"), (2, "Second feedback")] {
         app.view.apply(&event(
             "comment",
@@ -633,14 +632,7 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     assert!(!triggered_ok);
 
     // Breakpoint at 84 (<85) -> compact banner
-    let header_compact = render_header(
-        "projekt",
-        "conv-test",
-        Some(true),
-        "ready",
-        PanelFocus::Chat,
-        84,
-    );
+    let header_compact = render_header("projekt", "conv-test", "ready", PanelFocus::Chat, 84);
     let text_compact: String = header_compact
         .spans
         .iter()
@@ -651,14 +643,7 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     assert!(text_compact.contains("(Tab: switch)"));
 
     // Breakpoint at 85 (>=85) -> side by side mode
-    let header_wide = render_header(
-        "projekt",
-        "conv-test",
-        Some(true),
-        "ready",
-        PanelFocus::Chat,
-        85,
-    );
+    let header_wide = render_header("projekt", "conv-test", "ready", PanelFocus::Chat, 85);
     let text_wide: String = header_wide
         .spans
         .iter()
@@ -667,7 +652,6 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     assert!(!text_wide.contains("[Chat]"));
     assert!(!text_wide.contains("(Tab: switch)"));
     assert!(text_wide.contains("projekt"));
-    assert!(text_wide.contains("autonomous"));
 
     // Empty state
     let empty_lines = transcript_empty_state(80);
@@ -800,7 +784,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         }
         if help == Help::Picker {
             let mut picker = Picker::new(Kind::Commands);
-            picker.query = "mode".into();
+            picker.query = "plan".into();
             picker.selected = 1;
             app.picker = Some(picker);
         }
@@ -830,7 +814,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
             assert_eq!(editor.input.text, "comment draft?");
         }
         if let Some(picker) = &app.picker {
-            assert_eq!(picker.query, "mode");
+            assert_eq!(picker.query, "plan");
             assert_eq!(picker.selected, 1);
         }
     }
@@ -1016,7 +1000,7 @@ fn app_fake_request_capture_through_app() {
     let (tx, rx) = mpsc::channel::<Value>();
 
     let handle = thread::spawn(move || {
-        for _ in 0..10 {
+        for _ in 0..7 {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -1058,19 +1042,6 @@ fn app_fake_request_capture_through_app() {
         matches!(u, antislop::lean::tui::Update::SendResult { .. })
     });
 
-    // 2. Canonical /mode autonomous and supervised
-    app.run_workflow(Command::Autonomous);
-    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(req["op"], "mode");
-    assert_eq!(req["conversation"], "test-conv");
-    assert_eq!(req["autonomous"], true);
-
-    app.run_workflow(Command::Supervised);
-    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(req["op"], "mode");
-    assert_eq!(req["conversation"], "test-conv");
-    assert_eq!(req["autonomous"], false);
-
     // 3. Pause and continue
     app.run_workflow(Command::Pause);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -1095,16 +1066,10 @@ fn app_fake_request_capture_through_app() {
         "payload": {
             "plan": "plan-xyz",
             "tasks": [
-                {"id": "t1", "title": "Kompilacja", "writes": true}
+                {"id": "t1", "title": "Kompilacja", "change_kind": "code"}
             ]
         }
     }));
-    app.run_workflow(Command::Accept);
-    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(req["op"], "accept");
-    assert_eq!(req["conversation"], "test-conv");
-    assert_eq!(req["plan"], "plan-xyz");
-
     // 6. Plan resume
     app.view.apply(&json!({
         "seq": 2,
@@ -1175,7 +1140,7 @@ fn app_graph_details_diff_navigation_and_search() {
     app.view.apply(&json!({
         "seq": 1,
         "kind": "plan",
-        "payload": {
+        "payload": {"change_kind":"none",
             "id": "p1",
             "status": "in_progress",
             "title": "Build",
@@ -1328,7 +1293,6 @@ fn app_incoming_updates_and_rendering() {
 #[test]
 fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     let mut app = App::test_app();
-    app.view.autonomous = Some(true);
 
     // 1. Resizing across breakpoints
     // 120x30 (wide side-by-side)
@@ -1506,7 +1470,7 @@ fn tui_isolated_fake_request_capture() {
     let (tx, rx) = mpsc::channel::<Value>();
 
     let handle = thread::spawn(move || {
-        for _ in 0..7 {
+        for _ in 0..5 {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -1528,6 +1492,7 @@ fn tui_isolated_fake_request_capture() {
         antislop::lean::daemon::ConversationRequest::Send {
             conversation: "conv-1".into(),
             text: "hello orchestrator".into(),
+            to: None,
         },
     ));
     assert!(res.is_ok());
@@ -1542,6 +1507,9 @@ fn tui_isolated_fake_request_capture() {
             conversation: "conv-1".into(),
             target: "worker:t1".into(),
             text: "code feedback".into(),
+            plan: None,
+            round: None,
+            run: None,
         },
     ));
     assert!(res.is_ok());
@@ -1550,41 +1518,18 @@ fn tui_isolated_fake_request_capture() {
     assert_eq!(req["target"], "worker:t1");
     assert_eq!(req["text"], "code feedback");
 
-    // 3. Accept plan
-    let res = client.call(&Request::Conversation(
-        antislop::lean::daemon::ConversationRequest::Accept {
-            conversation: "conv-1".into(),
-            plan: "p-100".into(),
-        },
-    ));
-    assert!(res.is_ok());
-    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(req["op"], "accept");
-    assert_eq!(req["plan"], "p-100");
-
     // 4. Resume plan
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Resume {
             conversation: "conv-1".into(),
             plan: "p-100".into(),
+            revision_token: None,
         },
     ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "resume");
     assert_eq!(req["plan"], "p-100");
-
-    // 5. Mode change (canonical autonomous)
-    let res = client.call(&Request::Conversation(
-        antislop::lean::daemon::ConversationRequest::Mode {
-            conversation: "conv-1".into(),
-            autonomous: true,
-        },
-    ));
-    assert!(res.is_ok());
-    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(req["op"], "mode");
-    assert_eq!(req["autonomous"], true);
 
     // 6. Pause
     let res = client.call(&Request::Conversation(
@@ -1602,6 +1547,7 @@ fn tui_isolated_fake_request_capture() {
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Cancel {
             conversation: "conv-1".into(),
+            revision_token: None,
         },
     ));
     assert!(res.is_ok());
@@ -2147,7 +2093,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         request_id: conv_a_task_id,
         key: "worker:t1".into(),
         round: 0,
-        task: json!({"id": "t1", "title": "old task"}),
+        task: json!({"change_kind":"none","id": "t1", "title": "old task"}),
     });
     // Active Conv-B details remains pristine (for worker:t9):
     assert_eq!(app.details.as_ref().unwrap().key, "worker:t9");
@@ -2420,7 +2366,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
         request_id: app.task_request_id,
         key: "worker:t1".into(),
         round: 0,
-        task: json!({"id": "t1", "title": "task after A->B->A"}),
+        task: json!({"change_kind":"none","id": "t1", "title": "task after A->B->A"}),
     });
     assert_eq!(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["title"],
@@ -3409,9 +3355,9 @@ fn test_refresh_updates_preserve_graph_selection() {
         "payload": {
             "plan": "plan-1",
             "tasks": [
-                {"id": "t1", "title": "Step 1", "round": 1, "status": "proposed"},
-                {"id": "t2", "title": "Step 2", "round": 1, "status": "proposed"},
-                {"id": "t3", "title": "Step 3", "round": 1, "status": "proposed"}
+                {"change_kind":"none","id": "t1", "title": "Step 1", "round": 1, "status": "proposed"},
+                {"change_kind":"none","id": "t2", "title": "Step 2", "round": 1, "status": "proposed"},
+                {"change_kind":"none","id": "t3", "title": "Step 3", "round": 1, "status": "proposed"}
             ]
         }
     }));
@@ -3521,7 +3467,7 @@ fn test_inspector_whole_record_search() {
         "id": "t1",
         "spec": {
             "title": "Task with a report and findings",
-            "writes": true
+            "change_kind": "code"
         },
         "report": "Detailed final report with unique_key_12345",
         "findings": ["Finding A: analysis_key_xyz"],
@@ -3569,11 +3515,11 @@ fn test_conversation_details_inspector() {
         uuid: Some("u1".into()),
         title: "Kompilacja i testy".into(),
         status: "approved".into(),
-        writes: true,
+        change_kind: antislop::lean::tasks::ChangeKind::Code,
         ..Default::default()
     });
     view.plan = Some("P42".into());
-    view.plan_scope_hash = Some("hash-p42".into());
+    view.plan_revision_token = Some("hash-p42".into());
 
     let lines = details.lines(&view);
     let text = lines
@@ -3598,7 +3544,7 @@ fn test_recipient_selection_and_broadcast() {
     view.tasks.push(antislop::lean::tui::view::TaskRow {
         id: "t1".into(),
         title: "Building the kernel".into(),
-        writes: true,
+        change_kind: antislop::lean::tasks::ChangeKind::Code,
         ..Default::default()
     });
 
@@ -3681,7 +3627,7 @@ fn test_precise_comment_targets_and_labels() {
         "payload": {
             "plan": "p1",
             "document": "# Plan\nLine two",
-            "tasks": [{"id": "t1", "title": "Task 1", "status": "proposed"}]
+            "tasks": [{"change_kind":"none","id": "t1", "title": "Task 1", "status": "proposed"}]
         }
     }));
     app.view.apply(&json!({
@@ -3711,7 +3657,7 @@ fn test_precise_comment_targets_and_labels() {
     assert_eq!(req["op"], "comment");
     assert_eq!(req["plan"], "p1");
     assert_eq!(req["target"], "plan:p1:line:1");
-    assert!(req.get("round").is_none() && req.get("run").is_none());
+    assert!(req["round"].is_null() && req["run"].is_null());
 }
 
 #[test]
@@ -3742,167 +3688,6 @@ fn test_diff_reviewer_profile_rendered() {
     assert!(
         text.contains("reviewer:"),
         "diff header must include reviewer: {text}"
-    );
-}
-
-#[test]
-fn test_confirmation_card_action_lifecycle() {
-    let (mut app, _rx) = App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
-    app.view.plan = Some("P100".into());
-    app.view.plan_scope_hash = Some("hash-p100".into());
-
-    let card = ConfirmationCard {
-        id: "conf-1".into(),
-        title: "Uruchomienie planu P100".into(),
-        action: ConfirmationAction::AcceptPlan,
-        plan_id: Some("P100".into()),
-        task_id: None,
-        candidate: None,
-        scope_hash: "hash-p100".into(),
-        status: ConfirmationStatus::Pending,
-        detail: "5 tasks in the plan".into(),
-    };
-
-    app.request_confirmation(card.clone());
-    assert!(app.confirmation.is_some());
-    assert_eq!(app.view.cards.len(), 1);
-    assert!(
-        matches!(&app.view.cards[0], TranscriptCard::Confirmation(c) if c.id == "conf-1" && c.status == ConfirmationStatus::Pending)
-    );
-
-    // Confirm action via Enter key
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.confirmation.is_none());
-    assert!(
-        matches!(&app.view.cards[0], TranscriptCard::Confirmation(c) if c.id == "conf-1" && c.status == ConfirmationStatus::Confirmed)
-    );
-
-    // Test rejection
-    let card2 = ConfirmationCard {
-        id: "conf-2".into(),
-        title: "Wznowienie planu P100".into(),
-        action: ConfirmationAction::ResumePlan,
-        plan_id: Some("P100".into()),
-        task_id: None,
-        candidate: None,
-        scope_hash: "hash-p100".into(),
-        status: ConfirmationStatus::Pending,
-        detail: "Wznowienie".into(),
-    };
-    app.request_confirmation(card2);
-    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.confirmation.is_none());
-    assert!(
-        matches!(&app.view.cards[1], TranscriptCard::Confirmation(c) if c.id == "conf-2" && c.status == ConfirmationStatus::Rejected)
-    );
-}
-
-#[test]
-fn test_stale_confirmation_handling_and_rendering() {
-    let (mut app, _rx) = App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
-    app.view.plan = Some("P100".into());
-    app.view.plan_scope_hash = Some("scope-current".into());
-
-    // 1. Confirm attempt with stale scope hash
-    let stale_card = ConfirmationCard {
-        id: "conf-stale".into(),
-        title: "Uruchomienie planu P100".into(),
-        action: ConfirmationAction::AcceptPlan,
-        plan_id: Some("P100".into()),
-        task_id: None,
-        candidate: None,
-        scope_hash: "scope-old".into(),
-        status: ConfirmationStatus::Pending,
-        detail: "5 tasks".into(),
-    };
-    app.request_confirmation(stale_card);
-    assert!(app.confirmation.is_some());
-
-    // User presses Enter to confirm -> rejected as stale
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.confirmation.is_none());
-    assert!(
-        matches!(&app.view.cards[0], TranscriptCard::Confirmation(c) if c.id == "conf-stale" && c.status == ConfirmationStatus::Stale)
-    );
-    assert!(app.notice.as_ref().unwrap().contains("stale_scope"));
-
-    // 2. Background event changes scope while confirmation is pending
-    let pending_card = ConfirmationCard {
-        id: "conf-live".into(),
-        title: "Uruchomienie planu P100".into(),
-        action: ConfirmationAction::AcceptPlan,
-        plan_id: Some("P100".into()),
-        task_id: None,
-        candidate: None,
-        scope_hash: "scope-current".into(),
-        status: ConfirmationStatus::Pending,
-        detail: "5 tasks".into(),
-    };
-    app.request_confirmation(pending_card);
-    assert!(app.confirmation.is_some());
-
-    // Live update arrives changing the plan scope hash
-    app.apply_update(Update::Events {
-        conversation: "test-conv".into(),
-        generation: app.generation,
-        events: vec![json!({
-            "seq": 99,
-            "kind": "plan_proposed",
-            "payload": {
-                "plan": "P100",
-                "scope_hash": "scope-newer",
-                "tasks": []
-            }
-        })],
-        idle: true,
-        autonomous: false,
-    });
-    // Confirmation modal should be dismissed and card marked stale
-    assert!(app.confirmation.is_none());
-    assert!(
-        matches!(&app.view.cards[1], TranscriptCard::Confirmation(c) if c.id == "conf-live" && c.status == ConfirmationStatus::Stale)
-    );
-
-    // 3. Daemon rejects with stale_scope asynchronously
-    let confirmed_card = ConfirmationCard {
-        id: "conf-async".into(),
-        title: "Diff candidate".into(),
-        action: ConfirmationAction::ReviewDiff,
-        plan_id: Some("P100".into()),
-        task_id: Some("t1".into()),
-        candidate: Some("patch1".into()),
-        scope_hash: "scope-newer".into(),
-        status: ConfirmationStatus::Confirmed,
-        detail: "Recenzja".into(),
-    };
-    app.view
-        .cards
-        .push(TranscriptCard::Confirmation(confirmed_card));
-    app.apply_update(Update::Notice("✗ stale_scope: mismatch".into()));
-    let async_card = app
-        .view
-        .cards
-        .iter()
-        .find_map(|c| match c {
-            TranscriptCard::Confirmation(conf) if conf.id == "conf-async" => Some(conf),
-            _ => None,
-        })
-        .expect("conf-async must exist");
-    assert_eq!(async_card.status, ConfirmationStatus::Stale);
-
-    // 4. Rendering test: review stale cards render "[stale: stale_scope]"
-    let mut terminal = Terminal::new(TestBackend::new(180, 40)).unwrap();
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let rendered: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(
-        rendered.contains("[stale: stale_scope]"),
-        "rendered transcript must include stale notice: {rendered}"
     );
 }
 
@@ -4831,47 +4616,6 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
 }
 
 #[test]
-fn test_workspace_trust_modal_lifecycle() {
-    let mut app = App::test_app();
-    app.input = InputBuffer::with_text("initial draft");
-    app.require_trust("/Users/test/untrusted-repo");
-
-    let mut term = Terminal::new(TestBackend::new(90, 24)).unwrap();
-    term.draw(|f| app.draw(f)).unwrap();
-    assert!(!term.backend().cursor_visible());
-    let rendered: String = term
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(rendered.contains("Workspace trust required"));
-    assert!(rendered.contains("Do you trust the contents of this directory?"));
-    assert!(rendered.contains("/Users/test/untrusted-repo"));
-
-    // Typing ordinary keys or pasting is blocked while trust prompt is active
-    assert!(app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)));
-    app.paste("injected text");
-    assert_eq!(app.input.text, "initial draft");
-    assert!(app.trust_prompt.is_some());
-
-    // Pressing 'n' or Esc rejects and exits (returns false)
-    let mut reject_app = App::test_app();
-    reject_app.require_trust("/Users/test/untrusted-repo");
-    assert!(!reject_app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)));
-
-    // Pressing 'y' or Enter trusts the workspace and dismisses the modal
-    assert!(app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
-    assert!(app.trust_prompt.is_none());
-    assert_eq!(app.notice.as_deref(), Some("workspace directory trusted"));
-
-    // Normal typing works after trusting
-    assert!(app.key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)));
-    assert_eq!(app.input.text, "initial draft!");
-}
-
-#[test]
 fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
     use antislop::lean::tui::view::View;
     let mut view = View::default();
@@ -4879,7 +4623,7 @@ fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
     view.apply(&ev(
         1,
         "plan_proposed",
-        json!({"plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}),
+        json!({"plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "Store"}]}),
     ));
     // A round announced without feedback shows no effect and no counters.
     view.apply(&ev(
@@ -4929,7 +4673,7 @@ fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
     view.apply(&ev(
         6,
         "integration",
-        json!({"id": "t1", "title": "Store", "status": "needs_user",
+        json!({"change_kind":"none","id": "t1", "title": "Store", "status": "needs_user",
                "detail": "conflicts with the current branch in src/a.rs"}),
     ));
     assert_eq!(
@@ -4978,9 +4722,9 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         1,
         "plan_proposed",
         json!({"plan": "p1", "tasks": [
-            {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
+            {"change_kind":"none","id": "t1", "title": "Store", "summary": "Fix the storage path.",
              "reviewer": {"summary": "Check the storage path."}},
-            {"id": "t2", "title": "API", "depends_on": ["t1"]}
+            {"change_kind":"none","id": "t2", "title": "API", "depends_on": ["t1"]}
         ]}),
     ));
     let card = |view: &View, key: &str| -> (String, u16) {
@@ -5181,8 +4925,8 @@ fn card_height_tracks_visible_content_and_retry_removes_old_feedback() {
         |seq: u64, kind: &str, payload: Value| json!({"seq":seq,"kind":kind,"payload":payload});
     let mut view = View::default();
     view.apply(&ev(1,"plan_proposed",json!({"plan":"p1","tasks":[
-        {"id":"t1","title":"Store","summary":"Fix storage.","reviewer":{"summary":"Check storage."}},
-        {"id":"t2","title":"API","depends_on":["t1"],"summary":"Long café 👩‍💻 description. ".repeat(30)}
+        {"change_kind":"none","id":"t1","title":"Store","summary":"Fix storage.","reviewer":{"summary":"Check storage."}},
+        {"change_kind":"none","id":"t2","title":"API","depends_on":["t1"],"summary":"Long café 👩‍💻 description. ".repeat(30)}
     ]})));
     let height = |view: &View| Graph::new(view).node("worker:t1").unwrap().height;
     let short = height(&view);
@@ -5248,9 +4992,8 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         conversation: "test-conv".into(),
         generation: 1,
         events: vec![json!({"seq": 1, "kind": "plan_proposed", "payload": {
-            "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}})],
+            "plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "Store"}]}})],
         idle: true,
-        autonomous: false,
     });
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
@@ -5258,7 +5001,6 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": 3, "kind": "task", "payload": {
             "id": "t1", "task": "u1", "status": "working", "round": 1}})],
         idle: false,
-        autonomous: false,
     });
     app.open_details("worker:t1".into());
     let issued = app.task_request_id;
@@ -5298,7 +5040,6 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": 3, "kind": "task", "payload": {
             "id": "t1", "task": "u1", "status": "working", "round": 2}})],
         idle: false,
-        autonomous: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
     assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(2));
@@ -5348,7 +5089,6 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": seq, "kind": "check", "payload": {
             "id": id, "task": task, "round": 2, "check": "V01", "state": "settled"}})],
         idle: false,
-        autonomous: false,
     };
     app.apply_update(check("another-task", "u2", 5));
     assert_eq!(
@@ -5374,7 +5114,7 @@ fn every_reported_landing_earns_its_real_label_on_the_card() {
     };
     let mut view = View::default();
     view.apply(&json!({"seq": 1, "kind": "plan_proposed", "payload": {
-        "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}}));
+        "plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "Store"}]}}));
     // The daemon stamps these names through `Outcome::name`; the card must
     // read every one of them back as its own label — never `not reported`.
     for (outcome, label) in [
@@ -5414,7 +5154,7 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
     use antislop::lean::tui::view::View;
     let mut view = View::default();
     view.apply(&json!({"seq": 1, "kind": "plan_proposed", "payload": {
-        "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}}));
+        "plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "Store"}]}}));
     view.apply(&json!({"seq": 2, "kind": "task", "payload": {
         "id": "t1", "task": "u1", "status": "needs_user", "round": 1,
         "feedback": {"round": 1, "effect": "2 files changed",
@@ -5603,8 +5343,8 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
-        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
-        idle: false, autonomous: false,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -5626,7 +5366,6 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
             json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1,"approved":true}}),
         ],
         idle: false,
-        autonomous: false,
     });
     assert_eq!(app.task_request_id, request + 1);
     assert_eq!(
@@ -5638,7 +5377,6 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         generation: 1,
         events: vec![],
         idle: false,
-        autonomous: false,
     });
     assert_eq!(app.task_request_id, request + 1);
 }
@@ -5708,9 +5446,9 @@ fn configuration_load_and_save_use_live_daemon_requests() {
     let parallel = editor
         .fields
         .iter_mut()
-        .find(|f| f.path == ["policy", "max_parallel"])
+        .find(|f| f.path == ["policy", "local_commits"])
         .unwrap();
-    parallel.input = InputBuffer::with_text("2");
+    parallel.input = InputBuffer::with_text("false");
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     assert_eq!(
         requests.recv_timeout(Duration::from_secs(3)).unwrap()["op"],
@@ -5718,12 +5456,11 @@ fn configuration_load_and_save_use_live_daemon_requests() {
     );
     let saved = requests.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(saved["op"], "set_config");
-    assert_eq!(
-        antislop::config::Config::from_toml(saved["toml"].as_str().unwrap())
+    assert!(
+        !antislop::config::Config::from_toml(saved["toml"].as_str().unwrap())
             .unwrap()
             .policy
-            .max_parallel,
-        2
+            .local_commits
     );
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     assert_eq!(
@@ -5753,9 +5490,6 @@ mod config_editor_acceptance {
     impl Daemon {
         fn start(project: &Path, config: &Path, state: &Path, registry: &Path) -> Self {
             test_socket(state);
-            antislop::lean::trust::Registry::at(registry)
-                .trust(project)
-                .unwrap();
             let child = Command::new(env!("CARGO_BIN_EXE_antislop"))
                 .args(["__core"])
                 .arg(project)
@@ -5836,13 +5570,10 @@ mod config_editor_acceptance {
         let fixture = Config {
             schema_version: config.schema_version,
             policy: Policy {
-                mode: config.policy.mode,
-                local_write: config.policy.local_write,
                 local_commits: config.policy.local_commits,
                 required_gates: config.policy.required_gates,
-                max_parallel: config.policy.max_parallel,
+
                 local_options: config.policy.local_options,
-                max_tasks: config.policy.max_tasks,
             },
             providers: config
                 .providers
@@ -5929,6 +5660,9 @@ mod config_editor_acceptance {
             };
             let state = dir.relative_path().join("project/.antislop");
             let daemon = Daemon::start(&project, target, &state, &registry);
+            let original = target;
+            let retained = state.join("antislop.toml");
+            let target = &retained;
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
             app.run_workflow(antislop::lean::tui::Command::Config);
             pump(&mut app, &updates);
@@ -5949,12 +5683,9 @@ mod config_editor_acceptance {
                 let old = field.input.text.clone();
                 let key = path.last().unwrap().as_str();
                 let (new, cycle) = match key {
-                    "mode" => (json!("autonomous"), true),
-                    "local_write" | "local_commits" | "required_gates" | "local_options" => {
+                    "local_commits" | "required_gates" | "local_options" => {
                         (json!(old != "true"), true)
                     }
-                    "max_parallel" => (json!(2), false),
-                    "max_tasks" => (json!(7), false),
                     "provider" => (json!(if old == "codex" { "agy" } else { "codex" }), true),
                     "effort" => (json!(if old == "low" { "medium" } else { "low" }), true),
                     "binary" => (json!("/tmp/config-editor-test-binary"), false),
@@ -5993,6 +5724,7 @@ mod config_editor_acceptance {
                 assert_eq!(actual, &expected, "written value for {path:?}");
             }
             assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
+            assert_eq!(std::fs::read_to_string(original).unwrap(), SOURCE);
             assert!(
                 std::fs::read_to_string(target)
                     .unwrap()
@@ -6051,6 +5783,7 @@ mod config_editor_acceptance {
             pump(&mut app, &updates);
             assert!(!Config::load(target).unwrap().profiles.contains_key(&name));
             assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
+            assert_eq!(std::fs::read_to_string(original).unwrap(), SOURCE);
         }
     }
 
@@ -6070,7 +5803,7 @@ mod config_editor_acceptance {
             );
             return;
         }
-        let global = antislop::lean::trust::config_dir()
+        let global = antislop::lean::paths::config_dir()
             .unwrap()
             .join("antislop.toml");
         for is_global in [false, true] {
@@ -6084,9 +5817,9 @@ mod config_editor_acceptance {
             let index = editor
                 .fields
                 .iter()
-                .position(|f| f.path == ["policy", "max_parallel"])
+                .position(|f| f.path == ["policy", "local_commits"])
                 .unwrap();
-            edit(&mut editor, index, "invalid-number", false);
+            edit(&mut editor, index, "invalid-boolean", false);
             assert!(editor.source().is_none());
             let mut terminal = Terminal::new(TestBackend::new(160, 16)).unwrap();
             terminal.draw(|frame| editor.draw(frame)).unwrap();
@@ -6098,7 +5831,7 @@ mod config_editor_acceptance {
                 "Configuration (project):"
             }));
             assert!(text.contains("Running turns finish with their old profile."));
-            assert!(text.contains("policy.max_parallel = invalid-number ERROR:"));
+            assert!(text.contains("policy.local_commits = invalid-boolean ERROR:"));
             assert!(
                 buffer
                     .content
@@ -6122,6 +5855,7 @@ mod config_editor_acceptance {
         std::fs::write(&path, SOURCE).unwrap();
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
+        let path = state.join("antislop.toml");
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
         app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
@@ -6131,18 +5865,18 @@ mod config_editor_acceptance {
             .unwrap()
             .fields
             .iter()
-            .position(|f| f.path == ["policy", "max_parallel"])
+            .position(|f| f.path == ["policy", "local_commits"])
             .unwrap();
-        edit(app.config_editor.as_mut().unwrap(), index, "2", false);
+        edit(app.config_editor.as_mut().unwrap(), index, "false", false);
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let external = SOURCE.replace("max_parallel = 4", "max_parallel = 10");
+        let external = SOURCE.replace("local_commits = true", "local_commits = false");
         std::fs::write(&path, &external).unwrap();
         app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
         assert!(app.config_editor.as_ref().unwrap().conflict);
         assert_eq!(
             app.config_editor.as_ref().unwrap().fields[index].input.text,
-            "2"
+            "false"
         );
         app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), external);
@@ -6150,11 +5884,14 @@ mod config_editor_acceptance {
         pump(&mut app, &updates);
         assert_eq!(
             app.config_editor.as_ref().unwrap().fields[index].input.text,
-            "10"
+            "false"
         );
         assert!(!app.config_editor.as_ref().unwrap().is_dirty());
-        edit(app.config_editor.as_mut().unwrap(), index, "3", false);
-        let newer = external.replace("max_parallel = 10", "max_parallel = 11");
+        edit(app.config_editor.as_mut().unwrap(), index, "true", false);
+        let newer = external.replace(
+            "local_commits = false",
+            "local_commits = false # external update",
+        );
         std::fs::write(&path, &newer).unwrap();
         app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
         pump(&mut app, &updates);
@@ -6167,7 +5904,7 @@ mod config_editor_acceptance {
         );
         assert_eq!(
             app.config_editor.as_ref().unwrap().fields[index].input.text,
-            "3"
+            "true"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
         // A failed reload must retain the draft too.
@@ -6176,7 +5913,7 @@ mod config_editor_acceptance {
         pump(&mut app, &updates);
         assert_eq!(
             app.config_editor.as_ref().unwrap().fields[index].input.text,
-            "3"
+            "true"
         );
         assert!(!app.config_editor.as_ref().unwrap().pending);
     }
@@ -6207,7 +5944,7 @@ mod config_editor_acceptance {
         editor.visible = false;
         editor.refresh(
             ConfigEditor::new(
-                &SOURCE.replace("max_parallel = 4", "max_parallel = 9"),
+                &SOURCE.replace("local_commits = true", "local_commits = false"),
                 "antislop.toml".into(),
             )
             .unwrap(),
@@ -6216,11 +5953,11 @@ mod config_editor_acceptance {
             editor
                 .fields
                 .iter()
-                .find(|f| f.path == ["policy", "max_parallel"])
+                .find(|f| f.path == ["policy", "local_commits"])
                 .unwrap()
                 .input
                 .text,
-            "9"
+            "false"
         );
         editor.fields.retain(|f| f.path[0] != "providers");
         editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
@@ -6263,6 +6000,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&path, initial.source().unwrap()).unwrap();
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
+        let path = state.join("antislop.toml");
         let conversation = daemon
             .client
             .call(&Request::Control(
@@ -6278,6 +6016,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                 antislop::lean::daemon::ConversationRequest::Send {
                     conversation: conversation.clone(),
                     text: "first turn".into(),
+                    to: None,
                 },
             ))
             .unwrap();
@@ -6345,6 +6084,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                 antislop::lean::daemon::ConversationRequest::Send {
                     conversation,
                     text: "second turn".into(),
+                    to: None,
                 },
             ))
             .unwrap();
@@ -6372,11 +6112,6 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
     #[test]
     fn semantic_failures_match_the_authoritative_config_validator() {
         for (path, input, replacement) in [
-            (
-                vec!["policy", "max_parallel"],
-                "0",
-                ("max_parallel = 4", "max_parallel = 0"),
-            ),
             (
                 vec!["orchestrator", "profile"],
                 "missing",
@@ -6529,7 +6264,7 @@ mod text_selection_acceptance {
                 generation: app.generation,
                 events: vec![json!({"seq": 1, "kind": "conversation_state", "payload": {"state": "waiting"}})],
                 idle: true,
-                autonomous: false,
+
             });
                 assert!(
                     app.text_selection.text().is_none(),
@@ -6589,8 +6324,8 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
     let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
-        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
-        idle: false, autonomous: false,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -6617,7 +6352,6 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
         generation: 1,
         events: vec![],
         idle: false,
-        autonomous: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
     let reply = updates.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -6635,8 +6369,8 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
-        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":1}})],
-        idle: false, autonomous: false,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":1}})],
+        idle: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -6654,7 +6388,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":3,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1,"feedback":{"summary":"accepted"}}})],
-        idle: false, autonomous: false,
+        idle: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
 }
@@ -6697,8 +6431,8 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     });
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
-        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
-        idle: false, autonomous: false,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false,
     });
     app.open_details("worker:t1".into());
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
@@ -6708,7 +6442,6 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
         generation: 1,
         events: vec![json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1}})],
         idle: false,
-        autonomous: false,
     });
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     let task = app.details.as_ref().unwrap().task.as_ref().unwrap();
@@ -6717,7 +6450,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":4,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1}})],
-        idle: false, autonomous: false,
+        idle: false,
     });
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     server.join().unwrap();
@@ -6812,7 +6545,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
             app.apply_update(Update::Events {
                 conversation:"test-conv".into(), generation:1,
                 events:vec![json!({"seq":round,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":round}})],
-                idle:false, autonomous:false,
+                idle:false,
             });
         }
         issued.push((round, app.task_request_id));
@@ -6907,7 +6640,6 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
         generation: 1,
         events: vec![],
         idle: false,
-        autonomous: false,
     };
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     assert!(app.notice.take().is_some());
@@ -7283,7 +7015,7 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
 fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
     use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
-    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,autonomous:false});
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,});
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
     let issued = app.task_request_id;
@@ -7293,7 +7025,6 @@ fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
             generation: 1,
             events: vec![json!({"seq":seq,"kind":"check","payload":{"task":"u1","round":1}})],
             idle: false,
-            autonomous: false,
         });
     }
     assert_eq!(
@@ -7338,7 +7069,7 @@ fn inspector_delivery_failure_before_send_receipt_remains_visible_until_delivery
             ..Default::default()
         },
     );
-    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"mail_delivery_failed","payload":{"recipient":recipient,"ids":[7],"reason":"authentication required"}})],idle:true,autonomous:false});
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"mail_delivery_failed","payload":{"recipient":recipient,"ids":[7],"reason":"authentication required"}})],idle:true,});
     app.apply_update(Update::AgentMessage {
         conversation: "test-conv".into(),
         recipient: recipient.clone(),
@@ -7359,7 +7090,6 @@ fn inspector_delivery_failure_before_send_receipt_remains_visible_until_delivery
         generation: 1,
         events: vec![json!({"seq":2,"kind":"mail_delivered","payload":{"ids":[7]}})],
         idle: true,
-        autonomous: false,
     });
     assert!(drafts.borrow()[&key].error.is_none());
     assert_eq!(drafts.borrow()[&key].delivery.as_deref(), Some("delivered"));
@@ -7405,7 +7135,7 @@ fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
         composer.sending = true;
         composer.address = Some(key.1.clone());
     }
-    app.apply_update(Update::Events {conversation:key.0.clone(),generation:1,events:vec![json!({"seq":9,"kind":"mail_delivered","payload":{"recipient":"orchestrator","ids":[9,10]}})],idle:true,autonomous:false});
+    app.apply_update(Update::Events {conversation:key.0.clone(),generation:1,events:vec![json!({"seq":9,"kind":"mail_delivered","payload":{"recipient":"orchestrator","ids":[9,10]}})],idle:true,});
     app.apply_update(Update::AgentMessage {
         conversation: key.0.clone(),
         recipient: key.1.clone(),
@@ -7434,8 +7164,7 @@ fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators()
             dir.path().to_path_buf(),
             app.client.clone(),
         ));
-    for mode in [None, Some(false), Some(true)] {
-        app.view.autonomous = mode;
+    {
         let line = app.header_line(180);
         let text: String = line
             .spans
@@ -7470,11 +7199,11 @@ fn dashboard_screen(
         1,
         "plan_proposed",
         json!({"plan": "p1", "tasks": [
-            {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
+            {"change_kind":"none","id": "t1", "title": "Store", "summary": "Fix the storage path.",
              "goal": "Make the storage layer atomic.\nNever lose a write on crash.",
              "reviewer": {"summary": "Check it.", "focus": "Crash safety.",
                           "risks": ["Torn writes", "Lock inversion"]}},
-            {"id": "t2", "title": "API", "depends_on": ["t1"]}
+            {"change_kind":"none","id": "t2", "title": "API", "depends_on": ["t1"]}
         ]}),
     ));
     view.apply(&ev(
@@ -7513,9 +7242,9 @@ fn dashboard_screen(
     details.tab = tab;
     details.task = Some(json!({
         "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",
-        "spec": {"id": "t1", "title": "Store", "goal": "g", "kind": "implementation",
+        "spec": {"id": "t1", "title": "Store", "goal": "g", "change_kind": "code", "kind": "implementation",
                  "requirement_ids": ["Q1"],
-                 "reviewer": {"focus": "Crash safety.", "risks": ["Torn writes", "Lock inversion"]}},
+                 "reviewer": {"summary": "Crash safety."}},
         "checks": [{"id": "R1", "state": "settled", "status": "issue", "note": "fsync missing"},
                    {"id": "R2", "state": "checking"}],
         "verdict": {"findings": [{"severity": "high", "issue": "No fsync before rename",

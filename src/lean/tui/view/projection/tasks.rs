@@ -40,9 +40,9 @@ fn update_task_row(
     let row = &mut view.tasks[index];
     let (previous_status, previous_round) = update_task_identity(row, payload, task_uuid);
     update_task_feedback(row, &payload["feedback"]);
-    if let Some(scope) = payload["scope_hash"].as_str() {
-        row.scope_hash = Some(scope.to_owned());
-        view.conversation_scope_hash = Some(scope.to_owned());
+    if let Some(scope) = payload["revision_token"].as_str() {
+        row.revision_token = Some(scope.to_owned());
+        view.conversation_revision_token = Some(scope.to_owned());
     }
     clear_finished_activity(row);
     TaskProgress {

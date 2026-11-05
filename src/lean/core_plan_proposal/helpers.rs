@@ -61,7 +61,7 @@ impl Core {
                 return Ok(None);
             }
         }
-        crate::lean::ledger::validate_plan_runtime_constraints(&resolved, &[], &[], &entries)?;
+
         Ok(Some(resolved))
     }
 
@@ -117,13 +117,6 @@ impl Core {
         run: &str,
         error: &dyn std::fmt::Display,
     ) -> Result<()> {
-        if self
-            .store
-            .count_since_user(conversation, "requirements-planner")?
-            >= tasks::FORMAT_REPAIR_ATTEMPTS as usize
-        {
-            return Ok(());
-        }
         self.store.add_message(
             conversation,
             "requirements-planner",
@@ -146,18 +139,17 @@ impl Core {
     ) -> Result<()> {
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
         self.resolve_plan_comments(conversation, addressed, plan, checked)?;
-        let autonomous = self.autonomous(conversation)?;
-        let waiting = self.plan_waiting_reason(conversation, plan, specs, autonomous, checked)?;
-        let scope_hash = self.plan_scope_hash(conversation, &plan.id)?;
+        let waiting = (!checked).then_some("the plan reviewer did not approve this plan");
+        let revision_token = self.plan_revision_token(conversation, &plan.id)?;
         self.store.append_event(
             conversation,
             None,
             Some(&plan.id),
             "plan_proposed",
-            &plan_event_payload(text, plan, specs, review, autonomous, waiting, scope_hash)?,
+            &plan_event_payload(text, plan, specs, review, waiting, revision_token)?,
         )?;
-        if autonomous && waiting.is_none() {
-            self.accept_plan(conversation, &plan.id)?;
+        if waiting.is_none() {
+            self.activate_reviewed_plan(conversation, &plan.id)?;
         }
         Ok(())
     }
@@ -179,30 +171,6 @@ impl Core {
             addressed.or(pending.as_deref()),
         )?;
         Ok(())
-    }
-
-    fn plan_waiting_reason(
-        &self,
-        conversation: &str,
-        plan: &PreparedPlan,
-        specs: &[TaskContract],
-        autonomous: bool,
-        checked: bool,
-    ) -> Result<Option<&'static str>> {
-        if !autonomous {
-            return Ok(None);
-        }
-        if !checked {
-            return Ok(Some("the plan reviewer did not approve this plan"));
-        }
-        if self.store.count_since_user(conversation, RUNTIME)? > 0
-            && self.repeats_a_plan_that_ran(conversation, &plan.id, specs)?
-        {
-            return Ok(Some(
-                "the same plan already ran without you and did not close what was found",
-            ));
-        }
-        Ok(None)
     }
 }
 pub(super) struct PreparedPlan {

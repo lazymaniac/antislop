@@ -185,16 +185,6 @@ impl Core {
         let baseline = self.store.plan(&revision.plan)?;
         let specs = self.revised_specs(revision, &baseline)?;
         self.store.revision_checkpoints(conversation, revision)?;
-        if let Some(run) = self.store.plan_run(&revision.plan)? {
-            self.store.validate_authorized_plan_constraints(
-                conversation,
-                &revision.plan,
-                &specs,
-                &baseline,
-                &revision.redo,
-                &self.store.ledger_entries(conversation, &run, None)?,
-            )?;
-        }
         self.ensure_revision_accepted(conversation, revision)?;
         self.prepared_revision(conversation, request, revision, baseline, specs)
     }
@@ -275,8 +265,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    fn contract(writes: bool, paths: &[&str]) -> TaskContract {
-        serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","kind":"implementation","writes":writes,"scope":paths,"reviewer":{"focus":"Check local behavior"}})).unwrap()
+    fn contract(writes: bool, _paths: &[&str]) -> TaskContract {
+        serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","change_kind": if writes { "code" } else { "none" }, "kind":"implementation","reviewer":{"summary": "Check local behavior"}})).unwrap()
     }
 
     #[test]
@@ -291,9 +281,9 @@ mod tests {
             .add_plan(
                 &conversation,
                 &[
-                    json!({"id":"a","title":"A","goal":"Inspect A","kind":"analysis","scope":["src"]}),
-                    json!({"id":"b","title":"B","goal":"Inspect B","kind":"analysis","depends_on":["a"]}),
-                    json!({"id":"c","title":"C","goal":"Inspect C","kind":"analysis"}),
+                    json!({"id":"a","title":"A","goal":"Inspect A","change_kind": "none", "kind":"analysis"}),
+                    json!({"id":"b","title":"B","goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":["a"]}),
+                    json!({"id":"c","title":"C","goal":"Inspect C","change_kind": "none", "kind":"analysis"}),
                 ],
             )
             .unwrap();
@@ -348,7 +338,13 @@ mod tests {
             )
             .unwrap();
         let plan = &tasks[0].plan_id;
-        core.store.db().execute("INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,'[\".\"]','[]')",rusqlite::params![plan,conversation]).unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
+                rusqlite::params![plan, conversation],
+            )
+            .unwrap();
         let revision = PlanRevision {
             plan: plan.clone(),
             base_revision: 0,

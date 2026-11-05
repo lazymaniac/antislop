@@ -12,7 +12,7 @@ mod run_context;
 #[path = "workflow.rs"]
 mod workflow;
 pub use history::{AgentMessage, ContentOwner, HistoryScope};
-pub use run_context::{RunAccess, RunContext};
+pub use run_context::RunContext;
 pub use workflow::Workflow;
 
 use crate::{Error, Result};
@@ -40,13 +40,10 @@ pub(in crate::lean) use evidence::{EvidenceReference, MAX_RESULT_EVIDENCE};
 mod answer_waits;
 #[path = "store/plan_reviews.rs"]
 mod plan_reviews;
-#[path = "store/recovery_decisions.rs"]
-mod recovery_decisions;
 #[path = "store/revision_jobs.rs"]
 mod revision_jobs;
 #[path = "store/task_progress.rs"]
 mod task_progress;
-pub(in crate::lean) use recovery_decisions::RecoveryDecision;
 
 pub struct Store {
     connection: Mutex<Connection>,
@@ -263,7 +260,7 @@ pub fn now_ms() -> i64 {
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
-const SCHEMA: u32 = 15;
+const SCHEMA: u32 = 16;
 
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;
@@ -290,7 +287,3 @@ pub use turn_status::TurnStatus;
 #[cfg(test)]
 #[path = "store/tests.rs"]
 mod tests;
-
-#[path = "store/execution_authorizations.rs"]
-mod execution_authorizations;
-pub use execution_authorizations::ExecutionAuthorization;

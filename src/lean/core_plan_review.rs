@@ -82,7 +82,7 @@ fn review_setup<'a>(
         profile: config.resolve(WorkKind::Orchestration, RoleKind::Reviewer),
         cwd: project.to_path_buf(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         upto_message: upto,
     }
 }

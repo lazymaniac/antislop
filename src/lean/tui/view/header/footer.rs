@@ -20,7 +20,7 @@ pub fn main_footer_hint(
 
 fn plan_hint(proposed: bool, resumable: bool) -> &'static str {
     if proposed {
-        "Ctrl+A accept plan · "
+        "Plan review · "
     } else if resumable {
         "Ctrl+R resume plan · "
     } else {

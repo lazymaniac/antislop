@@ -9,20 +9,7 @@ use std::time::{Duration, Instant};
 /// Fake codex (orchestrator) and agy (everyone else). Both log every prompt
 /// to `prompts.jsonl`; `answer` comes from the given Python statements.
 fn open(dir: &Path, orchestrator: &str, agent: &str) -> Arc<Core> {
-    open_limited(dir, orchestrator, agent, 4)
-}
-
-/// Like [`open`], with at most `max_parallel` tasks of a plan at a time.
-fn open_limited(dir: &Path, orchestrator: &str, agent: &str, max_parallel: usize) -> Arc<Core> {
-    open_edited(
-        dir,
-        orchestrator,
-        agent,
-        &[(
-            "max_parallel = 4",
-            &format!("max_parallel = {max_parallel}"),
-        )],
-    )
+    open_edited(dir, orchestrator, agent, &[])
 }
 
 /// Like [`open`], with the example configuration edited by `replacements`.
@@ -46,7 +33,7 @@ def verdict(approved):
     return "```verdict\n" + json.dumps({{"approved": approved, "findings": [], "coverage": coverage}}) + "\n```"
 def task(id, title, depends=()):
     return {{"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "kind": "analysis", "reviewer": {{"focus": "f"}}}}
+            "change_kind": "none", "kind": "analysis", "reviewer": {{"focus": "f"}}}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({{"tasks": list(tasks)}}) + "\n```"
 def message(to, kind, text):
@@ -156,11 +143,9 @@ fn run(core: &Arc<Core>, dir: &Path) -> String {
         .unwrap()
         .id;
     core.send(&conversation, "zbadaj").unwrap();
-    wait_until("plan proposed", || core.is_idle(&conversation));
-    let plan = core.store.latest_plan(&conversation).unwrap()[0]
-        .plan_id
-        .clone();
-    core.accept_plan(&conversation, &plan).unwrap();
+    wait_until("reviewed plan activated", || {
+        core.store.accepted_plan(&conversation).unwrap().is_some()
+    });
     conversation
 }
 
@@ -170,7 +155,7 @@ fn the_user_writes_to_a_working_agent_and_the_orchestrator_learns_of_it() {
     let core = open(
         dir.path(),
         r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
+answer = "done" if "The plan finished. Results of each task follow." in prompt else plan(task("t1", "Parser"))
 "#,
         r#"    if "Messages for you" in prompt:
         answer = "report with UTF-8 case"
@@ -216,7 +201,7 @@ fn a_comment_reaches_the_orchestrator_and_stays_until_the_user_resolves_it() {
     let core = open(
         dir.path(),
         r#"
-answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "[user]\ncontinue" in prompt else plan(task("t1", "Parser"))
+answer = "noted" if "The plan finished. Results of each task follow." in prompt or "[user comment" in prompt or "[user]\ncontinue" in prompt else plan(task("t1", "Parser"))
 "#,
         r#"    answer = "report""#,
     );
@@ -332,8 +317,10 @@ import re
 if "Address each new user comment" in prompt:
     ids = re.findall(r"user comment #(\d+) on", prompt)
     answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Parser v2"))
-else:
+elif "You are the planner" in prompt:
     answer = plan(task("t1", "Parser"))
+else:
+    answer = "Results acknowledged."
 "#,
         // The follow-up check of a revised plan is a review too.
         "    answer = verdict(True) if \"new plan\" in prompt else 'unused'",
@@ -424,9 +411,8 @@ if len(_ledger_context)==2:
         .add_plan(
             &conversation,
             &[serde_json::json!({
-                "id":"t1", "title":"Parser", "goal":"g", "kind":"analysis",
-                "reviewer":{"focus":"f"}
-            })],
+                "id":"t1", "title":"Parser", "goal":"g", "change_kind": "none", "kind":"analysis",
+                "reviewer":{"summary": "f"}})],
         )
         .unwrap()[0]
         .plan_id
@@ -563,10 +549,12 @@ fn comments_answered_in_words_stay_open_and_are_reported_as_replied() {
         r#"
 if "Address each new user comment" in prompt:
     answer = "Because the plan is split by module."
-else:
+elif "You are the planner" in prompt:
     answer = plan(task("t1", "Parser"))
+else:
+    answer = "Results acknowledged."
 "#,
-        "    answer = 'unused'",
+        "    answer = 'Inspected the parser'",
     );
     let (conversation, plan, ids) = plan_with_two_draft_comments(&core, dir.path());
     core.review_comments(&conversation, &plan).unwrap();
@@ -590,12 +578,12 @@ else:
 }
 
 /// Two independent read-only tasks whose workers log when they start and end.
-fn timed_plan(dir: &Path, max_parallel: usize) -> Vec<(f64, f64)> {
+fn timed_plan(dir: &Path) -> Vec<(f64, f64)> {
     let log = dir.join("times.log");
-    let core = open_limited(
+    let core = open(
         dir,
         r#"
-answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt else "done"
+answer = plan(task("t1", "One"), task("t2", "Two")) if "The plan finished. Results of each task follow." not in prompt else "done"
 "#,
         &format!(
             r#"    import time
@@ -606,7 +594,6 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt
     answer = "report""#,
             log = log.to_string_lossy()
         ),
-        max_parallel,
     );
     let conversation = support::fixture_conversation(&core, &dir.join("project"))
         .unwrap()
@@ -616,7 +603,6 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt
     let plan = core.store.latest_plan(&conversation).unwrap()[0]
         .plan_id
         .clone();
-    core.accept_plan(&conversation, &plan).unwrap();
     wait_until("plan done", || {
         core.is_idle(&conversation)
             && core
@@ -637,28 +623,23 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt
 }
 
 #[test]
-fn independent_tasks_overlap_in_time_unless_the_limit_says_otherwise() {
+fn independent_tasks_overlap_without_a_configured_concurrency_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let mut spans = timed_plan(dir.path(), 4);
+    let mut spans = timed_plan(dir.path());
     spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     assert_eq!(spans.len(), 2);
     assert!(
         spans[1].0 < spans[0].1,
         "the second started before the first ended: {spans:?}"
     );
-
-    let dir = tempfile::tempdir().unwrap();
-    let mut spans = timed_plan(dir.path(), 1);
-    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    assert!(spans[1].0 >= spans[0].1, "one at a time: {spans:?}");
 }
 
 const WRITING_PLAN: &str = r#"
 def writer(id, extra=None):
     t = task(id, "Change", [])
-    t.update({"writes": True, "kind": "implementation", "scope": ["a.rs"]})
+    t.update({"change_kind": "code", "kind": "implementation"})
     return t
-answer = plan(writer("t1")) if "[runtime]" not in prompt else "done"
+answer = plan(writer("t1")) if "The plan finished. Results of each task follow." not in prompt else "done"
 "#;
 
 #[test]
@@ -673,7 +654,12 @@ fn the_plan_reviewer_is_told_when_a_plan_that_changes_code_has_no_context_scout(
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
-    wait_until("plan proposed", || core.is_idle(&conversation));
+    wait_until("plan reviewer started", || {
+        std::fs::read_to_string(dir.path().join("prompts.jsonl"))
+            .is_ok_and(|log| log.contains("You review a plan"))
+    });
+    core.cancel(&conversation);
+    wait_until("graph inspection cancelled", || core.is_idle(&conversation));
     let review = prompts(dir.path())
         .into_iter()
         .find(|(_, prompt)| prompt.contains("You review a plan"))
@@ -696,7 +682,12 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
-    wait_until("plan proposed", || core.is_idle(&conversation));
+    wait_until("plan reviewer started", || {
+        std::fs::read_to_string(dir.path().join("prompts.jsonl"))
+            .is_ok_and(|log| log.contains("You review a plan"))
+    });
+    core.cancel(&conversation);
+    wait_until("graph inspection cancelled", || core.is_idle(&conversation));
     let notices = events(&core, &conversation, "notice");
     assert!(
         notices.iter().any(|n| n["text"]
@@ -716,7 +707,12 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
-    wait_until("plan proposed", || core.is_idle(&conversation));
+    wait_until("plan reviewer started", || {
+        std::fs::read_to_string(dir.path().join("prompts.jsonl"))
+            .is_ok_and(|log| log.contains("You review a plan"))
+    });
+    core.cancel(&conversation);
+    wait_until("graph inspection cancelled", || core.is_idle(&conversation));
     assert!(
         events(&core, &conversation, "notice")
             .iter()
@@ -730,7 +726,7 @@ fn a_dependent_gets_the_summary_of_its_dependency_not_its_report() {
     let core = open(
         dir.path(),
         r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]), task("t3", "Docs"))
+answer = "done" if "The plan finished. Results of each task follow." in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]), task("t3", "Docs"))
 "#,
         r#"    answer = json.dumps({"type": "completed", "summary": "audit summary S1", "report": "audit found F1 and F2"}) if "Task id: t1" in prompt else "report""#,
     );
@@ -764,7 +760,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1', 'Audit'))",
         r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('changed report' if 'make correction' in prompt else 'initial report')"#,
     );
     let conversation = run(&core, dir.path());
@@ -834,7 +830,7 @@ fn direct_worker_correction_invalidates_and_recomputes_the_dependency_chain() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
         r#"    if "The worker's updated report:" in prompt:
         answer = verdict(True)
     elif "make correction" in prompt:
@@ -945,7 +941,7 @@ fn worker_message_during_review_requires_another_round_before_approval() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1', 'Audit'))",
         r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('corrected report' if 'correct during review' in prompt else 'first report')"#,
     );
     let binary = dir.path().join("agy");
@@ -1066,7 +1062,7 @@ fn direct_reviewer_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
         r#"    if "The worker's updated report:" in prompt or "You review another agent's work." in prompt:
         answer = verdict(False) if 'reject the old report' in prompt else verdict(True)
     else:
@@ -1160,7 +1156,7 @@ fn direct_worker_failure_remains_queued_and_is_never_consumed_by_a_receipt_turn(
     );
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1', 'Source'))",
         &agent,
     );
     let conversation = run(&core, dir.path());
@@ -1230,7 +1226,7 @@ fn direct_reviewers_receive_review_context_instead_of_receipt_only_instructions(
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'))",
+        "answer = 'done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1', 'Source'))",
         "    answer = verdict(True) if \"The worker's updated report:\" in prompt else 'worker report'",
     );
     let conversation = run(&core, dir.path());
@@ -1351,7 +1347,7 @@ else:
 #[test]
 fn isolated_worker_can_ask_the_orchestrator_with_the_only_task_slot_occupied() {
     let dir = tempfile::tempdir().unwrap();
-    let core = open_limited(
+    let core = open(
         dir.path(),
         r#"
 import os,re,urllib.request
@@ -1363,7 +1359,7 @@ if 'Agent question ' in prompt:
     assert not reply['result'].get('isError'),reply
     answer='Answered the local question.'
 else:
-    answer='done' if '[runtime]' in prompt else plan(task('t1','Encoding inspection'))
+    answer='done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1','Encoding inspection'))
 "#,
         r#"    import os,urllib.request
     def call(name,**arguments):
@@ -1381,7 +1377,6 @@ else:
     late=call('wait_for_answer')
     assert late['state']=='answered' and late['answer']=='Use UTF-8',late
     answer='Inspected encoding: UTF-8'"#,
-        1,
     );
     let conversation = run(&core, dir.path());
     wait_until(
@@ -1438,7 +1433,7 @@ if '"status":"failed"' in prompt:
     assert again.get('isError'),again
     answer='retried t1'
 else:
-    answer='done' if '[runtime]' in prompt else plan(task('t1','Inspection'))
+    answer='done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1','Inspection'))
 "#,
         &agent,
     );
@@ -1483,11 +1478,10 @@ fn a_dependency_correction_cancels_the_old_consumer_and_releases_its_only_slot()
         entered = entered.to_string_lossy(),
         release = release.to_string_lossy()
     );
-    let core = open_limited(
+    let core = open(
         dir.path(),
-        "answer='done' if '[runtime]' in prompt else plan(task('t1','Source'),task('t2','Consumer',['t1']))",
+        "answer='done' if 'The plan finished. Results of each task follow.' in prompt else plan(task('t1','Source'),task('t2','Consumer',['t1']))",
         &agent,
-        1,
     );
     let conversation = run(&core, dir.path());
     wait_until("consumer occupied the only scheduler slot", || {

@@ -12,33 +12,11 @@ impl Core {
         spec: &TaskContract,
     ) -> Result<Inputs> {
         let conversation = self.store.plan_conversation(&task.plan_id)?;
-        let mut sources = self.dependency_tasks(&task.plan_id, spec)?;
-        sources.push(task.clone());
-        let originals = sources
-            .iter()
-            .filter_map(|source| {
-                self.store
-                    .completed_task_result(source)
-                    .ok()
-                    .map(|(id, _)| id)
-            })
-            .collect::<Vec<_>>();
-        for id in originals {
-            if !sources.iter().any(|source| source.id == id)
-                && let Some(source) = self.store.task_by_id(&id)?
-            {
-                require(
-                    self.store.plan_conversation(&source.plan_id)? == conversation,
-                    "artifact source belongs to another conversation",
-                )?;
-                sources.push(source);
-            }
-        }
         let mut inputs = BTreeMap::new();
         for path in &spec.outputs {
             let input = match self.store.artifact_input(task, path)? {
                 Some(None) if task.result.is_none() => {
-                    if let Some(receipt) = self.artifact_source(&conversation, path, &sources)? {
+                    if let Some(receipt) = self.store.artifact_receipt(&conversation, path)? {
                         let project =
                             PathBuf::from(self.store.conversation(&conversation)?.project);
                         git::require_owned_outputs(
@@ -53,7 +31,7 @@ impl Core {
                 }
                 Some(input) => input,
                 None => {
-                    let receipt = self.artifact_source(&conversation, path, &sources)?;
+                    let receipt = self.store.artifact_receipt(&conversation, path)?;
                     self.store
                         .freeze_artifact_input(task, path, receipt.as_ref())?
                 }
@@ -61,61 +39,6 @@ impl Core {
             inputs.insert(path.clone(), input);
         }
         Ok(inputs)
-    }
-
-    fn artifact_source(
-        &self,
-        conversation: &str,
-        path: &str,
-        sources: &[Task],
-    ) -> Result<Option<ArtifactReceipt>> {
-        if let Some(receipt) = self.store.artifact_receipt(conversation, path)? {
-            // The receipt proves this conversation delivered the file. Content is
-            // compared against the frozen commit before launch and again at delivery.
-            return Ok(Some(receipt));
-        }
-        // Older daemons already persisted successful landings. Use only a
-        // declared artifact dependency with that durable proof, never a file
-        // name, an unlanded result, or a report's assertion of ownership.
-        let mut candidates = sources.to_vec();
-        let ids = {
-            let db = self.store.db();
-            let mut query=db.prepare("SELECT DISTINCT t.id FROM tasks t,json_each(t.spec,'$.outputs') o WHERE t.conversation_id=?1 AND o.value=?2")?;
-            query
-                .query_map(rusqlite::params![conversation, path], |r| {
-                    r.get::<_, String>(0)
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        for id in ids {
-            if !candidates.iter().any(|t| t.id == id)
-                && let Some(task) = self.store.task_by_id(&id)?
-            {
-                candidates.push(task);
-            }
-        }
-        for task in candidates.iter().rev() {
-            let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
-            if spec.delivery == Some(tasks::DeliveryMode::Untracked)
-                && spec.outputs.iter().any(|p| p == path)
-                && let Some(commit) = self.artifact_landing(task)
-                && git::artifact_was_created(
-                    Path::new(&self.store.conversation(conversation)?.project),
-                    &commit,
-                    path,
-                )?
-            {
-                let receipt = ArtifactReceipt {
-                    task: task.id.clone(),
-                    generation: task.input_generation,
-                    commit: commit.clone(),
-                };
-                self.store
-                    .record_artifact_delivery(conversation, path, &receipt)?;
-                return Ok(Some(receipt));
-            }
-        }
-        Ok(None)
     }
 
     pub(in crate::lean) fn artifact_commits(
@@ -140,8 +63,7 @@ impl Core {
         let mut current = inputs.clone();
         let conversation = self.store.plan_conversation(&task.plan_id)?;
         for path in &spec.outputs {
-            if let Some(receipt) =
-                self.artifact_source(&conversation, path, std::slice::from_ref(task))?
+            if let Some(receipt) = self.store.artifact_receipt(&conversation, path)?
                 && receipt.task == task.id
                 && receipt.generation == task.input_generation
             {

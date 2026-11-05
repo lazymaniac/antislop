@@ -40,7 +40,7 @@ fn agents_are_found_by_role_or_task_title() {
     view.apply(
         &serde_json::json!({"seq": 1, "kind": "plan_proposed", "payload": {
             "plan": "p",
-            "tasks": [{"id": "t1", "title": "Parser"}, {"id": "t2", "title": "Docs"}]}}),
+            "tasks": [{"change_kind":"none","id": "t1", "title": "Parser"}, {"change_kind":"none","id": "t2", "title": "Docs"}]}}),
     );
     let mut picker = Picker::new(Kind::Agents);
     picker.query = "pars revi".into();
@@ -76,7 +76,10 @@ fn picker_cursor_bounded_and_display_width_aware() {
     // So cursor_x should be 8 + 1 + 5 = 14.
     let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
     assert_eq!(cursor_x, 14);
-    assert_eq!(cursor_y, 5);
+    let query_row: String = (0..80)
+        .map(|x| terminal.backend().buffer()[(x, cursor_y)].symbol())
+        .collect();
+    assert!(query_row.contains("> pla"));
 
     // 2. Double-width CJK character takes 2 visual columns
     picker.query = "漢".into();
@@ -237,7 +240,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     assert!(rendered.contains("newline in draft"));
     assert!(rendered.contains("line in draft"));
     assert!(rendered.contains("scroll conversation"));
-    assert!(rendered.contains("accept/resume"));
+    assert!(rendered.contains("line start / resume"));
     assert!(rendered.contains("delete to start / end"));
 
     // Review every scroll position so new help entries cannot make an
@@ -259,7 +262,6 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
 
     assert!(rendered2.contains("cancel running work"));
     assert!(rendered2.contains("pause new steps / continue"));
-    assert!(rendered2.contains("autonomous / supervised mode"));
     assert!(rendered2.contains("always sent as chat"));
     assert!(rendered2.contains("search conversation"));
     assert!(rendered2.contains("command palette"));

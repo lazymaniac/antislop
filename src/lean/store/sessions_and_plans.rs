@@ -115,8 +115,7 @@ impl Store {
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
                AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','reviewing'))
                AND NOT EXISTS(SELECT 1 FROM agent_questions q WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
-               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)
-               AND NOT EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id JOIN run_contexts r ON r.turn_id=t.id JOIN provider_blocks b ON b.provider=t.provider AND b.profile=r.profile WHERE s.task_id=tasks.id)",
+               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)",
             params![conversation, plan_id],
         )?)
     }
@@ -131,8 +130,7 @@ impl Store {
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2 AND status='waiting'
                AND NOT EXISTS (SELECT 1 FROM agent_questions q
                  WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
-               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)
-               AND NOT EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id JOIN run_contexts r ON r.turn_id=t.id JOIN provider_blocks b ON b.provider=t.provider AND b.profile=r.profile WHERE s.task_id=tasks.id)",
+               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)",
             params![conversation, plan_id],
         )?)
     }
@@ -142,7 +140,7 @@ impl Store {
         Ok(self
             .db()
             .query_row(
-                "SELECT p.id FROM plans p JOIN plan_authorizations a ON a.plan_id=p.id
+                "SELECT p.id FROM plans p JOIN plan_activations a ON a.plan_id=p.id
                  WHERE p.conversation_id=?1 ORDER BY p.created_ms DESC,p.rowid DESC LIMIT 1",
                 [conversation],
                 |row| row.get(0),
@@ -166,7 +164,7 @@ impl Store {
                 params![conversation, plan_id, serde_json::json!({"text": text}).to_string(), now_ms()],
             )?;
         }
-        authorize_plan(&tx, conversation, plan_id)?;
+        record_plan_activation(&tx, conversation, plan_id)?;
         advance_workflow(&tx, conversation, plan_id)?;
         tx.commit()?;
         Ok(all as usize)
@@ -241,11 +239,14 @@ fn proposed_task_count(
     Ok(all)
 }
 
-fn authorize_plan(tx: &rusqlite::Transaction<'_>, conversation: &str, plan_id: &str) -> Result<()> {
-    // Keep the existing schema and acceptance marker readable across restarts.
-    // Legacy path columns no longer define task filesystem permissions.
+fn record_plan_activation(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    plan_id: &str,
+) -> Result<()> {
+    // Activation records the reviewed plan used by scheduling and recovery.
     tx.execute(
-        "INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,'[]','[]')",
+        "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
         params![plan_id, conversation],
     )?;
     Ok(())

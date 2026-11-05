@@ -47,8 +47,9 @@ fn opencode_learns_the_session_it_created_without_locking_itself() {
         model: None,
         effort: None,
         cwd: project,
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -94,8 +95,9 @@ fn continuous_terminal_redraw_does_not_block_connected_first_or_followup_turns()
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -135,8 +137,9 @@ fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
         model: None,
         effort: None,
         cwd: project,
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -173,8 +176,9 @@ fn a_session_is_replaced_when_the_wanted_one_differs_from_the_live_one() {
         model: None,
         effort: None,
         cwd: project,
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let first = core
@@ -219,8 +223,9 @@ fn cancelled_gateway_startup_keeps_the_session_retryable() {
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -269,8 +274,9 @@ fn cancelling_a_running_turn_interrupts_without_discarding_its_session() {
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -325,8 +331,9 @@ fn failed_fixture_reports_raw_terminal_tail_and_discards_the_session() {
         model: None,
         effort: None,
         cwd: project,
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -352,7 +359,7 @@ fn failed_fixture_reports_raw_terminal_tail_and_discards_the_session() {
 }
 
 #[test]
-fn live_cli_that_never_connects_times_out_and_is_cleaned_up() {
+fn live_cli_that_never_connects_is_cancellable_and_cleaned_up() {
     let dir = test_tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -375,8 +382,9 @@ fn live_cli_that_never_connects_times_out_and_is_cleaned_up() {
         model: None,
         effort: None,
         cwd: project,
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -388,28 +396,28 @@ fn live_cli_that_never_connects_times_out_and_is_cleaned_up() {
         assert!(Instant::now() < output_deadline, "fixture did not start");
         std::thread::sleep(Duration::from_millis(10));
     }
-    *session.ready_limit.lock().unwrap() = Duration::from_millis(200);
-
-    let error = session
-        .run(
-            &core.native,
-            "never-connect-turn",
-            "this prompt must not be typed",
-            &AtomicBool::new(false),
-        )
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains(EXECUTION_FAILED), "{error}");
-    assert!(
-        error.contains("did not connect to the antislop MCP gateway"),
-        "{error}"
-    );
-    assert!(error.contains("fixture waiting without MCP"), "{error}");
-    assert!(session.failed_before_start());
+    let cancel = AtomicBool::new(false);
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(session.check_alive().is_ok());
+            cancel.store(true, Ordering::SeqCst);
+        });
+        session
+            .run(
+                &core.native,
+                "never-connect-turn",
+                "must not be typed",
+                &cancel,
+            )
+            .unwrap_err()
+            .to_string()
+    });
+    assert_eq!(error, mcp::CANCELLED);
+    assert!(!session.failed_before_start());
     assert!(!session.primed.load(Ordering::SeqCst));
     assert!(!session.gateway.connected());
-    assert!(session.stop.load(Ordering::SeqCst));
+    assert!(!session.stop.load(Ordering::SeqCst));
     assert!(Arc::ptr_eq(
         &session,
         &core
@@ -459,8 +467,9 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -486,7 +495,7 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
 }
 
 #[test]
-fn a_cli_that_prints_nothing_for_the_idle_limit_is_reported_hung_with_its_tail() {
+fn a_silent_live_cli_is_not_failed_by_an_idle_budget() {
     let dir = test_tempdir();
     let core = core(dir.path());
     let binary = dir.path().join("hung-agent");
@@ -499,8 +508,9 @@ fn a_cli_that_prints_nothing_for_the_idle_limit_is_reported_hung_with_its_tail()
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -517,19 +527,8 @@ fn a_cli_that_prints_nothing_for_the_idle_limit_is_reported_hung_with_its_tail()
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    let mut observed = None;
-    for _ in 0..80 {
-        if let Err(error) = session.check_active(Duration::from_millis(300)) {
-            observed = Some(error.to_string());
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    let error = observed.expect("a silent CLI should be reported hung");
-    assert!(error.contains("opencode printed nothing for"), "{error}");
-    assert!(error.contains("last words 41"), "{error}");
-    session.check_active(Duration::from_secs(3600)).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(session.check_alive().is_ok());
     core.native.shutdown().unwrap();
 }
 
@@ -551,8 +550,9 @@ fn provider_limit_fails_immediately_with_raw_reset_message() {
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core
@@ -596,7 +596,7 @@ fn real_cli_permission_policy_smoke() {
     let project = dir.path().join("synthetic-project");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("input.txt"), "synthetic input\n").unwrap();
-    for access in [agent::Access::Write, agent::Access::ReadOnly] {
+    for role_kind in ["worker", "reviewer", "orchestrator"] {
         let mut spec = agent::Spec {
             provider,
             binary: agent::name(provider).into(),
@@ -604,12 +604,12 @@ fn real_cli_permission_policy_smoke() {
             model: None,
             effort: None,
             cwd: project.clone(),
+            runtime: core.state.clone(),
             add_dirs: vec![],
-            access,
             resume: None,
         };
         for resumed in [false, true] {
-            let role = format!("smoke-{access:?}-{resumed}");
+            let role = format!("smoke-{role_kind}-{resumed}");
             let session = core
                 .native
                 .prepare_scoped(&core, "synthetic", &role, &spec, "")
@@ -625,11 +625,7 @@ fn real_cli_permission_policy_smoke() {
                 }
                 timer_cancel.store(true, Ordering::SeqCst);
             });
-            let instructions = if access == agent::Access::Write {
-                "Run this shell probe exactly: probe=runtime-policy; printf '%s\\n' \"$probe\"; ps -p $$ -o pid=; printf 'written\\n' > output.txt. Read output.txt and finish_turn with text='writer probe passed'. Do not ask for permission."
-            } else {
-                "Read input.txt. Attempt to write blocked.txt using an editing or shell tool; it must be refused by the configured read-only role. If it is refused, finish_turn with text='read-only probe passed'. If it succeeds, finish_turn with text='read-only probe FAILED'. Do not ask for permission."
-            };
+            let instructions = "Write output.txt containing full-access, read it back, and finish_turn with text='probe passed'. Do not ask for permission.";
             let outcome = session.run(
                 &core.native,
                 &format!("smoke-{resumed}"),
@@ -640,16 +636,12 @@ fn real_cli_permission_policy_smoke() {
             timer.join().unwrap();
             let outcome = outcome.unwrap_or_else(|error| {
                 panic!(
-                    "{provider:?} {access:?} resume={resumed}: {error}; terminal: {}",
+                    "{provider:?} {role_kind} resume={resumed}: {error}; terminal: {}",
                     agent::persisted_error(&terminal::tail(&session.screen, 40))
                 )
             });
             assert!(!outcome.text.contains("FAILED"), "{}", outcome.text);
-            if access == agent::Access::Write {
-                assert!(project.join("output.txt").exists());
-            } else {
-                assert!(!project.join("blocked.txt").exists());
-            }
+            assert!(project.join("output.txt").exists());
             if !resumed {
                 spec.resume = outcome.session;
                 assert!(
@@ -663,7 +655,7 @@ fn real_cli_permission_policy_smoke() {
 }
 
 #[test]
-fn a_provider_limit_blocks_new_launches_for_the_profile_across_restart() {
+fn a_provider_limit_is_reported_without_blocking_later_launches_or_restart() {
     use crate::config::{ProviderConfig, ProviderKind, RoleKind, WorkKind};
     let directory = test_tempdir();
     let binary = directory.path().join("limited-provider");
@@ -702,7 +694,7 @@ fn a_provider_limit_blocks_new_launches_for_the_profile_across_restart() {
             profile: config.resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
             cwd: directory.path().into(),
             add_dirs: vec![],
-            access: agent::Access::ReadOnly,
+
             upto_message: 0,
         };
         assert!(
@@ -730,8 +722,8 @@ fn a_provider_limit_blocks_new_launches_for_the_profile_across_restart() {
     probe(&reopened, "after-restart-limit-probe");
     assert_eq!(
         std::fs::read_to_string(count).unwrap().lines().count(),
-        1,
-        "no automatic retry or new process on the blocked profile"
+        3,
+        "each explicit turn reaches the CLI; no persistent profile ban or automatic quota retry"
     );
 }
 
@@ -749,8 +741,9 @@ fn worktree_cleanup_defers_while_a_native_session_is_in_use() {
         model: None,
         effort: None,
         cwd: dir.path().into(),
+        runtime: core.state.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         resume: None,
     };
     let session = core

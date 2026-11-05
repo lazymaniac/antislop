@@ -30,10 +30,9 @@ impl PlanRevision {
                 (self.retire.contains(old)
                     || (uuid::Uuid::parse_str(old).is_ok()
                         && !baseline.iter().any(|t| t.spec["id"] == *old)
-                        && self
-                            .tasks
-                            .iter()
-                            .any(|t| &t.id == new && t.writes && t.changes_code())))
+                        && self.tasks.iter().any(|t| {
+                            &t.id == new && t.change_kind.has_delivery() && t.changes_code()
+                        })))
                     && self.tasks.iter().any(|t| &t.id == new)
                     && !baseline.iter().any(|t| t.spec["id"] == *new),
                 "replacements: use a fresh task id and a retired local source, or a code writer and a historical checkpoint UUID",

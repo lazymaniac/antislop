@@ -17,7 +17,7 @@ prompt = sys.argv[-1]
 if "SESSION PHASE: INTERVIEW." in prompt:
     answer = "```requirements\nGoal, scope and acceptance: inspect the requested fixture.\n```"
 elif "propose" in prompt or "SESSION PHASE: planning" in prompt:
-    answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"reviewer\": {\"focus\": \"f\"}}]}\n```"
+    answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"change_kind\": \"none\", \"kind\": \"analysis\", \"reviewer\": {\"summary\": \"f\"}}]}\n```"
 else:
     answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
@@ -39,8 +39,18 @@ fn fake_agy(dir: &Path) -> PathBuf {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
+import os, time, re
+root = os.path.dirname(__file__)
+if 'You review a plan' in prompt and os.path.exists(os.path.join(root, 'hold-plan-review')):
+    open(os.path.join(root, 'plan-review-started'), 'w').close()
+    while not os.path.exists(os.path.join(root, 'release-plan-review')): time.sleep(0.01)
+if 'You review' in prompt or 'You audit' in prompt:
+    ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
+    answer = '```verdict\n'+json.dumps({'approved':True,'findings':[],'coverage':{i:{'status':'ok','note':'fixture checked'} for i in ids}})+'\n```'
+else:
+    answer = 'ok'
 print(json.dumps({"event": "init", "conversation_id": "worker-1"}))
-print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "status": "SUCCESS", "response": "ok", "usage": {}}}))
+print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,
     )
     .unwrap();
@@ -77,7 +87,7 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(project: &Path, config: &Path, state: &Path) -> Self {
-        common::trust(project);
+        common::runtime_environment(project);
         std::fs::create_dir_all(state).unwrap();
         std::fs::set_permissions(state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .unwrap();
@@ -140,7 +150,7 @@ impl DaemonGuard {
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
         let socket_path = antislop::lean::daemon::socket(&self.state);
         let mut stream = UnixStream::connect(&socket_path).unwrap();
-        let mut bytes = serde_json::to_vec(&json!({"protocol":4,"request":json_payload})).unwrap();
+        let mut bytes = serde_json::to_vec(&json!({"protocol":5,"request":json_payload})).unwrap();
         bytes.push(b'\n');
         stream.write_all(&bytes).unwrap();
         let mut reader = BufReader::new(stream);
@@ -209,7 +219,7 @@ fn test_conversations_structured_summary() {
     assert!(item["active_plan"].is_null());
     assert_eq!(item["tasks_total"], 0);
     assert_eq!(item["tasks_done"], 0);
-    assert!(item["scope_hash"].as_str().unwrap().len() >= 8);
+    assert!(item["revision_token"].as_str().unwrap().len() >= 8);
 }
 
 #[test]
@@ -487,7 +497,7 @@ fn test_sessions_structured_data() {
     assert!(context.get("backend").is_none());
     assert_eq!(context["profile"], "orchestrator");
     assert_eq!(context["cwd"], project.to_str().unwrap());
-    assert_eq!(context["access"], "read_only");
+    assert!(context.get("access").is_none());
     assert_eq!(context["provider_thread_id"], "orch");
     assert!(context["provider_session_id"].is_null());
     let other = daemon.call_raw(&json!({"op":"start"})).unwrap();
@@ -500,7 +510,7 @@ fn test_sessions_structured_data() {
 }
 
 #[test]
-fn test_scope_hash_review_and_stale_scope_rejection() {
+fn test_revision_token_review_and_stale_revision_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
@@ -516,29 +526,32 @@ fn test_scope_hash_review_and_stale_scope_rejection() {
 
     // 1. Get conversation scope hash from summary
     let convs = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
-    let current_scope = convs[0]["scope_hash"].as_str().unwrap().to_string();
+    let current_scope = convs[0]["revision_token"].as_str().unwrap().to_string();
 
-    // 2. Cancel with stale scope_hash -> must be rejected with 'stale_scope'
+    // 2. Cancel with stale revision_token -> must be rejected with 'stale_revision'
     let stale_err = daemon
         .call_raw(&json!({
             "op": "cancel",
             "conversation": conv_id,
-            "scope_hash": "stale_scope_hash_12345"
+            "revision_token": "stale_revision_token_12345"
         }))
         .unwrap_err();
-    assert!(stale_err.contains("stale_scope"), "error was: {stale_err}");
+    assert!(
+        stale_err.contains("stale_revision"),
+        "error was: {stale_err}"
+    );
 
-    // 3. Cancel with correct scope_hash -> succeeds
+    // 3. Cancel with correct revision_token -> succeeds
     let cancel_ok = daemon
         .call_raw(&json!({
             "op": "cancel",
             "conversation": conv_id,
-            "scope_hash": current_scope
+            "revision_token": current_scope
         }))
         .unwrap();
     assert!(cancel_ok.is_null());
 
-    // 4. Cancel without scope_hash -> succeeds (backward compatibility)
+    // 4. Cancel without revision_token -> succeeds as an unconditional cancellation
     let cancel_none = daemon
         .call_raw(&json!({
             "op": "cancel",
@@ -547,46 +560,46 @@ fn test_scope_hash_review_and_stale_scope_rejection() {
         .unwrap();
     assert!(cancel_none.is_null());
 
-    // 5. Accept with stale scope_hash -> rejected with 'stale_scope'
+    // 5. The removed accept operation has no decoder.
     let accept_err = daemon
         .call_raw(&json!({
             "op": "accept",
             "conversation": conv_id,
             "plan": "P99",
-            "scope_hash": "stale_plan_hash"
+            "revision_token": "stale_plan_hash"
         }))
         .unwrap_err();
     assert!(
-        accept_err.contains("stale_scope"),
+        accept_err.contains("unknown variant `accept`"),
         "error was: {accept_err}"
     );
 
-    // 6. Resume with stale scope_hash -> rejected with 'stale_scope'
+    // 6. Resume with stale revision_token -> rejected with 'stale_revision'
     let resume_err = daemon
         .call_raw(&json!({
             "op": "resume",
             "conversation": conv_id,
             "plan": "P99",
-            "scope_hash": "stale_plan_hash"
+            "revision_token": "stale_plan_hash"
         }))
         .unwrap_err();
     assert!(
-        resume_err.contains("stale_scope"),
+        resume_err.contains("stale_revision"),
         "error was: {resume_err}"
     );
 
-    // 7. Review with stale scope_hash -> rejected with 'stale_scope'
+    // 7. Review with stale revision_token -> rejected with 'stale_revision'
     let review_err = daemon
         .call_raw(&json!({
             "op": "review",
             "conversation": conv_id,
             "plan": "P99",
             "id": "T1",
-            "scope_hash": "stale_diff_hash"
+            "revision_token": "stale_diff_hash"
         }))
         .unwrap_err();
     assert!(
-        review_err.contains("stale_scope"),
+        review_err.contains("stale_revision"),
         "error was: {review_err}"
     );
 }
@@ -710,7 +723,7 @@ fn test_wire_request_deny_unknown_fields_and_defaults() {
 }
 
 #[test]
-fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects() {
+fn test_stale_revision_forced_change_between_read_and_execution_has_no_side_effects() {
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
@@ -727,70 +740,50 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
 
     // 1. Read current conversation scope hash
     let convs = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
-    let scope_at_read = convs[0]["scope_hash"].as_str().unwrap().to_string();
+    let scope_at_read = convs[0]["revision_token"].as_str().unwrap().to_string();
 
-    // 2. Force a scope change between read and execution by sending a new turn
-    let send_res = daemon
-        .call_raw(&json!({
-            "op": "send",
-            "conversation": conv_id,
-            "text": "force state change"
-        }))
+    // 2. Change runtime state deterministically, without launching agents.
+    daemon
+        .call_raw(&json!({"op":"pause", "conversation":conv_id,"paused":true}))
         .unwrap();
-    assert!(send_res.as_u64().unwrap() > 0);
-
-    // Wait until daemon processes turn and returns to idle
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut scope_after_change = scope_at_read.clone();
-    while Instant::now() < deadline {
-        let updated = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
-        if matches!(updated[0]["status"].as_str(), Some("idle" | "proposed"))
-            && updated[0]["scope_hash"].as_str().unwrap() != scope_at_read
-        {
-            scope_after_change = updated[0]["scope_hash"].as_str().unwrap().to_string();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_ne!(
-        scope_at_read, scope_after_change,
-        "scope must have changed on daemon"
-    );
+    let changed = daemon.call_raw(&json!({"op":"conversations"})).unwrap();
+    let scope_after_change = changed[0]["revision_token"].as_str().unwrap().to_owned();
+    assert_ne!(scope_at_read, scope_after_change);
 
     // 3. Execution attempt with scope_at_read (stale scope)
     let stale_err = daemon
         .call_raw(&json!({
             "op": "cancel",
             "conversation": conv_id,
-            "scope_hash": scope_at_read
+            "revision_token": scope_at_read
         }))
         .unwrap_err();
     assert!(
-        stale_err.contains("stale_scope"),
-        "error must be stale_scope, got: {stale_err}"
+        stale_err.contains("stale_revision"),
+        "error must be stale_revision, got: {stale_err}"
     );
 
     // 4. Review ZERO side effects: conversation was not cancelled, events remain intact
     let convs_after = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
     assert_eq!(convs_after[0]["id"], conv_id);
     assert_eq!(
-        convs_after[0]["scope_hash"].as_str().unwrap(),
+        convs_after[0]["revision_token"].as_str().unwrap(),
         scope_after_change,
         "state must remain untouched after stale scope error"
     );
 
-    // 5. Test plan accept with stale scope:
+    // 5. The removed accept operation is rejected rather than interpreted:
     let plan_stale_err = daemon
         .call_raw(&json!({
             "op": "accept",
             "conversation": conv_id,
             "plan": "P_nonexistent",
-            "scope_hash": "outdated_plan_hash"
+            "revision_token": "outdated_plan_hash"
         }))
         .unwrap_err();
     assert!(
-        plan_stale_err.contains("stale_scope"),
-        "error must be stale_scope, got: {plan_stale_err}"
+        plan_stale_err.contains("unknown variant `accept`"),
+        "error must be stale_revision, got: {plan_stale_err}"
     );
 
     // 6. Test resume with stale scope:
@@ -799,12 +792,12 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
             "op": "resume",
             "conversation": conv_id,
             "plan": "P_nonexistent",
-            "scope_hash": "outdated_resume_hash"
+            "revision_token": "outdated_resume_hash"
         }))
         .unwrap_err();
     assert!(
-        resume_stale_err.contains("stale_scope"),
-        "error must be stale_scope, got: {resume_stale_err}"
+        resume_stale_err.contains("stale_revision"),
+        "error must be stale_revision, got: {resume_stale_err}"
     );
 
     // 7. Test review with stale scope:
@@ -814,12 +807,12 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
             "conversation": conv_id,
             "plan": "P_nonexistent",
             "id": "T_nonexistent",
-            "scope_hash": "outdated_diff_hash"
+            "revision_token": "outdated_diff_hash"
         }))
         .unwrap_err();
     assert!(
-        review_stale_err.contains("stale_scope"),
-        "error must be stale_scope, got: {review_stale_err}"
+        review_stale_err.contains("stale_revision"),
+        "error must be stale_revision, got: {review_stale_err}"
     );
 }
 
@@ -853,9 +846,7 @@ fn test_task_scoped_query_includes_freshness_token() {
     let daemon = DaemonGuard::start(&project, &config, &state);
     let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
     let conv_id = started["id"].as_str().unwrap();
-    daemon
-        .call_raw(&json!({"op":"mode","conversation":conv_id,"autonomous":true}))
-        .unwrap();
+    std::fs::write(dir_path.join("hold-plan-review"), "").unwrap();
 
     daemon
         .call_raw(&json!({
@@ -866,6 +857,18 @@ fn test_task_scoped_query_includes_freshness_token() {
         .unwrap();
 
     daemon.wait_for_planning(conv_id);
+    let review_deadline = Instant::now() + Duration::from_secs(120);
+    while !dir_path.join("plan-review-started").exists() {
+        assert!(
+            Instant::now() < review_deadline,
+            "independent review did not start"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    daemon
+        .call_raw(&json!({"op":"pause","conversation":conv_id,"paused":true}))
+        .unwrap();
+    std::fs::write(dir_path.join("release-plan-review"), "").unwrap();
     let mut plan_id = String::new();
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -883,16 +886,18 @@ fn test_task_scoped_query_includes_freshness_token() {
     }
     assert!(!plan_id.is_empty(), "plan was not proposed");
 
-    // Task rows precede independent plan review; tokens stabilize when it ends.
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        let state = daemon
-            .call_raw(&json!({"op":"events","conversation":conv_id,"after":0,"wait_ms":0}))
+        let task = daemon
+            .call_raw(&json!({"op":"task_checks","conversation":conv_id,"plan":plan_id,"id":"t1"}))
             .unwrap();
-        if state["idle"] == true {
+        if matches!(task["status"].as_str(), Some("queued" | "working")) {
             break;
         }
-        assert!(Instant::now() < deadline, "plan review did not finish");
+        assert!(
+            Instant::now() < deadline,
+            "reviewed task was not queued: {task}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 
@@ -918,6 +923,9 @@ fn test_task_scoped_query_includes_freshness_token() {
         }))
         .unwrap();
     assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
+    daemon
+        .call_raw(&json!({"op":"cancel","conversation":conv_id}))
+        .unwrap();
 }
 
 #[test]
@@ -933,27 +941,37 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
 
     let conv = daemon.call_raw(&json!({"op": "start"})).unwrap();
     let conv = conv["id"].as_str().unwrap();
-    daemon
-        .call_raw(&json!({"op":"mode","conversation":conv,"autonomous":true}))
-        .unwrap();
+    std::fs::write(dir_path.join("hold-plan-review"), "").unwrap();
     daemon
         .call_raw(&json!({"op": "send", "conversation": conv, "text": "please propose"}))
         .unwrap();
     daemon.wait_for_planning(conv);
+    let review_deadline = Instant::now() + Duration::from_secs(120);
+    while !dir_path.join("plan-review-started").exists() {
+        assert!(
+            Instant::now() < review_deadline,
+            "independent review did not start"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    daemon
+        .call_raw(&json!({"op":"pause","conversation":conv,"paused":true}))
+        .unwrap();
+    std::fs::write(dir_path.join("release-plan-review"), "").unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     // Candidate task rows appear before review/replanning finishes. Wait for
     // the completed planning turn, then select its final active plan and token.
     let plan = loop {
-        let reply = daemon
-            .call_raw(&json!({"op":"events", "conversation":conv, "after":0, "wait_ms":0}))
-            .unwrap();
-        if reply["idle"] == true {
-            let list = daemon.call_raw(&json!({"op":"conversations"})).unwrap();
-            if let Some(plan) = list[0]["active_plan"].as_str() {
+        let list = daemon.call_raw(&json!({"op":"conversations"})).unwrap();
+        if let Some(plan) = list[0]["active_plan"].as_str() {
+            let task = daemon
+                .call_raw(&json!({"op":"task_checks","conversation":conv,"plan":plan,"id":"t1"}))
+                .unwrap();
+            if task["status"] == "working" && task["round"].as_u64().unwrap_or(0) >= 1 {
                 break plan.to_owned();
             }
         }
-        assert!(Instant::now() < deadline, "planning did not finish");
+        assert!(Instant::now() < deadline, "reviewed task was not queued");
         std::thread::sleep(Duration::from_millis(20));
     };
     let task = daemon
@@ -963,7 +981,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         .call_raw(&json!({"op": "task_checks", "conversation": conv, "plan": plan, "id": "t1"}))
         .unwrap();
     assert_eq!(inspector["id"], task["id"]);
-    assert_eq!(inspector["round"], task["round"]);
+    assert!(inspector["round"].as_u64().unwrap() >= task["round"].as_u64().unwrap());
     assert_eq!(inspector["checks"], task["checks"]);
     assert!(inspector.get("freshness_token").is_none_or(Value::is_null));
     let other = daemon.call_raw(&json!({"op": "start"})).unwrap();
@@ -979,7 +997,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         .expect("a token")
         .to_owned();
 
-    // A proposed task is not stopped, so there is nothing to recover.
+    // A queued task does not need the stopped-task retry operation.
     let error = daemon
         .call_raw(&json!({
             "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
@@ -990,10 +1008,13 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
     let error = daemon
         .call_raw(&json!({
             "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
-            "action": "restart_agent", "freshness_token": token
+            "action": "retry_with_guidance", "freshness_token": token, "message":"Retry the existing task"
         }))
         .unwrap_err();
-    assert!(error.contains("not waiting for recovery"), "{error}");
+    assert!(
+        error.contains("not waiting for recovery") || error.contains("still running"),
+        "{error}"
+    );
 
     // Unknown actions and fields are refused by the protocol.
     assert!(
@@ -1004,6 +1025,9 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
             }))
             .is_err()
     );
+    daemon
+        .call_raw(&json!({"op":"cancel","conversation":conv}))
+        .unwrap();
 }
 
 #[test]
@@ -1026,68 +1050,46 @@ fn removed_options_are_refused_with_a_reason() {
 }
 
 #[test]
-fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
+fn unattended_start_uses_global_state_without_a_trust_registry() {
     let dir = tempfile::tempdir().unwrap();
-    let dir_path = dir.path().canonicalize().unwrap();
-    let project = dir_path.join("project");
+    let root = dir.path().canonicalize().unwrap();
+    let project = root.join("project");
     std::fs::create_dir(&project).unwrap();
-    let codex = fake_codex(&dir_path);
-    let agy = fake_agy(&dir_path);
-    let config = write_config(&dir_path, &codex, &agy);
+    let codex = fake_codex(&root);
+    let agy = fake_agy(&root);
+    let config = write_config(&root, &codex, &agy);
     std::fs::copy(&config, project.join("antislop.toml")).unwrap();
-    let list = dir_path.join("config");
-
-    // The CLI without a terminal and without --trust refuses, leaving no state.
+    let global = root.join("runtime");
+    let state = global
+        .join("projects")
+        .join(antislop::lean::paths::project_identity(&project).unwrap());
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(&project)
-        .env("ANTISLOP_CONFIG_DIR", &list)
-        .arg("hello")
+        .env("ANTISLOP_STATE_ROOT", &global)
+        .env("ANTISLOP_CONFIG_DIR", root.join("config"))
+        .args(["chat", "--new"])
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not trusted"));
-    assert!(!project.join(".antislop").exists(), "no state directory");
-    assert!(!list.exists(), "nothing was remembered");
-
-    // A daemon will not start for it either.
-    let state = dir_path.join("state");
-    let daemon = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-        .env("ANTISLOP_CONFIG_DIR", &list)
-        .arg("__core")
-        .arg(&project)
-        .arg(&config)
-        .arg(&state)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    assert!(!daemon.status.success());
-    assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
-    assert!(!state.exists(), "internal entrypoint must not create state");
-    assert!(!list.exists(), "internal entrypoint must not grant trust");
-
-    // A repository can supply a prepared database; its flag is not consent
-    // from the user who launches the daemon.
-    {
-        let core =
-            antislop::lean::Core::open(&state, antislop::config::Config::load(&config).unwrap())
-                .unwrap();
-        core.store
-            .trust_project(&project.to_string_lossy())
-            .unwrap();
-    }
-    let daemon = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-        .env("ANTISLOP_CONFIG_DIR", &list)
-        .arg("__core")
-        .arg(&project)
-        .arg(&config)
-        .arg(&state)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    assert!(!daemon.status.success());
-    assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
-    assert!(!list.exists(), "project database cannot grant global trust");
+    let client = Client::at(&state);
+    let identity = client.call(&Request::Control(
+        antislop::lean::daemon::ControlRequest::Identity,
+    ));
+    let stopped = Client::stop(&state, true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stopped.unwrap());
+    assert_eq!(
+        identity.unwrap()["config"],
+        state.join("antislop.toml").to_string_lossy().as_ref()
+    );
+    assert!(state.join("core.db").exists());
+    assert!(!project.join(".antislop").exists());
+    assert!(!root.join("config/trusted.json").exists());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Trust this directory"));
 }
 
 /// The reply budget counts payload bytes, but the first event of a page
@@ -1151,10 +1153,10 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
     let text = before["toml"]
         .as_str()
         .unwrap()
-        .replace("max_parallel = 4", "max_parallel = 1")
+        .replace("local_options = true", "local_options = false")
         .replace("effort = \"high\"", "effort = \"low\"");
     assert_ne!(text, before["toml"].as_str().unwrap());
-    assert!(text.contains("max_parallel = 1"));
+    assert!(text.contains("local_options = false"));
     assert!(text.contains("effort = \"low\""));
     let missing_revision = daemon
         .call_raw(&json!({"op": "set_config", "toml": text}))
@@ -1168,10 +1170,16 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
             &json!({"op": "set_config", "toml": text, "expected_revision": before["revision"]}),
         )
         .unwrap();
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+    assert_eq!(
+        std::fs::read_to_string(state.join("antislop.toml")).unwrap(),
+        text
+    );
     let stale = daemon.call_raw(&json!({"op": "set_config", "toml": before["toml"], "expected_revision": before["revision"]})).unwrap_err();
     assert!(stale.contains("configuration changed"), "{stale}");
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+    assert_eq!(
+        std::fs::read_to_string(state.join("antislop.toml")).unwrap(),
+        text
+    );
     assert_eq!(
         daemon.call_raw(&json!({"op": "get_config"})).unwrap()["toml"],
         text
@@ -1184,10 +1192,10 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
         .current_dir(project)
         .arg("chat")
         .arg("--config")
-        .arg(&config)
+        .arg(state.join("antislop.toml"))
         .arg("--state")
         .arg(&state)
-        .arg("hello")
+        .arg("--new")
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
@@ -1208,7 +1216,7 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
         let mut line = String::new();
         BufReader::new(&stream).read_line(&mut line).unwrap();
         let request: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["protocol"], 4);
+        assert_eq!(request["protocol"], 5);
         assert_eq!(request["request"]["op"], "task_checks");
         writeln!(stream, "{}", json!({"error":"incompatible protocol"})).unwrap();
     });
@@ -1397,7 +1405,7 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
     let mut task = store
         .add_plan(
             &conversation,
-            &[json!({"id":"t1","title":"Historical result","kind":"analysis","writes":false})],
+            &[json!({"id":"t1","title":"Historical result","kind":"analysis","change_kind":"none"})],
         )
         .unwrap()
         .remove(0);

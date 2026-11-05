@@ -18,8 +18,12 @@ impl Core {
         )?;
         self.validate_plan_inputs(conversation, plan_id)?;
         queue(&self.store)?;
-        let authorized: bool = self.store.db().query_row("SELECT EXISTS(SELECT 1 FROM plan_authorizations WHERE plan_id=?1 AND conversation_id=?2)",rusqlite::params![plan_id,conversation],|r|r.get(0))?;
-        require(authorized, "plan implementation has not been authorized")?;
+        let activated: bool = self.store.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
+            rusqlite::params![plan_id, conversation],
+            |r| r.get(0),
+        )?;
+        require(activated, "plan is not active")?;
 
         self.blocked_seen
             .lock()
@@ -72,7 +76,11 @@ impl Core {
         cancel: Arc<AtomicBool>,
         tasks: &[Task],
     ) {
-        let tasks_write = tasks.iter().any(|task| task.spec["writes"] == true);
+        let tasks_write = tasks.iter().any(|task| {
+            task.spec["change_kind"]
+                .as_str()
+                .is_some_and(|kind| kind != "none")
+        });
         let core = self.clone();
         let conversation = conversation.to_owned();
         let plan_id = plan_id.to_owned();

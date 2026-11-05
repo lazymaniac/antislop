@@ -4,13 +4,7 @@ A local team of AI agents that works on your project through the CLIs you
 already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI, OpenCode). You talk to an
 orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
 worker and checked by its own reviewer, and approved changes land on your
-branch. The product specification is [design.md](design.md); how the runtime
-works, what it guarantees and what is still open is in
-[docs/lean-core.md](docs/lean-core.md); how each acceptance scenario of the
-design is met, and which ones rest on agents' instructions rather than the
-runtime, is in [docs/acceptance.md](docs/acceptance.md); the full TUI parity
-matrix and reviewed contract evidence against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
-is in [docs/parity.md](docs/parity.md).
+branch. The product specification is [design.md](design.md).
 
 ## Use
 
@@ -26,23 +20,26 @@ antislop "Review architecture"   # line mode, exits when idle
 antislop --config FILE --state DIR   # the directory you start it in is the project
 ```
 
-The first time you start antislop in a directory it asks whether you trust the
-files there (agents read them, run commands and edit code). The answer is kept
-per directory in `~/.config/antislop/trusted.json` (`$XDG_CONFIG_HOME` or
-`ANTISLOP_CONFIG_DIR` move it), so it survives deleting `.antislop/`. Nothing is
-created or started in the directory before you answer. Without a terminal, pass
-`--trust` to answer yes.
+All agent roles launch with full filesystem and tool access. There is no directory
+trust registry, execution approval or restricted launch mode. The runtime has no
+agent-count, concurrency, execution-time, idle-time, memory, cost or retry budget.
+Manual pause and cancellation remain available; roles, dependencies, independent
+review and evidence still determine whether work is complete.
 
-The internal daemon entrypoint checks the same user-owned trust registry before
-opening project state. Trust stored in a project database does not grant access.
-Registry updates use an exclusively created temporary file and an atomic rename.
+Runtime files live outside source checkouts. The root is `ANTISLOP_STATE_ROOT`,
+else `$XDG_STATE_HOME/antislop`, else `~/.local/state/antislop`. Each project gets
+`projects/<identity>` under that root. Linked Git worktrees share the identity of
+their canonical common Git directory; non-Git projects use their canonical path.
+Databases, logs, settings and checkpoints survive worktree cleanup. Long socket
+paths use a short private directory under `/tmp`.
 
-Configuration precedence is `--config FILE`, then `./antislop.toml`, then
-`$ANTISLOP_CONFIG_DIR/antislop.toml`, `$XDG_CONFIG_HOME/antislop/antislop.toml`, or
-`~/.config/antislop/antislop.toml` (the first configured global directory).
-An invalid or inaccessible project file reports an error instead of falling back.
-Resolving a configuration creates nothing. The editor saves to the selected file;
-when using a shared global file, saving also affects future starts of other projects.
+Configuration precedence is `--config FILE`, then the retained project runtime
+configuration, then `./antislop.toml`, then the shared user configuration
+(`ANTISLOP_CONFIG_DIR`, `$XDG_CONFIG_HOME/antislop`, or `~/.config/antislop`).
+The selected source seeds the runtime copy; the editor updates that retained copy.
+An explicit `--config` selects a new input. Invalid files report their raw error
+without falling back or silently changing the active configuration. Resolving paths
+creates nothing. Per-launch provider settings never modify a provider's own files.
 
 In the graph each task is a frame titled with the task, holding a card for its
 options agent (when the plan asks for options), its worker and its reviewer,
@@ -64,58 +61,42 @@ is passed. Forced shutdown cancels running agents and preserves conversation his
 
 Several projects can be open in one screen: `Ctrl+G` switches between them and
 opens another by typing its path; each keeps its own configuration,
-`.antislop/` and daemon, and the header shows what the others are doing.
+durable runtime directory and daemon, and the header shows what the others are doing.
 
 ## How a request runs
 
-1. The orchestrator works in the project directory, read-only, with its CLI's
-   own tools. It interviews you and settles the requirements.
-2. A dedicated planner, in a session of its own, drafts the plan from those
-   requirements: tasks with a goal, dependencies,
-   whether the task changes files, and what its reviewer should focus on
-   (including the risks of that task's domain). It runs with the executor
-   profile of `[routing.planning]`. Filesystem access follows the checkout and
-   CLI permissions supplied by the runtime; tasks do not declare path scopes.
-   Writers work in isolated worktrees. Independent tasks can run concurrently,
-   while `depends_on` orders work that needs another task's result. Actual diffs
-   are integrated in sequence with conflict and user-edit protection.
-3. An independent plan reviewer checks the plan against your request and the
-   project before you see it; a flawed plan goes back to the orchestrator,
-   which revises it and answers your comments.
-4. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
-   itself, and the next one too, until a plan would repeat one that already
-   ran.
-5. Every writing task first gets its own read-only options comparison and review,
-   including tasks that implement quality checks. Shared architecture decisions
-   do not replace that local choice.
-6. Workers receive their local contract and named inputs, then read and edit files
-   in isolated worktrees. They can ask the orchestrator through MCP while working.
-7. Independent reviewers inspect separate result checkouts and cover the task's
-   criteria and selected risks. Corrections continue while review shows
-   progress; unchanged unresolved obligations return to the orchestrator.
-8. Approved changes are integrated into the project while preserving user edits.
-   Plan revisions require independent review and stay within accepted permissions.
-9. An independent audit checks delivery of the request before the orchestrator
-   reports completion.
+1. The orchestrator gathers the requirements and asks only for missing product decisions.
+2. A dedicated planner drafts tasks with explicit `change_kind` (`none`, `artifact`,
+   or `code`), goals and dependencies. These describe deliverables, not permissions.
+3. Independent plan review checks coverage and dependencies. A checked plan starts
+   automatically; rejected plans are corrected without a new execution approval.
+4. Code tasks get dedicated local options and any configured quality gates.
+   Workers deliver changes from isolated worktrees; independent tasks run concurrently.
+5. Dedicated reviewers inspect results and evidence and may run checks. Corrections
+   continue as needed. Missing progress produces a notice rather than a hidden stop limit.
+6. Reviewed results are integrated while preserving user edits. Contract or dependency
+   changes receive independent review; unavailable evidence is never invented.
+7. An independent final audit checks acceptance before the request is reported complete.
 
-This alpha changes the database, configuration and daemon protocol formats.
-See [the execution model](docs/lean-core.md) for the contracts and version boundary.
+The current formats are configuration **4**, daemon protocol **5**, and database
+**16**. Old formats are rejected; there are no legacy readers or automatic migrations.
+Archive an old runtime before starting a fresh session with the current build.
 
 ## Build and test
 
-Rust 1.98.1 is pinned. `scripts/cargo.sh` prefers rustup when an asdf shim
+Rust 1.98.1 is pinned. `cargo.sh` prefers rustup when an asdf shim
 shadows the selected toolchain.
 
 ```sh
-scripts/cargo.sh build
-scripts/cargo.sh test --all-targets
-scripts/cargo.sh clippy --all-targets -- -D warnings
+./cargo.sh build
+./cargo.sh test --all-targets
+./cargo.sh clippy --all-targets -- -D warnings
 ```
 
 Tests use small fake CLIs written in Python (`python3` must be on `PATH`); they
 consume no provider usage.
 
-Open the configuration with F8 (also in Ctrl+P) to edit the active project or global configuration.
+Open the configuration with F8 (also in Ctrl+P) to edit the retained project runtime configuration.
 Tab/Shift+Tab select fields; Enter cycles enum and boolean values. Arrays use JSON
 string-array syntax, including command tokens. Empty optional fields remove overrides.
 Ctrl+N adds an entry in the selected providers, profiles, or routing section (else a profile).

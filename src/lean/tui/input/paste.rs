@@ -17,7 +17,7 @@ impl App {
             self.native_send(crate::lean::terminal::Input::Paste { text: text.into() });
             return true;
         }
-        if self.plan_history.is_some() || self.help.is_some() || self.trust_prompt.is_some() {
+        if self.plan_history.is_some() || self.help.is_some() {
             return true;
         }
         if self.ledger_view.as_ref().is_some_and(|view| view.visible) && self.picker.is_none() {

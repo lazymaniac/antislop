@@ -350,7 +350,7 @@ fn the_landing_line_pairs_label_with_the_whole_detail() {
 
 #[test]
 fn next_steps_name_keys_the_frontend_handles() {
-    assert!(next_step(&View::default(), &row("proposed", 0)).contains("Ctrl+A"));
+    assert!(next_step(&View::default(), &row("proposed", 0)).contains("automatic execution"));
     assert!(next_step(&View::default(), &row("waiting", 1)).contains("Ctrl+R"));
     assert!(next_step(&View::default(), &row("failed", 1)).contains("u unblocks"));
     let mut waiting = row("queued", 0);

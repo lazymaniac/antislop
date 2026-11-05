@@ -1,7 +1,4 @@
-use super::super::{
-    cli::Options,
-    daemon::{Client, Request},
-};
+use super::super::{cli::Options, daemon::Client};
 use super::{
     App, InputBuffer, ascii_terminal, clipboard, in_ascii, theme, to_indexed_colors,
     truecolor_terminal, without_color, workspace,
@@ -46,7 +43,6 @@ impl Rendering {
 fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateReceiver)> {
     let conversation = options.conversation(client)?;
     let (updates, received) = super::update_channel(256);
-    let trust_prompt = trust_prompt(options, client);
     let mut app = App::bootstrap(client.clone(), updates);
     app.project = options
         .project
@@ -57,7 +53,6 @@ fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateR
     app.input = InputBuffer::with_text(options.message.clone().unwrap_or_default());
     app.notice = client.notice.clone();
     app.terminal_area = Rect::default();
-    app.trust_prompt = trust_prompt;
     app.load_history(&options.state);
     app.register_project(workspace::ProjectConn::new(
         options.project.clone(),
@@ -65,18 +60,6 @@ fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateR
     ));
     app.open(conversation);
     Ok((app, received))
-}
-
-fn trust_prompt(options: &Options, client: &Client) -> Option<String> {
-    if options.trust {
-        return None;
-    }
-    match client.call(&Request::Control(
-        crate::lean::daemon::ControlRequest::TrustStatus,
-    )) {
-        Ok(value) if value["trusted"] == true => None,
-        _ => Some(options.project.to_string_lossy().into_owned()),
-    }
 }
 
 fn enable_capture() {

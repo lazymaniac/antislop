@@ -139,7 +139,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     assert!(std::rc::Rc::ptr_eq(&first, &idle));
     view.apply(
         &serde_json::json!({"seq": 1, "kind": "plan_proposed", "payload": {
-            "plan": "p1", "tasks": [{"id": "t1", "title": "first", "depends_on": []}]}}),
+            "plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "first", "depends_on": []}]}}),
     );
     let updated = cache.get(
         &view,

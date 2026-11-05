@@ -3,20 +3,6 @@ mod poller;
 use poller::Poller;
 
 impl App {
-    pub fn require_trust(&mut self, project_path: impl Into<String>) {
-        self.trust_prompt = Some(project_path.into());
-    }
-
-    pub fn accept_trust(&mut self) {
-        if self.trust_prompt.take().is_some() {
-            self.request(
-                Request::Control(crate::lean::daemon::ControlRequest::Trust { trusted: true }),
-                Some("workspace directory trusted"),
-            );
-            self.notice = Some("workspace directory trusted".into());
-        }
-    }
-
     pub fn help_max_scroll(&self) -> usize {
         if let Some(help) = self.help {
             help.max_scroll(self.terminal_area)
@@ -82,7 +68,6 @@ impl App {
         self.plan_view = None;
         self.ledger_view = None;
         self.editor = None;
-        self.confirmation = None;
     }
 
     fn reset_conversation_navigation(&mut self) {

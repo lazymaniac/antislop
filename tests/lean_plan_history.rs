@@ -66,7 +66,7 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(project: &Path, config: &Path, state: &Path) -> Self {
-        common::trust(project);
+        common::runtime_environment(project);
         std::fs::create_dir_all(state).unwrap();
         std::fs::set_permissions(state, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
@@ -550,7 +550,7 @@ fn daemon_rejects_foreign_scope_requests() {
 
     // Test 3: Requesting task_a1 with plan_a2 (task belongs to plan A1, not plan A2)
     let err_task_mismatch = daemon_a.client.call(&Request::Conversation(
-        antislop::lean::daemon::ConversationRequest::TaskScoped {
+        antislop::lean::daemon::ConversationRequest::Task {
             conversation: Some(conv_a_id.clone()),
             plan: plan_a2_id.clone(),
             id: task_a1_id.clone(),
@@ -581,11 +581,13 @@ fn daemon_rejects_foreign_scope_requests() {
 
     // Test 5: Comment scoped with non-existent or foreign plan
     let err_comment_foreign = daemon_a.client.call(&Request::Conversation(
-        antislop::lean::daemon::ConversationRequest::CommentScoped {
+        antislop::lean::daemon::ConversationRequest::Comment {
             conversation: conv_a_id.clone(),
             plan: Some("non_existent_plan".into()),
             target: "t1".into(),
             text: "comment".into(),
+            round: None,
+            run: None,
         },
     ));
     assert!(
@@ -595,7 +597,7 @@ fn daemon_rejects_foreign_scope_requests() {
 
     // Test 6: Valid scoped requests succeed
     let ok_task = daemon_a.client.call(&Request::Conversation(
-        antislop::lean::daemon::ConversationRequest::TaskScoped {
+        antislop::lean::daemon::ConversationRequest::Task {
             conversation: Some(conv_a_id.clone()),
             plan: plan_a1_id.clone(),
             id: task_a1_id.clone(),

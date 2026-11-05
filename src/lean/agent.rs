@@ -13,14 +13,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Access {
-    /// Orchestrator, reviewers and analysis: may read anything, must not edit.
-    ReadOnly,
-    /// A worker in its own worktree.
-    Write,
-}
-
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub provider: ProviderKind,
@@ -29,9 +21,11 @@ pub struct Spec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub cwd: PathBuf,
+    /// Durable runtime files; never derived from the disposable working directory.
+    pub runtime: PathBuf,
     /// Additional directories explicitly provided by the runtime.
     pub add_dirs: Vec<PathBuf>,
-    pub access: Access,
+
     /// The CLI's own session/conversation ID from an earlier turn.
     pub resume: Option<String>,
 }
@@ -40,17 +34,6 @@ pub struct Spec {
 pub struct Outcome {
     pub session: Option<String>,
     pub text: String,
-}
-
-/// Writers run unsandboxed: the sandbox denies sockets, daemons and git
-/// metadata, which fails the very builds and tests they must run. Their
-/// isolation is the task worktree; read-only turns keep the sandbox.
-pub(crate) fn codex_sandbox(read_only: bool) -> &'static str {
-    if read_only {
-        "read-only"
-    } else {
-        "danger-full-access"
-    }
 }
 
 /// Ends the process group of a turn left running by a daemon that died, if
@@ -133,12 +116,6 @@ mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
-
-    #[test]
-    fn writers_run_unsandboxed_and_readers_stay_read_only() {
-        assert_eq!(codex_sandbox(false), "danger-full-access");
-        assert_eq!(codex_sandbox(true), "read-only");
-    }
 
     #[test]
     fn persisted_diagnostics_keep_causes_and_redact_credentials() {

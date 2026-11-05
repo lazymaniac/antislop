@@ -3,8 +3,8 @@ use super::*;
 fn options_test_task(id: &str, writes: bool) -> TaskContract {
     serde_json::from_value(serde_json::json!({
             "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
-            "kind": "implementation", "writes": writes, "scope": ["src/"],
-            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "reviewer": {"focus":"Check storage"},
+            "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",
+            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "reviewer": {"summary": "Check storage"},
         }))
         .unwrap()
 }
@@ -18,7 +18,7 @@ fn options_inherit_writer_context_and_precede_it() {
     validate(&full).unwrap();
     let options = &full[1];
     assert_eq!(options.kind, WorkKind::Options);
-    assert!(!options.writes);
+    assert!(!options.change_kind.has_delivery());
     assert_eq!(options.section.as_deref(), Some("Options"));
     assert!(
         serde_json::to_value(options)
@@ -45,7 +45,11 @@ fn options_cover_all_writers_including_gates_deterministically() {
     assert_eq!(full.len(), 14); // Eight original tasks, six writers/options.
     validate(&full).unwrap(); // Also proves no cycles or forward references.
     assert_eq!(with_options(with_required_agents(full.clone())), full);
-    for (index, writer) in full.iter().enumerate().filter(|(_, task)| task.writes) {
+    for (index, writer) in full
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task.change_kind.has_delivery())
+    {
         let options = &full[index - 1];
         assert_eq!(options.kind, WorkKind::Options);
         assert!(writer.depends_on.contains(&options.id));
@@ -123,8 +127,7 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
 fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need() {
     let mut scout: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "map", "title": "Map", "goal": "Map the storage code.",
-        "kind": "context", "reviewer": {"focus": "f"}
-    }))
+        "change_kind": "none", "kind": "context", "reviewer": {"summary": "f"}}))
     .unwrap();
     for prompt in [
         reviewer_prompt("project", &scout, "report", None),
@@ -144,8 +147,7 @@ fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need(
 fn automatically_added_quality_gates_have_distinct_concise_summaries() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
-        "kind": "implementation", "writes": true, "reviewer": {"focus": "Check the storage change."}
-    }))
+        "change_kind": "code", "kind": "implementation",  "reviewer": {"summary": "Check the storage change."}}))
     .unwrap();
     let full = with_options(with_required_agents(vec![task]));
     assert_eq!(full.len(), 12);
@@ -160,12 +162,12 @@ fn automatically_added_quality_gates_have_distinct_concise_summaries() {
 }
 
 #[test]
-fn parallel_peers_ignore_legacy_scopes_and_follow_dependencies() {
+fn parallel_peers_follow_dependencies() {
     let tasks = submitted(serde_json::json!({"tasks":[
-        {"id":"t1","title":"Context","section":"1. Context","goal":"g","scope":["src/"],"kind":"context"},
-        {"id":"t2","title":"Mod A","section":"2. Module A","goal":"g","scope":["src/a.rs"],"depends_on":["t1"],"kind":"implementation"},
-        {"id":"t3","title":"Mod B","section":"3. Module B","goal":"g","scope":["src/b.rs"],"depends_on":["t1"],"kind":"implementation"},
-        {"id":"t4","title":"Mod A2","section":"2. Module A","goal":"g","scope":["src/a.rs"],"depends_on":["t1"],"kind":"refactoring"}
+        {"id":"t1","title":"Context","section":"1. Context","goal":"g","change_kind": "none", "kind":"context"},
+        {"id":"t2","title":"Mod A","section":"2. Module A","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t3","title":"Mod B","section":"3. Module B","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t4","title":"Mod A2","section":"2. Module A","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"refactoring"}
     ]}))
     .unwrap();
     let peers = parallel_peers(&tasks);
@@ -187,8 +189,7 @@ fn parallel_peers_follow_long_dependency_chains() {
         depends_on: deps,
         ..serde_json::from_value(serde_json::json!({
             "id": "x", "title": "T", "goal": "g",
-            "kind": "analysis", "reviewer": {"focus": "f"}
-        }))
+            "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}}))
         .unwrap()
     };
     // A chain of 400 plus one independent task: only the loner has peers,
@@ -272,7 +273,7 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
         ("none", false, serde_json::json!([])),
         ("artifact", true, serde_json::json!(["report.md"])),
     ] {
-        let task: PlannedTask = serde_json::from_value(serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report problems without repairing the project","kind":"analysis","writes":writes,"change_kind":change,"outputs":outputs})).unwrap();
+        let task: PlannedTask = serde_json::from_value(serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report problems without repairing the project","kind":"analysis","change_kind":change,"outputs":outputs})).unwrap();
         let mut plan = planned_graph(vec![task]).unwrap();
         for _ in 0..3 {
             plan = with_options(with_required_agents(plan));
@@ -288,9 +289,9 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
             );
         }
     }
-    let legacy = options_test_task("code", true);
-    assert_eq!(legacy.change_kind(), ChangeKind::Code);
-    assert!(with_required_agents(vec![legacy]).len() > 1);
+    let code = options_test_task("code", true);
+    assert_eq!(code.change_kind(), ChangeKind::Code);
+    assert!(with_required_agents(vec![code]).len() > 1);
     assert_eq!(
         options_test_task("read", false).change_kind(),
         ChangeKind::None
@@ -299,12 +300,12 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
 
 #[test]
 fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_options() {
-    let writer:TaskContract=serde_json::from_value(serde_json::json!({"id":"writer","title":"Writer","goal":"Old absolute output","kind":"implementation","writes":true})).unwrap();
+    let writer:TaskContract=serde_json::from_value(serde_json::json!({"id":"writer","title":"Writer","goal":"Old absolute output","change_kind": "code", "kind":"implementation"})).unwrap();
     let first = super::super::with_options(vec![writer.clone()]);
     let mut updated = writer;
     updated.goal = "New relative output only".into();
     updated.depends_on = vec!["diagnosis".into(), "writer-options".into()];
-    let diagnosis:TaskContract=serde_json::from_value(serde_json::json!({"id":"diagnosis","title":"Diagnosis","goal":"Inspect prerequisite","kind":"analysis"})).unwrap();
+    let diagnosis:TaskContract=serde_json::from_value(serde_json::json!({"id":"diagnosis","title":"Diagnosis","goal":"Inspect prerequisite","change_kind": "none", "kind":"analysis"})).unwrap();
     let merged = super::super::refresh_existing_options(vec![first[0].clone(), updated, diagnosis]);
     let ordered = super::super::order_graph(merged).unwrap();
     let options = ordered

@@ -76,29 +76,15 @@ fn yes() -> bool {
     true
 }
 
-/// Run-wide limits audited against the requirement's immutable source span.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeConstraint {
-    NoNewExecutions,
-    NoFileChanges,
-    /// Existing files are immutable; named new untracked documents are allowed.
-    NoExistingFileChanges,
-    ArtifactOnly,
-    UntrackedDelivery,
-}
-
 /// One small record; collections are stored as normalized rows, not run snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, remote = "Self")]
+#[serde(deny_unknown_fields)]
 pub struct EntrySpec {
     pub id: String,
     pub source: SourceSpan,
     pub interpretation: String,
     #[serde(default)]
     pub qualifiers: Vec<String>,
-    #[serde(default)]
-    pub constraints: Vec<RuntimeConstraint>,
     #[serde(default)]
     pub parent: Option<String>,
     #[serde(default)]
@@ -111,29 +97,6 @@ pub struct EntrySpec {
     pub position: u32,
     #[serde(default)]
     pub disposition: Disposition,
-}
-
-impl Serialize for EntrySpec {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        Self::serialize(self, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EntrySpec {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        if let Some(object) = value.as_object_mut() {
-            for legacy in ["implementation_owners", "review_owners", "task_ids"] {
-                object.remove(legacy);
-            }
-        }
-        Self::deserialize(value).map_err(serde::de::Error::custom)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

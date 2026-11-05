@@ -28,7 +28,7 @@ pub fn fixture_conversation(
     let conversation = core.store.create_conversation(&project.to_string_lossy())?;
     core.store
         .interview_summary(&conversation.id, "Fixture requirements.", 0)?;
-    core.store.approve_requirements(&conversation.id)?;
+    core.store.finish_interview(&conversation.id)?;
     Ok(conversation)
 }
 

@@ -4,11 +4,8 @@ use super::*;
 mod artifact_outputs;
 pub(crate) use artifact_outputs::validate_artifact_output;
 
-/// A task as a planner writes it through `submit_plan` or `revise_plan`: what
-/// to do and where. Everything else is the runtime's: whether it writes
-/// follows from its kind unless stated, its reviewer checks the goal, the
-/// assigned criteria and the kind's risk catalog, and generated options and
-/// quality gates are added around it.
+/// A planner-authored task with an explicit delivery purpose. The runtime
+/// adds reviewer context, local options and quality gates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedTask {
@@ -18,15 +15,9 @@ pub struct PlannedTask {
     pub kind: WorkKind,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    /// Older saved planner payloads may contain paths; they grant no access.
-    #[serde(default, rename = "scope", skip_serializing)]
-    _legacy_scope: Option<serde_json::Value>,
-    #[serde(default)]
-    pub writes: Option<bool>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred: bool,
-    #[serde(default)]
-    pub change_kind: Option<ChangeKind>,
+    pub change_kind: ChangeKind,
     #[serde(default)]
     pub outputs: Vec<String>,
     #[serde(default)]
@@ -41,21 +32,19 @@ pub struct PlannedTask {
 
 impl PlannedTask {
     pub fn into_contract(self) -> TaskContract {
-        let writes = self.writes.unwrap_or_else(|| self.kind.writes_by_default());
         TaskContract {
             quality_gate: false,
             options_for: None,
             requirement_ids: Vec::new(),
             criterion_ids: Vec::new(),
             reviewer: ReviewerSpec {
-                summary: Some(reviewer_summary(writes).into()),
+                summary: Some(reviewer_summary(self.change_kind != ChangeKind::None).into()),
             },
             id: self.id,
             title: self.title,
             goal: self.goal,
             summary: self.summary,
             section: self.section,
-            writes,
             deferred: self.deferred,
             change_kind: self.change_kind,
             outputs: self.outputs,
@@ -67,8 +56,8 @@ impl PlannedTask {
     }
 }
 
-fn reviewer_summary(writes: bool) -> &'static str {
-    if writes {
+fn reviewer_summary(delivers_files: bool) -> &'static str {
+    if delivers_files {
         "Review the change meets the goal, its criteria and the domain risks."
     } else {
         "Review the result meets the goal, its criteria and the domain risks."
@@ -215,10 +204,6 @@ fn validate_dependencies(
 }
 
 fn validate_change(task: &TaskContract) -> Result<()> {
-    crate::require(
-        task.change_kind() == ChangeKind::None || task.writes,
-        &format!("task {}: change_kind requires writes=true", task.id),
-    )?;
     crate::require(
         task.change_kind() != ChangeKind::Artifact || !task.outputs.is_empty(),
         &format!("task {}: artifact requires explicit outputs", task.id),

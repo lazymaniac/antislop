@@ -96,6 +96,7 @@ impl CommentSend {
                 conversation: self.conversation.clone(),
                 plan: plan.to_owned(),
                 reason,
+                revision_token: None,
             },
         ))
     }
@@ -104,16 +105,18 @@ impl CommentSend {
         let target = self.editor.target.clone();
         if self.round.is_none() && self.run.is_none() {
             self.client.call(&Request::Conversation(
-                crate::lean::daemon::ConversationRequest::CommentScoped {
+                crate::lean::daemon::ConversationRequest::Comment {
                     conversation: self.conversation.clone(),
                     plan: self.plan.clone(),
                     target,
                     text: self.text.clone(),
+                    round: None,
+                    run: None,
                 },
             ))
         } else {
             self.client.call(&Request::Conversation(
-                crate::lean::daemon::ConversationRequest::CommentAt {
+                crate::lean::daemon::ConversationRequest::Comment {
                     conversation: self.conversation.clone(),
                     plan: self.plan.clone(),
                     target,

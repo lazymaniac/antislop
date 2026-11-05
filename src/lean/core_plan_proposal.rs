@@ -25,13 +25,6 @@ pub(in crate::lean) fn checked_plan(
     specs: &[TaskContract],
     config: &Config,
 ) -> std::result::Result<Vec<TaskContract>, String> {
-    if specs.len() > config.policy.max_tasks {
-        return Err(format!(
-            "The plan has {} tasks; at most {} are allowed. Group the work by module or responsibility into fewer, larger tasks (the runtime adds options and quality gates itself) and submit the complete plan again.",
-            specs.len(),
-            config.policy.max_tasks
-        ));
-    }
     let specs = finalize_plan(
         specs.to_vec(),
         config.policy.required_gates,
@@ -52,9 +45,8 @@ pub(in crate::lean) fn checked_plan(
 
 impl Core {
     /// Stores the plan and has it checked. A plan the reviewer sends back
-    /// goes back to the planner while review confirms progress; otherwise it
-    /// is shown to the user with the verdict, and in autonomous mode a checked
-    /// plan starts at once.
+    /// goes back to the planner until review approves it. A checked plan
+    /// starts automatically; failures and missing inputs remain visible.
     pub(in crate::lean) fn propose(
         self: &Arc<Self>,
         conversation: &str,
@@ -109,13 +101,7 @@ impl Core {
     }
 
     fn record_plan_lint(&self, conversation: &str, message: &str) -> Result<()> {
-        if self.store.count_since_user(conversation, PLAN_LINT)?
-            < tasks::FORMAT_REPAIR_ATTEMPTS as usize
-        {
-            self.store.add_message(conversation, PLAN_LINT, message)?;
-        } else {
-            self.notice(conversation, message);
-        }
+        self.store.add_message(conversation, PLAN_LINT, message)?;
         Ok(())
     }
 

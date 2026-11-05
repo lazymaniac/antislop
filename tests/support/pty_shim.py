@@ -45,14 +45,6 @@ if "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in os.environ:
 url = url or os.environ.get("ANTISLOP_MCP_URL")
 token = token or os.environ.get("ANTISLOP_MCP_TOKEN")
 session = resume or ("session-%d" % os.getpid())
-sandbox = "read-only"
-for i, arg in enumerate(args):
-    if arg == "-s" and i + 1 < len(args):
-        sandbox = args[i + 1]
-    if arg == "--permission-mode" and i + 1 < len(args):
-        sandbox = "danger-full-access" if args[i + 1] == "acceptEdits" else "read-only"
-
-
 # The launcher's own arguments come first, before the flags the daemon adds.
 markers = ("-c", "resume", "--mcp-config", "--agent")
 cut = min([args.index(m) for m in markers if m in args] or [len(args)])
@@ -354,7 +346,7 @@ def task_result(text, prompt):
     return "complete", {"summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text}
 
 
-PLANNED = ("id", "title", "goal", "kind", "depends_on", "scope", "writes", "section", "summary")
+PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary")
 
 
 def planned_task(task):
@@ -433,17 +425,6 @@ def finish(turn, text, thread, prompt):
     return tool, error
 
 
-def finish_in_words(turn, text, thread, prompt, refused):
-    """After a result refused for good: the words of a refused plan only; a
-    role that may not end a turn that way fails it."""
-    plan = plan_call(text, prompt)
-    if plan is None:
-        raise RuntimeError(refused[1])
-    error = call({"name": "finish_turn", "arguments": {"turn": turn, "text": plan["document"]}}, thread)
-    if error is not None:
-        raise RuntimeError(error)
-
-
 def turn_of(prompt):
     # Earlier diagnostics in the conversation may quote a previous turn.
     footer = prompt.rsplit("\n\n---\nWhen this turn is complete", 1)[-1]
@@ -456,9 +437,9 @@ def run_fixture(prompt, turn):
     if name.endswith("codex") or "codex" in name:
         argv = [fixture] + extra + ["exec"]
         if resume:
-            argv += ["resume", "-c", 'sandbox_mode="%s"' % sandbox] + model_args + [resume]
+            argv += ["resume", "--dangerously-bypass-approvals-and-sandbox"] + model_args + [resume]
         else:
-            argv += ["--json", "-C", os.getcwd(), "-s", sandbox] + model_args
+            argv += ["--json", "-C", os.getcwd(), "--dangerously-bypass-approvals-and-sandbox"] + model_args
     else:
         argv = [fixture] + extra
         if resume:
@@ -525,19 +506,16 @@ def main():
         global resume
         resume = seen or resume
         refused = finish(turn, text, seen, prompt)
-        for _ in range(2):
-            if refused is None:
-                break
+        while refused is not None:
             # First, since fixtures cut the prompt at the ledger context.
             retry = "%s was refused: %s\n\n%s" % (refused[0], refused[1], prompt)
             done = run_fixture(retry, turn)
             again, _ = answer_of(done.stdout)
             if done.returncode != 0 or again is None:
-                break
+                sys.stderr.write((done.stderr or done.stdout or "no correction answer") + "\n")
+                return done.returncode or 1
             text = again
             refused = finish(turn, text, seen, retry)
-        if refused is not None:
-            finish_in_words(turn, text, seen, prompt, refused)
 
 
 sys.exit(main())

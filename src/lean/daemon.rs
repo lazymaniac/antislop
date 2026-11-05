@@ -66,7 +66,7 @@ pub fn build_identity(executable: &Path) -> Result<String> {
     )))
 }
 
-const PROTOCOL_VERSION: u32 = 4;
+const PROTOCOL_VERSION: u32 = 5;
 
 pub(crate) use protocol::RequestEnvelope;
 
@@ -159,7 +159,7 @@ mod live_config_tests {
             let path = PathBuf::from(std::env::var_os("ANTISLOP_TEST_CONFIG_EXIT_PATH").unwrap());
             let text = std::fs::read_to_string(&path)
                 .unwrap()
-                .replace("max_parallel = 4", "max_parallel = 1");
+                .replace("local_options = true", "local_options = false");
             let prepared = PreparedConfigWrite::prepare(&path, &text).unwrap();
             if phase == "published" {
                 prepared.publish().unwrap();
@@ -183,7 +183,7 @@ mod live_config_tests {
             let expected = if phase == "prepared" {
                 original.to_owned()
             } else {
-                original.replace("max_parallel = 4", "max_parallel = 1")
+                original.replace("local_options = true", "local_options = false")
             };
             assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
             Config::load(&path).unwrap();
@@ -216,7 +216,7 @@ mod live_config_tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert_eq!(*core.config_snapshot(), *old);
-        let updated = original.replace("max_parallel = 4", "max_parallel = 1");
+        let updated = original.replace("local_options = true", "local_options = false");
         call(Request::Control(
             crate::lean::daemon::ControlRequest::SetConfig {
                 toml: updated.clone(),
@@ -224,8 +224,8 @@ mod live_config_tests {
             },
         ))
         .unwrap();
-        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
-        assert_eq!(old.policy.max_parallel, 4);
+        assert!(!core.config_snapshot().policy.local_options);
+        assert!(old.policy.local_options);
         let stale = call(Request::Control(
             crate::lean::daemon::ControlRequest::SetConfig {
                 toml: original.into(),
@@ -234,7 +234,7 @@ mod live_config_tests {
         ))
         .unwrap_err();
         assert!(stale.to_string().contains("configuration changed"));
-        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        assert!(!core.config_snapshot().policy.local_options);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
         assert_eq!(
             call(Request::Control(
@@ -270,7 +270,7 @@ mod live_config_tests {
         .unwrap_err();
         assert!(failure.to_string().contains("injected log failure"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
-        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        assert!(!core.config_snapshot().policy.local_options);
         db.execute_batch("DROP TRIGGER reject_config_event;
             CREATE TABLE deferred_failure(id TEXT REFERENCES conversations(id) DEFERRABLE INITIALLY DEFERRED);
             CREATE TRIGGER fail_config_commit AFTER INSERT ON events WHEN NEW.kind='config_updated'
@@ -291,7 +291,7 @@ mod live_config_tests {
                 .contains("FOREIGN KEY")
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        assert_eq!(core.config_snapshot().policy.max_parallel, 4);
+        assert!(core.config_snapshot().policy.local_options);
     }
 
     #[test]

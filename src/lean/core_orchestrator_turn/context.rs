@@ -113,7 +113,7 @@ fn turn_setup<'a>(
         profile: config.resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
         cwd: project.to_path_buf(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         upto_message: upto,
     }
 }

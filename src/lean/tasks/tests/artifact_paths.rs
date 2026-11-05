@@ -1,7 +1,7 @@
 use super::*;
 
 fn plan(output: &str, delivery: Option<&str>) -> Value {
-    json!({"tasks":[{"id":"report","title":"Analysis report","goal":"Deliver the report only","kind":"analysis","writes":true,"change_kind":"artifact","outputs":[output],"delivery":delivery}]})
+    json!({"tasks":[{"id":"report","title":"Analysis report","goal":"Deliver the report only","kind":"analysis","change_kind":"artifact","outputs":[output],"delivery":delivery}]})
 }
 
 #[test]

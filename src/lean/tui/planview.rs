@@ -23,7 +23,6 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 pub enum PlanAction {
     None,
     Close,
-    Accept,
     Reject,
     CommentLine {
         line: usize,
@@ -41,7 +40,6 @@ pub enum PlanAction {
 /// Which button in the fixed bottom bar is currently highlighted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BottomButton {
-    Accept,
     Reject,
     CommentWholePlan,
     Review,
@@ -50,17 +48,15 @@ pub enum BottomButton {
 impl BottomButton {
     pub fn next(self) -> Self {
         match self {
-            Self::Accept => Self::Reject,
             Self::Reject => Self::CommentWholePlan,
             Self::CommentWholePlan => Self::Review,
-            Self::Review => Self::Accept,
+            Self::Review => Self::Reject,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Accept => Self::Review,
-            Self::Reject => Self::Accept,
+            Self::Reject => Self::Review,
             Self::CommentWholePlan => Self::Reject,
             Self::Review => Self::CommentWholePlan,
         }
@@ -100,14 +96,12 @@ pub struct PlanView {
     pub cursor: usize,
     pub scroll: usize,
     pub button: BottomButton,
-    /// Hit-boxes for the three bottom bar buttons `(Accept, Reject, CommentWholePlan)`.
-    pub button_rects: [Rect; 4],
+    /// Hit-boxes for the plan comment and rejection actions.
+    pub button_rects: [Rect; 3],
     /// Inner document area for mouse line selection.
     pub doc_area: Rect,
     /// The document line each screen row belongs to, from the last draw.
     pub row_docs: Vec<Option<usize>>,
-    /// Accept was activated once from its button; a second activation accepts.
-    pub confirm_accept: bool,
     /// Advances the in-progress spinner; the app sets it before drawing.
     pub tick: u64,
     /// The task graph has its own selection and scroll position.
@@ -136,10 +130,9 @@ impl PlanView {
             cursor: 0,
             scroll: 0,
             button: BottomButton::CommentWholePlan,
-            button_rects: [Rect::default(); 4],
+            button_rects: [Rect::default(); 3],
             doc_area: Rect::default(),
             row_docs: Vec::new(),
-            confirm_accept: false,
             tick: 0,
             graph_focused: false,
             graph_selected: 0,

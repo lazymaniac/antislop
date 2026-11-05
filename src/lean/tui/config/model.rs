@@ -35,11 +35,7 @@ impl Field {
                 .map(|v| serde_json::json!(v))
                 .map_err(|e| e.to_string()),
             "args" => Ok(serde_json::json!([])),
-            "max_parallel" | "max_tasks" => text
-                .parse::<i64>()
-                .map(|v| serde_json::json!(v))
-                .map_err(|e| e.to_string()),
-            "local_write" | "local_commits" | "required_gates" | "local_options" => text
+            "local_commits" | "required_gates" | "local_options" => text
                 .parse::<bool>()
                 .map(Value::Bool)
                 .map_err(|e| e.to_string()),
@@ -157,7 +153,6 @@ impl ConfigEditor {
         let key = path.last().unwrap().as_str();
         let choices = match key {
             "provider" => kind_names::<ProviderKind>()?,
-            "mode" => strings(&["supervised", "autonomous"]),
             "effort" => strings(&["low", "medium", "high", "xhigh"]),
             _ if value.is_boolean() => strings(&["false", "true"]),
             _ => vec![],
@@ -217,7 +212,7 @@ impl ConfigEditor {
     }
 
     pub(super) fn parse_draft(&mut self) -> Option<Value> {
-        let mut root = serde_json::json!({"schema_version": 3, "profiles": {}, "providers": {}, "routing": {}});
+        let mut root = serde_json::json!({"schema_version": crate::config::SCHEMA_VERSION, "profiles": {}, "providers": {}, "routing": {}});
         let mut invalid = false;
         for field in &mut self.fields {
             field.error = None;

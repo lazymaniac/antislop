@@ -4,7 +4,7 @@
 mod common;
 
 use antislop::lean::daemon::{Client, Request};
-use antislop::lean::tui::workspace::{self, ProjectConn};
+use antislop::lean::tui::workspace::ProjectConn;
 use antislop::lean::tui::{App, UpdateReceiver, update_channel};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
@@ -60,12 +60,13 @@ struct Daemon {
 
 impl Daemon {
     fn start(project: &Path) -> Self {
-        common::trust(project);
-        let state = project.join(".antislop");
+        common::runtime_environment(project);
+        let state = antislop::lean::paths::project_state(project).unwrap();
         std::fs::create_dir_all(&state).unwrap();
         std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .unwrap();
-        let child = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+            .current_dir(project)
             .arg("__core")
             .arg(project)
             .arg(project.join("antislop.toml"))
@@ -82,9 +83,19 @@ impl Daemon {
             ))
             .is_err()
         {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("fixture daemon exited during startup: {status}");
+            }
             assert!(Instant::now() < deadline, "daemon did not start");
             std::thread::sleep(Duration::from_millis(25));
         }
+        let client = Client::connect(
+            project,
+            &project.join("antislop.toml"),
+            &state,
+            Path::new(env!("CARGO_BIN_EXE_antislop")),
+        )
+        .unwrap();
         Self {
             child,
             conn: ProjectConn::new(project.to_path_buf(), client),
@@ -211,36 +222,33 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
 }
 
 #[test]
-fn an_untrusted_directory_is_asked_about_before_anything_is_created_there() {
+fn opening_a_project_uses_global_state_without_consent_or_local_artifacts() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let path_a = project(&root, "alpha");
     let a = Daemon::start(&path_a);
-    let stranger = project(&root, "stranger");
-
+    let next = project(&root, "next");
     let (tx, rx) = update_channel(256);
     let mut app = App::test_app_with_client_and_updates(a.conn.client.clone(), tx);
     app.register_project(a.conn.clone());
-    app.open_project(&stranger.to_string_lossy());
-    pump(&mut app, &rx, |app| app.project_trust.is_some());
-    assert_eq!(app.project_trust.as_deref(), Some(stranger.as_path()));
-    assert!(!stranger.join(".antislop").exists(), "nothing created yet");
-
-    // Declining closes the question and changes nothing.
-    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.project_trust.is_none());
-    assert_eq!(app.projects.len(), 1);
-    assert!(!stranger.join(".antislop").exists());
-
-    // The same checks the screen makes, without starting a daemon.
-    let registry = antislop::lean::trust::Registry::from_env().unwrap();
-    assert!(matches!(
-        workspace::connect(&stranger, &registry),
-        Err(workspace::ConnectError::NotTrusted(_))
-    ));
-    // A project that is open is switched to, not opened twice.
+    app.open_project(&next.to_string_lossy());
+    pump(&mut app, &rx, |app| app.project == "next");
+    let selected = app.projects[app.active_project]
+        .client
+        .state_dir()
+        .to_path_buf();
+    let stopped = Client::stop(&selected, true);
+    assert!(stopped.unwrap());
+    assert_eq!(app.projects.len(), 2);
+    assert_eq!(
+        selected,
+        antislop::lean::paths::project_state(&next).unwrap()
+    );
+    assert!(selected.join("core.db").exists());
+    assert!(!selected.starts_with(&next));
+    assert!(!next.join(".antislop").exists());
     app.open_project(&path_a.to_string_lossy());
-    assert_eq!(app.projects.len(), 1);
+    assert_eq!(app.projects.len(), 2);
 }
 
 #[test]
@@ -297,28 +305,23 @@ fn configuration_precedence_and_errors_without_creating_state() {
     // Only project, only global, then both: assert the actual canonical selection.
     std::fs::write(&local_file, valid).unwrap();
     assert_selected(&local_file);
-    assert!(run(&["chat", "hello"]).contains("not trusted"));
     std::fs::remove_file(&local_file).unwrap();
     std::fs::write(&global_file, valid).unwrap();
     assert_selected(&global_file);
-    assert!(run(&["chat", "hello"]).contains("not trusted"));
     std::fs::write(&local_file, valid).unwrap();
     assert_selected(&local_file);
-    assert!(run(&["chat", "hello"]).contains("not trusted"));
     std::fs::write(&global_file, "invalid TOML").unwrap();
-    assert!(run(&["chat", "hello"]).contains("not trusted"));
     // A broken project file must not fall back to the valid global file.
     std::fs::write(&global_file, valid).unwrap();
     std::fs::write(&local_file, "invalid TOML").unwrap();
     assert_selected(&local_file);
-    assert!(run(&["chat", "hello"]).contains("not trusted"));
-    assert!(run(&["chat", "--trust", "hello"]).contains("invalid TOML configuration"));
-    antislop::lean::trust::Registry::at(&global)
-        .untrust(&project)
-        .unwrap();
+    assert!(run(&["chat", "hello"]).contains("invalid TOML configuration"));
     // An explicit file wins even over the broken project file.
     std::fs::write(project.join("custom.toml"), valid).unwrap();
-    assert!(run(&["chat", "--config", "custom.toml", "hello"]).contains("not trusted"));
+    assert_eq!(
+        antislop::lean::cli::resolve_config(&project, Some(Path::new("custom.toml"))).unwrap(),
+        project.join("custom.toml").canonicalize().unwrap()
+    );
     let error = run(&["chat", "--config", "absent.toml", "hello"]);
     assert!(
         error.contains(project.join("absent.toml").to_str().unwrap()),
@@ -331,4 +334,126 @@ fn configuration_precedence_and_errors_without_creating_state() {
         antislop::lean::cli::resolve_config(&project, Some(&link)).unwrap(),
         project.join("custom.toml").canonicalize().unwrap()
     );
+}
+
+#[test]
+fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let primary = project(root.path(), "primary");
+    common::runtime_environment(&primary);
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&primary)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--quiet", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "fixture",
+    ]);
+    let checkout = root.path().join("checkout");
+    git(&[
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        checkout.to_str().unwrap(),
+    ]);
+    std::fs::copy(
+        primary.join("antislop.toml"),
+        checkout.join("antislop.toml"),
+    )
+    .unwrap();
+    let daemon = Daemon::start(&checkout);
+    let state = daemon.conn.client.state_dir().to_path_buf();
+    let conversation = daemon
+        .conn
+        .client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Start,
+        ))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = daemon
+        .conn
+        .client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Identity,
+        ))
+        .unwrap();
+    git(&["worktree", "remove", "--force", checkout.to_str().unwrap()]);
+    assert_eq!(
+        state,
+        antislop::lean::paths::project_state(&primary).unwrap()
+    );
+    let client = Client::connect(
+        &primary,
+        &state.join("antislop.toml"),
+        &state,
+        Path::new(env!("CARGO_BIN_EXE_antislop")),
+    )
+    .unwrap();
+    let attached = client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Identity,
+        ))
+        .unwrap();
+    assert_eq!(
+        attached["pid"], before["pid"],
+        "cleanup must not replace the live daemon"
+    );
+    let read_history = |client: &Client| {
+        client
+            .call(&Request::History(
+                antislop::lean::daemon::HistoryRequest::Events {
+                    conversation: conversation.clone(),
+                    after: 0,
+                    wait_ms: 0,
+                },
+            ))
+            .unwrap()
+    };
+    assert!(
+        !read_history(&client)["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    drop(daemon);
+    let restarted = Client::connect(
+        &primary,
+        &state.join("antislop.toml"),
+        &state,
+        Path::new(env!("CARGO_BIN_EXE_antislop")),
+    )
+    .unwrap();
+    let history = read_history(&restarted);
+    Client::stop(&state, true).unwrap();
+    assert!(!history["events"].as_array().unwrap().is_empty());
+    assert!(state.join("core.db").exists());
+    assert!(state.join("antislop.toml").exists());
+    assert!(!primary.join(".antislop").exists());
 }

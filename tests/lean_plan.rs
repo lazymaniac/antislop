@@ -23,9 +23,6 @@ fn a_reviewer_started_after_a_live_update_uses_the_new_profile_in_the_same_round
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
-    wait_idle(&core, &conversation.id);
-    let task = core.store.latest_plan(&conversation.id).unwrap().remove(0);
-    core.accept_plan(&conversation.id, &task.plan_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while !marker.exists() {
         assert!(Instant::now() < deadline, "worker did not reach the gate");
@@ -81,14 +78,20 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [
-  {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "goal": "Assess storage", "scope": ["src"],
-   "kind": "architecture", "reviewer": {"summary": "Review the storage findings.", "focus": "claims", "risks": ["r-storage"]}},
+  {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "goal": "Assess storage",
+   "change_kind": "none", "kind": "architecture", "reviewer": {"summary": "Review the storage findings."}},
   {"id": "t2", "title": "TUI", "goal": "Assess TUI", "depends_on": ["t1"],
-   "kind": "analysis", "reviewer": {"focus": "claims", "risks": ["r-tui"]}}]}
-if "[runtime]" in prompt:
+   "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "claims"}}]}
+if "The plan finished. Results of each task follow." in prompt and "Address each new user comment" not in prompt:
     answer = "summary: " + ("fixed report" if "fixed report" in prompt else "missing")
-else:
+elif "Address each new user comment" in prompt:
+    import re
+    ids = re.findall(r"user comment #(\d+) on", prompt)
+    answer = "Storage review explained.\n```comments\n" + json.dumps({"addressed":[{"id":int(i),"how":"Explained storage review"} for i in ids]}) + "\n```\n```plan\n" + json.dumps(plan) + "\n```"
+elif "You are the planner" in prompt:
     answer = "Two tasks.\n```plan\n" + json.dumps(plan) + "\n```"
+else:
+    answer = "Continue the active plan."
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
@@ -243,8 +246,11 @@ fn a_plan_comment_gets_an_independent_revision_and_review() {
             .unwrap()
             .is_none()
     );
-    let refused = core.accept_plan(&conversation.id, &initial).unwrap_err();
-    assert!(refused.to_string().contains("Review"), "{refused}");
+    let refused = core.resume_plan(&conversation.id, &initial).unwrap_err();
+    assert!(
+        refused.to_string().contains("nothing to resume"),
+        "{refused}"
+    );
     assert!(
         core.set_comment(&conversation.id, comment.id, "open")
             .unwrap_err()
@@ -340,10 +346,6 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
         .find(|message| message.author == "orchestrator")
         .expect("the plan's words reach the user");
     assert_eq!(shown.text, "Two tasks.", "plan block is not shown");
-    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
-        .plan_id
-        .clone();
-    core.accept_plan(&conversation.id, &plan).unwrap();
     wait_idle(&core, &conversation.id);
 
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
@@ -380,7 +382,12 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
             args.contains("Assess TUI") && !args.contains("Assess storage")
         }
     }));
-    assert!(workers.iter().all(|(_, args)| args.contains("--mode plan")));
+    assert!(
+        workers
+            .iter()
+            .all(|(_, args)| args.contains("--mode accept-edits")
+                && args.contains("--dangerously-skip-permissions"))
+    );
     // The dependent task is told it is unblocked and gets the summary of
     // what its dependency delivered, not its rounds.
     let dependent = workers
@@ -467,7 +474,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
 }
 
 #[test]
-fn a_malformed_or_missing_plan_is_corrected_within_the_turn_with_a_finite_retry_limit() {
+fn malformed_plans_retry_until_corrected_or_explicitly_cancelled() {
     for (persistent, missing) in [(false, false), (true, false), (false, true), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let (codex, agy) = fake_clis(dir.path());
@@ -503,11 +510,28 @@ if not os.path.exists('format-error-sent') or {persistent}:
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
         core.send(&conversation.id, "Assess storage and TUI")
             .unwrap();
+        if persistent {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while std::fs::read_to_string(dir.path().join("codex.rejections"))
+                .map_or(0, |text| text.lines().count())
+                < 5
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "correction stopped before five rejections"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!core.is_idle(&conversation.id));
+            core.cancel(&conversation.id);
+        }
         wait_idle(&core, &conversation.id);
-        // The gateway refuses the result within the turn; the agent is asked
-        // again twice, then the turn ends without a plan.
         let refused = std::fs::read_to_string(dir.path().join("codex.rejections")).unwrap();
-        assert_eq!(refused.lines().count(), if persistent { 3 } else { 1 });
+        if persistent {
+            assert!(refused.lines().count() >= 5);
+        } else {
+            assert_eq!(refused.lines().count(), 1);
+        }
         let plan = core.store.latest_plan(&conversation.id).unwrap();
         if persistent {
             assert!(plan.is_empty());
@@ -548,13 +572,13 @@ fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message(
     store
         .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
         .unwrap();
-    let message = store.approve_requirements(&conversation.id).unwrap();
+    assert!(store.finish_interview(&conversation.id).unwrap());
     let turn = store
         .start_turn(&conversation.id, "planner", "codex", message.seq, None)
         .unwrap();
     store.set_session(&turn.id, "orch").unwrap();
     let plan = json!({"type": "plan", "document": "Plan", "tasks": [
-        {"id": "t1", "title": "Inspect", "goal": "Inspect the project", "kind": "analysis"}]});
+        {"id": "t1", "title": "Inspect", "goal": "Inspect the project", "change_kind": "none", "kind": "analysis"}]});
     store
         .append_event(
             &conversation.id,
@@ -582,9 +606,17 @@ fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message(
         "{:?}",
         core.store.events_since(&conversation.id, 0, 2000).unwrap()
     );
+    assert!(
+        core.store
+            .events_since(&conversation.id, 0, 2000)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "turn_started"
+                && event.payload["role"] == "requirements-extraction-analyst")
+    );
     assert_eq!(
         core.store
-            .messages_by(&conversation.id, "requirements-format-repair", 0)
+            .messages_by(&conversation.id, "user", 0)
             .unwrap()
             .len(),
         1
@@ -657,12 +689,12 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     base, snapshot = re.search(r'Current task contracts for plan ([-\w]+):\n([^\n]+)', prompt).groups()
     snapshot = json.loads(snapshot)
     snapshot = snapshot['tasks']
-    planned = ('id', 'title', 'goal', 'kind', 'depends_on', 'scope', 'writes', 'covers', 'section', 'summary')
+    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'covers', 'section', 'summary')
     def planned_task(task):
         return {key: task[key] for key in planned if task.get(key) is not None}
     first = snapshot[0]
     extra = planned_task(first)
-    extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', writes=False, depends_on=['t1'],
+    extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', change_kind='none', depends_on=['t1'],
                  covers=first.get('requirement_ids', []) + first.get('criterion_ids', []))
     gate = planned_task(next(task for task in snapshot if task['id'] == 't2'))
     gate['depends_on'] = ['extra']
@@ -686,10 +718,13 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
-    wait_idle(&core, &conversation.id);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "worker did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let before = core.store.latest_plan(&conversation.id).unwrap();
     let plan = &before[0].plan_id;
-    core.accept_plan(&conversation.id, plan).unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while !started.exists() {
         assert!(Instant::now() < deadline, "worker did not start");
@@ -755,16 +790,13 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let plan = serde_json::json!({"tasks": [
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
-        {"id":"t12", "title":"Review", "goal":"Review change", "kind":"analysis", "depends_on":["t11"]},
-        {"id":"t13", "title":"Report", "goal":"Report checked results", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
     ]});
     let source = std::fs::read_to_string(&codex).unwrap().replace(
-        "if \"[runtime]\" in prompt:",
-        &format!(
-            "plan = json.loads({:?})\nif \"[runtime]\" in prompt:",
-            plan.to_string()
-        ),
+        "if \"The plan finished. Results of each task follow.\" in prompt and \"Address each new user comment\" not in prompt:",
+        &format!("plan = json.loads({:?})\nif \"The plan finished. Results of each task follow.\" in prompt and \"Address each new user comment\" not in prompt:",plan.to_string())
     );
     std::fs::write(&codex, source).unwrap();
     let mut config = config(&codex, &agy);
@@ -776,6 +808,15 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
         "Report only after quality and static checks",
     )
     .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while core.store.latest_plan(&conversation.id).unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "generated plan was not submitted"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    core.cancel(&conversation.id);
     wait_idle(&core, &conversation.id);
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
     assert!(!tasks.is_empty());
@@ -845,7 +886,7 @@ fn a_task_a_revision_changes_waits_for_its_review_instead_of_starting_on_the_old
 if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
     import re, os, urllib.request
     snapshot = json.loads(re.search(r'Current task contracts for plan [-\w]+:\n([^\n]+)', prompt).group(1))['tasks']
-    planned = ('id', 'title', 'goal', 'kind', 'depends_on', 'scope', 'writes', 'covers', 'section', 'summary')
+    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'covers', 'section', 'summary')
     t2 = {key: value for key, value in next(t for t in snapshot if t['id'] == 't2').items() if key in planned and value is not None}
     t2['goal'] = 'Assess TUI again'
     body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Sharpen the TUI assessment','tasks':[t2],'retire':[]}}}
@@ -857,26 +898,26 @@ if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
     print(json.dumps({'type':'turn.completed','usage':{}}))
     sys.exit(0)
 "#;
-    // t2 does not wait for t1; one slot makes it queue behind t1 instead.
-    let orchestrator = std::fs::read_to_string(&codex)
-        .unwrap()
-        .replace("\"depends_on\": [\"t1\"],\n", "\n")
-        .replace(
-            "plan = {\"tasks\": [",
-            &format!("{hook}\nplan = {{\"tasks\": ["),
-        );
+    // Keep t2 dependent on t1, so its contract can be reviewed before t1 releases it.
+    let orchestrator = std::fs::read_to_string(&codex).unwrap().replace(
+        "plan = {\"tasks\": [",
+        &format!("{hook}\nplan = {{\"tasks\": ["),
+    );
     std::fs::write(&codex, orchestrator).unwrap();
-    let mut config = config(&codex, &agy);
-    config.policy.max_parallel = 1;
+    let config = config(&codex, &agy);
+
     let core = Core::open(&dir.path().join("state"), config).unwrap();
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
-    wait_idle(&core, &conversation.id);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "worker did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
         .plan_id
         .clone();
-    core.accept_plan(&conversation.id, &plan).unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     let wait_for = |done: &dyn Fn() -> bool, what: &str| {
         while !done() {

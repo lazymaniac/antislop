@@ -1,7 +1,6 @@
 use super::*;
 use crate::lean::core_task_execution::task_execution::worker::complete_report;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 #[test]
 fn worker_blocker_ends_the_turn_without_approving_or_releasing_dependents() {
@@ -79,12 +78,7 @@ fn worker_blocker_ends_the_turn_without_approving_or_releasing_dependents() {
             assert_eq!(receipt["recorded"], true, "{response}");
         }
         let finish = gateway
-            .wait(
-                &turn.id,
-                &AtomicBool::new(false),
-                Duration::from_secs(2),
-                || Ok(()),
-            )
+            .wait(&turn.id, &AtomicBool::new(false), || Ok(()))
             .unwrap();
         let result: TurnResult = serde_json::from_str(&finish.text).unwrap();
         assert!(matches!(result, TurnResult::Blocked { .. }));
@@ -172,8 +166,8 @@ fn options_tasks(core: &Core, conversation: &str) -> Vec<Task> {
         .apply_ledger_change(&change, &core.state, true)
         .unwrap();
     let tasks = core.store.add_plan(conversation, &[
-        json!({"id":"options","title":"Options","goal":"Choose a viable approach","kind":"options","options_for":"consumer","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"consumer","title":"Consumer","goal":"Apply the approach","kind":"analysis","depends_on":["options"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"options","title":"Options","goal":"Choose a viable approach","change_kind": "none", "kind":"options","options_for":"consumer","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"consumer","title":"Consumer","goal":"Apply the approach","change_kind": "none", "kind":"analysis","depends_on":["options"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
     ]).unwrap();
     core.store
         .link_plan_run(conversation, &tasks[0].plan_id, &run.id)

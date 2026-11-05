@@ -36,8 +36,6 @@ impl Session {
             executing: AtomicBool::new(false),
             primed: AtomicBool::new(false),
             startup_failed: AtomicBool::new(false),
-            #[cfg(test)]
-            ready_limit: Mutex::new(READY_LIMIT),
             touched: Mutex::new(Instant::now()),
         })
     }
@@ -71,48 +69,20 @@ impl Session {
         Ok(())
     }
 
-    /// Alive, and printed something within `idle` unless it waits for an answer.
-    pub(super) fn check_active(&self, idle: Duration) -> Result<()> {
-        self.check_alive()?;
-        let quiet = terminal::quiet_for(&self.screen);
-        if quiet < idle || self.gateway.awaiting_answer() {
-            return Ok(());
-        }
-        Err(StopCause::Timeout.diagnostic(format!(
-            "{} printed nothing for {} s: {}",
-            agent::name(self.spec.provider),
-            quiet.as_secs(),
-            terminal::tail(&self.screen, SCREEN_LINES)
-        )))
-    }
-
     /// Require MCP tool discovery, then briefly let startup drawing settle.
     /// Output silence is a courtesy, not a readiness signal: interactive CLIs
     /// may redraw a spinner continuously, including between completed turns.
     fn wait_ready(&self, cancel: &AtomicBool) -> Result<()> {
-        #[cfg(test)]
-        let ready_limit = self.ready_limit.lock().map_or(READY_LIMIT, |limit| *limit);
-        #[cfg(not(test))]
-        let ready_limit = READY_LIMIT;
-        self.wait_for_connection(cancel, ready_limit)?;
+        self.wait_for_connection(cancel)?;
         self.wait_for_settle(cancel)
     }
 
-    fn wait_for_connection(&self, cancel: &AtomicBool, ready_limit: Duration) -> Result<()> {
-        let limit = Instant::now() + ready_limit;
+    fn wait_for_connection(&self, cancel: &AtomicBool) -> Result<()> {
         while !self.gateway.connected() {
             if cancel.load(Ordering::SeqCst) {
                 return Err(invalid(mcp::CANCELLED));
             }
             self.check_alive()?;
-            if Instant::now() >= limit {
-                return Err(StopCause::Timeout.diagnostic(format!(
-                    "{} did not connect to the antislop MCP gateway within {} s; the terminal shows:\n{}",
-                    agent::name(self.spec.provider),
-                    READY_LIMIT.as_secs(),
-                    terminal::tail(&self.screen, SCREEN_LINES)
-                )));
-            }
             std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
@@ -212,9 +182,7 @@ impl Session {
 
     fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
         self.gateway
-            .wait(turn, cancel, turn_timeout(), || {
-                self.check_active(turn_idle())
-            })
+            .wait(turn, cancel, || self.check_alive())
             .inspect_err(|error| {
                 if error.to_string() == mcp::CANCELLED {
                     let _ = terminal::Session::interrupt(&self.screen);

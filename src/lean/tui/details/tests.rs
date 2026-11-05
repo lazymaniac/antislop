@@ -101,7 +101,7 @@ fn footer_numbers_match_each_keys_visible_tabs() {
 
 fn reviewer_task(extra: Value) -> Value {
     let mut task = serde_json::json!({
-        "spec": {"id": "t1", "title": "T", "goal": "g", "kind": "analysis"},
+        "spec": {"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis"},
     });
     task.as_object_mut()
         .unwrap()

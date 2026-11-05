@@ -6,7 +6,7 @@ mod tests {
 
     fn task() -> TaskContract {
         serde_json::from_value(
-            json!({"id":"local","title":"API","goal":"Define API","kind":"implementation"}),
+            json!({"id":"local","title":"API","goal":"Define API","change_kind": "code", "kind":"implementation"}),
         )
         .unwrap()
     }
@@ -39,12 +39,10 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_completion_with_legacy_outputs_still_loads() {
-        let result: TurnResult = serde_json::from_value(
+    fn completion_rejects_removed_output_fields() {
+        assert!(serde_json::from_value::<TurnResult>(
             json!({"type":"completed","summary":"API","report":"Defined","outputs":{"api":"x"}}),
-        )
-        .unwrap();
-        assert_eq!(result.text(), "Defined");
+        ).is_err());
     }
 
     #[test]
@@ -81,12 +79,16 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_selection_of_the_longer_form_still_loads() {
-        let stored = json!({"criteria": ["c"], "alternatives": [
-            {"id": "A", "approach": "a", "evaluations": ["e"], "eligible": true, "tradeoffs": "t"}],
-            "selected": "A", "rationale": "r", "reconsider_when": "w"});
-        let selection: Selection = serde_json::from_value(stored).unwrap();
-        assert_eq!(selection.chosen().unwrap().approach, "a");
+    fn selection_rejects_unknown_fields_at_each_level() {
+        let current = json!({"alternatives":[{"id":"A","approach":"a","tradeoffs":"t"}],
+            "selected":"A","rationale":"r"});
+        assert!(serde_json::from_value::<Selection>(current.clone()).is_ok());
+        let mut outer = current.clone();
+        outer["criteria"] = json!(["c"]);
+        assert!(serde_json::from_value::<Selection>(outer).is_err());
+        let mut nested = current;
+        nested["alternatives"][0]["eligible"] = json!(true);
+        assert!(serde_json::from_value::<Selection>(nested).is_err());
     }
 
     #[test]

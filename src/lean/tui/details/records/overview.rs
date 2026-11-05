@@ -39,7 +39,6 @@ fn append_agent_records(details: &Details, view: &View, records: &mut Vec<Rc<Det
 
 fn conversation_record(view: &View) -> Rc<DetailRecord> {
     let mut lines = vec![label("Conversation details")];
-    lines.push(plain(format!("Mode: {}", mode_label(view.autonomous))));
     lines.push(plain(format!("Status: {}", conversation_status(view))));
     if let Some(plan) = &view.plan {
         lines.push(plain(format!("Active plan: {plan}")));
@@ -52,14 +51,6 @@ fn conversation_record(view: &View) -> Rc<DetailRecord> {
         .count();
     lines.push(plain(format!("Tasks: total {total}, completed {done}")));
     record(lines, " ")
-}
-
-fn mode_label(autonomous: Option<bool>) -> &'static str {
-    match autonomous {
-        Some(true) => "autonomous",
-        Some(false) => "supervised",
-        None => "unspecified",
-    }
 }
 
 fn conversation_status(view: &View) -> &'static str {
@@ -100,7 +91,7 @@ fn task_record(view: &View, task: &TaskRow, reviewer: bool) -> Rc<DetailRecord> 
     lines.push(plain(format!(
         "Kind: {}{}",
         task.kind,
-        if task.writes {
+        if task.change_kind.has_delivery() {
             " · modifies files"
         } else {
             " · read-only"

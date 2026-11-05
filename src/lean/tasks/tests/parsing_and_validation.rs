@@ -15,23 +15,22 @@ fn task_ids_reject_paths_and_empty_fragments() {
         "a b",
         "é",
     ] {
-        let task = json!({"id": id, "title": "Task", "goal": "Assess", "kind": "analysis"});
+        let task = json!({"id": id, "title": "Task", "goal": "Assess", "change_kind": "none", "kind": "analysis"});
         let error = submitted(json!({"tasks": [task]})).unwrap_err().to_string();
         assert!(error.contains("invalid task id"), "{id:?}: {error}");
     }
     let mut task: TaskContract = serde_json::from_value(json!({
         "id": "x".repeat(257), "title": "Task", "goal": "Assess",
-        "kind": "analysis", "reviewer": {"focus": "claims"}
-    }))
+        "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "claims"}}))
     .unwrap();
     assert!(validate(&[task.clone()]).is_err());
     task.id = "x".repeat(256);
-    task.writes = true;
+    task.change_kind = crate::lean::tasks::ChangeKind::Code;
     assert!(validate(&[task.clone()]).is_ok());
     let generated = with_options(vec![
         task.clone(),
         TaskContract {
-            change_kind: None,
+            change_kind: crate::lean::tasks::ChangeKind::None,
             outputs: Vec::new(),
             delivery: None,
             quality_gate: false,
@@ -54,7 +53,7 @@ fn saved_plans_keep_valid_ids_and_generated_options() {
         "task_1.v2",
     ];
     let saved = json!({"tasks": ids.iter().map(|id| json!({
-            "id": id, "title": "Task", "goal": "Assess", "kind": "implementation"
+            "id": id, "title": "Task", "goal": "Assess", "change_kind": "code", "kind": "implementation"
         })).collect::<Vec<_>>()});
     let tasks = submitted(saved).unwrap();
     assert_eq!(
@@ -71,16 +70,19 @@ fn saved_plans_keep_valid_ids_and_generated_options() {
 }
 
 #[test]
-fn a_planned_task_gets_writes_from_its_kind_unless_it_says_otherwise() {
+fn planned_tasks_preserve_explicit_delivery_independently_of_work_kind() {
     let tasks = submitted(json!({"tasks":[
-        {"id":"t1","title":"Storage","goal":"Assess storage","scope":["src/storage.rs"],"kind":"architecture"},
-        {"id":"t2","title":"TUI","goal":"Change the TUI","depends_on":["t1"],"kind":"implementation"},
-        {"id":"t3","title":"Probe","goal":"Run the probe","depends_on":["t1"],"kind":"analysis","writes":true}
+        {"id":"t1","title":"Storage","goal":"Assess storage","change_kind": "none", "kind":"architecture"},
+        {"id":"t2","title":"TUI","goal":"Change the TUI","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t3","title":"Probe","goal":"Run the probe","depends_on":["t1"],"change_kind": "code", "kind":"analysis"}
     ]}))
     .unwrap();
     assert_eq!(tasks[1].depends_on, ["t1"]);
     assert_eq!(
-        tasks.iter().map(|task| task.writes).collect::<Vec<_>>(),
+        tasks
+            .iter()
+            .map(|task| task.change_kind.has_delivery())
+            .collect::<Vec<_>>(),
         [false, true, true]
     );
     assert!(tasks.iter().all(|task| task.reviewer.summary.is_some()));
@@ -88,7 +90,7 @@ fn a_planned_task_gets_writes_from_its_kind_unless_it_says_otherwise() {
 
 #[test]
 fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
-    let base = json!({"id": "t1", "title": "Storage", "goal": "A detailed storage analysis.", "kind": "analysis"});
+    let base = json!({"id": "t1", "title": "Storage", "goal": "A detailed storage analysis.", "change_kind": "none", "kind": "analysis"});
     let parse = |task: &Value| submitted(json!({"tasks": [task]}));
     let plain = parse(&base).unwrap();
     assert!(plain[0].summary.is_none());
@@ -115,47 +117,37 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
 }
 
 #[test]
-fn a_stored_contract_with_legacy_fields_still_loads() {
-    let stored: TaskContract = serde_json::from_value(json!({
-        "id": "t2", "title": "Use", "goal": "Use it", "kind": "analysis",
-        "inputs": [{"name": "api", "task": "t1", "output": "api"}], "outputs": ["report"],
-        "reviewer": {"focus": "claims", "risks": ["units"], "risk_ids": ["R002"], "summary": "Check."}
-    }))
-    .unwrap();
-    assert_eq!(stored.reviewer.summary.as_deref(), Some("Check."));
-    let saved = serde_json::to_value(&stored).unwrap();
-    assert!(saved.get("inputs").is_none() && saved["reviewer"].get("focus").is_none());
+fn contracts_reject_removed_fields_and_missing_change_kind() {
+    let current =
+        json!({"id":"t1","title":"Task","goal":"Inspect","kind":"analysis","change_kind":"none"});
+    assert!(serde_json::from_value::<TaskContract>(current.clone()).is_ok());
+    for key in ["scope", "writes", "inputs"] {
+        let mut old = current.clone();
+        old[key] = json!([]);
+        assert!(
+            serde_json::from_value::<TaskContract>(old.clone()).is_err(),
+            "{key}"
+        );
+        assert!(serde_json::from_value::<PlannedTask>(old).is_err(), "{key}");
+    }
+    let mut missing = current.clone();
+    missing.as_object_mut().unwrap().remove("change_kind");
+    assert!(serde_json::from_value::<TaskContract>(missing.clone()).is_err());
+    assert!(serde_json::from_value::<PlannedTask>(missing).is_err());
+    let mut reviewer = current;
+    reviewer["reviewer"] = json!({"focus":"claims"});
+    assert!(serde_json::from_value::<TaskContract>(reviewer).is_err());
 }
 
 #[test]
 fn a_plan_with_out_of_order_dependencies_is_ordered_and_a_cycle_is_rejected() {
     let first = json!({"id": "consumer", "title": "Consumer", "goal": "Use it",
-        "kind": "analysis", "depends_on": ["scout"]});
-    let second = json!({"id": "scout", "title": "Scout", "goal": "Find it", "kind": "analysis"});
+        "change_kind": "none", "kind": "analysis", "depends_on": ["scout"]});
+    let second = json!({"id": "scout", "title": "Scout", "goal": "Find it", "change_kind": "none", "kind": "analysis"});
     let tasks = submitted(json!({"tasks": [first, second]})).unwrap();
     let ids: Vec<_> = tasks.iter().map(|task| task.id.as_str()).collect();
     assert_eq!(ids, ["scout", "consumer"]);
 
-    let cycle = |a: &str, b: &str| json!({"id": a, "title": a, "goal": "g", "kind": "analysis", "depends_on": [b]});
+    let cycle = |a: &str, b: &str| json!({"id": a, "title": a, "goal": "g", "change_kind": "none", "kind": "analysis", "depends_on": [b]});
     assert!(submitted(json!({"tasks": [cycle("a", "b"), cycle("b", "a")]})).is_err());
-}
-
-#[test]
-fn legacy_task_scopes_are_ignored_and_never_serialized() {
-    let plain = json!({"id":"t1","title":"Task","goal":"Inspect files","kind":"analysis"});
-    let mut legacy = plain.clone();
-    legacy["scope"] = json!(["../service", "/private/data", "src/**"]);
-    let planned: PlannedTask = serde_json::from_value(legacy.clone()).unwrap();
-    assert!(
-        serde_json::to_value(&planned)
-            .unwrap()
-            .get("scope")
-            .is_none()
-    );
-    let expected = serde_json::from_value::<PlannedTask>(plain)
-        .unwrap()
-        .into_contract();
-    assert_eq!(planned.into_contract(), expected);
-    let saved: TaskContract = serde_json::from_value(legacy).unwrap();
-    assert!(serde_json::to_value(saved).unwrap().get("scope").is_none());
 }

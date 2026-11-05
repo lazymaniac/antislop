@@ -3,9 +3,8 @@ use super::*;
 #[test]
 fn a_reviewer_owes_the_goal_the_assigned_criteria_and_the_kind_catalog_only() {
     let mut task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis",
-        "reviewer": {"focus": "f", "risks": ["units"], "risk_ids": ["R001"]}
-    }))
+        "id": "t1", "title": "Revenue", "goal": "g", "change_kind": "none", "kind": "analysis",
+        "reviewer": {"summary": "f"}}))
     .unwrap();
     task.criterion_ids = vec!["REQ-1.1".into()];
     let ids: Vec<String> = obligations(&task).into_iter().map(|(id, _)| id).collect();
@@ -24,7 +23,7 @@ fn a_reviewer_owes_the_goal_the_assigned_criteria_and_the_kind_catalog_only() {
 #[test]
 fn a_verdict_counts_only_with_every_obligation_accounted_for() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis"
+        "id": "t1", "title": "Revenue", "goal": "g", "change_kind": "none", "kind": "analysis"
     }))
     .unwrap();
     let obligations = obligations(&task);
@@ -77,7 +76,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
 #[test]
 fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Audit", "goal": "g", "kind": "analysis"
+        "id": "t1", "title": "Audit", "goal": "g", "change_kind": "none", "kind": "analysis"
     }))
     .unwrap();
     let obligations = obligations(&task);
@@ -207,9 +206,8 @@ fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
 #[test]
 fn a_reviewer_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "w", "title": "Writer", "goal": "Do it", "kind": "implementation",
-        "reviewer": {"focus": "f"}
-    }))
+        "id": "w", "title": "Writer", "goal": "Do it", "change_kind": "code", "kind": "implementation",
+        "reviewer": {"summary": "f"}}))
     .unwrap();
     let earlier = vec![
         serde_json::json!({"id": "goal:aaaa1111", "check": "goal", "severity": "medium", "issue": "map omits a file", "where": "x"}),
@@ -231,14 +229,12 @@ fn a_reviewer_is_shown_its_earlier_blocking_findings_by_runtime_id() {
 #[test]
 fn an_options_reviewer_leaves_the_writers_tests_and_validation_to_the_writer() {
     let options: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "w-options", "title": "Options for W", "goal": "g", "kind": "options",
-        "options_for": "w", "reviewer": {"focus": "f"}
-    }))
+        "id": "w-options", "title": "Options for W", "goal": "g", "change_kind": "none", "kind": "options",
+        "options_for": "w", "reviewer": {"summary": "f"}}))
     .unwrap();
     let writer: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "w", "title": "W", "goal": "g", "kind": "implementation", "writes": true,
-        "reviewer": {"focus": "f"}
-    }))
+        "id": "w", "title": "W", "goal": "g", "change_kind": "code", "kind": "implementation",
+        "reviewer": {"summary": "f"}}))
     .unwrap();
     for prompt in [
         reviewer_prompt("/p", &options, "report", None),
@@ -252,9 +248,8 @@ fn an_options_reviewer_leaves_the_writers_tests_and_validation_to_the_writer() {
 #[test]
 fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "audit", "title": "Audit", "goal": "g", "kind": "performance",
-        "reviewer": {"focus": "f"}
-    }))
+        "id": "audit", "title": "Audit", "goal": "g", "change_kind": "none", "kind": "performance",
+        "reviewer": {"summary": "f"}}))
     .unwrap();
     for prompt in [
         reviewer_prompt("/p", &audit, "report", None),
@@ -268,9 +263,8 @@ fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residua
 #[test]
 fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "audit", "title": "Audit", "goal": "g", "kind": "security",
-        "reviewer": {"focus": "f"}
-    }))
+        "id": "audit", "title": "Audit", "goal": "g", "change_kind": "none", "kind": "security",
+        "reviewer": {"summary": "f"}}))
     .unwrap();
     let earlier =
         [serde_json::json!({"id": "f1", "check": "R1", "severity": "medium", "issue": "x"})];
@@ -281,7 +275,7 @@ fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
         assert!(later.contains(REPORT_RECHECK), "{later}");
     }
     let mut writer = audit.clone();
-    writer.writes = true;
+    writer.change_kind = crate::lean::tasks::ChangeKind::Code;
     let prompt = reviewer_turn_prompt("/p", &writer, "report", None, false, "", &earlier);
     assert!(!prompt.contains(REPORT_RECHECK), "{prompt}");
 }

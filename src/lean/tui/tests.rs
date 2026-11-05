@@ -191,7 +191,7 @@ fn ac_modal_05_modal_isolated_plan_shortcuts() {
     app.view.apply(&serde_json::json!({
         "seq": 1,
         "kind": "plan_proposed",
-        "payload": {"plan": "p1", "tasks": [{"id": "t1", "title": "A"}]}
+        "payload": {"plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "A"}]}
     }));
     assert!(app.view.plan_proposed());
     app.editor = Some(Editor {
@@ -315,7 +315,6 @@ fn requirements_event(app: &mut App, seq: u64, run: &str, resolved: bool) {
         generation: app.generation,
         events,
         idle: true,
-        autonomous: false,
     });
 }
 fn review_app() -> App {
@@ -465,7 +464,6 @@ fn requirements_approval_automatically_opens_comparison() {
             "seq": 1, "kind": "ledger_approval_required", "payload": {"run": "r1"}
         })],
         idle: true,
-        autonomous: false,
     });
     let ledger = app.ledger_view.as_ref().unwrap();
     assert!(ledger.visible);
@@ -496,30 +494,16 @@ fn requirements_button_opens_ledger_and_preserves_chat_draft() {
 }
 
 #[test]
-fn interview_shortcut_guides_approval_and_preserves_unsent_answers() {
+fn interview_home_preserves_unsent_answers_without_requesting_approval() {
     let mut app = test_app();
     app.view.workflow_phase = Some("interview".into());
-    app.key(event::KeyEvent::new(
-        KeyCode::Char('a'),
-        KeyModifiers::CONTROL,
-    ));
-    assert!(
-        app.notice
-            .as_deref()
-            .unwrap()
-            .contains("requirements summary")
-    );
     app.view.requirements_summary = "Goal and criteria".into();
     app.input = InputBuffer::with_text("Correction 👩‍💻");
-    app.key(event::KeyEvent::new(
-        KeyCode::Char('a'),
-        KeyModifiers::CONTROL,
-    ));
+    app.key(key_ctrl('a'));
     assert_eq!(app.input.text, "Correction 👩‍💻");
     assert_eq!(app.input.cursor, 0);
-    app.run_workflow(Command::ApproveRequirements);
-    assert!(app.notice.as_deref().unwrap().contains("send your answers"));
-    assert_eq!(app.input.text, "Correction 👩‍💻");
+    assert!(app.notice.is_none());
+    assert!(!app.sending);
 }
 
 #[test]
@@ -528,7 +512,7 @@ fn chat_ctrl_a_plan_accept_vs_readline_home() {
     app.view.apply(&serde_json::json!({
         "seq": 1,
         "kind": "plan_proposed",
-        "payload": {"plan": "p1", "tasks": [{"id": "t1", "title": "A"}]}
+        "payload": {"plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "A"}]}
     }));
 
     // Non-empty draft: Ctrl+A acts as Home
@@ -929,7 +913,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     assert!(text1.contains("newline in draft"));
     assert!(text1.contains("line in draft"));
     assert!(text1.contains("scroll conversation"));
-    assert!(text1.contains("accept/resume"));
+    assert!(text1.contains("line start / resume"));
     assert!(text1.contains("delete to start / end of line"));
 
     // 2. Navigate/scroll help down and review modal isolation
@@ -971,7 +955,6 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
 
     assert!(text2.contains("cancel running work"));
     assert!(text2.contains("pause new steps / continue"));
-    assert!(text2.contains("autonomous / supervised mode"));
     assert!(text2.contains("always sent as chat"));
     assert!(text2.contains("search conversation"));
     assert!(text2.contains("command palette"));
@@ -1147,25 +1130,11 @@ fn the_plan_opens_from_every_panel_and_rejecting_asks_for_a_reason() {
 #[test]
 fn the_narrow_header_keeps_a_clickable_plan_button() {
     for width in [50, 70, 94] {
-        let line = render_header(
-            "p",
-            "conversation-id",
-            Some(false),
-            "ready",
-            PanelFocus::Chat,
-            width,
-        );
+        let line = render_header("p", "conversation-id", "ready", PanelFocus::Chat, width);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("[Plan]"), "{width}: {text}");
     }
-    let wide = render_header(
-        "p",
-        "conversation-id",
-        Some(false),
-        "ready",
-        PanelFocus::Chat,
-        120,
-    );
+    let wide = render_header("p", "conversation-id", "ready", PanelFocus::Chat, 120);
     let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text.matches("[Plan]").count(), 1);
 }
@@ -1389,7 +1358,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
         id: id.into(),
         title: format!("Task {id}"),
         status: status.into(),
-        writes: true,
+        change_kind: crate::lean::tasks::ChangeKind::Code,
         reason: Some("the reviewer repeated itself".into()),
         ..view::TaskRow::default()
     };
@@ -1548,9 +1517,6 @@ fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
             "{text}"
         );
     }
-    // Compact mode token at the narrowest widths.
-    app.view.autonomous = Some(true);
-    assert!(header_text(&app, 40).contains("[auto]"));
 }
 
 #[test]
@@ -1642,13 +1608,6 @@ fn panels_and_buttons_in_the_header_can_be_clicked() {
     assert_eq!(app.focus, Focus::Graph);
     click_header(&mut app, 80, "[Chat]");
     assert_eq!(app.focus, Focus::Chat);
-    // The mode does not flip until the daemon says so.
-    app.view.autonomous = Some(false);
-    app.run_workflow(Command::ToggleMode);
-    assert_eq!(app.view.autonomous, Some(false));
-    app.key(key_ctrl('t'));
-    assert_eq!(app.view.autonomous, Some(false));
-
     // With a dialog open the header ignores clicks.
     app.focus = Focus::Chat;
     app.editor = Some(Editor {

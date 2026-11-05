@@ -70,7 +70,6 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("comment_replied", mail::on_comment_replied),
     ("paused", reviews::on_paused),
     ("notice", reviews::on_notice),
-    ("mode", reviews::on_mode),
     ("check", tasks::on_check),
     ("integration", integration),
     ("task_recovery", task_recovery),

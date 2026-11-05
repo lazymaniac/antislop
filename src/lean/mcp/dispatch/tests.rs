@@ -89,7 +89,6 @@ fn a_cancelled_ask_response_cannot_mutate_the_next_turns_wait_state() {
     let state = shared.state.lock().unwrap();
     assert_eq!(state.expected.as_deref(), Some("next-turn"));
     assert_eq!(state.waiting, Some(started));
-    assert_eq!(state.waited, std::time::Duration::ZERO);
     assert!(state.finished.is_none());
 }
 

@@ -2,8 +2,8 @@
 //! frontend that attaches later rebuilds the same state.
 
 use super::super::tasks::{
-    DETAIL_LIMIT, EFFECT_LIMIT, UNKNOWN_ID_BYTES, bound, feedback_is_current, recovery_outcome,
-    resets_card, status,
+    ChangeKind, DETAIL_LIMIT, EFFECT_LIMIT, UNKNOWN_ID_BYTES, bound, feedback_is_current,
+    recovery_outcome, resets_card, status,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -68,37 +68,6 @@ pub struct MessageEntry {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfirmationAction {
-    AcceptPlan,
-    ResumePlan,
-    ReviewDiff,
-    CancelWork,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfirmationStatus {
-    Pending,
-    Confirmed,
-    Stale,
-    Rejected,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfirmationCard {
-    pub id: String,
-    pub title: String,
-    pub action: ConfirmationAction,
-    pub plan_id: Option<String>,
-    pub task_id: Option<String>,
-    pub candidate: Option<String>,
-    pub scope_hash: String,
-    pub status: ConfirmationStatus,
-    pub detail: String,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptCard {
     Message(MessageEntry),
@@ -119,7 +88,6 @@ pub enum TranscriptCard {
         text: String,
         status: String,
     },
-    Confirmation(ConfirmationCard),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -137,7 +105,7 @@ pub struct TaskRow {
     pub depends_on: Vec<String>,
     /// Peer task ids that can execute in parallel with this task.
     pub parallel_with: Vec<String>,
-    pub writes: bool,
+    pub change_kind: ChangeKind,
     pub focus: String,
     pub risks: Vec<String>,
     pub status: String,
@@ -146,7 +114,7 @@ pub struct TaskRow {
     pub activity: String,
     /// Why it stopped, when it stopped short of approval.
     pub reason: Option<String>,
-    pub scope_hash: Option<String>,
+    pub revision_token: Option<String>,
     /// The current round's bounded effect, as the daemon reported it in the
     /// task event's feedback. `None`: that round has reported no effect.
     pub effect: Option<String>,
@@ -208,14 +176,13 @@ pub struct View {
     pub reviews: HashMap<String, Vec<String>>,
     /// The user paused new plan work.
     pub paused: bool,
-    /// The conversation's mode, once the daemon said it.
-    pub autonomous: Option<bool>,
+
     /// Structured messages with observed actual states.
     pub messages: Vec<MessageEntry>,
     /// Structured cards for rendering the conversation.
     pub cards: Vec<TranscriptCard>,
-    pub plan_scope_hash: Option<String>,
-    pub conversation_scope_hash: Option<String>,
+    pub plan_revision_token: Option<String>,
+    pub conversation_revision_token: Option<String>,
     /// Agent key of each running turn.
     roles: HashMap<String, String>,
     comment_turns: HashMap<String, Vec<u64>>,
@@ -274,8 +241,8 @@ mod tests {
             None,
             "plan_proposed",
             serde_json::json!({"plan":"p","tasks":[
-                {"id":"implementation","title":"Implement"},
-                {"id":"security","title":"Security","depends_on":["implementation"]}
+                {"change_kind":"none","id":"implementation","title":"Implement"},
+                {"change_kind":"none","id":"security","title":"Security","depends_on":["implementation"]}
             ]}),
         ));
         view.tasks[0].status = "working".into();
@@ -288,9 +255,9 @@ mod tests {
                 ..Agent::default()
             },
         );
-        view.apply(&event(2,None,"graph_task",serde_json::json!({"plan":"p","id":"extra-uuid","status":"queued","round":0,"spec":{"id":"extra","title":"Extra","depends_on":["implementation"]}})));
-        view.apply(&event(3,None,"graph_task",serde_json::json!({"plan":"p","id":"security-uuid","status":"queued","round":0,"spec":{"id":"security","title":"Security","depends_on":["extra"]}})));
-        view.apply(&event(4,None,"graph_updated",serde_json::json!({"plan":"p","text":"Insert extra work before security","scope_hash":"new","order":["implementation","extra","security"]})));
+        view.apply(&event(2,None,"graph_task",serde_json::json!({"plan":"p","id":"extra-uuid","status":"queued","round":0,"spec":{"change_kind":"none","id":"extra","title":"Extra","depends_on":["implementation"]}})));
+        view.apply(&event(3,None,"graph_task",serde_json::json!({"plan":"p","id":"security-uuid","status":"queued","round":0,"spec":{"change_kind":"none","id":"security","title":"Security","depends_on":["extra"]}})));
+        view.apply(&event(4,None,"graph_updated",serde_json::json!({"plan":"p","text":"Insert extra work before security","revision_token":"new","order":["implementation","extra","security"]})));
         assert_eq!(
             view.tasks
                 .iter()
@@ -303,7 +270,7 @@ mod tests {
         assert_eq!(view.tasks[2].depends_on, ["extra"]);
         assert_eq!(view.agents["worker:implementation"].turns, 3);
         assert_eq!(view.task_rows["extra-uuid"], 1);
-        assert_eq!(view.plan_scope_hash.as_deref(), Some("new"));
+        assert_eq!(view.plan_revision_token.as_deref(), Some("new"));
     }
 
     #[test]
@@ -475,7 +442,7 @@ mod tests {
             1,
             None,
             "plan_proposed",
-            json!({"tasks": [{"id": "t1", "title": "Storage"}, {"id": "t2", "title": "API"}]}),
+            json!({"tasks": [{"change_kind":"none","id": "t1", "title": "Storage"}, {"change_kind":"none","id": "t2", "title": "API"}]}),
         ));
         let task = |seq, id: &str, status: &str, round, reason: Option<&str>| {
             event(
@@ -742,8 +709,8 @@ mod tests {
             None,
             "plan_proposed",
             json!({"tasks": [
-                {"id": "t1"}, {"id": "t2", "depends_on": ["t1"]},
-                {"id": "t3", "depends_on": ["t2"]}, {"id": "t4"}]}),
+                {"id": "t1", "change_kind":"none"}, {"id": "t2", "change_kind":"none", "depends_on": ["t1"]},
+                {"id": "t3", "change_kind":"none", "depends_on": ["t2"]}, {"id": "t4", "change_kind":"none"}]}),
         ));
         let peers = |id: &str| -> Vec<String> {
             view.tasks
@@ -790,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_projection_preserves_summaries_and_legacy_empty_values() {
+    fn plan_projection_preserves_optional_and_empty_summaries() {
         for summary in [
             Value::Null,
             json!(" \n\t "),
@@ -802,12 +769,12 @@ mod tests {
                 1,
                 None,
                 "plan_proposed",
-                json!({"tasks": [{
+                json!({"tasks": [{"change_kind":"none",
                     "id": "t1", "title": "Storage", "summary": summary, "goal": "Full goal",
                     "reviewer": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
                 }]}),
             ));
-            // Summaries arrive sanitized: blank and escape-only legacy values
+            // Summaries arrive sanitized: blank and escape-only values
             // fold to an empty line, which the views read as not written.
             let expected = summary.as_str().map(clean_line);
             assert_eq!(view.tasks[0].summary, expected);
@@ -821,7 +788,7 @@ mod tests {
             1,
             None,
             "plan_proposed",
-            json!({"tasks": [{"id": "old"}]}),
+            json!({"tasks": [{"id": "t1", "change_kind":"none"}]}),
         ));
         assert!(view.tasks[0].summary.is_none());
         assert!(view.tasks[0].reviewer_summary.is_none());
@@ -847,13 +814,13 @@ mod tests {
                 4,
                 None,
                 "plan_proposed",
-                json!({"tasks": [{"id": "t1", "title": "Store", "writes": false}]}),
+                json!({"tasks": [{"id": "t1", "title": "Store", "change_kind": "none"}]}),
             ),
             event(
                 5,
                 None,
                 "task",
-                json!({"id": "t1", "task": "uuid1", "title": "Store", "status": "working", "round": 1}),
+                json!({"change_kind":"none","id": "t1", "task": "uuid1", "title": "Store", "status": "working", "round": 1}),
             ),
             event(
                 6,
@@ -889,7 +856,7 @@ mod tests {
             1,
             None,
             "plan_proposed",
-            json!({"plan": "p1", "tasks": [{"id": "t1", "title": "A"}],
+            json!({"plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "A"}],
                    "review": {"approved": false, "error": "login required"},
                    "automatic": false, "waiting": "the plan reviewer did not approve this plan"}),
         ));
@@ -908,7 +875,7 @@ mod tests {
         assert!(text.contains(&"⚠ plan reviewer failed: login required"));
         assert!(
             text.iter()
-                .any(|line| line.contains("Waiting for you") && line.contains("Ctrl+A"))
+                .any(|line| line.contains("Plan review failed: login required"))
         );
         assert!(text.contains(&"⚠ audit: issues found"));
         assert!(text.contains(&"  - [high] README missing"));
@@ -1005,7 +972,7 @@ mod tests {
                 1,
                 None,
                 "plan_proposed",
-                json!({"plan": "p", "tasks": [{"id": "t1", "title": "A"}, {"id": "t2", "title": "B", "depends_on": ["t1"]}]}),
+                json!({"plan": "p", "tasks": [{"change_kind":"none","id": "t1", "title": "A"}, {"change_kind":"none","id": "t2", "title": "B", "depends_on": ["t1"]}]}),
             ),
             event(
                 2,
@@ -1087,7 +1054,7 @@ mod tests {
                 seq,
                 None,
                 "plan_proposed",
-                json!({"plan": id, "tasks": [{"id": "t1", "title": "A"}]}),
+                json!({"plan": id, "tasks": [{"change_kind":"none","id": "t1", "title": "A"}]}),
             )
         };
         view.apply(&plan(1, "p1"));
@@ -1221,14 +1188,7 @@ mod tests {
     #[test]
     fn ac_resp_01_responsive_breakpoint_compact_switch() {
         // Breakpoint: width 84 (< 85) -> compact mode with banner
-        let header_chat = render_header(
-            "proj",
-            "conv-12345",
-            Some(true),
-            "ready",
-            PanelFocus::Chat,
-            84,
-        );
+        let header_chat = render_header("proj", "conv-12345", "ready", PanelFocus::Chat, 84);
         let chat_text: String = header_chat
             .spans
             .iter()
@@ -1238,14 +1198,7 @@ mod tests {
         assert!(chat_text.contains("Team"));
         assert!(chat_text.contains("(Tab: switch)"));
 
-        let header_graph = render_header(
-            "proj",
-            "conv-12345",
-            Some(true),
-            "ready",
-            PanelFocus::Graph,
-            84,
-        );
+        let header_graph = render_header("proj", "conv-12345", "ready", PanelFocus::Graph, 84);
         let graph_text: String = header_graph
             .spans
             .iter()
@@ -1259,14 +1212,7 @@ mod tests {
     #[test]
     fn ac_resp_02_wide_header() {
         // Wide: width 85 (>= 85) -> side-by-side mode, no compact toggle badge
-        let header_wide = render_header(
-            "proj",
-            "conv-12345",
-            Some(true),
-            "ready",
-            PanelFocus::Chat,
-            85,
-        );
+        let header_wide = render_header("proj", "conv-12345", "ready", PanelFocus::Chat, 85);
         let wide_text: String = header_wide
             .spans
             .iter()
@@ -1276,7 +1222,6 @@ mod tests {
         assert!(!wide_text.contains("(Tab: switch)"));
         assert!(wide_text.contains("proj"));
         assert!(wide_text.contains("conv-123"));
-        assert!(wide_text.contains("autonomous"));
         assert!(wide_text.contains("ready"));
     }
 
@@ -1314,24 +1259,15 @@ mod tests {
 
     #[test]
     fn ac_copy_02_status_strings() {
-        let header = render_header(
-            "test-proj",
-            "conv-12345",
-            Some(false),
-            "ready",
-            PanelFocus::Chat,
-            120,
-        );
+        let header = render_header("test-proj", "conv-12345", "ready", PanelFocus::Chat, 120);
         let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("test-proj"));
         assert!(!text.contains("antislop"));
-        assert!(text.contains("supervised"));
         assert!(text.contains("ready"));
 
         let header_auto = render_header(
             "test-proj",
             "conv-12345",
-            Some(true),
             "tasks in progress…",
             PanelFocus::Chat,
             120,
@@ -1341,7 +1277,6 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(text_auto.contains("autonomous"));
         assert!(text_auto.contains("tasks in progress…"));
     }
 

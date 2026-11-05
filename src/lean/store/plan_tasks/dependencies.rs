@@ -44,7 +44,7 @@ impl Store {
             return Ok(None);
         }
         crate::require(task.status == "approved", "dependency is not reviewed")?;
-        let summary = self.dependency_summary(&task)?;
+        let summary = self.task_summary(&task)?;
         Ok(Some(crate::lean::tasks::DependencyReport {
             id: dependency.to_owned(),
             title: task.spec["title"].as_str().unwrap_or(dependency).to_owned(),
@@ -84,10 +84,7 @@ impl Store {
             reports.push(crate::lean::tasks::DependencyReport {
                 id: check.id.clone(),
                 title: format!("{} (earlier check)", check.title),
-                report: crate::lean::tasks::bound(
-                    &self.dependency_summary(task)?,
-                    CHECK_SUMMARY_LIMIT,
-                ),
+                report: crate::lean::tasks::bound(&self.task_summary(task)?, CHECK_SUMMARY_LIMIT),
             });
         }
         reports.sort_by(|left, right| left.id.cmp(&right.id));
@@ -126,20 +123,6 @@ impl Store {
         crate::require(task.status == "approved", "local options are not reviewed")?;
         let result = self.completed_task_output(&task)?;
         selected_report(&result)
-    }
-
-    /// Uses a result summary, falling back to the first report line for older plans.
-    fn dependency_summary(&self, task: &Task) -> Result<String> {
-        let summary = self
-            .completed_task_output(task)
-            .map(Some)
-            .or_else(|error| match error {
-                Error::Sql(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                error => Err(error),
-            })?;
-        Ok(summary
-            .and_then(|result| result["summary"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| first_report_line(task)))
     }
 }
 
@@ -232,12 +215,4 @@ fn selected_report(result: &Value) -> Result<crate::lean::tasks::DependencyRepor
         report: serde_json::json!({"variant":variant,"rationale":selection["rationale"]})
             .to_string(),
     })
-}
-
-fn first_report_line(task: &Task) -> String {
-    task.report
-        .as_deref()
-        .and_then(|report| report.lines().find(|line| !line.trim().is_empty()))
-        .unwrap_or_default()
-        .to_owned()
 }

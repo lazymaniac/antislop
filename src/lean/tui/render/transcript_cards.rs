@@ -84,7 +84,6 @@ fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &T
             tone,
         } => system_rows(title, meta, text, tone, found, width, theme),
         TranscriptCard::Comment { .. } => unreachable!("comments handled before standard rows"),
-        TranscriptCard::Confirmation(conf) => confirmation_rows(conf, found, width, theme),
     }
 }
 
@@ -239,60 +238,5 @@ fn comment_body(text: &str, error: Option<&str>) -> String {
     match error {
         Some(error) => format!("{text}\nError: {error}"),
         None => text.to_owned(),
-    }
-}
-
-fn confirmation_rows(conf: &ConfirmationCard, found: bool, width: u16, theme: &Theme) -> Vec<Row> {
-    let (accent, status) = confirmation_style(conf.status, theme);
-    let head = confirmation_heading(conf, accent, theme);
-    let body = confirmation_body(conf);
-    card(
-        theme,
-        CardProps {
-            fill: card_fill(found, theme),
-            accent,
-            head,
-            right: status.into(),
-            body: &body,
-            max_body: usize::MAX,
-            width,
-        },
-    )
-}
-
-fn confirmation_style(status: ConfirmationStatus, theme: &Theme) -> (Style, &'static str) {
-    match status {
-        ConfirmationStatus::Pending => (theme.warning(), "[awaiting confirmation]"),
-        ConfirmationStatus::Confirmed => (theme.status("completed"), "[confirmed]"),
-        ConfirmationStatus::Stale => (theme.error(), "[stale: stale_scope]"),
-        ConfirmationStatus::Rejected => (theme.dim(), "[rejected]"),
-    }
-}
-
-fn confirmation_heading(
-    conf: &ConfirmationCard,
-    accent: Style,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
-    vec![
-        Span::styled("Confirmation: ", theme.faint()),
-        Span::styled(theme.clean(&conf.title), accent.patch(theme.title())),
-    ]
-}
-
-fn confirmation_body(conf: &ConfirmationCard) -> String {
-    let mut body = conf.detail.clone();
-    append_optional_line(&mut body, "Plan", conf.plan_id.as_deref());
-    append_optional_line(&mut body, "Task", conf.task_id.as_deref());
-    append_optional_line(&mut body, "Diff candidate", conf.candidate.as_deref());
-    if !conf.scope_hash.is_empty() {
-        append_optional_line(&mut body, "Scope (hash)", Some(&conf.scope_hash));
-    }
-    body
-}
-
-fn append_optional_line(body: &mut String, label: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        body.push_str(&format!("\n{label}: {value}"));
     }
 }

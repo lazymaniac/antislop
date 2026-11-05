@@ -38,7 +38,7 @@ mod tests {
         assert_eq!(again["result"]["isError"], true);
         let cancel = AtomicBool::new(false);
         let answer = gateway
-            .wait("t1", &cancel, Duration::from_secs(2), || Ok(()))
+            .wait("t1", &cancel, || Ok(()))
             .unwrap();
         assert_eq!(answer.text, "done");
     }
@@ -49,10 +49,10 @@ mod tests {
         gateway.begin("t1").unwrap();
         let (status, _) = post(&gateway, "wrong", finish("t1", "x"));
         assert_eq!(status, 401);
-        let cancel = AtomicBool::new(false);
+        let cancel = AtomicBool::new(true);
         assert!(
             gateway
-                .wait("t1", &cancel, Duration::from_millis(300), || Ok(()))
+                .wait("t1", &cancel, || Ok(()))
                 .is_err()
         );
     }
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(gateway.session().as_deref(), Some("conversation-9"));
         let cancel = AtomicBool::new(false);
         let finish = gateway
-            .wait("t1", &cancel, Duration::from_secs(2), || Ok(()))
+            .wait("t1", &cancel, || Ok(()))
             .unwrap();
         assert_eq!(finish.text, "from agy");
     }
@@ -144,13 +144,13 @@ mod tests {
         gateway.begin("t1").unwrap();
         let cancel = AtomicBool::new(true);
         let error = gateway
-            .wait("t1", &cancel, Duration::from_secs(5), || Ok(()))
+            .wait("t1", &cancel, || Ok(()))
             .unwrap_err();
         assert_eq!(error.to_string(), CANCELLED);
         gateway.begin("t2").unwrap();
         let cancel = AtomicBool::new(false);
         let error = gateway
-            .wait("t2", &cancel, Duration::from_secs(5), || {
+            .wait("t2", &cancel, || {
                 Err(invalid("agent exited"))
             })
             .unwrap_err();
@@ -271,7 +271,7 @@ mod role_tests {
         assert!(finish["properties"]["addressed"].is_object());
         assert!(tool_list("auditor")[0]["inputSchema"]["properties"]["addressed"].is_null());
         let task = &schema::revision()["tasks"]["items"];
-        assert_eq!(task["required"], json!(["id", "title", "goal", "kind"]));
+        assert_eq!(task["required"], json!(["id", "title", "goal", "kind", "change_kind"]));
         for gone in ["inputs", "reviewer", "requirement_ids"] {
             assert!(task["properties"][gone].is_null(), "{gone}");
         }
@@ -286,13 +286,13 @@ mod role_tests {
     fn a_submitted_plan_ends_the_turn_and_a_repeat_is_acknowledged() {
         let shared = shared("planner");
         shared.state.lock().unwrap().expected = Some("t1".into());
-        let call = json!({"name":"submit_plan","arguments":{"turn":"t1","document":"# Plan","tasks":[{"id":"t1","title":"Do","goal":"Do it","kind":"implementation"}]}});
+        let call = json!({"name":"submit_plan","arguments":{"turn":"t1","document":"# Plan","tasks":[{"id":"t1","title":"Do","goal":"Do it","change_kind": "code", "kind":"implementation"}]}});
         assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
         let finish = shared.state.lock().unwrap().finished.clone().unwrap();
         let (text, plan) = super::super::turn_result::TurnResult::plan_answer(&finish.text);
         assert_eq!(text, "# Plan");
         let (tasks, keep) = plan.unwrap();
-        assert!(tasks[0].clone().into_contract().writes && keep.is_empty());
+        assert!(tasks[0].clone().into_contract().change_kind.has_delivery() && keep.is_empty());
         shared.state.lock().unwrap().finished = None;
         assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
         let mut other = call.clone();
@@ -405,7 +405,6 @@ mod rejection_tests {
                 .wait(
                     "current",
                     &AtomicBool::new(false),
-                    Duration::ZERO,
                     || Ok(())
                 )
                 .unwrap()
@@ -415,7 +414,7 @@ mod rejection_tests {
     }
 
     #[test]
-    fn a_correction_after_sixty_seconds_can_finish_within_the_turn_timeout() {
+    fn a_late_correction_can_finish_without_an_execution_deadline() {
         let gateway = Gateway::start().unwrap();
         gateway.begin("current").unwrap();
         gateway.shared.state.lock().unwrap().rejected_finish = Some((
@@ -426,7 +425,6 @@ mod rejection_tests {
             .wait(
                 "current",
                 &AtomicBool::new(false),
-                Duration::from_secs(1800),
                 || {
                     assert_eq!(
                         call(&gateway.shared, &submission("current"))["isError"],
@@ -439,37 +437,6 @@ mod rejection_tests {
         assert_eq!(finish.text, "done");
     }
 
-    #[test]
-    fn rejection_keeps_the_turn_timeout_and_resets_for_a_new_turn() {
-        let gateway = Gateway::start().unwrap();
-        gateway.begin("current").unwrap();
-        gateway.shared.state.lock().unwrap().rejected_finish = Some((
-            Instant::now() - Duration::from_secs(61),
-            "request: unknown question ID".into(),
-        ));
-        let error = gateway
-            .wait(
-                "current",
-                &AtomicBool::new(false),
-                Duration::ZERO,
-                || Ok(()),
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("request: unknown question ID"));
-        assert!(error.contains("no accepted result"), "{error}");
-        assert!(gateway.shared.state.lock().unwrap().expected.is_none());
-        gateway.begin("next").unwrap();
-        assert!(
-            gateway
-                .shared
-                .state
-                .lock()
-                .unwrap()
-                .rejected_finish
-                .is_none()
-        );
-    }
 
     #[test]
     fn cli_exit_retains_rejection_and_closes_the_turn() {
@@ -481,7 +448,6 @@ mod rejection_tests {
             .wait(
                 "current",
                 &AtomicBool::new(false),
-                Duration::from_secs(1800),
                 || Err(invalid("CLI exited (1)")),
             )
             .unwrap_err()
@@ -491,38 +457,13 @@ mod rejection_tests {
         assert!(gateway.shared.state.lock().unwrap().expected.is_none());
     }
 
-    #[test]
-    fn an_agent_is_awaiting_an_answer_only_while_its_wait_is_open() {
-        let gateway = Gateway::start().unwrap();
-        gateway.begin("current").unwrap();
-        assert!(!gateway.awaiting_answer());
-        gateway.shared.state.lock().unwrap().waiting = Some(Instant::now());
-        assert!(gateway.awaiting_answer());
-    }
 
-    #[test]
-    fn timeout_retains_the_rejection_reason() {
-        let gateway = Gateway::start().unwrap();
-        gateway.begin("current").unwrap();
-        gateway.shared.state.lock().unwrap().rejected_finish =
-            Some((Instant::now(), "bad checkpoint".into()));
-        let error = gateway
-            .wait(
-                "current",
-                &AtomicBool::new(false),
-                Duration::ZERO,
-                || Ok(()),
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("last rejected submission: bad checkpoint"));
-    }
 }
 
 #[test]
 fn task_schema_exposes_only_its_completion_and_actual_checks() {
     use crate::lean::mcp::tools::scoped_tool_list;
-    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","goal":"Report","kind":"analysis","criterion_ids":["R1.1"]})).unwrap();
+    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","goal":"Report","change_kind": "none", "kind":"analysis","criterion_ids":["R1.1"]})).unwrap();
     for (kind, tool, other) in [(crate::config::WorkKind::Analysis,"complete","select"),(crate::config::WorkKind::Options,"select","complete")] {
         task.kind = kind;
         let list = scoped_tool_list("worker:t",Some(&task));

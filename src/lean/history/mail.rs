@@ -18,14 +18,6 @@ impl Store {
         let mail =
             agent::insert_agent_mail(&tx, request, &signature, task.as_deref(), &stored_text, now)?;
         agent::update_agent_task(&tx, request, task.as_deref(), now)?;
-        // New user work explicitly retries this recipient after a provider
-        // stop. Replayed operation IDs return above and cannot lift a block.
-        tx.execute(
-            "DELETE FROM provider_blocks WHERE (provider,profile) IN (
-                SELECT t.provider,r.profile FROM turns t JOIN run_contexts r ON r.turn_id=t.id
-                WHERE t.conversation_id=?1 AND t.role=?2)",
-            params![request.conversation, request.recipient],
-        )?;
         tx.commit()?;
         Ok(serde_json::json!({"mail":mail,"state":"queued","recipient":request.recipient}))
     }

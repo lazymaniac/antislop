@@ -18,9 +18,9 @@ fn configuration_errors_explain_location_and_repair_without_values() {
             "remove the unknown field",
         ),
         (
-            example.replace("max_parallel = 4", "max_parallel = 0"),
-            "policy.max_parallel",
-            "positive integer",
+            example.replace("local_commits = true", "local_commits = \"secret-value\""),
+            "incorrect value or type",
+            "expected a boolean",
         ),
     ] {
         let error = Config::from_toml(&source).unwrap_err().to_string();
@@ -264,16 +264,6 @@ fn assignments_still_require_existing_profiles_and_consistent_orchestration() {
 }
 
 #[test]
-fn max_parallel_defaults_to_four_and_must_be_positive() {
-    let text = include_str!("../../examples/antislop.toml");
-    let default = Config::from_toml(&text.replace("max_parallel = 4\n", "")).unwrap();
-    assert_eq!(default.policy.max_parallel, 4);
-    assert!(Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 0")).is_err());
-    let one = Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 1")).unwrap();
-    assert_eq!(one.policy.max_parallel, 1);
-}
-
-#[test]
 fn obsolete_configuration_is_rejected_without_echoing_values() {
     let example = include_str!("../../examples/antislop.toml");
     for (header, field) in [
@@ -379,18 +369,14 @@ fn the_planner_resolves_the_planning_executor_and_nothing_else() {
 }
 
 #[test]
-fn local_options_and_task_ceiling_have_defaults_and_bounds() {
+fn local_options_have_a_default_and_can_be_disabled() {
     let text = include_str!("../../examples/antislop.toml");
-    let stripped = text
-        .replace("local_options = true\n", "")
-        .replace("max_tasks = 100\n", "");
+    let stripped = text.replace("local_options = true\n", "");
     let default = Config::from_toml(&stripped).unwrap();
     assert!(default.policy.local_options);
-    assert_eq!(default.policy.max_tasks, 100);
     let off =
         Config::from_toml(&text.replace("local_options = true", "local_options = false")).unwrap();
     assert!(!off.policy.local_options);
-    assert!(Config::from_toml(&text.replace("max_tasks = 100", "max_tasks = 0")).is_err());
 }
 
 #[test]
@@ -417,9 +403,32 @@ fn load_and_resolve_preserve_file_error_context_and_role_selection() {
 }
 
 #[test]
-fn previous_configuration_schema_is_rejected_after_role_rename() {
-    let source = include_str!("../../examples/antislop.toml")
-        .replace("schema_version = 3", "schema_version = 2");
-    let error = Config::from_toml(&source).unwrap_err().to_string();
-    assert!(error.contains("schema_version = 3"), "{error}");
+fn previous_configuration_schemas_are_rejected_without_a_fallback() {
+    for version in [2, 3] {
+        let source = include_str!("../../examples/antislop.toml")
+            .replace("schema_version = 4", &format!("schema_version = {version}"));
+        let error = Config::from_toml(&source).unwrap_err().to_string();
+        assert!(error.contains("schema_version = 4"), "{error}");
+    }
+}
+
+#[test]
+fn removed_permission_and_execution_budget_settings_are_rejected() {
+    let source = include_str!("../../examples/antislop.toml");
+    for setting in [
+        r#"mode = "supervised""#,
+        "unrestricted = true",
+        "local_write = true",
+        "max_parallel = 4",
+        "max_tasks = 100",
+    ] {
+        let candidate = source.replace("[policy]", &format!("[policy]\n{setting}"));
+        assert!(
+            Config::from_toml(&candidate)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field"),
+            "{setting}"
+        );
+    }
 }

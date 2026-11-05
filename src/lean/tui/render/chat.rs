@@ -43,12 +43,6 @@ impl App {
     fn phase_action(&self) -> Option<(&'static str, Command)> {
         if self.view.requirements_approval_run.is_some() {
             Some(("Review requirements changes · F2", Command::Requirements))
-        } else if self.view.workflow_phase.as_deref() == Some("interview")
-            && !self.view.requirements_summary.is_empty()
-        {
-            Some(("Proceed to planning · Ctrl+A", Command::ApproveRequirements))
-        } else if self.view.plan_proposed() {
-            Some(("Proceed to implementation · Ctrl+A", Command::Accept))
         } else {
             None
         }
@@ -110,7 +104,6 @@ impl App {
             && self.editor.is_none()
             && self.picker.is_none()
             && self.help.is_none()
-            && self.trust_prompt.is_none()
             && self.diff.is_none()
             && self.details.is_none();
         self.paint_input(frame, input, shown_lines, focused, theme);

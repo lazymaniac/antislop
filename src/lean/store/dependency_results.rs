@@ -11,7 +11,7 @@ impl Store {
         let db = self.db();
         let plan: Option<String> = db.query_row(
             "SELECT coalesce(t.plan_id,
-                (SELECT p.id FROM plans p JOIN plan_authorizations a ON a.plan_id=p.id WHERE p.conversation_id=t.conversation_id ORDER BY p.created_ms DESC,p.rowid DESC LIMIT 1),
+                (SELECT p.id FROM plans p JOIN plan_activations a ON a.plan_id=p.id WHERE p.conversation_id=t.conversation_id ORDER BY p.created_ms DESC,p.rowid DESC LIMIT 1),
                 (SELECT p.id FROM plans p WHERE p.conversation_id=t.conversation_id ORDER BY p.created_ms DESC,p.rowid DESC LIMIT 1))
              FROM turns t WHERE t.id=?1 AND t.conversation_id=?2 AND t.role=?3 AND t.status='running'",
             params![turn,conversation,role], |r| r.get(0))?;
@@ -80,7 +80,7 @@ impl Store {
                 "historical result belongs to another conversation",
             )?;
             reports.extend(self.worker_report_references(&ancestor, &source)?);
-            let mut sources = {
+            let sources = {
                 let db = self.db();
                 let mut query = db.prepare("SELECT producer_task_id FROM task_result_sources WHERE task_id=?1 AND generation<=?2 UNION SELECT source_task FROM task_resume_results WHERE task_id=?1 AND generation<=?2 AND source_task<>?1")?;
                 query
@@ -89,13 +89,6 @@ impl Store {
                     })?
                     .collect::<std::result::Result<Vec<_>, _>>()?
             };
-            if let Some(prior) = ancestor
-                .feedback
-                .as_ref()
-                .and_then(|f| f["carried_from"].as_str())
-            {
-                sources.push(prior.to_owned());
-            }
             for id in sources {
                 pending.push(self.task_by_id(&id)?.ok_or_else(|| {
                     Error::Invalid("historical result producer disappeared".into())

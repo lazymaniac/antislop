@@ -25,27 +25,7 @@ pub(crate) mod fixture {
     include!("../../tests/support/fixture_cli.rs");
 }
 
-pub(crate) const EXECUTION_FAILED: &str =
-    "native backend execution failed (automatic retry disabled): ";
-/// A turn that has not ended after this long is reported as failed, however
-/// busy the agent is; `ANTISLOP_TURN_TIMEOUT_SECS` changes it.
-fn turn_timeout() -> Duration {
-    seconds_from_env("ANTISLOP_TURN_TIMEOUT_SECS", 2 * 60 * 60)
-}
-/// A CLI that prints nothing for this long, outside a wait for an answer,
-/// is hung and fails the turn; `ANTISLOP_TURN_IDLE_SECS` changes it. A long
-/// build or test run still redraws the CLI's own progress line.
-fn turn_idle() -> Duration {
-    seconds_from_env("ANTISLOP_TURN_IDLE_SECS", 15 * 60)
-}
-fn seconds_from_env(name: &str, default: u64) -> Duration {
-    Duration::from_secs(
-        std::env::var(name)
-            .ok()
-            .and_then(|seconds| seconds.parse().ok())
-            .unwrap_or(default),
-    )
-}
+pub(crate) const EXECUTION_FAILED: &str = "native backend execution failed: ";
 /// A session nobody uses or looks at is released; it resumes on demand.
 const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long the CLI must stay silent before a prompt is typed, once it has
@@ -53,8 +33,6 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 const SETTLE: Duration = Duration::from_millis(400);
 /// UI animation must not block a CLI whose MCP tools are already available.
 const SETTLE_LIMIT: Duration = Duration::from_secs(2);
-/// How long a starting CLI may take to connect to the gateway.
-const READY_LIMIT: Duration = Duration::from_secs(60);
 const SCREEN_LINES: usize = 12;
 
 pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
@@ -82,8 +60,6 @@ pub struct Session {
     /// The CLI died or never connected before any prompt was typed into it,
     /// so the turn did nothing and can be started again without loss.
     startup_failed: AtomicBool,
-    #[cfg(test)]
-    ready_limit: Mutex<Duration>,
     touched: Mutex<Instant>,
 }
 

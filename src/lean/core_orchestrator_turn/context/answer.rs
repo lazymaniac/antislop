@@ -79,10 +79,7 @@ fn finish_interview(
     context: &OrchestrationContext<'_>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    if context.interviewing
-        && !cancel.load(Ordering::SeqCst)
-        && core.autonomous(context.conversation)?
-    {
+    if context.interviewing && !cancel.load(Ordering::SeqCst) {
         core.store.finish_interview(context.conversation)?;
     }
     Ok(())

@@ -12,6 +12,7 @@ pub(super) fn spawn_daemon(
         .open(state.join("daemon.log"))?;
     let mut command = std::process::Command::new(executable);
     command
+        .current_dir(project)
         .arg("__core")
         .arg(project)
         .arg(config)

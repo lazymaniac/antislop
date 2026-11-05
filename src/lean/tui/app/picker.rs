@@ -146,12 +146,6 @@ impl App {
             || self.editor.is_some()
             || self.diff.is_some()
             || self.unblock.is_some()
-            || self.trust_prompt.is_some()
-            || self.project_trust.is_some()
-            || self
-                .confirmation
-                .as_ref()
-                .is_some_and(|c| c.status == ConfirmationStatus::Pending)
             || self.config_editor.as_ref().is_some_and(|e| e.visible)
     }
 }

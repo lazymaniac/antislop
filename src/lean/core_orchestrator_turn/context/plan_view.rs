@@ -77,7 +77,7 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
     let states = graph.iter().map(|task| json!({
         "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
         "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
-        "recovery":if task.spec["deferred"] == true { "execution held by runtime; release only by reviewed revision after authorization" } else { match task.status.as_str() {
+        "recovery":if task.spec["deferred"] == true { "deliberate scheduling hold; release by reviewed revision when its prerequisite is resolved" } else { match task.status.as_str() {
             status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
             status::COORDINATING => "resume_task with current round/input_generation for a resolved blocker or independent authorized work; keep unresolved steps held; revise_plan for contract/dependency changes",
             status::WAITING => "answer_agent for the existing question, respecting its disposition",
@@ -102,7 +102,7 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core.store.create_conversation("fixture").unwrap().id;
         let specs = ["failed", "stalled", "done"]
-            .map(|id| json!({"id":id,"title":id,"goal":"Check","kind":"analysis"}));
+            .map(|id| json!({"id":id,"title":id,"goal":"Check","change_kind": "none", "kind":"analysis"}));
         let mut tasks = core.store.add_plan(&conversation, &specs).unwrap();
         for (task, state) in
             tasks
@@ -112,11 +112,17 @@ mod tests {
             task.status = state.into();
             core.store.update_task(task).unwrap();
         }
-        core.store.db().execute("INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,'[]','[]')",rusqlite::params![tasks[0].plan_id,conversation]).unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
+                rusqlite::params![tasks[0].plan_id, conversation],
+            )
+            .unwrap();
         core.store
             .add_plan(
                 &conversation,
-                &[json!({"id":"obsolete","title":"Draft","goal":"Draft","kind":"analysis"})],
+                &[json!({"id":"obsolete","title":"Draft","goal":"Draft","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap();
         tasks[0].feedback = Some(json!({"reason":"binary apply failed ".repeat(130_000)}));

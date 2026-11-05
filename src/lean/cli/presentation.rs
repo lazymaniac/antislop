@@ -40,7 +40,6 @@ fn describe_status(kind: &str, payload: &Value) -> Option<String> {
         }
         "paused" => Some("▶ resumed".into()),
         "notice" => Some(format!("⚠ {}", value(payload, "text"))),
-        "mode" => Some(describe_mode(payload)),
         "mail" if payload["kind"] != "copy" => Some(describe_mail(payload)),
         "mail_delivered" => Some(format!("✓ delivered messages {}", payload["ids"])),
         "mail_rejected" => Some(format!(
@@ -95,7 +94,10 @@ fn plan_tasks(payload: &Value) -> String {
                 task["id"].as_str().unwrap_or_default(),
                 task["title"].as_str().unwrap_or_default(),
                 task["kind"].as_str().unwrap_or_default(),
-                if task["writes"] == true {
+                if task["change_kind"]
+                    .as_str()
+                    .is_some_and(|kind| kind != "none")
+                {
                     ", modifies files"
                 } else {
                     ""
@@ -108,21 +110,15 @@ fn plan_tasks(payload: &Value) -> String {
 
 fn plan_status(payload: &Value) -> String {
     if payload["automatic"] == true {
-        return "Running (autonomous mode).".to_owned();
+        return "Running.".to_owned();
     }
-    let waiting = payload["waiting"]
-        .as_str()
-        .map(|reason| format!("Waiting for you: {reason}. "))
-        .unwrap_or_default();
-    format!("{waiting}Type /accept to run it.")
-}
-
-fn describe_mode(payload: &Value) -> String {
-    if payload["autonomous"] == true {
-        "⚙ autonomous mode: next plans and rounds start automatically".into()
-    } else {
-        "⚙ supervised mode: next plans wait for /accept".into()
+    if let Some(error) = payload["review"]["error"].as_str() {
+        return format!("Plan review failed: {error}");
     }
+    payload["waiting"].as_str().map_or_else(
+        || "Plan received.".to_owned(),
+        |reason| format!("Plan review: {reason}."),
+    )
 }
 
 fn describe_mail(payload: &Value) -> String {
@@ -240,9 +236,9 @@ mod tests {
             describe(&json!({"kind":"message","payload":{"author":"runtime"}})).as_deref(),
             Some("· task results handed to orchestrator")
         );
-        let plan = describe(&json!({"kind":"plan_proposed","payload":{"tasks":[{"id":"R1","title":"Split","kind":"implementation","writes":true}],"review":null,"automatic":false}})).unwrap();
+        let plan = describe(&json!({"kind":"plan_proposed","payload":{"tasks":[{"id":"R1","title":"Split","kind":"implementation","change_kind":"code"}],"review":null,"automatic":false}})).unwrap();
         assert!(plan.contains("[R1] Split (implementation, modifies files)"));
-        assert!(plan.ends_with("Type /accept to run it."));
+        assert!(plan.ends_with("Plan received."));
     }
 
     #[test]

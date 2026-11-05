@@ -22,7 +22,7 @@ impl App {
         let width = area.width.saturating_sub(1);
         let mut rows = self.prepare_transcript_rows(width, theme);
         self.add_workflow_card(&mut rows.extra, width, theme);
-        self.add_legacy_transcript(&mut rows, width, theme);
+        self.add_plain_transcript(&mut rows, width, theme);
         self.add_empty_transcript(&mut rows.extra, rows.history_height, width, theme);
         self.draw_transcript_viewport(frame, area, rows, theme);
     }
@@ -121,7 +121,7 @@ impl App {
         ));
     }
 
-    fn add_legacy_transcript(&self, rows: &mut TranscriptRows, width: u16, theme: &Theme) {
+    fn add_plain_transcript(&self, rows: &mut TranscriptRows, width: u16, theme: &Theme) {
         if !self.view.cards.is_empty() || !rows.extra.is_empty() || self.view.transcript.is_empty()
         {
             return;
@@ -245,7 +245,7 @@ fn workflow_card_text(view: &View) -> Option<(&'static str, String)> {
         view::Stage::Interview if view.requirements_summary.is_empty() => ("Phase 1/3: Interview and requirements", "Describe your goal and answer the orchestrator's questions. Agree on scope, constraints and acceptance criteria. A requirements summary will appear here for approval.".to_owned()),
         view::Stage::Interview => ("Phase 1/3: Review requirements", format!("{}\n\nReview the summary. Add comments in chat or choose Proceed to planning.", view.requirements_summary)),
         view::Stage::Planning => ("Phase 2/3: Planning", "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned()),
-        view::Stage::Review => ("Phase 2/3: Review and comment on the plan", "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Ctrl+A accepts the plan and starts implementation.".to_owned()),
+        view::Stage::Review => ("Phase 2/3: Review and comment on the plan", "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Execution starts automatically after successful review.".to_owned()),
         _ => ("Phase 3/3: Implementation", "Follow task progress and review in the graph. Open task details to inspect results, diffs or add comments.".to_owned()),
     })
 }

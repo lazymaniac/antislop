@@ -1,15 +1,15 @@
 use super::super::super::{Request, WireRequest};
 
-fn encode_comment_at(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+fn encode_comment(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentAt {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
             conversation,
             plan,
             target,
             text,
             round,
             run,
-        }) => Ok(WireRequest::CommentAt {
+        }) => Ok(WireRequest::Comment {
             conversation,
             plan,
             target,
@@ -36,39 +36,6 @@ fn encode_comments(request: Request) -> std::result::Result<WireRequest, Box<Req
     }
 }
 
-fn encode_comment(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
-            conversation,
-            target,
-            text,
-        }) => Ok(WireRequest::Comment {
-            conversation,
-            plan: None,
-            target,
-            text,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
-fn encode_comment_scoped(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    match request {
-        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentScoped {
-            conversation,
-            plan,
-            target,
-            text,
-        }) => Ok(WireRequest::Comment {
-            conversation,
-            plan,
-            target,
-            text,
-        }),
-        other => Err(Box::new(other)),
-    }
-}
-
 fn encode_comment_status(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::CommentStatus {
@@ -87,9 +54,7 @@ fn encode_comment_status(request: Request) -> std::result::Result<WireRequest, B
 pub(super) fn encode_group_comments(
     request: Request,
 ) -> std::result::Result<WireRequest, Box<Request>> {
-    encode_comment_at(request)
+    encode_comment(request)
         .or_else(|request| encode_comments(*request))
-        .or_else(|request| encode_comment(*request))
-        .or_else(|request| encode_comment_scoped(*request))
         .or_else(|request| encode_comment_status(*request))
 }

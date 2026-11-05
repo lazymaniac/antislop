@@ -6,13 +6,10 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         request,
         &[
             identity,
-            authorize_task_execution,
             runtime_notice,
             shutdown,
             force_shutdown,
             conversations_and_start,
-            trust_status,
-            trust,
         ],
     )
 }
@@ -32,6 +29,7 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
                 "busy": core.busy(),
                 "pid": std::process::id(),
                 "project": project,
+                "project_identity": core.store.repository_id(&project.to_string_lossy())?,
                 "config": config,
                 "config_modified": core.config_modified.load(Ordering::SeqCst),
             })
@@ -96,83 +94,14 @@ fn conversations_and_start(context: &Context<'_>, request: Request) -> Result<Ro
         }) => Route::Handled({
             let target_path = Path::new(&target_project).canonicalize()?;
             require(
-                super::super::super::trust::Registry::from_env()?.is_trusted(&target_path),
-                &format!(
-                    "{} is not a trusted directory: run antislop there in a terminal first",
-                    target_path.display()
-                ),
+                core.store
+                    .repository_id(&project.to_string_lossy())?
+                    .as_deref()
+                    == Some(crate::lean::paths::project_identity(&target_path)?.as_str()),
+                "project belongs to another repository; open its own runtime state",
             )?;
-            core.store.trust_project(&target_path.to_string_lossy())?;
             json!(core.start(&target_path)?)
         }),
-        request => Route::Unmatched(request),
-    })
-}
-
-fn trust_status(context: &Context<'_>, request: Request) -> Result<Route> {
-    let project = context.project;
-    Ok(match request {
-        Request::Control(crate::lean::daemon::ControlRequest::TrustStatus) => Route::Handled({
-            json!({
-                "project": project.to_string_lossy(),
-                "trusted": super::super::super::trust::Registry::from_env()?.is_trusted(project),
-            })
-        }),
-        request => Route::Unmatched(request),
-    })
-}
-
-fn trust(context: &Context<'_>, request: Request) -> Result<Route> {
-    let project = context.project;
-    Ok(match request {
-        Request::Control(crate::lean::daemon::ControlRequest::Trust { trusted }) => {
-            Route::Handled({
-                let registry = super::super::super::trust::Registry::from_env()?;
-                if trusted {
-                    registry.trust(project)?;
-                } else {
-                    registry.untrust(project)?;
-                }
-                json!({
-                    "project": project.to_string_lossy(),
-                    "trusted": trusted,
-                })
-            })
-        }
-        request => Route::Unmatched(request),
-    })
-}
-
-fn authorize_task_execution(context: &Context<'_>, request: Request) -> Result<Route> {
-    Ok(match request {
-        Request::Control(crate::lean::daemon::ControlRequest::AuthorizeTaskExecution {
-            authorization,
-        }) => {
-            let _guard = context
-                .core
-                .graph_updates
-                .lock()
-                .expect("graph update mutex");
-            let result = context
-                .core
-                .store
-                .authorize_task_execution(&authorization)?;
-            let text = format!(
-                "Explicit user/client execution authorization registered for task {} under answered decision {}. Only this exact contract and its next input generation receive a scoped exception to requirement {}'s NoNewExecutions; all other constraints and deferred work remain enforced. The writer is not yet released or approved: submit the independently reviewed revision. Preserve the following contract exactly; change only revision.reason to a fresh reason naming the scoped authorization so an immutable rejected receipt is not replayed. Do not ask the user for the same permission again. Authorized contract:\n{}",
-                authorization.contract.id,
-                authorization.decision,
-                authorization.requirement,
-                serde_json::to_string(&authorization.contract)?
-            );
-            context.core.store.add_message(
-                &authorization.conversation,
-                crate::lean::RUNTIME,
-                &text,
-            )?;
-            drop(_guard);
-            context.core.wake(&authorization.conversation);
-            Route::Handled(result)
-        }
         request => Route::Unmatched(request),
     })
 }

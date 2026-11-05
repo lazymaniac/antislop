@@ -17,10 +17,20 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
 }
 
 fn start(project: &Path, config_path: &Path, state: &Path) -> Result<(Runtime, UnixListener)> {
+    super::super::Store::check_runtime_repository(
+        &state.join("core.db"),
+        &super::super::paths::project_identity(project)?,
+    )?;
+    let config_path = super::config_write::durable_config(state, config_path)?;
+    let config_path = config_path.as_path();
     let loaded = modified(config_path);
-    let project = trusted_project(project)?;
+    let project = project.canonicalize()?;
     warn_on_config_cleanup(config_path);
     let core = open_core(state, config_path, loaded)?;
+    core.store.record_project_identity(
+        &project.to_string_lossy(),
+        &super::super::paths::project_identity(&project)?,
+    )?;
     let config = config_path.canonicalize()?;
     let (socket, listener) = bind_socket(state)?;
     eprintln!("antislop core ready at {}", socket.display());
@@ -33,19 +43,6 @@ fn start(project: &Path, config_path: &Path, state: &Path) -> Result<(Runtime, U
         },
         listener,
     ))
-}
-
-fn trusted_project(project: &Path) -> Result<PathBuf> {
-    let project = project.canonicalize()?;
-    let registry = super::super::trust::Registry::from_env()?;
-    require(
-        registry.is_trusted(&project),
-        &format!(
-            "{} is not a trusted directory: run antislop there in a terminal first, or pass --trust",
-            project.display()
-        ),
-    )?;
-    Ok(project)
 }
 
 fn warn_on_config_cleanup(config_path: &Path) {

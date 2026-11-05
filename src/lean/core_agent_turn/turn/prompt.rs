@@ -6,7 +6,8 @@ pub(super) fn prepare_prompt(
     spec: &agent::Spec,
     prompt: impl FnOnce(bool, bool) -> String,
 ) -> Result<String> {
-    let mut text = inbox_text(state);
+    let mut text = EXECUTION_POLICY.to_owned();
+    text.push_str(&inbox_text(state));
     append_task_context(core, state, spec, &mut text)?;
     append_allocation_context(state, spec, &mut text);
     let introduce = role_introduction(core, state)?;
@@ -14,6 +15,8 @@ pub(super) fn prepare_prompt(
     append_round_handoff(core, state, spec, &mut text)?;
     Ok(text)
 }
+
+const EXECUTION_POLICY: &str = "\nAll roles have full filesystem, shell and network access. Continue implementation, builds, tests and repairs without permission questions or execution budgets. Work in your allocated checkout and preserve results in durable runtime state. Report actual failures and missing inputs honestly; acceptance criteria and dependency correctness require evidence. Ask the user only for information or product decisions the team cannot infer. Manual pause and cancellation remain authoritative.\n";
 
 fn inbox_text(state: &TurnState<'_>) -> String {
     let mut mail = state
@@ -41,7 +44,6 @@ fn append_task_context(
         .store
         .task_by_id(id)?
         .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
-    text.push_str(&format!("Authoritative runtime launch metadata: {}\nUse these current fields to determine plan acceptance, the applied reviewed revision and exact scoped execution authorization. They do not approve your code or establish a successful build or qualification. Historical rejections, old blocker reports and retry guidance describe earlier states; do not infer that current prerequisites are missing from those records. Follow the current contract's non-renewable budgets. Report only a current, concrete failure; do not ask again for permissions the runtime has verified.\n",serde_json::to_string(&core.store.task_execution_approval_context(&task)?)?));
     if git::is_repository(&spec.cwd) {
         text.push_str(&format!(
             "Input revision: {}; source commit: {}\n",
@@ -49,38 +51,9 @@ fn append_task_context(
             git::head(&spec.cwd)?
         ));
     }
-    if let Some(run) = core.store.plan_run(&task.plan_id)? {
-        let entries = core.store.ledger_entries(state.conversation, &run, None)?;
-        let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
-        let restricted_count: usize = entries.iter().map(|e| e.spec.constraints.len()).sum();
-        let entries = core.store.authorized_task_constraints(
-            state.conversation,
-            &task,
-            &contract,
-            task.input_generation,
-            &entries,
-        )?;
-        if entries
-            .iter()
-            .map(|e| e.spec.constraints.len())
-            .sum::<usize>()
-            < restricted_count
-        {
-            text.push_str("Runtime verified an explicit user/client execution authorization bound to this exact contract and input generation. Only the executions and non-renewable budgets stated in this contract are permitted. This does not release other tasks, authorize retries, or waive other requirements. Preserve the cumulative execution budget in durable runtime state and MCP reports across turns.\n");
-        }
-        crate::lean::ledger::validate_runtime_constraints(
-            std::slice::from_ref(&contract),
-            &entries,
-        )?;
-        for entry in entries {
-            if !entry.spec.constraints.is_empty() {
-                text.push_str(&format!("Run constraints from requirement {}: {:?}. These apply to this task and any tool command. NoNewExecutions forbids builds/tests/benchmarks/migrations/launching the inspected project; file inspection remains allowed. NoExistingFileChanges permits only the named new untracked documents; never edit or overwrite existing files, including existing output files. Failing inspected checks are report evidence, not a repair obligation.\n", entry.spec.id, entry.spec.constraints));
-            }
-        }
-    }
     let runtime = crate::lean::core_task_runtime::directory(&core.state, &task)?;
     let sources = crate::lean::core_task_runtime::sources(core, &task)?;
-    text.push_str(&format!("Durable task runtime allocation: {}\nStore journals, snapshots, training state, raw measurements and files needed by later tasks in this directory, never inside the disposable checkout. It is outside worktree cleanup and survives restarts and input revisions; older generations stay in its parent. Use unique run subdirectories; never overwrite completed runs. The current task's runtime directory is an allocated write area for a writing worker. Read-only roles and reviewers may only inspect it. Build caches may stay in the checkout. Include exact runtime paths in the result; code commits and text evidence alone do not retain these files.\nRead-only runtime handoff sources (availability is directory presence, not content or digest verification): {}\nThese paths supplement the code checkout. Inspect existing files without modifying the producer's state; do not recreate missing states or repeat experiments without authorization.\n", runtime.display(), serde_json::to_string(&sources)?));
+    text.push_str(&format!("Durable task runtime allocation: {}\nStore journals, snapshots, training state, raw measurements and files needed by later tasks in this directory, never inside the disposable checkout. It is outside worktree cleanup and survives restarts and input revisions; older generations stay in its parent. Use unique run subdirectories; never overwrite completed runs. All roles can use their allocated runtime directory. Build caches may stay in the checkout. Include exact runtime paths in the result; code commits and text evidence alone do not retain these files.\nRuntime handoff sources (availability is directory presence, not content or digest verification): {}\nThese paths supplement the code checkout. Inspect existing files without modifying the producer's state; do not pretend missing states exist; preserve immutable completed measurements.\n", runtime.display(), serde_json::to_string(&sources)?));
     append_questions(core, &state.turn.id, text)?;
     let evidence = core
         .store

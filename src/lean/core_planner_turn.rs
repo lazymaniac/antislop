@@ -171,7 +171,7 @@ fn planner_setup<'a>(context: &PlannerTurnContext<'a>) -> TurnSetup<'a> {
             .resolve(WorkKind::Planning, RoleKind::Planner),
         cwd: context.project.clone(),
         add_dirs: vec![],
-        access: agent::Access::ReadOnly,
+
         upto_message: context.upto,
     }
 }
@@ -303,7 +303,7 @@ mod tests {
     use crate::config::Config;
 
     fn task() -> serde_json::Value {
-        json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}})
+        json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}})
     }
 
     #[test]
@@ -536,7 +536,7 @@ mod replan_blocker_tests {
         core.store
             .add_plan(
                 &conversation,
-                &[json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"})],
+                &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap();
         assert_eq!(

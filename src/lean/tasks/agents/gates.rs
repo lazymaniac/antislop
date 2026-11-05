@@ -175,7 +175,11 @@ fn gate_task(
     description: GateDescription,
 ) -> TaskContract {
     TaskContract {
-        change_kind: None,
+        change_kind: if description.audit {
+            ChangeKind::None
+        } else {
+            ChangeKind::Code
+        },
         outputs: Vec::new(),
         delivery: None,
         deferred: false,
@@ -188,7 +192,7 @@ fn gate_task(
         summary: Some(description.summary.to_owned()),
         goal: gate_goal(agent.focus, description.audit),
         section: Some("Quality Gates".to_owned()),
-        writes: !description.audit,
+
         depends_on,
         kind: agent.kind,
         covers: Vec::new(),

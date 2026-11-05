@@ -15,7 +15,7 @@ mod tests;
 #[derive(Debug)]
 pub(crate) struct RoundHandoff {
     pub round: u32,
-    pub writes: bool,
+    pub change_kind: tasks::ChangeKind,
     pub worktree: PathBuf,
     pub report: Option<(u32, String)>,
     pub verdict: Option<serde_json::Value>,
@@ -97,7 +97,6 @@ impl Core {
         profile: Option<&ResolvedProfile>,
         cwd: &Path,
         add_dirs: &[PathBuf],
-        access: agent::Access,
     ) -> Result<Option<String>> {
         if matches!(policy, SessionPolicy::Independent) {
             return Ok(None);
@@ -114,7 +113,6 @@ impl Core {
             profile,
             cwd,
             add_dirs,
-            access,
         )
     }
 

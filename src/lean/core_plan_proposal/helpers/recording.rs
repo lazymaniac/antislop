@@ -51,9 +51,8 @@ pub(super) fn plan_event_payload(
     plan: &PreparedPlan,
     specs: &[TaskContract],
     review: &std::result::Result<Verdict, String>,
-    autonomous: bool,
     waiting: Option<&str>,
-    scope_hash: String,
+    revision_token: String,
 ) -> Result<serde_json::Value> {
     Ok(json!({
         "plan": plan.id,
@@ -61,8 +60,8 @@ pub(super) fn plan_event_payload(
         "parallel": tasks::parallel_peers(specs),
         "tasks": plan.tasks.iter().map(|task| task.spec.clone()).collect::<Vec<_>>(),
         "review": review_json(review),
-        "automatic": autonomous && waiting.is_none(),
+        "automatic": waiting.is_none(),
         "waiting": waiting,
-        "scope_hash": scope_hash,
+        "revision_token": revision_token,
     }))
 }

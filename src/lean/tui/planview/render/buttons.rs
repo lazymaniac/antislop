@@ -3,7 +3,6 @@ use super::super::*;
 #[derive(Clone, Copy)]
 struct ButtonState {
     drafts: usize,
-    can_accept: bool,
     decidable: bool,
 }
 
@@ -14,29 +13,22 @@ impl PlanView {
         bar_area: Rect,
         view: &View,
         theme: &Theme,
-        open_comments: &[&super::super::super::view::Comment],
     ) {
         let btn_cols = self.button_areas(bar_area);
         let drafts = view.draft_plan_comments().len();
         let decidable = view.plan_proposed();
-        let can_accept = open_comments.is_empty() && decidable;
-        let state = ButtonState {
-            drafts,
-            can_accept,
-            decidable,
-        };
+        let state = ButtonState { drafts, decidable };
         self.draw_button_group(frame, btn_cols, theme, state);
     }
 
     fn draw_button_group(
         &self,
         frame: &mut Frame,
-        areas: [Rect; 4],
+        areas: [Rect; 3],
         theme: &Theme,
         state: ButtonState,
     ) {
         for (index, button) in [
-            BottomButton::Accept,
             BottomButton::Reject,
             BottomButton::CommentWholePlan,
             BottomButton::Review,
@@ -48,12 +40,12 @@ impl PlanView {
         }
     }
 
-    fn button_areas(&mut self, bar_area: Rect) -> [Rect; 4] {
+    fn button_areas(&mut self, bar_area: Rect) -> [Rect; 3] {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(25); 4])
+            .constraints([Constraint::Percentage(33); 3])
             .split(bar_area);
-        self.button_rects = [cols[0], cols[1], cols[2], cols[3]];
+        self.button_rects = [cols[0], cols[1], cols[2]];
         self.button_rects
     }
 
@@ -85,7 +77,6 @@ impl PlanView {
 
     fn button_label_tone(&self, button: BottomButton, state: ButtonState) -> (&'static str, Tone) {
         match button {
-            BottomButton::Accept => self.accept_label_tone(state),
             BottomButton::Reject => self.reject_label_tone(state.decidable),
             BottomButton::CommentWholePlan => (" [ Comment plan (C) ] ", Tone::Active),
             BottomButton::Review => {
@@ -96,28 +87,6 @@ impl PlanView {
                 }
             }
         }
-    }
-
-    fn accept_label_tone(&self, state: ButtonState) -> (&'static str, Tone) {
-        let label = if !state.decidable {
-            " [ Accept: decided ] "
-        } else if state.drafts > 0 {
-            " [ Accept: review first ] "
-        } else if !state.can_accept {
-            " [ Accept: resolve first ] "
-        } else if self.confirm_accept {
-            " [ Press again: accept ] "
-        } else {
-            " [ Accept (a) ] "
-        };
-        let tone = if state.can_accept {
-            Tone::Done
-        } else if state.decidable {
-            Tone::Waiting
-        } else {
-            Tone::Queued
-        };
-        (label, tone)
     }
 
     fn reject_label_tone(&self, decidable: bool) -> (&'static str, Tone) {

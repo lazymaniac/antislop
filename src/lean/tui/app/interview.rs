@@ -51,6 +51,7 @@ impl App {
                     crate::lean::daemon::ConversationRequest::Send {
                         conversation: conversation.clone(),
                         text,
+                        to: None,
                     },
                 ))
                 .map(|_| ())

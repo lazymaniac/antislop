@@ -117,14 +117,12 @@ impl Registry {
         spec: &agent::Spec,
         scope: &str,
     ) -> Result<Arc<Session>> {
-        if spec.access == agent::Access::Write
-            && let Some((id, _)) = super::super::task_role(role)
+        if let Some((id, _)) = super::super::task_role(role)
             && let Some(task) = core.store.task_by_id(id)?
         {
             let contract: super::super::tasks::TaskContract =
                 serde_json::from_value(task.spec.clone())?;
             contract.require_not_deferred()?;
-            core.store.validate_task_execution_constraints(&task)?;
         }
         let signature = session_signature(role, spec, scope);
         let key = (conversation.to_owned(), role.to_owned());
@@ -248,7 +246,7 @@ fn restored_spec(
         .get(&profile.provider)
         .ok_or_else(|| invalid("the session's provider is not configured"))?;
     let (binary, args) = crate::config::resolve_command(provider, profile)?;
-    let spec = restored_agent_spec(context, profile, round, binary, args);
+    let spec = restored_agent_spec(core, context, profile, round, binary, args);
     let signature = super::super::rounds::spec_signature(&context.profile, profile.effort, &spec)?;
     Ok((spec, signature))
 }
@@ -261,9 +259,10 @@ fn validate_profile(profile: &crate::config::Profile, context: &store::RunContex
 }
 
 fn restored_agent_spec(
+    core: &Core,
     context: &store::RunContext,
     profile: &crate::config::Profile,
-    round: Option<u32>,
+    _round: Option<u32>,
     binary: std::path::PathBuf,
     args: Vec<String>,
 ) -> agent::Spec {
@@ -277,12 +276,8 @@ fn restored_agent_spec(
             .native_effort(profile.effort)
             .map(str::to_owned),
         cwd: context.cwd.clone(),
+        runtime: core.state.clone(),
         add_dirs: context.add_dirs.clone(),
-        access: if context.access == store::RunAccess::Write && round.is_none() {
-            agent::Access::Write
-        } else {
-            agent::Access::ReadOnly
-        },
         resume: context
             .provider_thread_id
             .clone()

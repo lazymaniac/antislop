@@ -192,8 +192,6 @@ impl App {
         self.config_editor
             .as_ref()
             .is_some_and(|editor| editor.visible)
-            || self.trust_prompt.is_some()
-            || self.project_trust.is_some()
             || self.unblock.is_some()
             || self.graph_filters.is_some()
             || self.interview_visible()

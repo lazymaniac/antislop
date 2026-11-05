@@ -27,11 +27,9 @@ CREATE TABLE task_contracts (
     spec TEXT NOT NULL CHECK (json_valid(spec)),
     PRIMARY KEY (task_id, version)
 );
-CREATE TABLE plan_authorizations (
+CREATE TABLE plan_activations (
     plan_id TEXT PRIMARY KEY REFERENCES plans(id),
-    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    scope TEXT NOT NULL CHECK (json_valid(scope)),
-    write_scope TEXT NOT NULL CHECK (json_valid(write_scope))
+    conversation_id TEXT NOT NULL REFERENCES conversations(id)
 );
 CREATE TABLE plan_revision_jobs (
     id TEXT PRIMARY KEY,

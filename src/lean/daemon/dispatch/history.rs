@@ -275,7 +275,6 @@ fn events_result(
     Ok(json!({
         "events": events,
         "idle": core.is_idle(conversation),
-        "autonomous": core.autonomous(conversation)?,
         "has_more": has_more,
         "history_unavailable": history_unavailable,
         "oldest_seq": oldest_seq,

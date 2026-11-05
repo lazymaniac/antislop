@@ -37,10 +37,6 @@ impl Reservations {
         self.tasks.remove(id);
     }
 
-    fn len(&self) -> usize {
-        self.tasks.len()
-    }
-
     fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
@@ -160,15 +156,8 @@ impl<'a> Scheduler<'a> {
     ) where
         'a: 'scope,
     {
-        if self.at_capacity() {
-            return;
-        }
         self.reservations.reserve(&id);
         self.spawn_task(scope, task.clone(), id);
-    }
-
-    fn at_capacity(&self) -> bool {
-        self.reservations.len() >= self.core.config_snapshot().policy.max_parallel
     }
 
     fn spawn_task<'scope, 'env>(
@@ -289,7 +278,7 @@ mod tests {
         let mut reservations = Reservations::default();
         reservations.reserve("first-writer");
         reservations.reserve("second-writer");
-        assert_eq!(reservations.len(), 2);
+        assert_eq!(reservations.tasks.len(), 2);
         assert!(reservations.contains("first-writer"));
         reservations.release("first-writer");
         assert!(!reservations.contains("first-writer"));
@@ -308,9 +297,9 @@ mod tests {
             .unwrap()
             .id;
         let mut tasks = core.store.add_plan(&conversation, &[
-            json!({"id":"future","title":"Future","goal":"Preserve future obligation","kind":"implementation","writes":true,"deferred":true}),
-            json!({"id":"consumer","title":"Consumer","goal":"Wait for future result","kind":"analysis","depends_on":["future"]}),
-            json!({"id":"diagnose","title":"Diagnose","goal":"Inspect current files","kind":"analysis"})
+            json!({"id":"future","title":"Future","goal":"Preserve future obligation","change_kind": "code", "kind":"implementation","deferred":true}),
+            json!({"id":"consumer","title":"Consumer","goal":"Wait for future result","change_kind": "none", "kind":"analysis","depends_on":["future"]}),
+            json!({"id":"diagnose","title":"Diagnose","goal":"Inspect current files","change_kind": "none", "kind":"analysis"})
         ]).unwrap();
         tasks.sort_by_key(|task| match task.spec["id"].as_str() {
             Some("future") => 0,
@@ -364,8 +353,9 @@ mod tests {
             model: None,
             effort: None,
             cwd: dir.path().to_path_buf(),
+            runtime: core.state.clone(),
             add_dirs: vec![],
-            access: agent::Access::Write,
+
             resume: None,
         };
         let role = format!("worker:{}", tasks[0].id);

@@ -80,17 +80,6 @@ fn insert_entry_version(
         .unwrap()
         .to_owned();
     insert_version_row(tx, change, entry, revision, version, &disposition)?;
-    for constraint in &entry.constraints {
-        tx.execute(
-            "INSERT OR IGNORE INTO ledger_runtime_constraints VALUES(?1,?2,?3,?4)",
-            params![
-                change.run_id,
-                entry.id,
-                version,
-                serde_json::to_value(constraint)?.as_str().unwrap()
-            ],
-        )?;
-    }
     insert_entry_criteria(tx, change, entry, version)
 }
 

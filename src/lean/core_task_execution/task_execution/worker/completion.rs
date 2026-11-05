@@ -131,7 +131,7 @@ mod tests {
             ".antislop/continuation-plan-review.md".to_owned(),
             ".antislop/appendix.md".to_owned(),
         ];
-        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Report","goal":"Deliver analysis","kind":"analysis","writes":true,"change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Report","goal":"Deliver analysis","kind":"analysis","change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
         let mut task = store
             .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
             .unwrap()

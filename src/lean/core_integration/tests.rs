@@ -20,7 +20,7 @@ fn untracked_report_overrides_local_commits_and_conflicts_keep_the_worktree() {
             let base = git::commit_all(&project, "base").unwrap();
             let mut config =
                 Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
-            config.policy.local_write = true;
+
             config.policy.local_commits = true;
             let core = Core::open(&directory.path().join("state"), config.clone()).unwrap();
             let conversation = core
@@ -50,7 +50,7 @@ fn untracked_report_overrides_local_commits_and_conflicts_keep_the_worktree() {
                     true,
                 )
                 .unwrap();
-            let spec: TaskContract=serde_json::from_value(json!({"id":"report","title":"Report","goal":"Write analysis","kind":"analysis","writes":true,"change_kind":"artifact","outputs":[output],"delivery":"untracked","requirement_ids":["R1"],"criterion_ids":["R1.1"]})).unwrap();
+            let spec: TaskContract=serde_json::from_value(json!({"id":"report","title":"Report","goal":"Write analysis","kind":"analysis","change_kind":"artifact","outputs":[output],"delivery":"untracked","requirement_ids":["R1"],"criterion_ids":["R1.1"]})).unwrap();
             let mut task = core
                 .store
                 .add_plan(&conversation, &[serde_json::to_value(&spec).unwrap()])

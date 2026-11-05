@@ -20,7 +20,6 @@ impl App {
             update @ Update::Events { .. } => self.apply_events(update),
             update @ Update::Conversation { .. } => self.apply_conversation(update),
             update @ Update::ProjectReady { .. } => self.apply_project_ready(update),
-            update @ Update::ProjectTrust { .. } => self.apply_project_trust(update),
             update @ Update::ProjectStatus { .. } => self.apply_project_status(update),
             update @ Update::Notice { .. } => self.apply_notice(update),
             update @ Update::TaskFailed { .. } => self.apply_task_failed(update),

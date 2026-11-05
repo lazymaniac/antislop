@@ -167,7 +167,11 @@ impl Execution<'_> {
     ) -> Result<bool> {
         let obligations = tasks::obligations(&self.spec);
         let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
-        tasks::settle(&mut verdict, &obligations, !self.spec.writes);
+        tasks::settle(
+            &mut verdict,
+            &obligations,
+            !self.spec.change_kind.has_delivery(),
+        );
         self.save_round_verdict(&verdict, finished)?;
         if incomplete {
             return self.incomplete();
@@ -246,22 +250,9 @@ impl Execution<'_> {
             Some(&serde_json::to_value(&state.run)?),
         )?;
         if stalled {
-            return self.stalled();
+            self.core.notice(self.conversation, "Review found no resolved obligation in this round; the worker continues with its findings and must change its approach where needed.");
         }
         state.findings = verdict.findings;
         Ok(true)
-    }
-
-    fn stalled(&mut self) -> Result<bool> {
-        let why = "no previously open obligation was resolved and the reviewer confirmed none of its earlier findings fixed; the orchestrator must supply a new basis or revise the contract";
-        let report = self.task.report.take().unwrap_or_default();
-        self.task.report = Some(format!("{report}\n\n[runtime] {why}"));
-        self.core.stop(
-            self.conversation,
-            self.task,
-            status::COORDINATING,
-            Some(why),
-        )?;
-        Ok(false)
     }
 }

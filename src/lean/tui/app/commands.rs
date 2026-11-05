@@ -11,20 +11,12 @@ impl App {
             Command::InterviewQuestion => self.open_interview_answer(),
             Command::Plans => self.open_plan_history(),
             Command::Plan => self.open_current_plan(),
-            Command::Accept if self.view.workflow_phase.as_deref() == Some("interview") => {
-                self.start_planning();
-            }
-            Command::ApproveRequirements => self.start_planning(),
-            Command::Accept => self.accept_plan(),
             Command::Reject => self.reject_plan(),
             Command::Resume => self.resume_plan(),
             Command::Cancel => self.request_cancel(),
             Command::Pause => self.set_paused(true),
             Command::Continue => self.set_paused(false),
             Command::PauseOrContinue => self.set_paused(!self.view.paused),
-            Command::ToggleMode => self.toggle_mode(),
-            Command::Autonomous => self.set_mode(true),
-            Command::Supervised => self.set_mode(false),
             Command::Config => self.open_config(),
             Command::TaskActions => self.open_unblock(None),
             Command::NewConversation => self.new_conversation(),
@@ -65,48 +57,6 @@ impl App {
         }
     }
 
-    fn start_planning(&mut self) {
-        if self.view.workflow_phase.as_deref() != Some("interview") {
-            self.notice = Some("✗ this session is not in interview".into());
-        } else if self.view.requirements_summary.is_empty()
-            || self.sending
-            || !self.input.text.is_empty()
-        {
-            self.notice =
-                Some("✗ send your answers and wait for the requirements summary first".into());
-        } else {
-            self.send_command(
-                Some("requirements approved; planning started"),
-                |conversation| {
-                    Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
-                        conversation,
-                        text: "/planning".into(),
-                    })
-                },
-            );
-        }
-    }
-
-    fn accept_plan(&mut self) {
-        let Some(plan) = self.view.plan.clone().filter(|_| self.view.plan_proposed()) else {
-            self.notice = Some("✗ there is no plan to accept".into());
-            return;
-        };
-        if !self.view.open_plan_comments().is_empty() {
-            self.notice = Some(
-                "✗ send the draft comments (Review) and resolve the rest before accepting".into(),
-            );
-            return;
-        }
-        self.plan_view = None;
-        self.send_command(Some("plan accepted"), |conversation| {
-            Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
-                conversation,
-                plan,
-            })
-        });
-    }
-
     fn reject_plan(&mut self) {
         let Some(plan) = self.view.plan.clone().filter(|_| self.view.plan_proposed()) else {
             self.notice = Some("✗ there is no plan to reject".into());
@@ -118,6 +68,7 @@ impl App {
                 conversation,
                 plan,
                 reason: None,
+                revision_token: None,
             })
         });
     }
@@ -136,13 +87,17 @@ impl App {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
                 plan,
+                revision_token: None,
             })
         });
     }
 
     fn request_cancel(&mut self) {
         self.send_command(Some("cancelled"), |conversation| {
-            Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel { conversation })
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
+                conversation,
+                revision_token: None,
+            })
         });
     }
 
@@ -151,20 +106,6 @@ impl App {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
                 conversation,
                 paused,
-            })
-        });
-    }
-
-    fn toggle_mode(&mut self) {
-        let autonomous = self.view.autonomous != Some(true);
-        self.set_mode(autonomous);
-    }
-
-    fn set_mode(&mut self, autonomous: bool) {
-        self.send_command(None, |conversation| {
-            Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
-                conversation,
-                autonomous,
             })
         });
     }

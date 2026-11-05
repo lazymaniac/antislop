@@ -2,13 +2,12 @@
 //! it opens the TUI; otherwise it prints events line by line. Either way the
 //! project's daemon does the work, so it goes on after the frontend exits.
 //! Lines typed while agents work are accepted at once and answered in the
-//! orchestrator's next turn. `/accept` starts the proposed plan, `/resume`
+//! orchestrator's next turn. Reviewed plans start automatically; `/resume`
 //! runs again what the last plan left unfinished, `/cancel` stops running
 //! work.
 
 use super::daemon::{Client, Request};
-use crate::{Result, require};
-use std::io::{BufRead, Write};
+use crate::Result;
 use std::path::{Path, PathBuf};
 
 mod chat;
@@ -18,8 +17,16 @@ pub use presentation::{describe, review_lines};
 /// Select the configuration without creating files or directories.
 /// An explicit path or an existing project file never falls back on error.
 pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
+    resolve_config_in(project, explicit, &super::paths::project_state(project)?)
+}
+
+fn resolve_config_in(project: &Path, explicit: Option<&Path>, state: &Path) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return checked_config(&project.join(path));
+    }
+    let runtime = state.join("antislop.toml");
+    if runtime.try_exists()? {
+        return checked_config(&runtime);
     }
     let local = project.join("antislop.toml");
     match std::fs::symlink_metadata(&local) {
@@ -27,7 +34,7 @@ pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let global = super::trust::config_dir()?.join("antislop.toml");
+    let global = super::paths::config_dir()?.join("antislop.toml");
     match std::fs::symlink_metadata(&global) {
         Ok(_) => checked_config(&global),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -53,7 +60,6 @@ pub struct Options {
     pub state: PathBuf,
     pub conversation: Option<String>,
     pub new: bool,
-    pub trust: bool,
     pub message: Option<String>,
 }
 
@@ -61,27 +67,27 @@ impl Options {
     pub fn parse(args: &[String]) -> Result<Self> {
         let project = std::env::current_dir()?.canonicalize()?;
         let parsed = ParsedArgs::parse(args)?;
-        let config = resolve_config(&project, parsed.config.as_deref())?;
-        // Nothing is created yet: the directory may not be trusted.
-        let state = parsed.state.unwrap_or_else(|| project.join(".antislop"));
+        let state = match parsed.state {
+            Some(state) => state,
+            None => super::paths::project_state(&project)?,
+        };
         let state = if state.is_absolute() {
             state
         } else {
             project.join(state)
         };
+        let config = resolve_config_in(&project, parsed.config.as_deref(), &state)?;
         Ok(Self {
             project,
             config,
             state,
             conversation: parsed.conversation,
             new: parsed.new,
-            trust: parsed.trust,
             message: (!parsed.words.is_empty()).then(|| parsed.words.join(" ")),
         })
     }
 
-    /// Creates the private state directory. Called once the working
-    /// directory is trusted, so that asking leaves nothing behind.
+    /// Creates the explicitly selected or global private state directory.
     pub fn prepare(&mut self) -> Result<()> {
         super::daemon::private_directory(&self.state)?;
         self.state = self.state.canonicalize()?;
@@ -100,7 +106,9 @@ impl Options {
             return Ok(id);
         }
         Ok(client.call(&Request::Control(
-            crate::lean::daemon::ControlRequest::Start,
+            crate::lean::daemon::ControlRequest::StartIn {
+                project: self.project.to_string_lossy().into_owned(),
+            },
         ))?["id"]
             .as_str()
             .unwrap_or_default()
@@ -128,7 +136,6 @@ struct ParsedArgs {
     state: Option<PathBuf>,
     conversation: Option<String>,
     new: bool,
-    trust: bool,
     words: Vec<String>,
 }
 
@@ -148,7 +155,6 @@ impl ParsedArgs {
             "--state" => self.state = Some(PathBuf::from(option_value(arg, args)?)),
             "--conversation" => self.conversation = Some(option_value(arg, args)?),
             "--new" => self.new = true,
-            "--trust" => self.trust = true,
             flag if flag.starts_with("--") => {
                 return Err(crate::Error::Invalid(format!("unknown option {flag}")));
             }
@@ -162,59 +168,6 @@ fn option_value(flag: &str, args: &mut std::slice::Iter<'_, String>) -> Result<S
     args.next()
         .cloned()
         .ok_or_else(|| crate::Error::Invalid(format!("{flag} requires a value")))
-}
-
-/// Makes sure the user let antislop work in `project`: it is remembered, or
-/// `--trust` says so, or the user answers now. Without a terminal and
-/// without `--trust` there is nobody to ask, so the answer is no.
-pub fn ensure_trusted<R: BufRead, W: Write>(
-    registry: &super::trust::Registry,
-    project: &std::path::Path,
-    trust_flag: bool,
-    interactive: bool,
-    reader: R,
-    writer: W,
-) -> Result<()> {
-    if registry.is_trusted(project) {
-        return Ok(());
-    }
-    if trust_flag {
-        return registry.trust(project);
-    }
-    confirm_trust(registry, project, interactive, reader, writer)
-}
-
-fn confirm_trust<R: BufRead, W: Write>(
-    registry: &super::trust::Registry,
-    project: &std::path::Path,
-    interactive: bool,
-    mut reader: R,
-    mut writer: W,
-) -> Result<()> {
-    require(
-        interactive,
-        "this directory is not trusted yet: run antislop here in a terminal to answer, \
-         or pass --trust",
-    )?;
-    writeln!(
-        writer,
-        "Do you trust the files in this directory?\n  {}\nAntislop agents can read files, run commands, and modify code in this directory.",
-        project.display()
-    )?;
-    write!(writer, "Trust this directory? [y/N]: ")?;
-    writer.flush()?;
-    let answer = read_trust_answer(&mut reader)?;
-    require(answer, "workspace directory is not trusted")?;
-    registry.trust(project)
-}
-
-fn read_trust_answer(reader: &mut impl BufRead) -> Result<bool> {
-    let mut answer = String::new();
-    reader.read_line(&mut answer)?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
 }
 
 /// One-time setup that an agent CLI needs and that only the user should do.
@@ -259,7 +212,10 @@ pub fn stop(args: &[String]) -> Result<()> {
             _ => return Err(crate::Error::Invalid(format!("unknown stop option {arg}"))),
         }
     }
-    let state = state.unwrap_or_else(|| PathBuf::from(".antislop"));
+    let state = match state {
+        Some(state) => state,
+        None => super::paths::project_state(&std::env::current_dir()?)?,
+    };
     if Client::stop(&state, force)? {
         println!("daemon stopped");
     } else {

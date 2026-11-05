@@ -6,10 +6,7 @@ use crate::lean::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// Not `deny_unknown_fields`: stored results from before a field was dropped
-// (a completed turn's `outputs`) must still load. Agents never write this
-// type directly; each MCP tool has its own strict schema.
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TurnResult {
     Report {
         text: String,
@@ -72,9 +69,8 @@ pub enum TurnResult {
 }
 
 /// The approach an options task chose and what it was weighed against.
-/// Stored selections may carry fields of the earlier, longer form; they are
-/// ignored. The `select` tool's schema is strict.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Selection {
     pub alternatives: Vec<Alternative>,
     pub selected: String,
@@ -82,6 +78,7 @@ pub struct Selection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Alternative {
     pub id: String,
     pub approach: String,

@@ -19,7 +19,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","reviewer":{"focus":"Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
@@ -77,7 +77,7 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","reviewer":{"focus":"Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
@@ -110,58 +110,10 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
 }
 
 #[test]
-fn acceptance_requires_current_summary_and_survives_reopening() {
+fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let store = Store::open(&path).unwrap();
-    let conversation = store.create_conversation("project").unwrap();
-    assert!(store.approve_requirements(&conversation.id).is_err());
-    let first = store
-        .add_message(&conversation.id, "user", "Goal 👩‍💻")
-        .unwrap();
-    store
-        .interview_summary(&conversation.id, "Scope and acceptance criteria", first.seq)
-        .unwrap();
-    let next = store
-        .add_message(&conversation.id, "user", "Also preserve drafts")
-        .unwrap();
-    assert!(store.approve_requirements(&conversation.id).is_err());
-    store
-        .interview_summary(
-            &conversation.id,
-            "Scope, draft preservation, criteria",
-            next.seq,
-        )
-        .unwrap();
-    let accepted = store.approve_requirements(&conversation.id).unwrap();
-    assert!(
-        accepted
-            .text
-            .contains("Scope, draft preservation, criteria")
-    );
-    assert!(
-        store
-            .messages_by(&conversation.id, "user", 0)
-            .unwrap()
-            .last()
-            .unwrap()
-            .text
-            .contains("Scope, draft preservation, criteria")
-    );
-    assert!(store.approve_requirements(&conversation.id).is_err());
-    drop(store);
-    let store = Store::open(&path).unwrap();
-    let workflow = store.workflow(&conversation.id).unwrap();
-    assert_eq!(workflow.phase, "planning");
-    assert!(workflow.summary.contains("draft preservation"));
-    let events = store.events_since(&conversation.id, 0, 100).unwrap();
-    assert_eq!(events.last().unwrap().payload["phase"], "planning");
-}
-
-#[test]
-fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
     assert!(!store.finish_interview(&conversation.id).unwrap());
     let first = store
@@ -194,6 +146,16 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
             .len(),
         1
     );
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.workflow(&conversation.id).unwrap().phase,
+        "planning"
+    );
+    assert_eq!(
+        reopened.workflow(&conversation.id).unwrap().summary,
+        "Inspect source and docs"
+    );
 }
 
 #[test]
@@ -207,14 +169,14 @@ fn every_conversation_begins_in_its_interview() {
 }
 
 #[test]
-fn malformed_requirements_retry_is_idempotent_and_bounded() {
+fn malformed_requirements_retry_is_idempotent_without_a_count_budget() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
     store
         .add_message(&conversation.id, "user", "Keep the same requirements")
         .unwrap();
-    for attempt in 0..3 {
+    for _attempt in 0..5 {
         store
             .append_event(
                 &conversation.id,
@@ -224,11 +186,10 @@ fn malformed_requirements_retry_is_idempotent_and_bounded() {
                 &serde_json::json!({"error":"the requirements analyst ended its turn without submit_ledger"}),
             )
             .unwrap();
-        assert_eq!(
+        assert!(
             store
                 .queue_requirements_format_repair(&conversation.id)
-                .unwrap(),
-            attempt < 2
+                .unwrap()
         );
         assert!(
             !store
@@ -241,7 +202,7 @@ fn malformed_requirements_retry_is_idempotent_and_bounded() {
             .messages_by(&conversation.id, "requirements-format-repair", 0)
             .unwrap()
             .len(),
-        2
+        5
     );
     store
         .add_message(&conversation.id, "user", "Retry preparation")
@@ -332,7 +293,7 @@ fn every_planning_cycle_awaits_its_own_first_plan() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","kind":"analysis","reviewer":{"focus":"f"}});
+    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
     let settle = |request: &str| {
         let message = store
             .add_message(&conversation.id, "user", request)

@@ -6,27 +6,14 @@ pub(super) fn gemini(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-    read_only: bool,
 ) -> Result<tempfile::NamedTempFile> {
-    let directory = spec.cwd.join(".antislop").join("sessions");
-    std::fs::create_dir_all(&directory)?;
-    // Session settings must never become part of a writer's checkpoint,
-    // including in projects that do not ignore .antislop yet.
-    use std::io::Write;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(directory.join(".gitignore"))
-    {
-        Ok(mut file) => file.write_all(b"*\n")?,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
+    let directory = spec.runtime.join("sessions");
+    crate::lean::daemon::private_directory(&directory)?;
     let mut settings = tempfile::Builder::new()
         .prefix("gemini-")
         .suffix(".json")
         .tempfile_in(directory)?;
-    let config = settings_config(gateway, read_only);
+    let config = settings_config(gateway);
     serde_json::to_writer(&mut settings, &config)?;
     command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", settings.path());
     command.env(TOKEN_ENV, gateway.token());
@@ -34,8 +21,8 @@ pub(super) fn gemini(
     Ok(settings)
 }
 
-fn settings_config(gateway: &Gateway, read_only: bool) -> Value {
-    let mut config = json!({
+fn settings_config(gateway: &Gateway) -> Value {
+    let config = json!({
         "mcp": {"allowed": [SERVER]},
         "mcpServers": {SERVER: {
             "httpUrl": gateway.url(),
@@ -43,25 +30,9 @@ fn settings_config(gateway: &Gateway, read_only: bool) -> Value {
             "trust": true,
             "includeTools": gateway.tool_names()
         }},
-        "tools": {"exclude": ["delegate_to_agent", "ask_user"]},
         "general": {"enableAutoUpdate": false}
     });
-    if read_only {
-        // Do not expose a shell: even apparently read-only shell commands can
-        // write. Plan mode can also block the MCP tool needed to end a turn.
-        config["tools"]["core"] = json!([
-            "list_directory",
-            "read_file",
-            "read_many_files",
-            "glob",
-            "search_file_content",
-            "google_web_search",
-            "web_fetch"
-        ]);
-    }
-    if !read_only {
-        config["tools"]["allowed"] = json!(["run_shell_command"]);
-    }
+
     config
 }
 

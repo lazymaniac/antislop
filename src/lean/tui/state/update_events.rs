@@ -8,14 +8,13 @@ impl App {
             generation,
             events,
             idle,
-            autonomous,
         } = update
         else {
             unreachable!("update routed to wrong handler");
         };
         self.apply_delivery_events(&conversation, &events);
         if conversation == self.conversation && generation == self.generation {
-            self.apply_active_event_batch(&events, idle, autonomous);
+            self.apply_active_event_batch(&events, idle);
         }
     }
 
@@ -64,15 +63,13 @@ impl App {
         }
     }
 
-    fn apply_active_event_batch(&mut self, events: &[Value], idle: bool, autonomous: bool) {
+    fn apply_active_event_batch(&mut self, events: &[Value], idle: bool) {
         let (manual_plan, requirements_review) = self.apply_view_events(events);
         self.update_ledger_approval(requirements_review);
         self.view.idle = idle;
-        self.view.autonomous = Some(autonomous);
         self.refresh_visible_ledger(events);
         self.refetch_stale_details();
         self.open_pending_plan(manual_plan);
-        self.mark_stale_confirmation();
     }
 
     fn apply_view_events(&mut self, events: &[Value]) -> (bool, bool) {
@@ -130,37 +127,10 @@ impl App {
         {
             plan_view.plan_id = plan.clone();
         }
-        if saw_manual_plan
-            && self.view.plan_proposed()
-            && !self.view.tasks.is_empty()
-            && self.confirmation.is_none()
-        {
+        if saw_manual_plan && self.view.plan_proposed() && !self.view.tasks.is_empty() {
             let plan = self.view.plan.clone().unwrap_or_else(|| "plan".into());
             self.plan_view = Some(PlanView::new(plan));
         }
-    }
-
-    fn mark_stale_confirmation(&mut self) {
-        let stale = self
-            .confirmation
-            .as_ref()
-            .is_some_and(|card| self.is_confirmation_stale(card));
-        if !stale {
-            return;
-        }
-        let Some(mut card) = self.confirmation.take() else {
-            return;
-        };
-        card.status = ConfirmationStatus::Stale;
-        for existing in self.view.cards.iter_mut().rev() {
-            if let TranscriptCard::Confirmation(existing) = existing
-                && existing.id == card.id
-            {
-                existing.status = ConfirmationStatus::Stale;
-                break;
-            }
-        }
-        self.notice = Some("✗ stale_scope: scope changed".into());
     }
 }
 

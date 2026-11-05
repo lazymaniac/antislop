@@ -3,7 +3,7 @@ use super::record_event;
 use crate::Result;
 use rusqlite::params;
 
-/// Recover an analysis that ended without its ledger once per failure, with a bounded budget.
+/// Recover an analysis that ended without its ledger once per recorded failure, without an execution budget.
 pub(super) fn queue_requirements_format_repair(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
@@ -11,9 +11,7 @@ pub(super) fn queue_requirements_format_repair(
     let Some(failure) = latest_missing_ledger_failure(tx, conversation)? else {
         return Ok(false);
     };
-    if repair_already_handled(tx, conversation, failure)?
-        || repair_budget_exhausted(tx, conversation)?
-    {
+    if repair_already_handled(tx, conversation, failure)? {
         return Ok(false);
     }
     record_requirements_retry(tx, conversation, failure)?;
@@ -40,14 +38,6 @@ fn repair_already_handled(
         "SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND seq>?2 AND kind IN ('turn_started','requirements_format_retry'))",
         params![conversation, failure], |row| row.get(0),
     )?)
-}
-
-fn repair_budget_exhausted(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<bool> {
-    let retries: i64 = tx.query_row(
-        "SELECT count(*) FROM messages WHERE conversation_id=?1 AND author='requirements-format-repair' AND seq>(SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user')",
-        [conversation], |row| row.get(0),
-    )?;
-    Ok(retries >= 2)
 }
 
 fn record_requirements_retry(

@@ -63,12 +63,7 @@ fn draw_editor_cursor(
     shown: usize,
     visible: usize,
 ) {
-    if app.help.is_some()
-        || app.picker.is_some()
-        || app.trust_prompt.is_some()
-        || area.width < 3
-        || area.height < 3
-    {
+    if app.help.is_some() || app.picker.is_some() || area.width < 3 || area.height < 3 {
         return;
     }
     let min_x = area.x + 1;
