@@ -17,16 +17,8 @@ pub use presentation::{describe, review_lines};
 /// Select the configuration without creating files or directories.
 /// An explicit path or an existing project file never falls back on error.
 pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
-    resolve_config_in(project, explicit, &super::paths::project_state(project)?)
-}
-
-fn resolve_config_in(project: &Path, explicit: Option<&Path>, state: &Path) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return checked_config(&project.join(path));
-    }
-    let runtime = state.join("antislop.toml");
-    if runtime.try_exists()? {
-        return checked_config(&runtime);
     }
     let local = project.join("antislop.toml");
     match std::fs::symlink_metadata(&local) {
@@ -76,7 +68,7 @@ impl Options {
         } else {
             project.join(state)
         };
-        let config = resolve_config_in(&project, parsed.config.as_deref(), &state)?;
+        let config = resolve_config(&project, parsed.config.as_deref())?;
         Ok(Self {
             project,
             config,

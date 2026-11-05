@@ -21,7 +21,7 @@ fn start(project: &Path, config_path: &Path, state: &Path) -> Result<(Runtime, U
         &state.join("core.db"),
         &super::super::paths::project_identity(project)?,
     )?;
-    let config_path = super::config_write::durable_config(state, config_path)?;
+    let config_path = config_path.canonicalize()?;
     let config_path = config_path.as_path();
     let loaded = modified(config_path);
     let project = project.canonicalize()?;

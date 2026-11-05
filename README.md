@@ -30,16 +30,17 @@ Runtime files live outside source checkouts. The root is `ANTISLOP_STATE_ROOT`,
 else `$XDG_STATE_HOME/antislop`, else `~/.local/state/antislop`. Each project gets
 `projects/<identity>` under that root. Linked Git worktrees share the identity of
 their canonical common Git directory; non-Git projects use their canonical path.
-Databases, logs, settings and checkpoints survive worktree cleanup. Long socket
+Databases, logs, session settings and checkpoints survive worktree cleanup. Long socket
 paths use a short private directory under `/tmp`.
 
-Configuration precedence is `--config FILE`, then the retained project runtime
-configuration, then `./antislop.toml`, then the shared user configuration
-(`ANTISLOP_CONFIG_DIR`, `$XDG_CONFIG_HOME/antislop`, or `~/.config/antislop`).
-The selected source seeds the runtime copy; the editor updates that retained copy.
-An explicit `--config` selects a new input. Invalid files report their raw error
-without falling back or silently changing the active configuration. Resolving paths
-creates nothing. Per-launch provider settings never modify a provider's own files.
+Configuration precedence is `--config FILE`, then `./antislop.toml`, then the shared
+user configuration (`ANTISLOP_CONFIG_DIR`, `$XDG_CONFIG_HOME/antislop`, or
+`~/.config/antislop`). Runtime state is never an implicit configuration source. The editor
+updates the selected file and applies it to subsequent turns; running turns keep
+their configuration snapshot. Manual file edits are loaded when reopening the
+frontend after running work finishes. Invalid selected files report their raw
+error without falling back. Resolving configuration paths creates nothing.
+Per-launch provider settings never modify a provider's own files.
 
 In the graph each task is a frame titled with the task, holding a card for its
 options agent (when the plan asks for options), its worker and its reviewer,

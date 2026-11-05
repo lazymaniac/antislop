@@ -267,10 +267,18 @@ fn configuration_precedence_and_errors_without_creating_state() {
     let local_file = project.join("antislop.toml");
     let global_file = global.join("antislop.toml");
     let valid = include_str!("../examples/antislop.toml");
+    let runtime = root.path().join("runtime");
+    let state = runtime
+        .join("projects")
+        .join(antislop::lean::paths::project_identity(&project).unwrap());
+    std::fs::create_dir_all(&state).unwrap();
+    let shadow = state.join("antislop.toml");
+    std::fs::write(&shadow, "invalid stale runtime configuration").unwrap();
     let run = |args: &[&str]| {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
             .current_dir(&project)
             .env("ANTISLOP_CONFIG_DIR", &global)
+            .env("ANTISLOP_STATE_ROOT", &runtime)
             .args(args)
             .stdin(std::process::Stdio::null())
             .output()
@@ -288,6 +296,7 @@ fn configuration_precedence_and_errors_without_creating_state() {
             ])
             .env("ANTISLOP_TEST_RESOLVE_PROJECT", &project)
             .env("ANTISLOP_CONFIG_DIR", &global)
+            .env("ANTISLOP_STATE_ROOT", &runtime)
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -296,7 +305,7 @@ fn configuration_precedence_and_errors_without_creating_state() {
             expected.canonicalize().unwrap().display()
         )));
     };
-    // Neither file: report both candidates, without creating either file.
+    // A stale runtime file is never a candidate, even without local/user files.
     let error = run(&["chat", "hello"]);
     assert!(error.contains("no configuration at"), "{error}");
     assert!(error.contains(local_file.to_str().unwrap()), "{error}");
@@ -334,10 +343,15 @@ fn configuration_precedence_and_errors_without_creating_state() {
         antislop::lean::cli::resolve_config(&project, Some(&link)).unwrap(),
         project.join("custom.toml").canonicalize().unwrap()
     );
+    assert_eq!(
+        std::fs::read_to_string(&shadow).unwrap(),
+        "invalid stale runtime configuration"
+    );
+    assert!(!state.join("core.db").exists());
 }
 
 #[test]
-fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
+fn worktree_cleanup_keeps_history_and_uses_the_remaining_checkout_config() {
     let root = tempfile::tempdir().unwrap();
     let primary = project(root.path(), "primary");
     common::runtime_environment(&primary);
@@ -411,7 +425,7 @@ fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
     );
     let client = Client::connect(
         &primary,
-        &state.join("antislop.toml"),
+        &primary.join("antislop.toml"),
         &state,
         Path::new(env!("CARGO_BIN_EXE_antislop")),
     )
@@ -421,9 +435,13 @@ fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
             antislop::lean::daemon::ControlRequest::Identity,
         ))
         .unwrap();
-    assert_eq!(
+    assert_ne!(
         attached["pid"], before["pid"],
-        "cleanup must not replace the live daemon"
+        "the idle daemon adopts the remaining checkout source"
+    );
+    assert_eq!(
+        attached["config"],
+        primary.join("antislop.toml").to_string_lossy().as_ref()
     );
     let read_history = |client: &Client| {
         client
@@ -445,7 +463,7 @@ fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
     drop(daemon);
     let restarted = Client::connect(
         &primary,
-        &state.join("antislop.toml"),
+        &primary.join("antislop.toml"),
         &state,
         Path::new(env!("CARGO_BIN_EXE_antislop")),
     )
@@ -454,6 +472,6 @@ fn worktree_cleanup_keeps_history_settings_and_daemon_identity() {
     Client::stop(&state, true).unwrap();
     assert!(!history["events"].as_array().unwrap().is_empty());
     assert!(state.join("core.db").exists());
-    assert!(state.join("antislop.toml").exists());
+    assert!(!state.join("antislop.toml").exists());
     assert!(!primary.join(".antislop").exists());
 }

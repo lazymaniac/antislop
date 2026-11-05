@@ -5660,9 +5660,6 @@ mod config_editor_acceptance {
             };
             let state = dir.relative_path().join("project/.antislop");
             let daemon = Daemon::start(&project, target, &state, &registry);
-            let original = target;
-            let retained = state.join("antislop.toml");
-            let target = &retained;
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
             app.run_workflow(antislop::lean::tui::Command::Config);
             pump(&mut app, &updates);
@@ -5724,7 +5721,7 @@ mod config_editor_acceptance {
                 assert_eq!(actual, &expected, "written value for {path:?}");
             }
             assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
-            assert_eq!(std::fs::read_to_string(original).unwrap(), SOURCE);
+            assert!(!state.join("antislop.toml").exists());
             assert!(
                 std::fs::read_to_string(target)
                     .unwrap()
@@ -5783,7 +5780,7 @@ mod config_editor_acceptance {
             pump(&mut app, &updates);
             assert!(!Config::load(target).unwrap().profiles.contains_key(&name));
             assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
-            assert_eq!(std::fs::read_to_string(original).unwrap(), SOURCE);
+            assert!(!state.join("antislop.toml").exists());
         }
     }
 
@@ -5855,7 +5852,6 @@ mod config_editor_acceptance {
         std::fs::write(&path, SOURCE).unwrap();
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
-        let path = state.join("antislop.toml");
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
         app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
@@ -6000,7 +5996,6 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&path, initial.source().unwrap()).unwrap();
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
-        let path = state.join("antislop.toml");
         let conversation = daemon
             .client
             .call(&Request::Control(

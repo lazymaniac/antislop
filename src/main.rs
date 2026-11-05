@@ -13,7 +13,7 @@ With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
 
 options:
-  --config FILE        seed/override the project runtime configuration
+  --config FILE        select a configuration file explicitly
   --state DIR          explicit runtime directory (default: global project state)
   --conversation ID    continue this conversation
   --new                start a new conversation

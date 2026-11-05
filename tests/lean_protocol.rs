@@ -1084,7 +1084,7 @@ fn unattended_start_uses_global_state_without_a_trust_registry() {
     assert!(stopped.unwrap());
     assert_eq!(
         identity.unwrap()["config"],
-        state.join("antislop.toml").to_string_lossy().as_ref()
+        project.join("antislop.toml").to_string_lossy().as_ref()
     );
     assert!(state.join("core.db").exists());
     assert!(!project.join(".antislop").exists());
@@ -1170,16 +1170,10 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
             &json!({"op": "set_config", "toml": text, "expected_revision": before["revision"]}),
         )
         .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(state.join("antislop.toml")).unwrap(),
-        text
-    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
     let stale = daemon.call_raw(&json!({"op": "set_config", "toml": before["toml"], "expected_revision": before["revision"]})).unwrap_err();
     assert!(stale.contains("configuration changed"), "{stale}");
-    assert_eq!(
-        std::fs::read_to_string(state.join("antislop.toml")).unwrap(),
-        text
-    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
     assert_eq!(
         daemon.call_raw(&json!({"op": "get_config"})).unwrap()["toml"],
         text
@@ -1192,7 +1186,7 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
         .current_dir(project)
         .arg("chat")
         .arg("--config")
-        .arg(state.join("antislop.toml"))
+        .arg(&config)
         .arg("--state")
         .arg(&state)
         .arg("--new")

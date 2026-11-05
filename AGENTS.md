@@ -139,15 +139,15 @@ src
     - value,plan_{tasks,status},describe_mail
   cli.rs
    chat(args):Result<()> > chat.run
-   resolve_config(project,explicit):Result<PathBuf> > resolve_config_in,project_state
+   resolve_config(project,explicit):Result<PathBuf> > checked_config,config_dir
    setup(args):Result<()> > status
    stop(args):Result<()> > project_state
    Options(C{project,config,state,conversation,new,message})
-    parse(args):Result<Self> > project_state,resolve_config_in
+    parse(args):Result<Self> > project_state,resolve_config
     prepare():Result<()> > private_directory
     conversation(client):Result<String> > latest
     latest(client):Result<Option<String>> > flatten,Client.call,as_str
-   - ParsedArgs,checked_config,option_value
+   - ParsedArgs,option_value
    - ParsedArgs: parse,apply
   content
    Chunk(C{text,next_offset,done})
@@ -402,7 +402,6 @@ src
     atomic_config_write(path,text):Result<()> > PreparedConfigWrite.prepare
     cleanup_config_temporaries(path):Result<usize> > config_directory,ConfigDirectoryLease.acquire,config_temporary_prefix,cleanup_temporary,sync_directory_if_changed
     config_temporary_prefix(target):String
-    durable_config(state,source):Result<PathBuf> > private_directory,atomic_config_write
     ConfigDirectoryLease(C) : Drop
      - drop
     ConfigUpdateReply(C{toml,path,status,warnings})
@@ -2720,7 +2719,7 @@ src
       PLAN_REVIEWER="plan-reviewer",AUDITOR="auditor"
    workspace
     badges(conversations):(usize,usize) > as_str
-    connect(path,executable):Result<ProjectConn,String> > resolve_config,private_directory,ProjectConn.new
+    connect(path,executable):Result<ProjectConn,String> > resolve_config,project_state,private_directory,ProjectConn.new
     latest_or_new(conn):Result<String,String> > flatten,as_str
     name_of(path):String
     others_summary(projects,active):Option<String>
@@ -2896,6 +2895,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,main
-· 117,895 LOC · input 1,039,088 · output 41,691 tokens · state 52768abbb6be
+· 117,850 LOC · input 1,038,637 · output 41,666 tokens · state c738c14d8dbb
 ```
 <!-- hologram:end -->

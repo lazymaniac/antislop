@@ -160,7 +160,8 @@ fn prepare_client(
         &state.join("core.db"),
         &super::super::paths::project_identity(project)?,
     )?;
-    let config = super::config_write::durable_config(state, config)?;
+    let config = config.canonicalize()?;
+    Config::load(&config)?;
     let mut client = Client::at(state);
     client.origin = Some((
         project.into(),

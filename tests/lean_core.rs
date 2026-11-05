@@ -838,7 +838,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         .output()
         .unwrap();
     assert!(initialized.status.success());
-    let retained = std::fs::read(state.join("antislop.toml")).unwrap();
+    let selected = dir.join("antislop.toml");
+    let original = std::fs::read(&selected).unwrap();
     let error = antislop::lean::daemon::Client::connect(
         &other_project,
         &dir.join("antislop.toml"),
@@ -848,16 +849,20 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     .err()
     .expect("foreign repository must be rejected");
     assert!(error.to_string().contains("another repository"));
-    assert_eq!(
-        std::fs::read(state.join("antislop.toml")).unwrap(),
-        retained
-    );
-    // Selecting another source config for the same repository still uses its
-    // one durable configuration and preserves the busy daemon.
+    assert_eq!(std::fs::read(&selected).unwrap(), original);
+    // A different explicit source must not silently reuse another configuration.
     let other_config = dir.join("other.toml");
     std::fs::write(&other_config, &text).unwrap();
-    antislop::lean::daemon::Client::connect(&project, &other_config, &state, current_build)
-        .unwrap();
+    let error =
+        antislop::lean::daemon::Client::connect(&project, &other_config, &state, current_build)
+            .err()
+            .expect("different source must be reported while work is active");
+    assert!(
+        error
+            .to_string()
+            .contains("another project or configuration path")
+    );
+    assert!(!state.join("antislop.toml").exists());
     assert_eq!(identity().unwrap()["pid"], daemon);
     if edit_config {
         // The user edits the configuration while the work runs.

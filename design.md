@@ -961,7 +961,10 @@ user cancellation rather than asking for new execution rights.
 Durable state lives under `ANTISLOP_STATE_ROOT`, `$XDG_STATE_HOME/antislop`, or
 `~/.local/state/antislop`, keyed by canonical common Git directory (canonical root
 without Git). Databases, logs, checkpoints and session settings are outside
-worktrees. Configuration/protocol/database formats are 4/5/16; old formats are
+worktrees. Application configuration is selected from explicit `--config`, then
+the project file, then the user configuration directory; state-directory files
+never override it automatically. The configuration editor writes that selected source.
+Configuration/protocol/database formats are 4/5/16; old formats are
 rejected rather than migrated. Provider configuration files are never modified;
 gateway and permission settings are supplied per launch.
 

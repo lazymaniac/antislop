@@ -6,10 +6,6 @@ fn test_tempdir() -> tempfile::TempDir {
     tempfile::tempdir_in(root).unwrap()
 }
 
-fn fixture_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
-    resolve_config_in(project, explicit, &project.join("runtime"))
-}
-
 #[test]
 fn removed_trust_flag_is_rejected_without_a_compatibility_mode() {
     let error = ParsedArgs::parse(&["--trust".into()]).err().unwrap();
@@ -43,16 +39,16 @@ fn explicit_config_wins_and_a_missing_explicit_path_does_not_fall_back() {
     std::fs::write(&explicit, "explicit config").unwrap();
 
     assert_eq!(
-        fixture_config(project.path(), None).unwrap(),
+        resolve_config(project.path(), None).unwrap(),
         local.canonicalize().unwrap()
     );
     assert_eq!(
-        fixture_config(project.path(), Some(Path::new("custom.toml"))).unwrap(),
+        resolve_config(project.path(), Some(Path::new("custom.toml"))).unwrap(),
         explicit.canonicalize().unwrap()
     );
 
     let missing = project.path().join("missing.toml");
-    let error = fixture_config(project.path(), Some(Path::new("missing.toml"))).unwrap_err();
+    let error = resolve_config(project.path(), Some(Path::new("missing.toml"))).unwrap_err();
     assert!(
         error
             .to_string()
@@ -74,7 +70,7 @@ fn config_symlink_is_resolved_to_its_target() {
     std::os::windows::fs::symlink_file(&target, &link).unwrap();
 
     assert_eq!(
-        fixture_config(project.path(), Some(Path::new("selected.toml"))).unwrap(),
+        resolve_config(project.path(), Some(Path::new("selected.toml"))).unwrap(),
         target.canonicalize().unwrap()
     );
 }
