@@ -87,7 +87,7 @@ impl Store {
             entry.spec.disposition == crate::lean::ledger::Disposition::Active,
             "authorization restriction is not active",
         )?;
-        let hash = crate::hash(serde_json::to_vec(&grant.contract)?);
+        let (raw_hash, hash) = self.execution_contract_hashes(&grant.plan, &grant.contract)?;
         let generation = task.input_generation + 1;
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -128,8 +128,8 @@ impl Store {
                     generation,
                     grant.requirement.clone(),
                     entry.version,
-                    hash.clone(),
-                ),
+                    old.5.clone(),
+                ) && (old.5 == hash || old.5 == raw_hash),
                 "decision is already bound to another contract; it cannot authorize broader work",
             )?;
         } else {
@@ -145,7 +145,7 @@ impl Store {
     /// Authoritative launch metadata, separate from code/qualification approval.
     pub(in crate::lean) fn task_execution_approval_context(&self, task: &Task) -> Result<Value> {
         let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
-        let hash = crate::hash(serde_json::to_vec(&contract)?);
+        let (raw_hash, hash) = self.execution_contract_hashes(&task.plan_id, &contract)?;
         let db = self.db();
         let accepted: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM plan_authorizations WHERE plan_id=?1)",
@@ -160,8 +160,8 @@ impl Store {
             )
             .optional()?;
         let applied:Option<String>=db.query_row("SELECT id FROM plan_revision_jobs WHERE plan_id=?1 AND status='applied' ORDER BY rowid DESC LIMIT 1",[&task.plan_id],|r|r.get(0)).optional()?;
-        let mut query=db.prepare("SELECT decision_id,answer_seq,requirement_id,requirement_version FROM execution_authorizations WHERE plan_id=?1 AND task_id=?2 AND generation=?3 AND contract_hash=?4")?;
-        let permissions=query.query_map(params![task.plan_id,task.id,task.input_generation,hash],|r|Ok(serde_json::json!({"decision":r.get::<_,String>(0)?,"answer_message":r.get::<_,i64>(1)?,"requirement":r.get::<_,String>(2)?,"requirement_version":r.get::<_,i64>(3)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let mut query=db.prepare("SELECT decision_id,answer_seq,requirement_id,requirement_version FROM execution_authorizations WHERE plan_id=?1 AND task_id=?2 AND generation=?3 AND contract_hash IN (?4,?5) ORDER BY decision_id")?;
+        let permissions=query.query_map(params![task.plan_id,task.id,task.input_generation,hash,raw_hash],|r|Ok(serde_json::json!({"decision":r.get::<_,String>(0)?,"answer_message":r.get::<_,i64>(1)?,"requirement":r.get::<_,String>(2)?,"requirement_version":r.get::<_,i64>(3)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         Ok(
             serde_json::json!({"plan":task.plan_id,"plan_accepted":accepted,"current_plan_revision":revision,"last_applied_reviewed_revision":applied,"task":task.id,"input_generation":task.input_generation,"contract_hash":hash,"scoped_execution_authorizations":permissions}),
         )
@@ -189,14 +189,14 @@ impl Store {
     /// Preserve the exact contract allowance, without renewing any used grant.
     fn refresh_unused_execution_authorizations(&self, task: &Task) -> Result<()> {
         let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
-        let hash = crate::hash(serde_json::to_vec(&contract)?);
+        let (raw_hash, hash) = self.execution_contract_hashes(&task.plan_id, &contract)?;
         let mut db = self.db();
-        let candidates: Vec<(String, i64)> = {
-            let mut query = db.prepare("SELECT decision_id,generation FROM execution_authorizations WHERE plan_id=?1 AND task_id=?2 AND contract_hash=?3 AND generation<?4")?;
+        let candidates: Vec<(String, i64, String)> = {
+            let mut query = db.prepare("SELECT decision_id,generation,contract_hash FROM execution_authorizations WHERE plan_id=?1 AND task_id=?2 AND contract_hash IN (?3,?5) AND generation<?4")?;
             query
                 .query_map(
-                    params![task.plan_id, task.id, hash, task.input_generation],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    params![task.plan_id, task.id, hash, task.input_generation, raw_hash],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
@@ -218,7 +218,7 @@ impl Store {
                 && serde_json::from_str::<Value>(&stored)? == task.spec,
             "authorization inputs changed before launch",
         )?;
-        for (decision, generation) in candidates {
+        for (decision, generation, hash) in candidates {
             let started: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1 AND x.generation>=?2)",params![task.id,generation],|r|r.get(0))?;
             if started {
                 continue;
@@ -240,11 +240,11 @@ impl Store {
         generation: i64,
         entries: &[LedgerEntry],
     ) -> Result<Vec<LedgerEntry>> {
-        let hash = crate::hash(serde_json::to_vec(contract)?);
+        let (raw_hash, hash) = self.execution_contract_hashes(&task.plan_id, contract)?;
         let db = self.db();
         let mut adjusted = entries.to_vec();
         for entry in &mut adjusted {
-            let allowed:bool = db.query_row("SELECT EXISTS(SELECT 1 FROM execution_authorizations WHERE conversation_id=?1 AND plan_id=?2 AND task_id=?3 AND local_task=?4 AND generation=?5 AND requirement_id=?6 AND requirement_version=?7 AND contract_hash=?8)",params![conversation,task.plan_id,task.id,contract.id,generation,entry.spec.id,entry.version,hash],|r|r.get(0))?;
+            let allowed:bool = db.query_row("SELECT EXISTS(SELECT 1 FROM execution_authorizations WHERE conversation_id=?1 AND plan_id=?2 AND task_id=?3 AND local_task=?4 AND generation=?5 AND requirement_id=?6 AND requirement_version=?7 AND contract_hash IN (?8,?9))",params![conversation,task.plan_id,task.id,contract.id,generation,entry.spec.id,entry.version,hash,raw_hash],|r|r.get(0))?;
             if allowed {
                 entry
                     .spec
@@ -253,6 +253,27 @@ impl Store {
             }
         }
         Ok(adjusted)
+    }
+
+    /// Finalization attaches an existing runtime-owned options prerequisite.
+    /// It cannot change the user-authorized scope or any authored dependency.
+    /// Keep the raw hash as a compatibility lookup for previously stored grants.
+    fn execution_contract_hashes(
+        &self,
+        plan: &str,
+        contract: &TaskContract,
+    ) -> Result<(String, String)> {
+        let raw = crate::hash(serde_json::to_vec(contract)?);
+        let options = {
+            let db = self.db();
+            let mut query = db.prepare("SELECT json_extract(spec,'$.id') FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.options_for')=?2 AND status<>'superseded'")?;
+            query
+                .query_map(params![plan, contract.id], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let mut authored = contract.clone();
+        authored.depends_on.retain(|id| !options.contains(id));
+        Ok((raw, crate::hash(serde_json::to_vec(&authored)?)))
     }
 
     pub(in crate::lean) fn validate_authorized_plan_constraints(

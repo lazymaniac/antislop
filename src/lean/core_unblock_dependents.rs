@@ -41,9 +41,12 @@ impl Core {
     }
 
     pub(in crate::lean) fn notice(&self, conversation: &str, text: &str) {
-        let _ = self
-            .store
-            .append_event(conversation, None, None, "notice", &json!({"text": text}));
+        if let Err(error) =
+            self.store
+                .append_event(conversation, None, None, "notice", &json!({"text": text}))
+        {
+            eprintln!("antislop: {text}; could not persist runtime notice: {error}");
+        }
     }
 
     pub(in crate::lean) fn maybe_continue_plan(

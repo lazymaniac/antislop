@@ -40,10 +40,13 @@ pub(in crate::lean) use evidence::{EvidenceReference, MAX_RESULT_EVIDENCE};
 mod answer_waits;
 #[path = "store/plan_reviews.rs"]
 mod plan_reviews;
+#[path = "store/recovery_decisions.rs"]
+mod recovery_decisions;
 #[path = "store/revision_jobs.rs"]
 mod revision_jobs;
 #[path = "store/task_progress.rs"]
 mod task_progress;
+pub(in crate::lean) use recovery_decisions::RecoveryDecision;
 
 pub struct Store {
     connection: Mutex<Connection>,

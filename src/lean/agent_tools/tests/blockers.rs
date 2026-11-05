@@ -47,8 +47,22 @@ fn worker_blocker_ends_the_turn_without_approving_or_releasing_dependents() {
             }))
             .unwrap();
         let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-            "name":"report_blocker","arguments":{"turn":turn.id,"report":"None of the candidates meets the required measurement threshold.","resume_condition":"Revise the consumer's threshold or supply a valid candidate."}
+            "name":"report_blocker","arguments":{"turn":turn.id,"report":"None of the candidates meets the required measurement threshold.","resume_condition":"Revise the consumer's threshold or supply a valid candidate.","unblocked_work_remaining":false}
         }});
+        let mut premature = request.clone();
+        premature["params"]["arguments"]["unblocked_work_remaining"] = true.into();
+        let rejected: Value = ureq::post(gateway.url())
+            .header("authorization", format!("Bearer {}", gateway.token()))
+            .send_json(&premature)
+            .unwrap()
+            .body_mut()
+            .read_json()
+            .unwrap();
+        assert_eq!(rejected["result"]["isError"], true);
+        assert_eq!(
+            core.store.task_by_id(&task.id).unwrap().unwrap().status,
+            status::WORKING
+        );
         for _ in 0..2 {
             let mut response = ureq::post(gateway.url())
                 .header("authorization", format!("Bearer {}", gateway.token()))
@@ -109,7 +123,7 @@ fn blockers_require_a_worker_and_a_concrete_resume_condition() {
                 &role,
                 &turn.id,
                 "report_blocker",
-                &json!({"report":"Blocked","resume_condition":"Revise"}),
+                &json!({"report":"Blocked","resume_condition":"Revise","unblocked_work_remaining":false}),
             )
             .unwrap_err()
             .to_string();

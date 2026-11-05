@@ -95,8 +95,9 @@ impl Store {
         Ok(conversations)
     }
 
-    /// Unfinished tasks stay queued with the interruption reason. Returns each
-    /// affected (conversation, plan), so the plan can be resumed.
+    /// Running tasks become queued with an interruption reason; queued
+    /// checkpoints remain unchanged. Returns candidate (conversation, plan)
+    /// pairs; callers must check dependencies and deferral before resuming.
     pub fn interrupt_unfinished_tasks(&self) -> Result<Vec<(String, String)>> {
         let mut db = self.db();
         let tx = db.transaction()?;

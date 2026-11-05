@@ -60,11 +60,21 @@ impl Store {
         conversation: &str,
         question: &crate::lean::interview::Question,
     ) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        Self::write_user_decision(&tx, conversation, question)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn write_user_decision(
+        tx: &rusqlite::Transaction<'_>,
+        conversation: &str,
+        question: &crate::lean::interview::Question,
+    ) -> Result<()> {
         question.validate()?;
         let payload = serde_json::to_string(question)?;
         crate::require(payload.len() <= 16384, "user decision exceeds 16 KiB")?;
-        let mut db = self.db();
-        let tx = db.transaction()?;
         let previous: Option<String> = tx.query_row(
             "SELECT payload FROM events WHERE conversation_id=?1 AND kind='user_decision_requested' AND json_extract(payload,'$.id')=?2 ORDER BY seq DESC LIMIT 1",
             params![conversation, question.id], |row| row.get(0),
@@ -77,7 +87,6 @@ impl Store {
         } else {
             tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'user_decision_requested',?2,?3)", params![conversation,payload,now_ms()])?;
         }
-        tx.commit()?;
         Ok(())
     }
 

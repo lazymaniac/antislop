@@ -154,7 +154,7 @@ fn replay_terminal(
     turn: &str,
     args: &Value,
 ) -> Result<bool> {
-    if !is_terminal(name)
+    if (!is_terminal(name) && !matches!(name, "resume_task" | "retry_task"))
         || state
             .receipt
             .as_ref()
@@ -199,7 +199,11 @@ fn finish_dispatch(
     )?;
     record_wait_time(&mut state, name);
     let mut response = response?;
-    if is_terminal(name)
+    let recovery_question = matches!(name, "resume_task" | "retry_task")
+        && response["approval_required"] == true
+        && response["recorded"] == true
+        && response["result"]["type"] == "question";
+    if (is_terminal(name) || recovery_question)
         && !(name == "wait_for_answer"
             && response["state"] == "answered"
             && response["recorded"] != true)

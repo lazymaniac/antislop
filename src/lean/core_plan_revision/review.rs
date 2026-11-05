@@ -46,10 +46,19 @@ impl Core {
     fn review_revision(self: &Arc<Self>, data: &ReviewData<'_>) -> Result<()> {
         let context = data.context;
         let previous = previous_specs(context);
+        let affected = affected_tasks(context.baseline, context.specs, &context.revision.redo);
+        let held: Vec<_> = context.baseline.iter()
+            .filter(|task| task.status == status::COORDINATING && !affected.contains(&task.id))
+            .map(|task| json!({"task":task.spec["id"],"runtime_id":task.id,"status":task.status,"input_generation":task.input_generation}))
+            .collect();
         let reason = format!(
             "{}\nRuntime checkpoint bindings (metadata, not acceptance criteria): {}. An empty new_transfers list does not remove existing_checkpoints. Ordinary contract edits preserve existing reports/base/result and request reassessment; do not demand a duplicate transfer or new recovery stage for code already attached to a task. Successors must assess retained code against their own goals before approval and integration. No source approval is inherited.",
             context.revision.reason,
             checkpoint_review_context(context.revision, context.baseline, data.checkpoints),
+        );
+        let reason = format!(
+            "{reason}\nPreserved coordinating tasks (authoritative runtime metadata, not acceptance criteria): {}. The scheduler only launches queued or skipped tasks; coordinating is a persisted scheduler-enforced hold even when deferred=false. An unaffected task keeps its status and input generation when this revision adds independent work. Approved options are already complete, not automatically runnable. Adding permitted read-only analysis does not release a preserved coordinating writer. Do not require deferred/release edits solely to restate this existing hold: those edits change the scoped contract and inputs. A trusted user/operator may recover the same task only after its concrete resume condition is fulfilled; the orchestrator retry_task tool cannot recover coordinating tasks. This metadata grants no permission and approves no work.",
+            serde_json::to_string(&held)?
         );
         let review = self
             .review(

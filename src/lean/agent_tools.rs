@@ -61,7 +61,7 @@ impl Core {
             "ask_user" | "submit_requirements" => {
                 self.interview_tool(conversation, role, turn, tool, args)
             }
-            "answer_agent" | "defer_to_user" | "retry_task" => {
+            "answer_agent" | "defer_to_user" | "retry_task" | "resume_task" => {
                 self.orchestrator_tool(conversation, role, turn, tool, args)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),

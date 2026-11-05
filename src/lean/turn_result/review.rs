@@ -26,10 +26,19 @@ pub fn task_tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResu
             selection: None,
         }),
         "select" => selection_tool(args),
-        "report_blocker" => Ok(TurnResult::Blocked {
-            report: super::tool_results::required_text(args, "report")?,
-            resume_condition: super::tool_results::required_text(args, "resume_condition")?,
-        }),
+        "report_blocker" => {
+            let report = super::tool_results::required_text(args, "report")?;
+            let resume_condition = super::tool_results::required_text(args, "resume_condition")?;
+            let remaining = args["unblocked_work_remaining"].as_bool().ok_or_else(|| crate::Error::Invalid("unblocked_work_remaining: required boolean; check whether any permitted independent edits or analysis remain".into()))?;
+            require(
+                !remaining,
+                "independent permitted work remains: continue it in this turn and keep only the dependent steps held; do not end the whole task on a later validation prerequisite",
+            )?;
+            Ok(TurnResult::Blocked {
+                report,
+                resume_condition,
+            })
+        }
         "review" => review(optional_text(args, "report"), args),
         other => Err(crate::Error::Invalid(format!(
             "{other} is not a task result"

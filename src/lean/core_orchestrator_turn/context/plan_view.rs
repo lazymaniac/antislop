@@ -75,11 +75,11 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
         .transpose()?
         .unwrap_or_default();
     let states = graph.iter().map(|task| json!({
-        "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round, "deferred":task.spec["deferred"] == true,
+        "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
         "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
         "recovery":if task.spec["deferred"] == true { "execution held by runtime; release only by reviewed revision after authorization" } else { match task.status.as_str() {
             status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
-            status::COORDINATING => "revise_plan to repair the stalled contract or dependencies",
+            status::COORDINATING => "resume_task with current round/input_generation for a resolved blocker or independent authorized work; keep unresolved steps held; revise_plan for contract/dependency changes",
             status::WAITING => "answer_agent for the existing question, respecting its disposition",
             _ => "do not retry; preserve approved work and let queued/running tasks proceed",
         }}
@@ -129,11 +129,21 @@ mod tests {
         assert_eq!(snapshot["unfinished_checkpoints"], json!([]));
         assert_eq!(snapshot["task_states"][0]["status"], status::FAILED);
         assert_eq!(snapshot["task_states"][1]["status"], status::COORDINATING);
+        assert_eq!(
+            snapshot["task_states"][1]["input_generation"],
+            tasks[1].input_generation
+        );
         assert!(
             snapshot["task_states"][1]["recovery"]
                 .as_str()
                 .unwrap()
                 .contains("revise_plan")
+        );
+        assert!(
+            snapshot["task_states"][1]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("resume_task")
         );
         assert_eq!(snapshot["task_states"][2]["status"], status::APPROVED);
         assert_eq!(snapshot["task_states"][2]["runtime_id"], tasks[2].id);

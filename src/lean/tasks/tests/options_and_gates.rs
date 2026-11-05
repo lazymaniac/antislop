@@ -44,6 +44,7 @@ fn options_cover_all_writers_including_gates_deterministically() {
     assert_eq!(full, with_options(input));
     assert_eq!(full.len(), 14); // Eight original tasks, six writers/options.
     validate(&full).unwrap(); // Also proves no cycles or forward references.
+    assert_eq!(with_options(with_required_agents(full.clone())), full);
     for (index, writer) in full.iter().enumerate().filter(|(_, task)| task.writes) {
         let options = &full[index - 1];
         assert_eq!(options.kind, WorkKind::Options);
@@ -317,4 +318,44 @@ fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_
         ordered.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
         ["diagnosis", "writer-options", "writer"]
     );
+}
+
+#[test]
+fn refinalization_preserves_a_read_only_consumers_explicit_options_dependency() {
+    for required_gates in [false, true] {
+        let finish = |plan| {
+            with_options(if required_gates {
+                with_required_agents(plan)
+            } else {
+                plan
+            })
+        };
+        let mut plan = finish(vec![options_test_task("writer", true)]);
+        let options_id = plan
+            .iter()
+            .find(|task| task.options_for.as_deref() == Some("writer"))
+            .unwrap()
+            .id
+            .clone();
+        let mut consumer = options_test_task("construction", false);
+        consumer.kind = WorkKind::Analysis;
+        consumer.depends_on = vec![options_id.clone()];
+        plan.push(consumer);
+        for _ in 0..3 {
+            plan = finish(plan);
+            let construction = plan.iter().find(|task| task.id == "construction").unwrap();
+            assert_eq!(
+                construction.depends_on.as_slice(),
+                std::slice::from_ref(&options_id),
+                "finalization dropped an authored input edge"
+            );
+            assert_eq!(
+                plan.iter()
+                    .filter(|task| task.options_for.as_deref() == Some("writer"))
+                    .count(),
+                1
+            );
+            validate(&plan).unwrap();
+        }
+    }
 }

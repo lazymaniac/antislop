@@ -59,8 +59,8 @@ pub(super) fn unfinished_plans(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(St
 
 impl Store {
     pub(super) fn mark_tasks_interrupted(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        for (id, report) in unfinished_task_rows(tx)? {
-            self.mark_task_interrupted(tx, &id, report.as_deref())?;
+        for (id, report, task_status) in unfinished_task_rows(tx)? {
+            self.mark_task_interrupted(tx, &id, report.as_deref(), task_status != "queued")?;
         }
         Ok(())
     }
@@ -70,6 +70,7 @@ impl Store {
         tx: &rusqlite::Transaction<'_>,
         id: &str,
         report: Option<&str>,
+        was_running: bool,
     ) -> Result<()> {
         let durable:Option<String>=tx.query_row("SELECT r.result FROM turns t JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id LEFT JOIN agent_results r ON r.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1 AND s.round=(SELECT round FROM tasks WHERE id=?1) AND x.generation=coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0) ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",[id],|r|r.get(0)).optional()?.flatten();
         let completed = durable
@@ -80,11 +81,11 @@ impl Store {
         if completed && !correction {
             tx.execute("UPDATE tasks SET feedback=json_set(coalesce(feedback,'{}'),'$.resume_role','reviewer') WHERE id=?1",[id])?;
         }
-        let mut text = interrupted_report(self, report)?;
+        let mut text = interrupted_report(self, report, was_running)?;
         if text.is_none() && completed {
             let result: Value =
                 serde_json::from_str(durable.as_deref().expect("completed result"))?;
-            text = interrupted_report(self, result["report"].as_str())?;
+            text = interrupted_report(self, result["report"].as_str(), was_running)?;
         }
         let encoded = text
             .as_deref()
@@ -98,15 +99,22 @@ impl Store {
     }
 }
 
-fn unfinished_task_rows(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(String, Option<String>)>> {
-    let mut statement =
-        tx.prepare("SELECT id,report FROM tasks WHERE status IN ('queued','working','reviewing')")?;
+fn unfinished_task_rows(
+    tx: &rusqlite::Transaction<'_>,
+) -> Result<Vec<(String, Option<String>, String)>> {
+    let mut statement = tx.prepare(
+        "SELECT id,report,status FROM tasks WHERE status IN ('queued','working','reviewing')",
+    )?;
     Ok(statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<_, _>>()?)
 }
 
-fn interrupted_report(store: &Store, report: Option<&str>) -> Result<Option<String>> {
+fn interrupted_report(
+    store: &Store,
+    report: Option<&str>,
+    was_running: bool,
+) -> Result<Option<String>> {
     let mut text = report
         .map(|report| store.content.decode(report))
         .transpose()?
@@ -120,7 +128,7 @@ fn interrupted_report(store: &Store, report: Option<&str>) -> Result<Option<Stri
         // Normalize old notice-only rows too, so fresh tasks start with a worker.
         return Ok(None);
     }
-    if !text.trim_end().ends_with(NOTICE) {
+    if was_running && !text.trim_end().ends_with(NOTICE) {
         text.push_str("\n\n");
         text.push_str(NOTICE);
     }

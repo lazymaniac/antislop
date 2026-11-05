@@ -4,7 +4,7 @@ mod comments;
 #[path = "comments_and_mail/mail.rs"]
 mod mail;
 use comments::*;
-use mail::*;
+pub(super) use mail::{append_mail_event, insert_mail_row};
 
 impl Store {
     /// Approved writers for this project, most recently approved first.

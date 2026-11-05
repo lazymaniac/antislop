@@ -185,15 +185,9 @@ fn expand_gate_dependencies(
 /// When authored tasks depend on generated gates, the pipeline is placed after
 /// upstream tasks and before those consumers, rather than after all writers.
 pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
-    let generated: BTreeSet<_> = tasks
-        .iter()
-        .filter(|task| task.options_for.is_some())
-        .map(|task| task.id.clone())
-        .collect();
-    tasks.retain(|task| !task.quality_gate && task.options_for.is_none());
-    for task in &mut tasks {
-        task.depends_on.retain(|id| !generated.contains(id));
-    }
+    // Existing options may also be explicit inputs of independent consumers.
+    // Keep their identities and edges while the generated gate pipeline refreshes.
+    tasks.retain(|task| !task.quality_gate);
     if !tasks.iter().any(TaskContract::changes_code) {
         let gates: BTreeSet<_> = PREDEFINED_AGENT_POOL
             .iter()
@@ -207,12 +201,13 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     resolve_gate_dependencies(&mut tasks);
     let missing = missing_quality_agents(&tasks);
     if missing.is_empty() {
-        return tasks;
+        return refresh_existing_options(tasks);
     }
     let mut gates = GatePlan::new(&tasks, missing);
     while let Some(task) = gates.next() {
         tasks.push(task);
     }
+    let tasks = refresh_existing_options(tasks);
     // Referenced gates can precede authored tasks instead of being appended.
     // Preserve invalid graphs for the caller's validation to report the cause.
     super::plan::order_graph(tasks.clone()).unwrap_or(tasks)
@@ -244,11 +239,14 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
                 .map(|target| (target.clone(), t.id.clone()))
         })
         .collect();
-    let old_ids: BTreeSet<_> = previous.values().cloned().collect();
     let mut ids: BTreeSet<_> = tasks.iter().map(|task| task.id.clone()).collect();
     let mut result = Vec::new();
     for mut task in tasks.into_iter().filter(|t| t.options_for.is_none()) {
-        task.depends_on.retain(|id| !old_ids.contains(id));
+        // Only the owner's generated edge is replaced. Other tasks may
+        // legitimately require this exact options result as authored input.
+        if let Some(own_options) = previous.get(&task.id) {
+            task.depends_on.retain(|id| id != own_options);
+        }
         if task.changes_code() {
             let mut prerequisite = options_task(&task, &mut ids);
             if let Some(id) = previous.get(&task.id) {

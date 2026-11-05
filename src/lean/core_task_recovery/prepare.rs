@@ -6,6 +6,16 @@ pub(super) fn load(core: &Core, req: TaskRecoveryRequest, actor: &str) -> Result
             core.store.accepted_plan(&req.conversation)?.as_deref() == Some(&req.plan),
             "retry_task plan was replaced; use a fresh orchestration turn",
         )?;
+        // This runs under the graph lock, including the count check and recovery
+        // event commit; concurrent coordinator turns cannot exceed the limit.
+        core.assert_orchestrator_recovery_budget(&req.conversation, &req.task)?;
+        require(
+            !matches!(
+                core.store.open_user_decision(&req.conversation)?,
+                Some(Some(_))
+            ),
+            "an unanswered user decision is open; task recovery cannot bypass it",
+        )?;
     }
     let config = core.config_snapshot();
     let conv = core.store.conversation(&req.conversation)?;

@@ -43,6 +43,12 @@ impl Core {
         } else {
             self.store.add_message(conversation, "user", text)?
         };
+        if let Err(error) = self.apply_recovery_answers(conversation) {
+            self.notice(
+                conversation,
+                &format!("User answer recorded; recovery could not be applied: {error}"),
+            );
+        }
         self.wake(conversation);
         Ok(message)
     }

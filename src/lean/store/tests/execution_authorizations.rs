@@ -278,11 +278,65 @@ fn execution_grant_rejects_mismatched_answers_conversations_and_stale_plan_heads
 
 #[test]
 fn planned_inputs_can_refresh_only_before_the_first_authorized_writer_turn() {
-    let (_dir, store, grant, tasks) = fixture();
+    let (_dir, store, grant, mut tasks) = fixture();
+    let finalized = crate::lean::tasks::with_options(vec![grant.contract.clone()]);
+    let options = finalized.iter().find(|t| t.options_for.is_some()).unwrap();
+    let writer = finalized
+        .iter()
+        .find(|t| t.id == grant.contract.id)
+        .unwrap();
+    tasks[1].spec = serde_json::to_value(options).unwrap();
+    store
+        .db()
+        .execute(
+            "UPDATE tasks SET spec=?2 WHERE id=?1",
+            params![tasks[1].id, serde_json::to_string(options).unwrap()],
+        )
+        .unwrap();
+    store.update_task(&tasks[1]).unwrap();
     answer(&store, &grant);
     store.authorize_task_execution(&grant).unwrap();
+    let entries = store
+        .ledger_entries(
+            &grant.conversation,
+            &store.plan_run(&grant.plan).unwrap().unwrap(),
+            None,
+        )
+        .unwrap();
+    let check = |contract: &TaskContract| {
+        store.validate_authorized_plan_constraints(
+            &grant.conversation,
+            &grant.plan,
+            std::slice::from_ref(contract),
+            &tasks,
+            &[],
+            &entries,
+        )
+    };
+    assert!(
+        check(writer).is_ok(),
+        "runtime-owned options must not invalidate the grant"
+    );
+    let mut expanded = writer.clone();
+    expanded.depends_on.push("another-authored-input".into());
+    assert!(
+        check(&expanded).is_err(),
+        "authored dependencies remain bound"
+    );
+    // Older runtime versions stored the full finalized contract hash.
+    store
+        .db()
+        .execute(
+            "UPDATE execution_authorizations SET contract_hash=?2 WHERE decision_id=?1",
+            params![
+                grant.decision,
+                crate::hash(serde_json::to_vec(writer).unwrap())
+            ],
+        )
+        .unwrap();
+    assert!(check(writer).is_ok());
     let mut task = tasks[0].clone();
-    task.spec = serde_json::to_value(&grant.contract).unwrap();
+    task.spec = serde_json::to_value(writer).unwrap();
     task.input_generation += 2; // options completed after the reviewed graph update
     store
         .db()
@@ -295,7 +349,7 @@ fn planned_inputs_can_refresh_only_before_the_first_authorized_writer_turn() {
         .db()
         .execute(
             "UPDATE tasks SET spec=?2 WHERE id=?1",
-            params![task.id, serde_json::to_string(&grant.contract).unwrap()],
+            params![task.id, serde_json::to_string(writer).unwrap()],
         )
         .unwrap();
     store.update_task(&task).unwrap();

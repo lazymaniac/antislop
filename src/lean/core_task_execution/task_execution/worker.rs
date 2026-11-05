@@ -434,59 +434,63 @@ mod tests {
     }
 
     #[test]
-    fn blocked_checkpoint_is_not_a_completed_result_for_review_only_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
-        let core = Core::open(&dir.path().join("state"), config).unwrap();
-        let conversation = core
-            .store
-            .create_conversation(dir.path().to_str().unwrap())
-            .unwrap()
-            .id;
-        let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","goal":"Inspect saved code","kind":"analysis"})]).unwrap().remove(0);
-        let worker = format!("worker:{}", task.id);
-        let reviewer = format!("reviewer:{}", task.id);
-        let turn = core
-            .store
-            .start_turn(&conversation, &worker, "fixture", 0, Some(&task.plan_id))
-            .unwrap();
-        core.store
-            .save_turn_result(
-                &turn.id,
-                &crate::lean::turn_result::TurnResult::Blocked {
-                    report: "Checkpoint preserved, build unavailable".into(),
-                    resume_condition: "Runtime repaired".into(),
-                },
-            )
-            .unwrap();
-        core.store
-            .finish_turn(&turn.id, store::TurnStatus::Done, None)
-            .unwrap();
-        task.report = Some("Checkpoint preserved, build unavailable".into());
-        task.feedback = Some(json!({"resume_role":"reviewer"}));
-        core.store.update_task(&task).unwrap();
-        assert!(!is_recheck(&core, &conversation, &task, &worker, &reviewer).unwrap());
-        task.round = 1;
-        core.store.update_task(&task).unwrap();
-        let turn = core
-            .store
-            .start_turn(&conversation, &worker, "fixture", 0, Some(&task.plan_id))
-            .unwrap();
-        core.store
-            .save_turn_result(
-                &turn.id,
-                &crate::lean::turn_result::TurnResult::Completed {
-                    summary: "Inspected".into(),
-                    report: "Actual completed inspection".into(),
-                    selection: None,
-                },
-            )
-            .unwrap();
-        core.store
-            .finish_turn(&turn.id, store::TurnStatus::Done, None)
-            .unwrap();
-        task.report = Some("Actual completed inspection".into());
-        core.store.update_task(&task).unwrap();
-        assert!(is_recheck(&core, &conversation, &task, &worker, &reviewer).unwrap());
+    fn incomplete_checkpoints_are_not_completed_results_for_review_only_recovery() {
+        for result in [
+            crate::lean::turn_result::TurnResult::Blocked {
+                report: "Checkpoint preserved, build unavailable".into(),
+                resume_condition: "Runtime repaired".into(),
+            },
+            crate::lean::turn_result::TurnResult::NeedsInput {
+                request: "fixture-question".into(),
+                checkpoint: "Awaiting an answer, not completed work".into(),
+            },
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config =
+                Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+            let core = Core::open(&dir.path().join("state"), config).unwrap();
+            let conversation = core
+                .store
+                .create_conversation(dir.path().to_str().unwrap())
+                .unwrap()
+                .id;
+            let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","goal":"Inspect saved code","kind":"analysis"})]).unwrap().remove(0);
+            let worker = format!("worker:{}", task.id);
+            let reviewer = format!("reviewer:{}", task.id);
+            let turn = core
+                .store
+                .start_turn(&conversation, &worker, "fixture", 0, Some(&task.plan_id))
+                .unwrap();
+            core.store.save_turn_result(&turn.id, &result).unwrap();
+            core.store
+                .finish_turn(&turn.id, store::TurnStatus::Done, None)
+                .unwrap();
+            task.report = Some("Checkpoint preserved, build unavailable".into());
+            task.feedback = Some(json!({"resume_role":"reviewer"}));
+            core.store.update_task(&task).unwrap();
+            assert!(!is_recheck(&core, &conversation, &task, &worker, &reviewer).unwrap());
+            task.round = 1;
+            core.store.update_task(&task).unwrap();
+            let turn = core
+                .store
+                .start_turn(&conversation, &worker, "fixture", 0, Some(&task.plan_id))
+                .unwrap();
+            core.store
+                .save_turn_result(
+                    &turn.id,
+                    &crate::lean::turn_result::TurnResult::Completed {
+                        summary: "Inspected".into(),
+                        report: "Actual completed inspection".into(),
+                        selection: None,
+                    },
+                )
+                .unwrap();
+            core.store
+                .finish_turn(&turn.id, store::TurnStatus::Done, None)
+                .unwrap();
+            task.report = Some("Actual completed inspection".into());
+            core.store.update_task(&task).unwrap();
+            assert!(is_recheck(&core, &conversation, &task, &worker, &reviewer).unwrap());
+        }
     }
 }

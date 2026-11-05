@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn insert_mail_row(
+pub(in crate::lean::store) fn insert_mail_row(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
     role: &str,
@@ -40,7 +40,7 @@ pub(super) fn append_mail_source(
     Ok(())
 }
 
-pub(super) fn append_mail_event(
+pub(in crate::lean::store) fn append_mail_event(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
     mail: &Mail,

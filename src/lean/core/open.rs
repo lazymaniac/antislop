@@ -143,6 +143,12 @@ fn restore_conversations(core: &Arc<Core>) -> Result<()> {
 }
 
 fn restore_conversation(core: &Arc<Core>, conversation: &str) -> Result<()> {
+    if let Err(error) = core.apply_recovery_answers(conversation) {
+        core.notice(
+            conversation,
+            &format!("Recorded recovery answer could not be applied at startup: {error}"),
+        );
+    }
     if core.autonomous(conversation)? {
         core.store.finish_interview(conversation)?;
     }
@@ -179,7 +185,13 @@ fn resume_interrupted(core: &Arc<Core>, plans: &[(String, String)]) {
                 return Ok(());
             }
             core.store.requeue_after_restart(conversation, plan)?;
-            core.maybe_continue_plan(conversation, plan)
+            // Queued work may be held by dependencies or explicit deferral.
+            // A restart alone must not re-announce those blockers or wake a
+            // coordinator when no worker can actually continue.
+            if core.has_runnable_dependents(plan)? {
+                core.maybe_continue_plan(conversation, plan)?;
+            }
+            Ok(())
         });
         if let Err(error) = resumed {
             core.notice(

@@ -166,10 +166,10 @@ impl Store {
                 continue;
             }
             // Legacy text is a result only when no structured worker report exists.
-            // A persisted blocker or an older input generation must not become
+            // A blocked/needs-input checkpoint or an older input generation must not become
             // a synthetic completion when recovering or starting another round.
             let structured: bool = self.db().query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1 AND json_extract(r.result,'$.type') IN ('completed','blocked'))",
+                "SELECT EXISTS(SELECT 1 FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1)",
                 [&current.id], |row| row.get(0),
             )?;
             if let Some(report) = current.report.filter(|_| !structured) {

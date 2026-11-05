@@ -13,7 +13,17 @@ impl Core {
         tasks_write: bool,
     ) {
         self.warn_of_uncommitted(conversation, tasks_write);
-        while !self.run_plan_cycle(conversation, plan_id, cancel) {}
+        loop {
+            match self.run_plan_cycle(conversation, plan_id, cancel) {
+                Ok(false) => {}
+                Ok(true) => break,
+                Err(error) => {
+                    self.notice(conversation, &format!("plan {plan_id} stopped: {error}"));
+                    self.clear_running_plan(conversation);
+                    break;
+                }
+            }
+        }
     }
 
     fn run_plan_cycle(
@@ -21,16 +31,16 @@ impl Core {
         conversation: &str,
         plan_id: &str,
         cancel: &AtomicBool,
-    ) -> bool {
+    ) -> Result<bool> {
         self.run_plan(conversation, plan_id, cancel);
         self.wait_for_revision_jobs(conversation, cancel);
         let graph = self.graph_updates.lock().expect("graph update mutex");
         if cancel.load(Ordering::SeqCst) {
             self.clear_running_plan(conversation);
-            return true;
+            return Ok(true);
         }
-        if self.has_runnable_dependents(plan_id) {
-            return false;
+        if self.has_runnable_dependents(plan_id)? {
+            return Ok(false);
         }
         drop(graph);
         self.finish_plan_run(conversation, plan_id, cancel)
@@ -48,14 +58,13 @@ impl Core {
         }
     }
 
-    fn has_runnable_dependents(&self, plan_id: &str) -> bool {
-        self.store.plan(plan_id).is_ok_and(|tasks| {
-            tasks.iter().any(|task| {
-                task.status == status::QUEUED
-                    && task.spec["deferred"] != true
-                    && dependencies_approved(task, &tasks)
-            })
-        })
+    pub(in crate::lean) fn has_runnable_dependents(&self, plan_id: &str) -> Result<bool> {
+        let tasks = self.store.plan(plan_id)?;
+        Ok(tasks.iter().any(|task| {
+            task.status == status::QUEUED
+                && task.spec["deferred"] != true
+                && dependencies_approved(task, &tasks)
+        }))
     }
 
     fn clear_running_plan(&self, conversation: &str) {
@@ -67,15 +76,15 @@ impl Core {
         conversation: &str,
         plan_id: &str,
         cancel: &AtomicBool,
-    ) -> bool {
+    ) -> Result<bool> {
         let graph = self.graph_updates.lock().expect("graph update mutex");
-        if self.has_runnable_dependents(plan_id) {
-            return false;
+        if self.has_runnable_dependents(plan_id)? {
+            return Ok(false);
         }
-        let tasks = self.store.plan(plan_id).unwrap_or_default();
+        let tasks = self.store.plan(plan_id)?;
         if has_blocked_tasks(&tasks) {
             self.finish_blocked_plan(conversation, &tasks);
-            true
+            Ok(true)
         } else {
             drop(graph);
             self.finish_audited_plan(conversation, plan_id, cancel)
@@ -87,25 +96,21 @@ impl Core {
         conversation: &str,
         plan_id: &str,
         cancel: &AtomicBool,
-    ) -> bool {
-        let snapshot = self.audited_plan_snapshot(plan_id);
+    ) -> Result<bool> {
+        let snapshot = self.audited_plan_snapshot(plan_id)?;
         let report = self.plan_report(conversation, plan_id, cancel);
         let _graph = self.graph_updates.lock().expect("graph update mutex");
-        if self.audited_plan_changed(conversation, plan_id, cancel, &snapshot) {
-            return false;
+        if self.audited_plan_changed(conversation, plan_id, cancel, &snapshot)? {
+            return Ok(false);
         }
         self.publish_plan_report(conversation, report);
-        true
+        Ok(true)
     }
 
-    fn audited_plan_snapshot(&self, plan_id: &str) -> AuditedPlanSnapshot {
-        let revision = self.store.plan_revision(plan_id).ok();
-        let basis = self
-            .store
-            .plan(plan_id)
-            .map(|tasks| plan_scope_hash(&tasks))
-            .ok();
-        AuditedPlanSnapshot { revision, basis }
+    fn audited_plan_snapshot(&self, plan_id: &str) -> Result<AuditedPlanSnapshot> {
+        let revision = self.store.plan_revision(plan_id)?;
+        let basis = plan_scope_hash(&self.store.plan(plan_id)?);
+        Ok(AuditedPlanSnapshot { revision, basis })
     }
 
     fn audited_plan_changed(
@@ -114,32 +119,26 @@ impl Core {
         plan_id: &str,
         cancel: &AtomicBool,
         snapshot: &AuditedPlanSnapshot,
-    ) -> bool {
-        !cancel.load(Ordering::SeqCst)
+    ) -> Result<bool> {
+        Ok(!cancel.load(Ordering::SeqCst)
             && (self
                 .revision_jobs
                 .lock()
                 .expect("revision jobs mutex")
                 .contains_key(conversation)
-                || self.store.plan_revision(plan_id).ok() != snapshot.revision
-                || self
-                    .store
-                    .plan(plan_id)
-                    .map(|tasks| plan_scope_hash(&tasks))
-                    .ok()
-                    != snapshot.basis
-                || self.has_runnable_dependents(plan_id))
+                || self.store.plan_revision(plan_id)? != snapshot.revision
+                || plan_scope_hash(&self.store.plan(plan_id)?) != snapshot.basis
+                || self.has_runnable_dependents(plan_id)?))
     }
 
     fn publish_plan_report(self: &Arc<Self>, conversation: &str, report: Result<String>) {
         let mut plans = self.plans.lock().expect("plans mutex");
-        if let Ok(report) = report
-            && self
-                .store
-                .add_message(conversation, RUNTIME, &report)
-                .is_ok()
-        {
-            self.wake(conversation);
+        match report.and_then(|report| self.store.add_message(conversation, RUNTIME, &report)) {
+            Ok(_) => self.wake(conversation),
+            Err(error) => self.notice(
+                conversation,
+                &format!("plan report could not be published: {error}"),
+            ),
         }
         plans.remove(conversation);
     }
@@ -242,7 +241,15 @@ impl Core {
         cancel.store(false, Ordering::SeqCst);
         match self.unanswered(conversation) {
             Ok(Some(upto)) => Some(upto),
-            _ => {
+            Ok(None) => {
+                running.remove(conversation);
+                None
+            }
+            Err(error) => {
+                self.notice(
+                    conversation,
+                    &format!("could not read pending conversation messages: {error}"),
+                );
                 running.remove(conversation);
                 None
             }
@@ -258,8 +265,8 @@ impl Core {
 }
 
 struct AuditedPlanSnapshot {
-    revision: Option<i64>,
-    basis: Option<String>,
+    revision: i64,
+    basis: String,
 }
 
 fn format_uncommitted_notice(files: &[String]) -> String {
@@ -280,7 +287,7 @@ fn format_uncommitted_notice(files: &[String]) -> String {
 fn dependencies_approved(task: &Task, tasks: &[Task]) -> bool {
     task.spec["depends_on"]
         .as_array()
-        .is_some_and(|dependencies| {
+        .is_none_or(|dependencies| {
             dependencies.iter().all(|dependency| {
                 tasks.iter().any(|upstream| {
                     upstream.spec["id"] == *dependency
@@ -294,6 +301,61 @@ fn dependencies_approved(task: &Task, tasks: &[Task]) -> bool {
 #[cfg(test)]
 mod deferred_tests {
     use super::*;
+    #[test]
+    fn a_plan_read_error_is_reported_and_releases_the_running_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open(
+            &dir.path().join("state"),
+            Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap(),
+        )
+        .unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let task = core
+            .store
+            .add_plan(
+                &conversation,
+                &[json!({"id":"bad","title":"Bad","goal":"Do work","kind":"analysis"})],
+            )
+            .unwrap()
+            .remove(0);
+        core.store
+            .db()
+            .execute(
+                "UPDATE tasks SET spec='invalid-json',status='queued' WHERE id=?1",
+                [&task.id],
+            )
+            .unwrap();
+        let error = core
+            .has_runnable_dependents(&task.plan_id)
+            .unwrap_err()
+            .to_string();
+        core.plans
+            .lock()
+            .unwrap()
+            .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));
+        core.plan_runner(&conversation, &task.plan_id, &AtomicBool::new(false), false);
+        assert!(!core.plans.lock().unwrap().contains_key(&conversation));
+        let events = core.store.events_since(&conversation, 0, 100).unwrap();
+        assert!(
+            events.iter().any(|e| e.kind == "notice"
+                && e.payload["text"]
+                    .as_str()
+                    .is_some_and(|s| s.contains(&error))),
+            "raw error must remain actionable"
+        );
+        assert!(
+            core.store
+                .messages_by(&conversation, RUNTIME, 0)
+                .unwrap()
+                .is_empty(),
+            "failed reads must never produce a successful plan report"
+        );
+    }
+
     #[test]
     fn held_work_returns_control_instead_of_spinning_the_plan_runner() {
         let dir = tempfile::tempdir().unwrap();
@@ -312,8 +374,11 @@ mod deferred_tests {
             .lock()
             .unwrap()
             .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));
-        assert!(!core.has_runnable_dependents(&tasks[0].plan_id));
-        assert!(core.run_plan_cycle(&conversation, &tasks[0].plan_id, &AtomicBool::new(false)));
+        assert!(!core.has_runnable_dependents(&tasks[0].plan_id).unwrap());
+        assert!(
+            core.run_plan_cycle(&conversation, &tasks[0].plan_id, &AtomicBool::new(false))
+                .unwrap()
+        );
         let reports = core.store.messages_by(&conversation, RUNTIME, 0).unwrap();
         assert!(
             reports

@@ -86,10 +86,12 @@ fn upstream_tasks(
             break;
         }
     }
-    let placed = tasks.iter().any(|task| downstream.contains(&task.id));
+    let placed = tasks
+        .iter()
+        .any(|task| task.options_for.is_none() && downstream.contains(&task.id));
     let upstream = tasks
         .iter()
-        .filter(|task| !downstream.contains(&task.id))
+        .filter(|task| task.options_for.is_none() && !downstream.contains(&task.id))
         .cloned()
         .collect();
     (placed, upstream)

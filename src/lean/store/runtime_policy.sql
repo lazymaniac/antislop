@@ -51,3 +51,22 @@ CREATE TABLE IF NOT EXISTS execution_authorizations(
  answer_seq INTEGER NOT NULL REFERENCES messages(seq), base_revision INTEGER NOT NULL,
  created_ms INTEGER NOT NULL, PRIMARY KEY(conversation_id,decision_id));
 CREATE INDEX IF NOT EXISTS execution_authorizations_by_task ON execution_authorizations(plan_id,task_id,generation);
+
+-- A question authorizes one bound continuation, never a new execution grant.
+CREATE TABLE IF NOT EXISTS recovery_decisions(
+ conversation_id TEXT NOT NULL REFERENCES conversations(id), decision_id TEXT NOT NULL,
+ plan_id TEXT NOT NULL REFERENCES plans(id), task_id TEXT NOT NULL REFERENCES tasks(id),
+ generation INTEGER NOT NULL, round INTEGER NOT NULL, freshness_token TEXT NOT NULL,
+ guidance TEXT NOT NULL, answer_seq INTEGER REFERENCES messages(seq),
+ state TEXT NOT NULL DEFAULT 'pending', created_ms INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id,decision_id), UNIQUE(task_id,generation,round));
+CREATE INDEX IF NOT EXISTS recovery_decisions_ready
+ ON recovery_decisions(conversation_id,created_ms)
+ WHERE state='pending' AND answer_seq IS NOT NULL;
+
+-- Additive scope bindings. Missing rows preserve legacy edit-only decisions.
+CREATE TABLE IF NOT EXISTS recovery_scopes(
+ conversation_id TEXT NOT NULL, decision_id TEXT NOT NULL,
+ scope TEXT NOT NULL CHECK(scope IN ('edits_only','existing_authorized_execution')),
+ authorization_hash TEXT, PRIMARY KEY(conversation_id,decision_id),
+ FOREIGN KEY(conversation_id,decision_id) REFERENCES recovery_decisions(conversation_id,decision_id));

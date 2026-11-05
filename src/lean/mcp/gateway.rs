@@ -50,6 +50,7 @@ pub(crate) const TOOLS: &[&str] = &[
     "answer_agent",
     "defer_to_user",
     "retry_task",
+    "resume_task",
     "revise_plan",
     "request_replan",
     "submit_ledger",

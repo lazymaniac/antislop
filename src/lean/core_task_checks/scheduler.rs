@@ -322,9 +322,13 @@ mod tests {
             core.store.update_task(task).unwrap();
         }
         let cancel = AtomicBool::new(false);
-        let scheduler = Scheduler::new(&core, &conversation, &tasks[0].plan_id, &cancel);
+        let scheduler_plan = tasks[0].plan_id.clone();
+        let scheduler = Scheduler::new(&core, &conversation, &scheduler_plan, &cancel);
         assert!(!scheduler.is_runnable(&tasks[0], "future"));
         assert!(scheduler.is_runnable(&tasks[2], "diagnose"));
+        tasks[2].status = status::COORDINATING.into();
+        assert!(!scheduler.is_runnable(&tasks[2], "diagnose"));
+        assert!(!scheduler.is_schedulable(&tasks[2], "diagnose"));
         tasks[2].status = status::APPROVED.into();
         core.store.update_task(&tasks[2]).unwrap();
         tasks[0].status = status::APPROVED.into();

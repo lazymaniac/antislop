@@ -188,7 +188,9 @@ fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
     let mut tasks = store.add_plan(&conversation.id, &[
         serde_json::json!({"id":"fresh","title":"Fresh","goal":"Run","kind":"analysis"}),
         serde_json::json!({"id":"legacy","title":"Legacy","goal":"Run","kind":"analysis"}),
-        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","kind":"analysis"})
+        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","kind":"analysis"}),
+        serde_json::json!({"id":"working","title":"Working","goal":"Continue","kind":"analysis"}),
+        serde_json::json!({"id":"reviewing","title":"Reviewing","goal":"Continue","kind":"analysis"})
     ]).unwrap();
     for task in &mut tasks {
         task.status = "queued".into();
@@ -199,6 +201,11 @@ fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
     store.update_task(&tasks[1]).unwrap();
     tasks[2].report = Some("Actual retained worker findings".into());
     store.update_task(&tasks[2]).unwrap();
+    for (index, task_status) in [(3, "working"), (4, "reviewing")] {
+        tasks[index].status = task_status.into();
+        tasks[index].report = Some("Actual work before interruption".into());
+        store.update_task(&tasks[index]).unwrap();
+    }
     store.interrupt_unfinished_tasks().unwrap();
     let once = store.plan(&tasks[0].plan_id).unwrap();
     assert!(once[0].report.is_none());
@@ -220,9 +227,25 @@ fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
             .unwrap()
             .starts_with("Actual retained worker findings")
     );
+    assert_eq!(
+        once[2].report, tasks[2].report,
+        "an untouched queued checkpoint is not an interrupted execution"
+    );
+    for index in [3, 4] {
+        assert_eq!(once[index].status, "queued");
+        assert!(
+            once[index]
+                .report
+                .as_ref()
+                .unwrap()
+                .contains("[interrupted]")
+        );
+    }
     store.interrupt_unfinished_tasks().unwrap();
     let twice = store.plan(&tasks[0].plan_id).unwrap();
     assert!(twice[0].report.is_none());
     assert!(twice[1].report.is_none());
-    assert_eq!(twice[2].report, once[2].report);
+    for index in [2, 3, 4] {
+        assert_eq!(twice[index].report, once[index].report);
+    }
 }

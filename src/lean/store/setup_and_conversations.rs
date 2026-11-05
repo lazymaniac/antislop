@@ -150,6 +150,7 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         let seq = insert_message(&tx, conversation, author, &stored_text)?;
+        super::recovery_decisions::capture_answer(&tx, conversation, author, text, seq)?;
         maybe_start_requirements_checkpoint(&tx, conversation, author, text, seq)?;
         tx.commit()?;
         Ok(Message {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::lean::ledger::LedgerChange;
+use crate::lean::status;
 use crate::lean::store::RevisionLease;
 use crate::lean::tasks::TaskContract;
 use serde_json::json;
@@ -657,3 +658,76 @@ fn a_changed_project_input_outside_legacy_scope_invalidates_a_report() {
 
 #[path = "plan_revision/continuations.rs"]
 mod continuations;
+
+#[test]
+fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation() {
+    let (dir, store, conversation, _, mut baseline) = fixture();
+    baseline[0].status = status::COORDINATING.into();
+    baseline[1].status = status::APPROVED.into();
+    for task in &baseline {
+        store.update_task(task).unwrap();
+    }
+    let mut specs: Vec<TaskContract> = baseline
+        .iter()
+        .map(|task| serde_json::from_value(task.spec.clone()).unwrap())
+        .collect();
+    let mut analysis = specs[1].clone();
+    analysis.id = "construction".into();
+    analysis.title = "Read-only construction".into();
+    analysis.goal = "Read existing code and describe the missing construction".into();
+    analysis.depends_on = vec![specs[1].id.clone()];
+    specs.push(analysis.clone());
+    let revision = PlanRevision {
+        plan: baseline[0].plan_id.clone(),
+        base_revision: 0,
+        reason: "Provide concrete reviewed guidance without releasing the held writer".into(),
+        tasks: vec![analysis],
+        retire: vec![],
+        redo: vec![],
+        replacements: Default::default(),
+    };
+    let (request, _) = store
+        .reserve_revision_job(&conversation, "construction", &revision)
+        .unwrap();
+    store
+        .apply_plan_revision(
+            &conversation,
+            &revision,
+            &baseline,
+            &specs,
+            &BTreeSet::new(),
+            &RevisionLease {
+                requirement_revision: 1,
+                request: &request,
+            },
+        )
+        .unwrap();
+    let current = store.plan(&revision.plan).unwrap();
+    let held = current.iter().find(|t| t.id == baseline[0].id).unwrap();
+    assert_eq!(held.status, status::COORDINATING);
+    assert_eq!(held.input_generation, baseline[0].input_generation);
+    assert_eq!(held.spec, baseline[0].spec);
+    store.assert_task_inputs(held).unwrap();
+    assert_eq!(
+        current
+            .iter()
+            .find(|t| t.id == baseline[1].id)
+            .unwrap()
+            .status,
+        status::APPROVED
+    );
+    assert_eq!(
+        current
+            .iter()
+            .find(|t| t.spec["id"] == "construction")
+            .unwrap()
+            .status,
+        status::QUEUED
+    );
+    drop(store);
+    let reopened = Store::open(&dir.path().join("core.db")).unwrap();
+    assert_eq!(
+        reopened.task_by_id(&held.id).unwrap().unwrap().status,
+        status::COORDINATING
+    );
+}

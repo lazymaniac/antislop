@@ -662,7 +662,7 @@ fn blocked_worker_history_remains_readable_without_becoming_a_completed_result()
     let (role, blocked) = start(&core, &conversation, &tasks[0], false);
     let report = "Preserved failed qualification; equivalence not established. ą🦀\n".repeat(700);
     core.agent_tool(&conversation, &role, &blocked.id, "report_blocker", &json!({
-        "report":report, "resume_condition":"Read the preserved record before continuing analysis"
+        "report":report, "resume_condition":"Read the preserved record before continuing analysis", "unblocked_work_remaining":false
     })).unwrap();
     core.store
         .finish_turn(&blocked.id, store::TurnStatus::Done, None)
