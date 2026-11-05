@@ -129,8 +129,11 @@ fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
          that summary and can read your full report through read_dependency_result. For amendments, \
          first read dependency=self and its report_history: use result_ref for earlier input generations \
          and retain the original report/evidence rather than claiming it disappeared. Historical reports \
-         are context, not proof of current acceptance. Record actual raw command/measurement output with \
-         record_evidence before complete when raw evidence is required or too large for the report. \
+         are context, not proof of current acceptance. When a command result is required as raw evidence, \
+         record_evidence only its essentials before complete: the command, exit code and the \
+         decisive lines (errors, failures, totals), ideally under 16 KiB. Never record whole \
+         build, test or JSON event streams; filter them first, and cite a file path or hash for \
+         the rest. Copy evidence ids exactly from tool results. \
          The runtime attaches immutable MCP references automatically; reviewers use read_evidence. \
          Retain older evidence by passing its ids in complete.evidence. Do not restate the task or dependency data or paste file \
          contents; the independent reviewer checks the report against the files. \

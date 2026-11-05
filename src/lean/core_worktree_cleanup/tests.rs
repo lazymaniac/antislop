@@ -266,6 +266,44 @@ fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
 }
 
 #[test]
+fn retired_checkouts_discard_tagged_build_caches_but_keep_other_ignored_state() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let mut task = tasks[0].clone();
+    let writer = checkout(&core, &task, "g0", &commit);
+    let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# cache\n";
+    let cache = writer.join("target");
+    std::fs::create_dir_all(cache.join("debug")).unwrap();
+    std::fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
+    std::fs::write(cache.join("debug/artifact"), "bin").unwrap();
+    std::fs::write(writer.join(".gitignore"), "target/\n").unwrap();
+    git::git(&writer, &["add", ".gitignore"]).unwrap();
+    git::commit_all(&writer, "ignore target").unwrap();
+    core.set_status(&conversation, &mut task, "superseded")
+        .unwrap();
+    core.drain_worktree_cleanup();
+    drain_until(&core, || !writer.exists());
+
+    // An ignored directory without the tag is still protected.
+    let kept = checkout(&core, &tasks[1].clone(), "g0", &commit);
+    std::fs::create_dir_all(kept.join("target")).unwrap();
+    std::fs::write(kept.join("target/data"), "x").unwrap();
+    std::fs::write(kept.join(".gitignore"), "target/\n").unwrap();
+    git::git(&kept, &["add", ".gitignore"]).unwrap();
+    git::commit_all(&kept, "ignore target").unwrap();
+    assert!(
+        crate::lean::git::remove_clean_writer(
+            &core.state.join("unused"),
+            &kept,
+            &git::worktree_branch(&kept).unwrap(),
+            &[]
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("ignored files")
+    );
+}
+
+#[test]
 fn retired_checkouts_preserve_undeclared_ignored_experiment_state() {
     let (_directory, core, conversation, tasks, commit) = fixture();
     let mut task = tasks[0].clone();

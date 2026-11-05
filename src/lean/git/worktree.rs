@@ -163,14 +163,32 @@ fn require_no_ignored_files(path: &Path) -> Result<()> {
             "-z",
         ],
     )?;
+    let durable = ignored
+        .split('\0')
+        .find(|entry| !entry.is_empty() && !is_cache_directory(&path.join(entry)));
     crate::require(
-        ignored.is_empty(),
+        durable.is_none(),
         &format!(
             "ignored files are not preserved by the Git checkpoint; worktree {} preserved ({}). Declare durable outputs before handoff; remove only verified disposable files explicitly",
             path.display(),
-            crate::lean::agent::clip(ignored.split('\0').next().unwrap_or_default(), 300)
+            crate::lean::agent::clip(durable.unwrap_or_default(), 300)
         ),
     )
+}
+
+/// A directory that marks itself as a regenerable cache with the standard
+/// `CACHEDIR.TAG` signature (written by cargo for `target/`, among others).
+fn is_cache_directory(directory: &Path) -> bool {
+    use std::io::Read;
+    const SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+    let Ok(tag) = std::fs::File::open(directory.join("CACHEDIR.TAG")) else {
+        return false;
+    };
+    let mut head = Vec::with_capacity(SIGNATURE.len());
+    tag.take(SIGNATURE.len() as u64)
+        .read_to_end(&mut head)
+        .is_ok()
+        && head == SIGNATURE
 }
 
 /// The repository a linked worktree belongs to, read from the worktree itself.

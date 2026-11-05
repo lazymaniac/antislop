@@ -12,17 +12,25 @@ pub(super) fn reference_error(
     } else {
         ""
     };
-    let suggestion = available.iter().find(|(id, _)| {
-        id.len() == requested.len()
-            && id
-                .bytes()
-                .zip(requested.bytes())
-                .filter(|(a, b)| a != b)
-                .count()
-                <= 3
-    });
+    // Models mis-copy ids by dropping, adding or swapping characters, so compare by
+    // edit distance. Only a single closest candidate is suggested, never substituted.
+    let mut near = available
+        .iter()
+        .map(|(id, note)| (edit_distance(id, requested), id, note))
+        .filter(|(distance, _, _)| *distance > 0 && *distance <= 4)
+        .collect::<Vec<_>>();
+    near.sort_by_key(|(distance, _, _)| *distance);
+    let suggestion = match near.as_slice() {
+        [(_, id, note)] => Some((id, note)),
+        [(first, id, note), (second, _, _), ..] if first < second => Some((id, note)),
+        _ => None,
+    };
     let hint = suggestion
-        .map(|(id, _)| format!("; possible typo: copy {id} exactly; nothing was substituted"))
+        .map(|(id, note)| {
+            format!(
+                "did you mean {id} ({note})? possible typo: copy it exactly; nothing was substituted. "
+            )
+        })
         .unwrap_or_default();
     let choices = available
         .iter()
@@ -32,8 +40,25 @@ pub(super) fn reference_error(
         .join(", ");
     let supplied = super::super::agent::clip(requested, 80);
     Error::Invalid(format!(
-        "{field}: {format}{reason}; requested {supplied:?}{hint}; available in this scope: [{choices}]"
+        "{field}: {hint}{format}{reason}; requested {supplied:?}; available in this scope: [{choices}]"
     ))
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut row: Vec<usize> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in right.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(a != *b))
+                .min(above + 1)
+                .min(row[j] + 1);
+            diagonal = above;
+        }
+    }
+    row[right.len()]
 }
 
 impl Core {
@@ -118,5 +143,44 @@ impl Core {
             },
             &available,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_error;
+
+    fn message(requested: &str) -> String {
+        let available = vec![
+            (
+                "98baa82a-8d26-41a9-8662-2ddebf94947c".to_string(),
+                "other".to_string(),
+            ),
+            (
+                "77408913-d154-4f8e-85a5-0357b89bee88".to_string(),
+                "recon".to_string(),
+            ),
+        ];
+        reference_error("evidence", requested, "unknown", &available).to_string()
+    }
+
+    #[test]
+    fn shifted_and_truncated_ids_get_a_leading_suggestion() {
+        for typo in [
+            "77408913-d154-4f8e-85a5-035b89bee88e",
+            "77408913-d154-4f8e-85a5-035b89bee88",
+        ] {
+            let text = message(typo);
+            assert!(
+                text.starts_with("evidence: did you mean 77408913-d154-4f8e-85a5-0357b89bee88"),
+                "{text}"
+            );
+            assert!(text.contains("nothing was substituted"));
+        }
+    }
+
+    #[test]
+    fn unrelated_ids_get_no_suggestion() {
+        assert!(!message("00000000-0000-4000-8000-000000000000").contains("did you mean"));
     }
 }
