@@ -54,6 +54,16 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
                 state.rejected_finish = Some((at, reason.clone()));
                 shared.changed.notify_all();
             }
+            // Tools that do not end the turn used to get only the bare refusal, and models then
+            // retyped the id from memory; give the exact one to copy.
+            if reason.starts_with("turn is not open")
+                && !reason.contains("requires turn")
+                && let Some(turn) = expected.as_deref()
+            {
+                reason.push_str(&format!(
+                    "; the current turn is {turn:?}: copy it exactly, never retype or reuse a previous id"
+                ));
+            }
             let name = params["name"].as_str().unwrap_or_default();
             let submitted = params["arguments"]["turn"].as_str();
             let active_turn = shared

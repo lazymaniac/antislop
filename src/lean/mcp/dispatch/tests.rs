@@ -108,3 +108,19 @@ fn a_contract_error_does_not_suggest_replacing_the_correct_turn_id() {
     assert!(state.protocol_rejected_at.is_none());
     assert!(state.finished.is_none());
 }
+
+#[test]
+fn a_refused_non_terminal_call_names_the_exact_current_turn() {
+    let shared = shared();
+    let refused = call(
+        &shared,
+        &json!({"name":"read_evidence","arguments":{"turn":"current-turn-typo","evidence":"x"}}),
+    );
+    assert_eq!(refused["isError"], true);
+    let text = refused["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("turn is not open"), "{text}");
+    assert!(
+        text.contains("the current turn is \"current-turn\""),
+        "{text}"
+    );
+}
