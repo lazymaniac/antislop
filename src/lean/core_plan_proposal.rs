@@ -124,6 +124,12 @@ impl Core {
         if self.requeue_rejected_plan(conversation, &plan.id, &review)? {
             return Ok(());
         }
-        self.publish_plan(conversation, text, addressed, plan, specs, &review)
+        self.publish_plan(conversation, text, addressed, plan, specs, &review)?;
+        // A cancel that arrived after the review but before the activated plan
+        // registered its own flag would otherwise be lost.
+        if cancel.load(Ordering::SeqCst) {
+            self.cancel(conversation);
+        }
+        Ok(())
     }
 }
