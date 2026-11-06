@@ -166,7 +166,33 @@ pub(super) fn rows(builder: &Builder<'_>, units: &[Unit], layers: &[u16]) -> Vec
     for (number, _) in units.iter().enumerate().filter(|(_, unit)| unit.visible) {
         by_layer.entry(layers[number]).or_default().push(number);
     }
-    ordered_rows(builder, units, by_layer)
+    let mut rows = ordered_rows(builder, units, by_layer);
+    isolate_expanded_unit(builder, units, &mut rows);
+    rows
+}
+
+/// Give the unit containing the expanded card its own measured row. Its
+/// height can then grow without sharing a vertical band with other units.
+fn isolate_expanded_unit(builder: &Builder<'_>, units: &[Unit], rows: &mut Vec<Vec<usize>>) {
+    let Some(expanded) = builder.size.expanded_key.as_deref() else {
+        return;
+    };
+    let Some(unit) = units.iter().position(|unit| {
+        member_keys(builder.view, unit)
+            .iter()
+            .any(|key| key == expanded)
+    }) else {
+        return;
+    };
+    let Some(row) = rows.iter().position(|row| row.contains(&unit)) else {
+        return;
+    };
+    if rows[row].len() == 1 {
+        return;
+    }
+    rows[row].retain(|member| *member != unit);
+    let next_row = row + 1;
+    rows.insert(next_row, vec![unit]);
 }
 
 fn ordered_rows(

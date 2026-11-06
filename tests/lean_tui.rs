@@ -1341,6 +1341,162 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
 }
 
 #[test]
+fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
+    use antislop::lean::tui::graph::Graph;
+    use antislop::lean::tui::view::TaskRow;
+
+    let mut app = App::test_app();
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Café 👩‍💻 root".into(),
+            summary: Some("Combining e\u{301} and a joined glyph 👩‍💻".into()),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Second root".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "First child".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t4".into(),
+            title: "Second child".into(),
+            depends_on: vec!["t2".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t5".into(),
+            title: "Joined child".into(),
+            depends_on: vec!["t3".into(), "t4".into()],
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+
+    fn graph(app: &App) -> Graph {
+        Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope,
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        )
+    }
+
+    fn assert_geometry(graph: &Graph, dimensions: (u16, u16)) {
+        let first = graph.node("worker:t1").unwrap();
+        let second = graph.node("worker:t2").unwrap();
+        println!(
+            "event-layout terminal={}x{} expanded={:?} t1@{},{} {}x{} t2@{},{} {}x{}",
+            dimensions.0,
+            dimensions.1,
+            graph.expanded,
+            first.x,
+            first.y,
+            first.width,
+            first.height,
+            second.x,
+            second.y,
+            second.width,
+            second.height
+        );
+        let cards: Vec<_> = graph.nodes.iter().filter(|node| node.visible).collect();
+        for (index, left) in cards.iter().enumerate() {
+            for right in &cards[index + 1..] {
+                assert!(
+                    left.x.saturating_add(left.width) <= right.x
+                        || right.x.saturating_add(right.width) <= left.x
+                        || left.y.saturating_add(left.height) <= right.y
+                        || right.y.saturating_add(right.height) <= left.y,
+                    "terminal={dimensions:?} overlapping cards: {left:?} and {right:?}"
+                );
+            }
+        }
+        for (from, to, path) in graph.edge_routes(Relations::all()) {
+            for node in &cards {
+                assert!(
+                    !Graph::route_intersects_card(&path, node),
+                    "terminal={dimensions:?} edge {from} -> {to} crosses card {} at ({},{})",
+                    node.key,
+                    node.x,
+                    node.y
+                );
+            }
+        }
+    }
+
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let compact = graph(&app);
+    assert_geometry(&compact, (160, 50));
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let expanded_first = graph(&app);
+    assert_geometry(&expanded_first, (160, 50));
+    assert_ne!(
+        expanded_first.node("worker:t1").unwrap().y,
+        expanded_first.node("worker:t2").unwrap().y
+    );
+
+    let next = [
+        (KeyCode::Left, -1, 0),
+        (KeyCode::Right, 1, 0),
+        (KeyCode::Up, 0, -1),
+        (KeyCode::Down, 0, 1),
+    ]
+    .into_iter()
+    .find_map(|(key, dx, dy)| {
+        expanded_first
+            .neighbour("worker:t1", dx, dy)
+            .filter(|next| next == "worker:t2")
+            .map(|_| key)
+    })
+    .expect("second root remains reachable by graph navigation");
+    app.key(KeyEvent::new(next, KeyModifiers::NONE));
+    assert_eq!(app.selected, "worker:t2");
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_geometry(&graph(&app), (160, 50));
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t2"));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let expanded_second = graph(&app);
+    assert_geometry(&expanded_second, (160, 50));
+    assert_eq!(
+        expanded_second
+            .nodes
+            .iter()
+            .filter(|node| node.visible && node.width > 40)
+            .count(),
+        1
+    );
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_expanded.is_none());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_geometry(&graph(&app), (160, 50));
+
+    let mut resized = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    resized.draw(|frame| app.draw(frame)).unwrap();
+    assert_geometry(&graph(&app), (80, 24));
+    let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
+    tiny.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.graph_area.is_none());
+}
+
+#[test]
 fn graph_position_markers_follow_offscreen_nodes_and_resize() {
     use antislop::lean::tui::graph::Graph;
     use antislop::lean::tui::view::TaskRow;

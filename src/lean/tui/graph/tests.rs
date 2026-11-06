@@ -77,6 +77,146 @@ fn expanded_card_reflows_the_graph_without_overlapping_its_neighbours() {
 }
 
 #[test]
+fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() {
+    let mut tasks = vec![task("t1", &[]), task("t2", &[])];
+    tasks[0].title = "Café 👩‍💻 root".into();
+    tasks[0].summary = Some("Combining e\u{301} and a joined glyph 👩‍💻".into());
+    tasks.extend([
+        task("t3", &["t1"]),
+        task("t4", &["t2"]),
+        task("t5", &["t3", "t4"]),
+    ]);
+    let view = view(tasks);
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        None,
+        Some("worker:t1".into()),
+        0,
+    );
+    let expanded = graph.node("worker:t1").unwrap();
+    let sibling = graph.node("worker:t2").unwrap();
+    assert_ne!(expanded.y, sibling.y, "expanded unit gets a dedicated row");
+    let cards: Vec<_> = graph.nodes.iter().filter(|node| node.visible).collect();
+    for (index, left) in cards.iter().enumerate() {
+        for right in &cards[index + 1..] {
+            assert!(
+                left.x.saturating_add(left.width) <= right.x
+                    || right.x.saturating_add(right.width) <= left.x
+                    || left.y.saturating_add(left.height) <= right.y
+                    || right.y.saturating_add(right.height) <= left.y,
+                "visible cards overlap: {left:?} and {right:?}"
+            );
+        }
+    }
+    for (from, to, path) in graph.edge_routes(Relations::all()) {
+        for node in &cards {
+            assert!(
+                !Graph::route_intersects_card(&path, node),
+                "edge {from} -> {to} crosses card {} at ({},{})",
+                node.key,
+                node.x,
+                node.y
+            );
+        }
+    }
+    let compact = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        None,
+    );
+    let mut compact_canvas = Canvas::new(compact.width, compact.height);
+    compact.render_with(
+        &view,
+        &mut compact_canvas,
+        Relations::all(),
+        "worker:t1",
+        &Theme::new(false, false),
+        0,
+    );
+    assert!(
+        compact_canvas
+            .lines()
+            .join("\n")
+            .contains("Combining e\u{301}")
+    );
+    for (width, height, theme) in [
+        (180, 70, Theme::new(false, false)),
+        (80, 24, Theme::new(false, true)),
+        (11, 4, Theme::new(false, true)),
+    ] {
+        let viewport = if (width, height) == (180, 70) {
+            None
+        } else {
+            Some((width, height))
+        };
+        let graph = Graph::new_with_expanded(
+            &view,
+            &Scope::default(),
+            &Default::default(),
+            GroupingMode::Dependency,
+            viewport,
+            Some("worker:t1".into()),
+            0,
+        );
+        let expanded = graph.node("worker:t1").unwrap();
+        let sibling = graph.node("worker:t2").unwrap();
+        println!(
+            "rendered terminal={width}x{height} card=t1@{},{} {}x{} sibling=t2@{},{} {}x{} graph={}x{}",
+            expanded.x,
+            expanded.y,
+            expanded.width,
+            expanded.height,
+            sibling.x,
+            sibling.y,
+            sibling.width,
+            sibling.height,
+            graph.width,
+            graph.height
+        );
+        let visible: Vec<_> = graph.nodes.iter().filter(|node| node.visible).collect();
+        for (index, left) in visible.iter().enumerate() {
+            for right in &visible[index + 1..] {
+                assert!(
+                    left.x.saturating_add(left.width) <= right.x
+                        || right.x.saturating_add(right.width) <= left.x
+                        || left.y.saturating_add(left.height) <= right.y
+                        || right.y.saturating_add(right.height) <= left.y,
+                    "terminal={width}x{height} cards overlap: {left:?} and {right:?}"
+                );
+            }
+        }
+        for (from, to, path) in graph.edge_routes(Relations::all()) {
+            for node in &visible {
+                assert!(
+                    !Graph::route_intersects_card(&path, node),
+                    "terminal={width}x{height} edge {from} -> {to} crosses {}",
+                    node.key
+                );
+            }
+        }
+        let mut canvas = Canvas::new_window(0, 0, width, height);
+        graph.render_with(&view, &mut canvas, Relations::all(), "worker:t1", &theme, 0);
+        let rendered = canvas.lines().join("\n");
+        if width >= 12 && height >= 5 {
+            assert!(
+                rendered.contains("Café"),
+                "terminal={width}x{height}: {rendered}"
+            );
+            assert!(
+                rendered.contains("1 Details"),
+                "terminal={width}x{height}: {rendered}"
+            );
+        }
+        assert_eq!(canvas.cells.len(), usize::from(width) * usize::from(height));
+    }
+}
+
+#[test]
 fn expanded_details_tab_shows_agent_and_task_metadata_in_card() {
     let mut task = task("t1", &[]);
     task.title = "Implement graph cards".into();
