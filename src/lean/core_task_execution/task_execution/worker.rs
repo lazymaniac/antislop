@@ -106,10 +106,6 @@ fn task_worktree(
                     task.id
                 ))
             })?;
-        require(
-            owner.input_generation == task.input_generation,
-            "options task and owner task have different input generations",
-        )?;
         let owner_spec: TaskContract = serde_json::from_value(owner.spec.clone())?;
         let owner_worktree = writer_worktree(core, &mut owner, &owner_spec, project)?;
         require(
@@ -468,6 +464,95 @@ mod tests {
             "reviewed upstream change"
         );
         assert_eq!(git::head(&project).unwrap(), upstream);
+    }
+
+    #[test]
+    fn options_task_reads_owner_worktree_when_task_generations_differ() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("input.txt"), "current input").unwrap();
+        git::commit_all(&project, "base").unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        let owner_spec: TaskContract = serde_json::from_value(json!({
+            "id":"owner", "title":"Owner", "goal":"Implement the selected change",
+            "change_kind":"code", "kind":"implementation"
+        }))
+        .unwrap();
+        let options_spec: TaskContract = serde_json::from_value(json!({
+            "id":"owner-options", "title":"Options", "goal":"Select an approach",
+            "change_kind":"none", "kind":"options", "options_for":"owner"
+        }))
+        .unwrap();
+        let tasks = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[
+                    serde_json::to_value(&options_spec).unwrap(),
+                    serde_json::to_value(&owner_spec).unwrap(),
+                ],
+            )
+            .unwrap();
+        let run = core
+            .store
+            .create_run(&conversation.id, "Options with current task inputs")
+            .unwrap();
+        let owner = tasks
+            .iter()
+            .find(|task| task.spec["id"] == "owner")
+            .unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
+                rusqlite::params![owner.id, run.id],
+            )
+            .unwrap();
+        let options = tasks
+            .iter()
+            .find(|task| task.spec["id"] == "owner-options")
+            .unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,0)",
+                rusqlite::params![options.id, run.id],
+            )
+            .unwrap();
+        let current = core.store.plan(&tasks[0].plan_id).unwrap();
+        let options = current
+            .iter()
+            .find(|task| task.spec["id"] == "owner-options")
+            .unwrap();
+        let owner = current
+            .iter()
+            .find(|task| task.spec["id"] == "owner")
+            .unwrap();
+        assert_ne!(options.input_generation, owner.input_generation);
+
+        let (workdir, add_dirs) =
+            task_directories(&core, options, &options_spec, &project, &None).unwrap();
+
+        assert!(add_dirs.is_empty());
+        assert_eq!(workdir, worktree_path(&core.state, owner).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(workdir.join("input.txt")).unwrap(),
+            "current input"
+        );
     }
 
     #[test]
