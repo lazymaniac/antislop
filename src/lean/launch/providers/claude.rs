@@ -6,7 +6,6 @@ pub(super) fn claude(
 ) -> Option<String> {
     clear_parent_session(command);
     append_gateway_config(command, gateway);
-    append_permission_policy(command);
     append_provider_options(command, spec);
     Some(append_session_id(command, spec))
 }
@@ -24,11 +23,6 @@ fn append_gateway_config(command: &mut CommandBuilder, gateway: &Gateway) {
         "headers": {"Authorization": format!("Bearer {}", gateway.token())}
     }}});
     command.args(["--mcp-config", &config.to_string(), "--strict-mcp-config"]);
-}
-
-fn append_permission_policy(command: &mut CommandBuilder) {
-    command.args(["--settings", "{\"sandbox\":{\"enabled\":false}}"]);
-    command.arg("--dangerously-skip-permissions");
 }
 
 fn append_provider_options(command: &mut CommandBuilder, spec: &Spec) {

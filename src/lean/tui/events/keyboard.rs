@@ -9,6 +9,7 @@ impl App {
             return result;
         }
         self.sync_interview();
+        self.sync_approval();
         if let Some(result) = self.route_ledger(key) {
             return result;
         }
@@ -107,6 +108,7 @@ impl App {
 
     fn is_editing(&self) -> bool {
         self.interview_visible()
+            || self.approval.is_some()
             || self.graph_filters.is_some()
             || self.editor.is_some()
             || self.picker.is_some()
@@ -131,6 +133,9 @@ impl App {
             return Some(true);
         }
         if let Some(handled) = self.route_graph_filters(key) {
+            return Some(handled);
+        }
+        if let Some(handled) = self.route_approval(key) {
             return Some(handled);
         }
         self.route_unblock(key)

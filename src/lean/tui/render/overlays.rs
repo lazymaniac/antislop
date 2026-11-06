@@ -12,6 +12,7 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
     draw_picker(app, frame);
     draw_help(app, frame);
     modal::draw_unblock(app, frame);
+    modal::draw_approval(app, frame);
     modal::draw_graph_filters(app, frame);
 }
 

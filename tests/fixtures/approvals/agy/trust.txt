@@ -1,0 +1,14 @@
+# agy 1.5.0 — trust
+Accessing workspace:
+
+/private/tmp/claude-501/-Users-sebastian-workspace-architect/e7c1fb6e-229f-4b4d-a487-d28e922fb074/scratchpad/work/agy
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                                                 Gemini 3.8 Flash · high

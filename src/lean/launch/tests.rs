@@ -5,7 +5,7 @@ use crate::lean::mcp::Gateway;
 use serde_json::Value;
 
 #[test]
-fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
+fn every_provider_launches_without_permission_flags_and_resumes_the_selected_session() {
     // SAFETY: all launch tests use this fixture-only bridge-check override.
     unsafe {
         std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
@@ -45,31 +45,40 @@ fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
             "{provider:?}: {args:?}"
         );
         assert!(args.iter().any(|v| v == "model-fixture"));
+        // The CLI's own permission policy decides; its dialogs reach the runtime.
+        for forbidden in [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "--approval-mode",
+            "--settings",
+            "--auto",
+            "--mode",
+            "--yolo",
+            "-a",
+            "-s",
+        ] {
+            assert!(
+                !args.iter().any(|v| v == forbidden),
+                "{provider:?}: {forbidden}"
+            );
+        }
+        assert!(
+            !args.iter().any(|v| v.starts_with("approval_policy")
+                || v.starts_with("sandbox_mode")
+                || v.starts_with("projects=")
+                || v.contains("default_tools_approval_mode")),
+            "{provider:?}: {args:?}"
+        );
         match provider {
             ProviderKind::Codex => {
-                assert!(
-                    args.iter()
-                        .any(|v| v == "--dangerously-bypass-approvals-and-sandbox")
-                );
-                assert!(!args.iter().any(|v| v == "-s"));
                 assert!(args.iter().any(|v| v == "--no-daemon"));
-                assert!(
-                    args.iter()
-                        .any(|v| v == "sandbox_mode=\"danger-full-access\"")
-                );
                 assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
             }
             ProviderKind::Claude => {
-                assert!(args.iter().any(|v| v == "--dangerously-skip-permissions"));
                 assert!(!args.iter().any(|v| v == "--disallowedTools"));
-                let settings = &args[args.iter().position(|v| v == "--settings").unwrap() + 1];
-                assert_eq!(
-                    serde_json::from_str::<Value>(settings).unwrap()["sandbox"]["enabled"],
-                    false
-                );
             }
             ProviderKind::Gemini => {
-                assert!(args.windows(2).any(|v| v == ["--approval-mode", "yolo"]));
                 assert!(launch.settings.is_none());
                 assert!(launch.command.get_env("ANTISLOP_MCP_URL").is_some());
                 assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
@@ -89,7 +98,6 @@ fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
                 );
             }
             ProviderKind::Agy => {
-                assert!(args.iter().any(|v| v == "--dangerously-skip-permissions"));
                 assert!(!args.iter().any(|v| v == "--sandbox" || v == "plan"));
             }
             ProviderKind::Opencode => {
@@ -101,9 +109,8 @@ fn every_provider_launches_with_full_access_and_resumes_the_selected_session() {
                         .to_string_lossy(),
                 )
                 .unwrap();
-                assert_eq!(config["permission"]["*"], "allow");
-                assert_eq!(config["permission"]["external_directory"]["*"], "allow");
-                assert_eq!(config["agent"]["antislop"]["permission"]["*"], "allow");
+                assert!(config["permission"].is_null());
+                assert!(config["agent"]["antislop"]["permission"].is_null());
                 assert!(
                     config["mcp"]["antislop"]["url"]
                         .as_str()

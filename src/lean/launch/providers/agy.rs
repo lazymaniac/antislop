@@ -12,9 +12,7 @@ pub(super) fn agy(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) 
     }
     command.env("ANTISLOP_MCP_URL", gateway.url());
     command.env("ANTISLOP_MCP_TOKEN", gateway.token());
-    command.arg("--dangerously-skip-permissions");
-    command.args(["--disable-slash-commands", "--mode"]);
-    command.arg("accept-edits");
+    command.arg("--disable-slash-commands");
     agy_overrides(command, spec);
     Ok(())
 }

@@ -118,6 +118,25 @@ fn encode_pause(request: Request) -> std::result::Result<WireRequest, Box<Reques
     }
 }
 
+fn encode_approvals(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    use crate::lean::daemon::ConversationRequest as C;
+    match request {
+        Request::Conversation(C::SetApprovalMode { conversation, mode }) => {
+            Ok(WireRequest::SetApprovalMode { conversation, mode })
+        }
+        Request::Conversation(C::AnswerApproval {
+            conversation,
+            request,
+            choice,
+        }) => Ok(WireRequest::AnswerApproval {
+            conversation,
+            request,
+            choice,
+        }),
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn encode_group_messages(
     request: Request,
 ) -> std::result::Result<WireRequest, Box<Request>> {
@@ -130,4 +149,5 @@ pub(super) fn encode_group_messages(
         .or_else(|request| encode_restart_orchestrator(*request))
         .or_else(|request| encode_cancel(*request))
         .or_else(|request| encode_pause(*request))
+        .or_else(|request| encode_approvals(*request))
 }

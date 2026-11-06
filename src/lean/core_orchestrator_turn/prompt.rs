@@ -48,7 +48,7 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     );
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
     append_ledger(context.ledger_context, &mut prompt);
-    prompt.insert_str(0, "\nOnly the orchestrator calls revise_plan for incremental changes: provide changed/added contracts and explicit retire entries. request_replan delegates a complete replacement draft to the planner. All agents have full access without execution limits. A deferred task remains a deliberate scheduling hold until a reviewed revision releases it; do not infer a permission hold from historical instructions. Preserve actual prerequisites, evidence and user decisions.\n");
+    prompt.insert_str(0, "\nOnly the orchestrator calls revise_plan for incremental changes: provide changed/added contracts and explicit retire entries. request_replan delegates a complete replacement draft to the planner. The runtime imposes no access or execution limits on agents. A deferred task remains a deliberate scheduling hold until a reviewed revision releases it; do not infer a permission hold from historical instructions. Preserve actual prerequisites, evidence and user decisions.\n");
     prompt
 }
 

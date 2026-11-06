@@ -90,6 +90,10 @@ pub struct App {
     pub graph_viewport: Option<(u16, u16)>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
+    /// An agent CLI's approval dialog put to the user.
+    pub(super) approval: Option<super::approval::Modal>,
+    /// Approvals the user put off; they stay open and the palette lists them.
+    pub(super) approval_hidden: std::collections::HashSet<String>,
     /// The graph filter menu, while it is open.
     pub(super) graph_filters: Option<super::graph_filters::FilterMenu>,
     /// The projects the screen is connected to; the active one's client is
@@ -174,6 +178,8 @@ macro_rules! initial_app {
             phase_action_command: None,
             chat_area: Rect::default(),
             unblock: None,
+            approval: None,
+            approval_hidden: std::collections::HashSet::new(),
             graph_filters: None,
             projects: Vec::new(),
             active_project: 0,

@@ -20,6 +20,7 @@ mod app {
 #[cfg(test)]
 mod tests;
 
+mod approval;
 pub mod clipboard;
 pub mod config;
 mod contracts;

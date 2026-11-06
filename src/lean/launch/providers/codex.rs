@@ -4,35 +4,24 @@ pub(super) fn codex(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway
     if let Some(id) = &spec.resume {
         command.args(["resume", id]);
     }
-    append_codex_settings(command, spec, gateway);
+    append_codex_settings(command, gateway);
     command.env(TOKEN_ENV, gateway.token());
-    // The shared Codex app server keeps its own sandbox policy and would
-    // ignore this launch's full access; run the TUI standalone.
+    // The shared Codex app server keeps its own sandbox and approval policy;
+    // run the TUI standalone so this launch answers to the user's own settings.
     command.arg("--no-daemon");
-    command.arg("--dangerously-bypass-approvals-and-sandbox");
     command.arg("-C");
     command.arg(&spec.cwd);
     append_codex_paths(command, spec);
     append_codex_model(command, spec);
 }
 
-fn append_codex_settings(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) {
+fn append_codex_settings(command: &mut CommandBuilder, gateway: &Gateway) {
     let prefix = format!("mcp_servers.{SERVER}");
     for setting in [
         // A prompt to update would hold an unattended turn.
         "check_for_update_on_startup=false".to_owned(),
-        "approval_policy=\"never\"".to_owned(),
-        "sandbox_mode=\"danger-full-access\"".to_owned(),
         format!("{prefix}.url={}", toml_string(gateway.url())),
         format!("{prefix}.bearer_token_env_var={}", toml_string(TOKEN_ENV)),
-        format!("{prefix}.default_tools_approval_mode=\"approve\""),
-        // This launch has full access; skip the provider's checkout trust dialog.
-        // Given per launch, never saved: an inline
-        // table, as Codex splits a dotted key at the dots of the path.
-        format!(
-            "projects={{{}={{trust_level=\"trusted\"}}}}",
-            toml_string(&spec.cwd.to_string_lossy())
-        ),
     ] {
         command.args(["-c", &setting]);
     }

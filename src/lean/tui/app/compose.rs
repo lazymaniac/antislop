@@ -269,6 +269,7 @@ impl App {
         self.help = None;
         self.picker = None;
         self.unblock = None;
+        self.approval = None;
     }
 
     fn preserve_comment_editor(&mut self) {

@@ -1,0 +1,13 @@
+# gemini-cli 0.67.0 — hand-assembled variant of the live layout (see shell_live.txt)
+✦ I'll run the command.
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ?  Shell touch /tmp/outside/probe.txt                                                            │
+│                                                                                                  │
+│ touch /tmp/outside/probe.txt                                                                     │
+│ Allow execution of [Shell]?                                                                      │
+│                                                                                                  │
+│ ● 1. Allow once                                                                                  │
+│   2. Allow for this session                                                                      │
+│   3. No, suggest changes (esc)                                                                   │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

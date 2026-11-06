@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "run_date": "2026-11-05",
+  "working_directory": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/worktrees/84b7c4bb-8d1e-4260-b36f-0c803617694c-g0",
+  "toolchain": {
+    "configured": "1.98.1 (rust-toolchain.toml)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "rustfmt": "rustfmt 1.9.0-stable (48a229ceae 2026-09-01)",
+    "clippy": "clippy 0.1.98 (48a229ceae 2026-09-01)"
+  },
+  "checks": [
+    {
+      "command": "./cargo.sh fmt --check",
+      "exit_code": 0,
+      "status": "passed",
+      "raw_output": "",
+      "log": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02/fmt.log"
+    },
+    {
+      "command": "./cargo.sh check",
+      "exit_code": 0,
+      "status": "passed",
+      "raw_output": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s",
+      "log": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02/check.log"
+    },
+    {
+      "command": "./cargo.sh clippy --all-targets -- -D warnings",
+      "exit_code": 0,
+      "status": "passed",
+      "raw_output": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s",
+      "log": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02/clippy.log"
+    },
+    {
+      "command": "./cargo.sh test --test lean_core",
+      "exit_code": 0,
+      "status": "passed",
+      "tests": {"passed": 23, "failed": 0, "ignored": 0},
+      "raw_output": "test result: ok. 23 passed; 0 failed; 0 ignored; finished in 11.87s",
+      "log": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02/lean_core.log"
+    },
+    {
+      "command": "./cargo.sh test --test lean_tui",
+      "exit_code": 0,
+      "status": "passed",
+      "tests": {"passed": 106, "failed": 0, "ignored": 0},
+      "raw_output": "test result: ok. 106 passed; 0 failed; 0 ignored; finished in 6.97s",
+      "log": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02/lean_tui.log"
+    }
+  ],
+  "failures": [],
+  "limitations": [
+    "No project code, tests, or configuration were modified by this check task.",
+    "The recorded targeted test runs cover only the lean_core and lean_tui integration-test targets requested by AGENTS.md; no claim is made about other test targets."
+  ],
+  "durable_runtime_run_directory": "/Users/sebastian/.local/state/antislop/projects/f58b309ea8a76a96134b1737390cdb2a2f3e1f97cf951339746f5f31c2cc2dca/task-state/84b7c4bb-8d1e-4260-b36f-0c803617694c/g0/run-20261105T-checks-02"
+}

@@ -209,6 +209,7 @@ mod role_tests {
                 "read_evidence",
                 "answer_agent",
                 "defer_to_user",
+                "decide_approval",
                 "retry_task",
                 "resume_task",
                 "revise_plan",

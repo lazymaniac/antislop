@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::Value;
 mod agents;
+mod approvals;
 mod conversation;
 mod graph;
 mod mail;
@@ -69,6 +70,10 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("task", task),
     ("comment_replied", mail::on_comment_replied),
     ("paused", reviews::on_paused),
+    ("approval_requested", approvals::on_approval_requested),
+    ("approval_resolved", approvals::on_approval_resolved),
+    ("approval_escalated", approvals::on_approval_escalated),
+    ("approval_mode_changed", approvals::on_approval_mode_changed),
     ("notice", reviews::on_notice),
     ("check", tasks::on_check),
     ("integration", integration),

@@ -1,0 +1,14 @@
+# gemini-cli 0.67.0 — hand-assembled MCP variant from the published bundle (shell/trust layouts were captured live)
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ?  finish_turn (other MCP Server)                                                                │
+│                                                                                                  │
+│ MCP Server: other                                                                                │
+│ Tool: finish_turn                                                                                │
+│ Allow execution of MCP tool "finish_turn" from server "other"?                                   │
+│                                                                                                  │
+│ ● 1. Allow once                                                                                  │
+│   2. Allow for this session                                                                      │
+│   3. Always allow                                                                                │
+│   4. No, suggest changes (esc)                                                                   │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

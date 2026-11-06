@@ -19,6 +19,9 @@ impl App {
             Command::PauseOrContinue => self.set_paused(!self.view.paused),
             Command::Config => self.open_config(),
             Command::TaskActions => self.open_unblock(None),
+            Command::ApprovalsSupervised => self.set_approval_mode("supervised"),
+            Command::ApprovalsAutonomous => self.set_approval_mode("autonomous"),
+            Command::PendingApprovals => self.show_pending_approvals(),
             Command::NewConversation => self.new_conversation(),
             Command::SwitchConversation => self.open_conversation_picker(),
             Command::Projects => self.open_projects_picker(),
@@ -130,7 +133,7 @@ impl App {
         });
     }
 
-    fn send_command(
+    pub(in crate::lean::tui) fn send_command(
         &mut self,
         notice: Option<&'static str>,
         request: impl FnOnce(String) -> Request,

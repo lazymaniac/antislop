@@ -130,6 +130,19 @@ pub struct TaskRow {
     pub integration: Option<Value>,
 }
 
+/// An approval dialog of an agent CLI that waits for a decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApproval {
+    pub request: String,
+    pub role: String,
+    pub provider: String,
+    pub summary: String,
+    /// The orchestrator decides it first; the user may still answer.
+    pub orchestrator: bool,
+    /// `(id, label, decision)` of each choice.
+    pub options: Vec<(String, String, String)>,
+}
+
 /// One runtime agent: the orchestrator, the plan reviewer, the auditor,
 /// and each task's worker and reviewer (shown together on one task card). Keys are `orchestrator`,
 /// `plan-reviewer`, `auditor`, `worker:t1`, `reviewer:t1`.
@@ -176,6 +189,10 @@ pub struct View {
     pub reviews: HashMap<String, Vec<String>>,
     /// The user paused new plan work.
     pub paused: bool,
+    /// The orchestrator decides the agents' approval dialogs.
+    pub autonomous: bool,
+    /// Approval dialogs of agent CLIs that wait for a decision.
+    pub approvals: Vec<PendingApproval>,
 
     /// Structured messages with observed actual states.
     pub messages: Vec<MessageEntry>,

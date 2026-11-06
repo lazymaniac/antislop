@@ -1,13 +1,10 @@
 use super::*;
 pub(super) fn opencode(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) -> Result<()> {
     let mut config = read_config()?;
-    let permission = json!({"*":"allow", "external_directory":{"*":"allow"}});
-    install_agent(&mut config, permission)?;
+    install_agent(&mut config)?;
     install_gateway(&mut config, gateway)?;
     command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
-    // Auto mode also covers ask rules merged from on-disk user/project config;
-    // explicit role denials remain enforced by the provider.
-    command.args(["--auto", "--agent", SERVER]);
+    command.args(["--agent", SERVER]);
     append_resume_model(command, spec);
     Ok(())
 }
@@ -21,21 +18,20 @@ fn read_config() -> Result<Value> {
     }
 }
 
-fn install_agent(config: &mut Value, permission: Value) -> Result<()> {
+fn install_agent(config: &mut Value) -> Result<()> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| Error::Invalid("OPENCODE_CONFIG_CONTENT must be a JSON object".into()))?;
-    root.insert("permission".into(), permission.clone());
-    // A dedicated primary agent keeps user-defined agents from overriding
-    // this turn's permissions.
+    // A dedicated primary agent keeps user-defined agents from replacing the
+    // one this runtime talks to. It sets no permissions: the user's own
+    // OpenCode policy decides, and its dialogs reach the runtime.
     root.entry("agent")
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| Error::Invalid("OpenCode agent configuration must be an object".into()))?
         .insert(
             SERVER.into(),
-            json!({"description": "Antislop managed agent", "mode": "primary",
-                   "permission": permission}),
+            json!({"description": "Antislop managed agent", "mode": "primary"}),
         );
     Ok(())
 }

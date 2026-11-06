@@ -49,7 +49,7 @@ pub(crate) fn settings_text() -> String {
 }
 
 fn append_gemini_options(command: &mut CommandBuilder, spec: &Spec) {
-    command.args(["--approval-mode", "yolo", "--extensions", "none"]);
+    command.args(["--extensions", "none"]);
     command.args(["--allowed-mcp-server-names", SERVER]);
     if let Some(model) = &spec.model {
         command.args(["--model", model]);

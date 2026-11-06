@@ -1,0 +1,15 @@
+# gemini-cli 0.67.0 — trust folder, captured live
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                    │
+ │ Do you trust the files in this folder?                                                                             │
+ │                                                                                                                    │
+ │ Trusting a folder allows Gemini CLI to load its local configurations, including custom commands, hooks, MCP        │
+ │ servers, agent skills, and settings. These configurations could execute code on your behalf or change the behavior │
+ │ of the CLI.                                                                                                        │
+ │                                                                                                                    │
+ │                                                                                                                    │
+ │ ● 1. Trust folder (proj)                                                                                           │
+ │   2. Trust parent folder (gem)                                                                                     │
+ │   3. Don't trust                                                                                                   │
+ │                                                                                                                    │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

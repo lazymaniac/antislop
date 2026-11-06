@@ -1,0 +1,13 @@
+# opencode 1.19.3 — external directory (default permissions)
+  ┃  △ Permission required
+  ┃    ← Access external directory /private/tmp/claude-501/-Users-sebastian-workspace-architect/e7c1fb6e-229f-4b4d-
+  ┃      a487-d28e922fb074/scratchpad/outside
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /private/tmp/claude-501/-Users-sebastian-workspace-architect/e7c1fb6e-229f-4b4d-a487-d28e922fb074/
+  ┃  scratchpad/outside/*
+  ┃
+  ┃
+  ┃   Allow once   Allow always   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃

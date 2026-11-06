@@ -99,9 +99,9 @@ impl Core {
             return Ok(None);
         }
         let graph = self.store.latest_plan(conversation)?;
-        Ok(Some(serde_json::to_string(
-            &graph.iter().map(|task| &task.spec).collect::<Vec<_>>(),
-        )?))
+        Ok(Some(serde_json::to_string(&authored_contracts(
+            graph.iter().map(|task| &task.spec),
+        ))?))
     }
 
     fn run_planner_turn(
@@ -158,6 +158,50 @@ impl Core {
             )),
         }
     }
+}
+
+/// The contracts as `submit_plan` accepts them: only tasks the planner authors, only the
+/// fields it may write. Options, quality gates and runtime-resolved links are generated and
+/// would be rejected as unknown fields if copied back.
+fn authored_contracts<'a>(
+    specs: impl Iterator<Item = &'a serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    const FIELDS: [&str; 12] = [
+        "id",
+        "title",
+        "goal",
+        "kind",
+        "depends_on",
+        "deferred",
+        "change_kind",
+        "outputs",
+        "delivery",
+        "covers",
+        "section",
+        "summary",
+    ];
+    let specs: Vec<_> = specs
+        .filter(|spec| spec["quality_gate"] != true && spec["options_for"].as_str().is_none())
+        .collect();
+    let ids: Vec<&str> = specs
+        .iter()
+        .filter_map(|spec| spec["id"].as_str())
+        .collect();
+    specs
+        .iter()
+        .map(|spec| {
+            let mut object = serde_json::Map::new();
+            for field in FIELDS {
+                if let Some(value) = spec.get(field).filter(|value| !value.is_null()) {
+                    object.insert(field.into(), value.clone());
+                }
+            }
+            if let Some(depends) = object.get_mut("depends_on").and_then(|v| v.as_array_mut()) {
+                depends.retain(|id| id.as_str().is_some_and(|id| ids.contains(&id)));
+            }
+            serde_json::Value::Object(object)
+        })
+        .collect()
 }
 
 fn planner_setup<'a>(context: &PlannerTurnContext<'a>) -> TurnSetup<'a> {
@@ -577,5 +621,33 @@ mod replan_blocker_tests {
                 .unwrap()["state"],
             "requested"
         );
+    }
+}
+
+#[cfg(test)]
+mod authored_contract_tests {
+    use super::authored_contracts;
+    use serde_json::json;
+
+    #[test]
+    fn the_planner_sees_only_authored_tasks_and_fields_it_may_submit() {
+        let specs = [
+            json!({"id":"a","title":"A","goal":"g","kind":"implementation","change_kind":"code",
+                "quality_gate":false,"options_for":null,"requirement_ids":["r"],"criterion_ids":[],
+                "reviewer":{"summary":"x"},"depends_on":["a-options","b"]}),
+            json!({"id":"b","title":"B","goal":"g","kind":"analysis","change_kind":"none","depends_on":[]}),
+            json!({"id":"a-options","options_for":"a","quality_gate":false,"depends_on":[]}),
+            json!({"id":"gate","quality_gate":true,"depends_on":["a"]}),
+        ];
+        let shown = authored_contracts(specs.iter());
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0]["depends_on"], json!(["b"]));
+        for task in &shown {
+            for field in ["quality_gate", "options_for", "requirement_ids", "reviewer"] {
+                assert!(task.get(field).is_none(), "{field} leaked: {task}");
+            }
+            serde_json::from_value::<crate::lean::tasks::PlannedTask>(task.clone())
+                .expect("every shown task is valid submit_plan input");
+        }
     }
 }

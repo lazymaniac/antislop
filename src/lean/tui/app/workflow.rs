@@ -110,7 +110,17 @@ impl App {
 
     /// The header's status text: the stage, then what is going on.
     pub(in crate::lean::tui) fn header_status(&self) -> String {
-        let status = if self.view.paused { "paused" } else { "" };
+        let waiting = self.view.approvals.len();
+        let status = [
+            self.view.paused.then(|| "paused".to_owned()),
+            self.view.autonomous.then(|| "approvals: auto".to_owned()),
+            (waiting > 0).then(|| format!("{waiting} approval(s) waiting")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+        let status = status.as_str();
         let stage = self.view.stage();
         match stage {
             view::Stage::Fresh => format!("1/3 interview · {status}"),

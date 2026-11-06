@@ -33,3 +33,14 @@ CREATE TABLE IF NOT EXISTS task_resume_results(
  task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL,
  source_task TEXT NOT NULL REFERENCES tasks(id), result_turn TEXT REFERENCES agent_results(turn_id),
  PRIMARY KEY(task_id,generation));
+CREATE TABLE IF NOT EXISTS approval_modes(
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+ mode TEXT NOT NULL CHECK(mode IN ('supervised','autonomous')));
+CREATE TABLE IF NOT EXISTS approvals(
+ id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+ turn_id TEXT NOT NULL, role TEXT NOT NULL, provider TEXT NOT NULL,
+ kind TEXT NOT NULL, summary TEXT NOT NULL, options TEXT NOT NULL, fingerprint TEXT NOT NULL,
+ decider TEXT NOT NULL CHECK(decider IN ('user','orchestrator')),
+ state TEXT NOT NULL CHECK(state IN ('open','answered','closed')),
+ choice TEXT, answered_by TEXT, created_ms INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS approvals_by_conversation ON approvals(conversation_id,state);

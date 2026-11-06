@@ -1,4 +1,5 @@
 use super::super::*;
+use native::approvals;
 
 impl Core {
     /// Attaches a view to the role's terminal. A role without a running CLI
@@ -159,6 +160,33 @@ impl Session {
                 state.term.key_up(K::Escape, M::NONE).map_err(invalid)?;
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Ok(())
+    }
+
+    /// Presses keys one after another, as a person at the keyboard would.
+    pub(crate) fn press(state: &Arc<Mutex<State>>, keys: &[approvals::Key]) -> Result<()> {
+        use approvals::Key;
+        use wezterm_term::{KeyCode as K, KeyModifiers as M};
+        for key in keys {
+            let code = match key {
+                Key::Char(c) => K::Char(*c),
+                Key::Enter => K::Enter,
+                Key::Escape => K::Escape,
+                Key::Up => K::UpArrow,
+                Key::Down => K::DownArrow,
+                Key::Right => K::RightArrow,
+            };
+            {
+                let mut state = state.lock().map_err(invalid)?;
+                require(
+                    state.error.is_none(),
+                    state.error.as_deref().unwrap_or("terminal failed"),
+                )?;
+                state.term.key_down(code, M::NONE).map_err(invalid)?;
+                state.term.key_up(code, M::NONE).map_err(invalid)?;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
         }
         Ok(())
     }

@@ -38,7 +38,7 @@ The system should reduce common agent failures: superficial planning, context lo
 | Independence | A separate reviewer session and context; preferably another model or CLI, with the same one allowed in a separate session. |
 | CLI routing | Profiles assigning effort and work kinds to CLIs; for example, Codex for heavy reasoning and Gemini for lighter tasks and code writing. |
 | Autonomy | Reviewed plans and repairs advance automatically; manual pause and cancellation remain available. |
-| Access | All roles launch with full filesystem and tool access, without execution approvals or permission profiles. |
+| Access | CLIs launch with no permission, sandbox or approval flags. Their own policy applies and their approval dialogs go through the runtime (§6.2). |
 | MVP limits | No limits on agent count, concurrency, time, cost, delegation depth, or revision rounds. |
 | Role pairs | A dedicated reviewer agent for every activated executor role. |
 | Orchestrator selection | Configurable CLI/model, with no default orchestrator provider. |
@@ -130,12 +130,28 @@ Stages describe a logical cycle; a small task may have short stages and few agen
 
 Tests can be created before or alongside implementation. The later Validation stage checks the result and evidence completeness. Stage separation does not impose waterfall development.
 
-### 6.2. Automatic progression with full access
+### 6.2. Automatic progression and approval dialogs
 
-All roles launch with full filesystem and tool access. There are no supervised or
-restricted modes, directory-trust dialogs, execution grants or count/time/resource
-budgets. Reviewed plans and necessary repair rounds advance automatically. Roles
-and task contracts describe work and deliverables; they do not grant permissions.
+Agent CLIs launch without any permission, sandbox or approval flag; the policy of
+each CLI (for example a corporate one) decides what is allowed. The runtime adds no
+execution grants or count/time/resource budgets. Reviewed plans and necessary
+repair rounds advance automatically. Roles and task contracts describe work and
+deliverables; they do not grant permissions.
+
+When a CLI shows an approval dialog the runtime recognizes it on the PTY screen
+(question, choices and the CLI's footer, at the bottom of the screen), turns it
+into an approval request and presses the chosen answer's keys. The mode is set per
+conversation in the TUI. **Supervised** (default): the request waits for the user.
+**Autonomous**: the orchestrator decides with `decide_approval` and may escalate to
+the user; the user can always answer first. Approvals of the orchestrator, its
+comment session and the planner always go to the user. A dialog answered in the
+attached terminal view closes the request without the runtime pressing anything.
+Trust dialogs for directories the runtime allocated are answered automatically.
+An unrecognized dialog stops the turn with the raw screen; nothing is guessed.
+Supported dialogs: Claude, Codex and OpenCode in full, Agy for its trust dialog (its
+default policy showed no command dialog); Gemini's trust and tool confirmations are recognized; their layout was captured
+from the published bundle running with an isolated HOME and a fake API server
+(no account login).
 
 Independent review, dependency ordering, freshness checks, integration ownership
 and acceptance evidence remain mandatory. A product choice that cannot be inferred
@@ -952,11 +968,10 @@ Criteria: data provenance/quality, explicit assumptions, correct units/denominat
 
 Protect user files, secrets, CLI authentication, session history, artifacts, local IPC, repositories, and external resources. Potentially untrusted inputs include repository contents, dependencies/test scripts, pages, tool results, plugins/MCP, other agents' responses, and generated patches.
 
-All agent CLIs launch with full access. No read-only, workspace-write or restricted
-permission profiles are supported. Tests and reviewers may run the checks they
-need. Workers deliver changes from isolated worktrees; reviewers preserve the
-result they assess. The runtime enforces ownership, consistency, evidence and
-user cancellation rather than asking for new execution rights.
+Agent CLIs launch with no permission flags; their own policy applies and approval
+dialogs go through the runtime (§6.2). Workers deliver changes from isolated
+worktrees; reviewers preserve the result they assess. The runtime enforces
+ownership, consistency, evidence and user cancellation.
 
 Durable state lives under `ANTISLOP_STATE_ROOT`, `$XDG_STATE_HOME/antislop`, or
 `~/.local/state/antislop`, keyed by canonical common Git directory (canonical root
@@ -966,7 +981,7 @@ the project file, then the user configuration directory; state-directory files
 never override it automatically. The configuration editor writes that selected source.
 Configuration/protocol/database formats are 4/5/16; old formats are
 rejected rather than migrated. Provider configuration files are never modified;
-gateway and permission settings are supplied per launch.
+the gateway is supplied per launch.
 
 Logs/exports use secret redaction, restricted permissions, and retention policies. Redaction cannot guarantee removal of every secret; minimize collection at the source. Never copy CLI authentication stores into logs/artifacts. Sanitize unsafe terminal control sequences.
 

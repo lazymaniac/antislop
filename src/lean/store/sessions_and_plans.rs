@@ -91,6 +91,7 @@ impl Store {
         let tx = db.transaction()?;
         let conversations = recovery::running_orchestrators(&tx)?;
         recovery::record_turn_interruptions(&tx)?;
+        recovery::close_open_approvals(&tx)?;
         tx.commit()?;
         Ok(conversations)
     }

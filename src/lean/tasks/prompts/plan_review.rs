@@ -6,7 +6,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
          project is your current working directory: {project}. Read the files \
          you need yourself to verify the plan. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
-         The proposed plan:\n{}\n\n{}{}{}",
+         The proposed plan:\n{}\n\n{GENERATED_NODES}{}{}{}",
         request,
         plan_text(plan),
         PLAN_CHECKS,
@@ -17,7 +17,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
     format!(
-        "{}The new plan:\n{}\n\nCheck it again. {}{}{}",
+        "{}The new plan:\n{}\n\n{GENERATED_NODES}Check it again. {}{}{}",
         if request.is_empty() {
             String::new()
         } else {
@@ -44,7 +44,7 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      added quality gates may use the interface language; filesystem access follows the allocated checkout and CLI permissions, not task path lists. Writers stay within their worktrees. Existing toolchain executables need no separate path grant. Tasks declare change_kind explicitly; only change_kind=code requires quality and \
      review agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
      is left in a better state; each goal's result can be independently verified from
-     the files, retained evidence and any checks the reviewer needs. All agents have full access.
+     the files, retained evidence and any checks the reviewer needs. The runtime imposes no access limits on agents.
      Workers execute the commands their goal needs and retain raw results. Each reviewer checks its task's goal,
      assigned acceptance criteria and its kind's risk catalog. ";
 
@@ -72,6 +72,9 @@ fn plan_entry(task: &TaskContract) -> Value {
         "added_by_runtime": true,
     })
 }
+
+/// Said wherever a reviewer reads a plan: generated nodes are the runtime's, not the planner's.
+const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options and quality gates) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them.\n\n";
 
 /// Review of a plan revision. A resumed reviewer has the plan already; either
 /// way the earlier contracts are repeated only for tasks the revision changed
@@ -106,7 +109,7 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nComplete candidate task IDs: {}\nThis index and the proposed graph above are authoritative. Earlier contracts below are comparison history, not the candidate graph. Before claiming a task is absent or a removed options edge still exists, check the candidate graph rather than the earlier contracts.\nReview a revision within accepted requirements. Preserve every obligation. deferred=true is a deliberate scheduling hold for the task, its generated options/gates and dependent work; a reviewed revision releases it when its prerequisite is resolved. All agents already have full access. Do not introduce permission decisions or execution budgets. Independent work can proceed while a prerequisite remains unavailable. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
+        "{head}\nComplete candidate task IDs: {}\nThis index and the proposed graph above are authoritative. Earlier contracts below are comparison history, not the candidate graph. Before claiming a task is absent or a removed options edge still exists, check the candidate graph rather than the earlier contracts.\nReview a revision within accepted requirements. Preserve every obligation. deferred=true is a deliberate scheduling hold for the task, its generated options/gates and dependent work; a reviewed revision releases it when its prerequisite is resolved. The runtime already imposes no access limits on agents. Do not introduce permission decisions or execution budgets. Independent work can proceed while a prerequisite remains unavailable. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
         serde_json::to_string(&plan.iter().map(|task| &task.id).collect::<Vec<_>>())
             .unwrap_or_default(),
         serde_json::to_string(&previous).unwrap_or_default(),

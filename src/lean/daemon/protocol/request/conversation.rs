@@ -42,6 +42,18 @@ pub enum ConversationRequest {
         conversation: String,
         paused: bool,
     },
+    /// Sets who decides the approval dialogs of the conversation's agents:
+    /// `supervised` (the user) or `autonomous` (the orchestrator).
+    SetApprovalMode {
+        conversation: String,
+        mode: String,
+    },
+    /// The user's decision on an agent CLI's approval dialog.
+    AnswerApproval {
+        conversation: String,
+        request: String,
+        choice: String,
+    },
     /// The user finished commenting on the plan: the orchestrator answers
     /// the draft comments together.
     ReviewComments {

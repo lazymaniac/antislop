@@ -241,6 +241,15 @@ fn run_cli(
     prepared
         .native
         .set_protocol_observer(protocol_observer(core, state))?;
+    prepared
+        .native
+        .set_approver(crate::lean::core_approvals::approver(
+            core,
+            state.conversation,
+            &state.role,
+            &state.turn.id,
+            &prepared.spec,
+        ))?;
     let mut attempts: u32 = 0;
     loop {
         let result = prepared
@@ -302,5 +311,14 @@ fn restart_native(
     prepared.native.set_tool_handler(handler.clone())?;
     prepared
         .native
-        .set_protocol_observer(protocol_observer(core, state))
+        .set_protocol_observer(protocol_observer(core, state))?;
+    prepared
+        .native
+        .set_approver(crate::lean::core_approvals::approver(
+            core,
+            state.conversation,
+            &state.role,
+            &state.turn.id,
+            &prepared.spec,
+        ))
 }

@@ -36,6 +36,7 @@ impl Session {
             executing: AtomicBool::new(false),
             primed: AtomicBool::new(false),
             startup_failed: AtomicBool::new(false),
+            approver: Mutex::new(None),
             touched: Mutex::new(Instant::now()),
         })
     }
@@ -56,7 +57,9 @@ impl Session {
             return Err(StopCause::Cancelled.diagnostic("the agent session was stopped"));
         }
         let screen = terminal::tail(&self.screen, SCREEN_LINES);
-        if let Some(cause) = stops::screen_stop(self.spec.provider, &screen) {
+        if let Some(cause) = stops::screen_stop(self.spec.provider, &screen)
+            && !(cause == StopCause::UnexpectedDialog && self.approval().is_some())
+        {
             return Err(cause.diagnostic(screen));
         }
         let mut terminal = self.terminal.lock().map_err(invalid)?;
@@ -67,6 +70,82 @@ impl Session {
             )));
         }
         Ok(())
+    }
+
+    /// The approval dialog the CLI shows now, if it is one this runtime
+    /// recognizes.
+    fn approval(&self) -> Option<approvals::Approval> {
+        approvals::detect(
+            self.spec.provider,
+            &terminal::tail(&self.screen, APPROVAL_LINES),
+        )
+    }
+
+    /// Settles the approval dialog on screen, if any: asks whoever decides and
+    /// presses the chosen answer. Returns once the dialog is gone.
+    fn serve_approval(&self, cancel: &AtomicBool) -> Result<()> {
+        let Some(approval) = self.approval() else {
+            return Ok(());
+        };
+        let approver = self
+            .approver
+            .lock()
+            .map_err(invalid)?
+            .clone()
+            .ok_or_else(|| {
+                StopCause::UnexpectedDialog.diagnostic(format!(
+                    "no one is set to answer this approval dialog:\n{}",
+                    terminal::tail(&self.screen, SCREEN_LINES)
+                ))
+            })?;
+        let shown = || {
+            self.approval()
+                .is_some_and(|now| now.fingerprint == approval.fingerprint)
+        };
+        match approver(&approval, cancel, &shown)? {
+            approvals::Verdict::AnsweredInTerminal => Ok(()),
+            approvals::Verdict::Choose(id) => {
+                let choice = approval
+                    .choice(&id)
+                    .ok_or_else(|| invalid(format!("approval dialog has no choice {id}")))?;
+                // The keys must make the dialog disappear; if it is still
+                // there they are pressed once more, then the failure is
+                // reported with the screen as it is.
+                for attempt in 0..2 {
+                    terminal::Session::press(&self.screen, &choice.keys)?;
+                    if self.dialog_gone(&approval, cancel)? {
+                        return Ok(());
+                    }
+                    if attempt == 1 {
+                        return Err(StopCause::UnexpectedDialog.diagnostic(format!(
+                            "the approval dialog did not accept the answer:\n{}",
+                            terminal::tail(&self.screen, SCREEN_LINES)
+                        )));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Waits a few seconds for `approval` to leave the screen.
+    fn dialog_gone(&self, approval: &approvals::Approval, cancel: &AtomicBool) -> Result<bool> {
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            let shown = self
+                .approval()
+                .is_some_and(|now| now.fingerprint == approval.fingerprint);
+            if !shown {
+                return Ok(true);
+            }
+            if cancel.load(Ordering::SeqCst) {
+                return Err(invalid(mcp::CANCELLED));
+            }
+            if Instant::now() >= until {
+                return Ok(false);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Require MCP tool discovery, then briefly let startup drawing settle.
@@ -83,6 +162,7 @@ impl Session {
                 return Err(invalid(mcp::CANCELLED));
             }
             self.check_alive()?;
+            self.serve_approval(cancel)?;
             std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
@@ -95,6 +175,7 @@ impl Session {
                 return Err(invalid(mcp::CANCELLED));
             }
             self.check_alive()?;
+            self.serve_approval(cancel)?;
             if terminal::quiet_for(&self.screen) >= SETTLE || Instant::now() >= settle_until {
                 return Ok(());
             }
@@ -148,6 +229,11 @@ impl Session {
         self.gateway.set_handler(handler)
     }
 
+    pub(crate) fn set_approver(&self, approver: Arc<approvals::Approver>) -> Result<()> {
+        *self.approver.lock().map_err(invalid)? = Some(approver);
+        Ok(())
+    }
+
     pub(crate) fn set_protocol_observer(&self, observer: Arc<mcp::ProtocolObserver>) -> Result<()> {
         self.gateway.set_protocol_observer(observer)
     }
@@ -182,7 +268,10 @@ impl Session {
 
     fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
         self.gateway
-            .wait(turn, cancel, || self.check_alive())
+            .wait(turn, cancel, || {
+                self.check_alive()?;
+                self.serve_approval(cancel)
+            })
             .inspect_err(|error| {
                 if error.to_string() == mcp::CANCELLED {
                     let _ = terminal::Session::interrupt(&self.screen);

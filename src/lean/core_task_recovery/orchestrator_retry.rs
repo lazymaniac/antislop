@@ -79,7 +79,7 @@ impl Core {
             plan,
             task,
             &format!(
-                "Continue retained work with full access and no execution budgets: {resolution}"
+                "Continue retained work with no runtime access limits or execution budgets: {resolution}"
             ),
         )
     }

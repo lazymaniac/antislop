@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub(crate) mod approvals;
 /// Makes a headless-style test script answer as an interactive agent CLI too
 /// (see `tests/support/fixture_cli.rs`).
 mod registry;
@@ -34,6 +35,8 @@ const SETTLE: Duration = Duration::from_millis(400);
 /// UI animation must not block a CLI whose MCP tools are already available.
 const SETTLE_LIMIT: Duration = Duration::from_secs(2);
 const SCREEN_LINES: usize = 12;
+/// A dialog can be taller than the lines shown in a failure.
+const APPROVAL_LINES: usize = 40;
 
 pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
     Error::Invalid(error.to_string())
@@ -61,6 +64,7 @@ pub struct Session {
     /// so the turn did nothing and can be started again without loss.
     startup_failed: AtomicBool,
     touched: Mutex<Instant>,
+    approver: Mutex<Option<Arc<approvals::Approver>>>,
 }
 
 /// What is typed into the CLI: the prompt and how to hand the answer back. The

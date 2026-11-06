@@ -1,0 +1,18 @@
+# gemini-cli 0.67.0 — MCP tool, captured live (isolated HOME, fake API, stdio probe server)
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Action Required                                                                                                      │
+│                                                                                                                      │
+│ ?  ping (probe MCP Server) ping(text: hi)                                                                            │
+│                                                                                                                      │
+│ MCP Server: probe                                                                                                    │
+│ Tool: ping                                                                                                           │
+│                                                                                                                      │
+│ MCP Tool Details:                                                                                                    │
+│ (press Ctrl+O to expand MCP tool details)                                                                            │
+│ Allow execution of MCP tool "ping" from server "probe"?                                                              │
+│                                                                                                                      │
+│ ● 1. Allow once                                                                                                      │
+│   2. Allow tool for this session                                                                                     │
+│   3. Allow all server tools for this session                                                                         │
+│   4. No, suggest changes (esc)                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

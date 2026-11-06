@@ -193,6 +193,7 @@ impl App {
             .as_ref()
             .is_some_and(|editor| editor.visible)
             || self.unblock.is_some()
+            || self.approval.is_some()
             || self.graph_filters.is_some()
             || self.interview_visible()
     }

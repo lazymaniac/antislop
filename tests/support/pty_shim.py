@@ -466,6 +466,23 @@ def rpc(method, params=None, ident=None):
 tools = set()
 
 
+def dialog(kind, fd):
+    """Shows the approval dialog a test left next to the fixture (`.dialog.<kind>`)
+    and waits for one key, as the real CLIs do; the key is recorded in `.keys`."""
+    path = here + ".dialog." + kind
+    if not os.path.exists(path):
+        return
+    with open(path) as shown:
+        text = shown.read().replace("\n", "\r\n")
+    sys.stdout.write("\x1b[2J\x1b[H" + text)
+    sys.stdout.flush()
+    key = os.read(fd, 1)
+    with open(here + ".keys", "ab") as record:
+        record.write(key)
+    sys.stdout.write("\x1b[2J\x1b[H")
+    sys.stdout.flush()
+
+
 def main():
     # The terminal is set up before connecting, as the real CLIs draw their
     # UI first: the runtime may type the prompt as soon as the gateway sees
@@ -475,6 +492,7 @@ def main():
     tty.setraw(fd)
     sys.stdout.write("\x1b[?2004h")
     sys.stdout.flush()
+    dialog("startup", fd)
     # Like the real CLIs, connect to the gateway while starting.
     rpc("initialize", {"protocolVersion": "2025-06-18"}, 1)
     rpc("notifications/initialized")
@@ -493,6 +511,7 @@ def main():
         pasted = buffer[start + 6 : end].decode().replace("\r", "\n")
         buffer = b""
         turn = turn_of(pasted)
+        dialog("turn", fd)
         prompt = pasted.split("\n\n---\nWhen this turn is complete", 1)[0]
         with open(here + ".prompts", "a") as record:
             record.write(json.dumps({"turn": turn, "prompt": prompt}) + "\n")

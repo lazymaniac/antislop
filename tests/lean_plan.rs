@@ -385,8 +385,8 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
     assert!(
         workers
             .iter()
-            .all(|(_, args)| args.contains("--mode accept-edits")
-                && args.contains("--dangerously-skip-permissions"))
+            .all(|(_, args)| !args.contains("--mode accept-edits")
+                && !args.contains("--dangerously-skip-permissions"))
     );
     // The dependent task is told it is unblocked and gets the summary of
     // what its dependency delivered, not its rounds.

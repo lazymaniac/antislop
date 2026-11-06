@@ -16,6 +16,7 @@ impl Core {
         match tool {
             "answer_agent" => self.answer_agent_tool(conversation, args),
             "defer_to_user" => self.defer_question_tool(conversation, args),
+            "decide_approval" => self.decide_approval_tool(conversation, args),
             "retry_task" => self.retry_failed_task(
                 conversation,
                 role,

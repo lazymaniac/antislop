@@ -13,6 +13,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             restart_and_cancel,
             cancel_work,
             pause,
+            approvals,
         ],
     )
 }
@@ -164,6 +165,30 @@ fn pause(context: &Context<'_>, request: Request) -> Result<Route> {
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.pause(&conversation, paused)?;
+            Value::Null
+        }),
+        request => Route::Unmatched(request),
+    })
+}
+
+fn approvals(context: &Context<'_>, request: Request) -> Result<Route> {
+    let core = context.core;
+    let project = context.project;
+    Ok(match request {
+        Request::Conversation(ConversationRequest::SetApprovalMode { conversation, mode }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                core.set_approval_mode(&conversation, &mode)?;
+                Value::Null
+            })
+        }
+        Request::Conversation(ConversationRequest::AnswerApproval {
+            conversation,
+            request,
+            choice,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            core.answer_approval(&conversation, &request, &choice)?;
             Value::Null
         }),
         request => Route::Unmatched(request),

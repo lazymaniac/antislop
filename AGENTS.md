@@ -290,7 +290,7 @@ src
    planner_prompt_text(context):String > format_messages,append_ledger
    PlannerPrompt(C{project,first,requirements,asked,replaced,keepable,ledger_context})
   core_planner_turn.rs
-   - PlannerTurnContext,planner_{setup,prompt},announce_planner_draft,record_planner_result
+   - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
   core_planning_context
    append_ledger(context,prompt)
    planning_ledger_context(core,conversation):Result<Option<String>> > load_planning_context,planning_run
@@ -2908,6 +2908,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 119,448 LOC · input 1,055,143 · output 41,999 tokens · state d85b886ad3f0
+· 119,523 LOC · input 1,055,973 · output 42,003 tokens · state 263ad924ade6
 ```
 <!-- hologram:end -->

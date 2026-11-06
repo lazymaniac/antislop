@@ -192,3 +192,28 @@ fn proposed_task(plan_id: &str, spec: &Value) -> Task {
         checks: None,
     }
 }
+
+/// After a restart no agent waits for an approval any more.
+pub(super) fn close_open_approvals(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    let open = {
+        let mut query =
+            tx.prepare("SELECT id,conversation_id FROM approvals WHERE state='open'")?;
+        query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for (id, conversation) in open {
+        tx.execute("UPDATE approvals SET state='closed' WHERE id=?1", [&id])?;
+        tx.execute(
+            "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'approval_resolved',?2,?3)",
+            rusqlite::params![
+                conversation,
+                serde_json::json!({"request":id,"state":"closed","reason":"restart"}).to_string(),
+                super::super::now_ms()
+            ],
+        )?;
+    }
+    Ok(())
+}

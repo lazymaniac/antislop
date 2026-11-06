@@ -438,8 +438,9 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     );
     let worker_args = agents[0]["args"].to_string();
     assert!(
-        worker_args.contains("accept-edits")
-            && worker_args.contains("--dangerously-skip-permissions")
+        worker_args.contains("--disable-slash-commands")
+            && !worker_args.contains("accept-edits")
+            && !worker_args.contains("--dangerously-skip-permissions")
             && !worker_args.contains("--sandbox")
     );
     // A writer is never given a directory to write outside the project.
@@ -590,7 +591,7 @@ fn resuming_preserves_an_unanswered_choice_after_conflicting_edits_are_removed()
     let calls_before = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
         .lines()
-        .filter(|line| line.contains("accept-edits"))
+        .filter(|line| line.contains("--disable-slash-commands"))
         .count();
 
     // Editing the project does not answer the resolver's pending question.
@@ -604,7 +605,7 @@ fn resuming_preserves_an_unanswered_choice_after_conflicting_edits_are_removed()
     let calls_after = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
         .lines()
-        .filter(|line| line.contains("accept-edits"))
+        .filter(|line| line.contains("--disable-slash-commands"))
         .count();
     assert_eq!(
         calls_after, calls_before,

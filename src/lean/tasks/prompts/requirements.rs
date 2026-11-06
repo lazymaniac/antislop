@@ -7,10 +7,10 @@ pub const REVIEW_FORMAT: &str = "End with review: your report and the findings, 
      problem stays open, so it is recognised across rounds.";
 
 /// What every agent of a task keeps to (design §10.3, §13).
-pub(super) const PROJECT_RULES: &str = "Follow applicable repository instructions and the user's current request. All agents have full access; execution has no task-count, concurrency, time, idle or memory budget. Work in the allocated checkout and preserve user changes. Do not change provider configuration files; permissions and gateway settings are supplied per launch. Runtime state and evidence belong in the durable runtime directory. Historical commit hashes, branches and paths are context, not prerequisites: inspect the actual checkout, complete the task and report concrete observations. Ask about inputs only when actually unavailable or unusable. Report raw failures and pursue technical recovery without additional permission questions.";
+pub(super) const PROJECT_RULES: &str = "Follow applicable repository instructions and the user's current request. The runtime imposes no access limits on agents; execution has no task-count, concurrency, time, idle or memory budget. Work in the allocated checkout and preserve user changes. Do not change provider configuration files; permissions and gateway settings are supplied per launch. Runtime state and evidence belong in the durable runtime directory. Historical commit hashes, branches and paths are context, not prerequisites: inspect the actual checkout, complete the task and report concrete observations. Ask about inputs only when actually unavailable or unusable. If the CLI asks for permission the runtime answers it; a refusal is information, so pick another way or report a blocker naming what was refused. Report raw failures and pursue technical recovery without additional permission questions.";
 
 /// The context a plan, audit or code reviewer may inspect.
-pub(super) const OUTSIDE: &str = "Inspect the project and any supporting files needed to verify the task. All agents have full access. Preserve user files and the independence of the review.";
+pub(super) const OUTSIDE: &str = "Inspect the project and any supporting files needed to verify the task. The runtime imposes no access limits on agents. Preserve user files and the independence of the review.";
 
 /// How a reviewer reports while it works, so the user can follow each check
 /// and its evidence as it is settled, not only in the final verdict.

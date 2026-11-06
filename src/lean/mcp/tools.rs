@@ -116,6 +116,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         "read_evidence",
         "answer_agent",
         "defer_to_user",
+        "decide_approval",
         "retry_task",
         "resume_task",
         "revise_plan",
@@ -161,6 +162,7 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         | "submit_audit_review"
         | "answer_agent"
         | "defer_to_user"
+        | "decide_approval"
         | "retry_task"
         | "resume_task"
         | "request_replan" => control_contract(name),
@@ -208,6 +210,7 @@ fn control_contract(name: &str) -> ToolSpec {
         "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn", "note", "assessments"]),
         "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":"Full revision request or dependency task UUID required for waiting dispositions"}}), vec!["turn", "request", "answer"]),
         "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn", "request", "explanation"]),
+        "decide_approval" => ("Decide an agent CLI's approval dialog that the runtime put to you. Pick the id of the choice that lets the agent do what its task needs and nothing broader; refuse (the denying choice) what the task does not need. Use choice \"escalate_to_user\" only when you cannot judge it or it is outside the user's request; give the user the reason in explanation. Never ask the agent: the dialog is the agent CLI's own.".into(), json!({"request":{"type":"string","description":"The approval request id the runtime message names"},"choice":{"type":"string","description":"A choice id from the message, or escalate_to_user"},"explanation":{"type":"string","description":"Why, for the user; required with escalate_to_user"}}), vec!["turn", "request", "choice"]),
         "retry_task" => ("Retry a failed task in its allocated worktree with concrete guidance. There is no recovery-count limit or permission question. Read current task_states first. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"guidance":{"type":"string"}}), vec!["turn","task","guidance"]),
         "resume_task" => ("Continue a coordinating task after resolving its blocker or identifying independent work. No recovery-count limit or permission question applies. Preserve unresolved factual prerequisites; never restart an active task. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"round":{"type":"integer","minimum":0},"input_generation":{"type":"integer","minimum":0},"resolution":{"type":"string"}}),vec!["turn","task","round","input_generation","resolution"]),
         "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),

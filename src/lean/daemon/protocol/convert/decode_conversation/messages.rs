@@ -142,6 +142,28 @@ fn decode_pause(wire: WireRequest) -> std::result::Result<Request, Box<WireReque
     }
 }
 
+fn decode_approvals(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    use crate::lean::daemon::ConversationRequest as C;
+    match wire {
+        WireRequest::SetApprovalMode { conversation, mode } => {
+            Ok(Request::Conversation(C::SetApprovalMode {
+                conversation,
+                mode,
+            }))
+        }
+        WireRequest::AnswerApproval {
+            conversation,
+            request,
+            choice,
+        } => Ok(Request::Conversation(C::AnswerApproval {
+            conversation,
+            request,
+            choice,
+        })),
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn decode_group_messages(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
@@ -154,4 +176,5 @@ pub(super) fn decode_group_messages(
         .or_else(|wire| decode_restart_orchestrator(*wire))
         .or_else(|wire| decode_cancel(*wire))
         .or_else(|wire| decode_pause(*wire))
+        .or_else(|wire| decode_approvals(*wire))
 }

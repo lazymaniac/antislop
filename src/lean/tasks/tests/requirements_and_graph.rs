@@ -88,7 +88,7 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
         "plan JSON is not pretty-printed"
     );
     // Review independence does not restrict CLI access.
-    assert!(prompt.contains("All agents have full access"));
+    assert!(prompt.contains("imposes no access limits on agents"));
     assert!(!prompt.contains("never by execution or edits"));
 }
 
@@ -227,9 +227,11 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
             .iter()
             .all(|finding| finding.rule != "writer-scope-outside-project")
     );
-    assert!(worker_prompt("/project", &report).contains("All agents have full access"));
+    assert!(worker_prompt("/project", &report).contains("imposes no access limits on agents"));
     for prompt in [planner_instructions(), orchestrator_instructions()] {
         assert!(prompt.contains("no path grant"));
-        assert!(prompt.contains("All agents launch with full filesystem and tool access"));
+        assert!(prompt.contains(
+            "Agents run in their own CLI with the permission policy the user set for it"
+        ));
     }
 }
