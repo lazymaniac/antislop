@@ -74,7 +74,7 @@ fn plan_entry(task: &TaskContract) -> Value {
 }
 
 /// Said wherever a reviewer reads a plan: generated nodes are the runtime's, not the planner's.
-const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options and quality gates) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them.\n\n";
+const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options and quality gates) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them. When the proposed plan contains no options entries at all, local options are switched off by policy: that is not a defect, so never raise a finding about a missing options producer or selected_approach, and do not approve a contract that makes a writer wait for or require a selection no task produces; ask for that condition to be removed instead.\n\n";
 
 /// Review of a plan revision. A resumed reviewer has the plan already; either
 /// way the earlier contracts are repeated only for tasks the revision changed
