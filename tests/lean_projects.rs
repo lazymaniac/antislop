@@ -208,7 +208,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
         picker
             .conversations
             .iter()
-            .any(|c| c.title.starts_with("beta ·"))
+            .any(|c| c.project == path_b.to_string_lossy().as_ref())
     );
 
     // Choosing beta's conversation there switches the project too.
