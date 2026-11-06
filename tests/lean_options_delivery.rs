@@ -21,8 +21,7 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
         "Selected: A\nSelected: B",
         "For writer: Selected: A\nFor other: Selected: B",
     ] {
-        let upstream =
-            tasks::upstream_note(&[("selected_approach", "Selected approach for Writer", report)]);
+        let upstream = tasks::upstream_note(&[("writer-options", "Options for Writer", report)]);
         for (path, continuation) in [
             ("resume", Some(tasks::worker_resume(&[]))),
             (
@@ -65,8 +64,7 @@ fn options_delivery_and_missing_choice_obligation_survive_reviewer_followups() {
         "Selected: A\nSelected: B",
         "For writer: Selected: A\nFor other: Selected: B",
     ] {
-        let upstream =
-            tasks::upstream_note(&[("selected_approach", "Selected approach for Writer", report)]);
+        let upstream = tasks::upstream_note(&[("writer-options", "Options for Writer", report)]);
         // New rounds use full instructions; compatible turns within one round use continuation.
         for (path, fresh) in [
             ("reviewer-fresh-round", true),
