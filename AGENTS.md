@@ -840,7 +840,7 @@ src
    lock_cancellable(lock,cancel):Option<MutexGuard<'a,()>>
   mcp
    dispatch
-    call(shared,params):Value ~67 > scoped_tools,dispatch,is_terminal
+    call(shared,params):Value ~77 > scoped_tools,dispatch,is_terminal
     dispatch(shared,params):Result<Value> > as_str,current_turn,prepare_dispatch,invoke_handler,finish_dispatch
     error(id,code,message):Value
     result(id,result):Value
@@ -2970,6 +2970,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 124,085 LOC · input 1,097,433 · output 43,013 tokens · state 344b426355d9
+· 124,111 LOC · input 1,097,693 · output 43,013 tokens · state f63ee05c3812
 ```
 <!-- hologram:end -->

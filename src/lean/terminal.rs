@@ -20,9 +20,20 @@ pub(crate) use session::handles::{quiet_for, tail};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
-    Key { event: KeyEvent },
-    Paste { text: String },
-    Mouse { event: MouseEvent },
+    Key {
+        event: KeyEvent,
+    },
+    Paste {
+        text: String,
+    },
+    Mouse {
+        event: MouseEvent,
+    },
+    /// Moves only the viewer's window into the history (positive: older
+    /// lines); nothing reaches the CLI.
+    Scroll {
+        lines: i32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,11 +57,14 @@ pub struct Screen {
     pub error: Option<String>,
 }
 
+/// Lines of history kept per terminal; storage stays bounded.
+const SCROLLBACK: usize = 2000;
+
 #[derive(Debug)]
 struct Config;
 impl TerminalConfiguration for Config {
     fn scrollback_size(&self) -> usize {
-        0
+        SCROLLBACK
     }
     fn color_palette(&self) -> wezterm_term::color::ColorPalette {
         Default::default()
@@ -67,6 +81,8 @@ pub(crate) struct State {
     output: std::time::Instant,
 }
 struct Handle {
+    /// Lines this viewer is scrolled back from the live screen.
+    scroll: usize,
     sequence: u64,
     seen: std::time::Instant,
 }
@@ -342,8 +358,24 @@ mod tests {
         for _ in 0..1000 {
             term.advance_bytes(b"line\r\n");
         }
-        assert!(term.screen().scrollback_rows() <= 3);
-        assert!(term.screen().lines_in_phys_range(0..10).len() <= 3);
+        assert!(term.screen().scrollback_rows() <= SCROLLBACK);
+        assert!(term.screen().lines_in_phys_range(0..10).len() <= 10);
+    }
+    #[test]
+    fn history_is_kept_for_scrolling_and_bounded() {
+        let mut term = emulator(40, 3);
+        for n in 0..5000 {
+            term.advance_bytes(format!("line {n}\r\n").as_bytes());
+        }
+        let screen = term.screen();
+        assert!(screen.scrollback_rows() > 3 + 100);
+        assert!(screen.scrollback_rows() <= SCROLLBACK + 3);
+        let top = screen.scrollback_or_visible_row(0);
+        let older = screen.lines_in_phys_range(top - 1..top)[0]
+            .visible_cells()
+            .map(|cell| cell.str().to_owned())
+            .collect::<String>();
+        assert!(older.starts_with("line 49"), "{older}");
     }
     #[test]
     fn zwj_and_combining_clusters_survive_byte_by_byte_output() {

@@ -21,6 +21,16 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn mouse_scroll(&mut self, down: bool) {
+        if self.graph_expanded.is_some()
+            && self.graph_tab == 1
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.selected_round.is_none() && !details.native_focus)
+        {
+            self.scroll_console(if down { -3 } else { 3 });
+            return;
+        }
         if self.scroll_help(down) {
             return;
         }

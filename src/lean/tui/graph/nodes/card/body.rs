@@ -50,7 +50,7 @@ impl Card<'_> {
             "1 Details | 2 PTY | 3 Results"
         };
         let tabs = if tab == 1 {
-            format!("{tabs} | Ctrl+] leave PTY")
+            format!("{tabs} | i type · PgUp/PgDn scroll · Ctrl+] stop typing")
         } else {
             tabs.to_owned()
         };
@@ -95,6 +95,9 @@ impl Card<'_> {
                     }
                 } else {
                     rows.push("No agent turn recorded".into());
+                    if let Some((task, _)) = task_card(self.view, &self.node.key) {
+                        rows.push(format!("Task: {}", task.title));
+                    }
                 }
             }
             1 => rows.push(agent.map_or_else(

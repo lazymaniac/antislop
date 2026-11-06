@@ -102,6 +102,7 @@ impl Session {
         self.handles.insert(
             handle.clone(),
             Handle {
+                scroll: 0,
                 sequence: 0,
                 seen: std::time::Instant::now(),
             },

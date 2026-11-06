@@ -11,7 +11,13 @@ impl Session {
         if after == Some(state.revision) {
             return Ok(None);
         }
-        Ok(Some(render_screen(handle, &state)))
+        let history = state
+            .term
+            .screen()
+            .scrollback_rows()
+            .saturating_sub(state.term.get_size().rows);
+        handle_state.scroll = handle_state.scroll.min(history);
+        Ok(Some(render_screen(handle, &state, handle_state.scroll)))
     }
 
     pub(super) fn input(&mut self, handle: &str, sequence: u64, input: Input) -> Result<()> {
@@ -32,13 +38,33 @@ impl Session {
             state.error.is_none(),
             state.error.as_deref().unwrap_or("terminal failed"),
         )?;
+        if let Input::Scroll { lines } = input {
+            let history = state
+                .term
+                .screen()
+                .scrollback_rows()
+                .saturating_sub(state.term.get_size().rows);
+            let wanted = (last.scroll as i64 + i64::from(lines)).clamp(0, history as i64);
+            last.sequence = sequence;
+            if wanted as usize != last.scroll {
+                last.scroll = wanted as usize;
+                // The viewer re-reads on any revision change.
+                state.revision += 1;
+            }
+            return Ok(());
+        }
+        if last.scroll != 0 {
+            // Typing returns the viewer to the live screen.
+            last.scroll = 0;
+            state.revision += 1;
+        }
         apply_input(&mut state, input)?;
         last.sequence = sequence;
         Ok(())
     }
 }
 
-fn render_screen(handle: &str, state: &State) -> Screen {
+fn render_screen(handle: &str, state: &State, scroll: usize) -> Screen {
     let dimensions = state.term.get_size();
     let cursor = state.term.cursor_pos();
     Screen {
@@ -46,18 +72,22 @@ fn render_screen(handle: &str, state: &State) -> Screen {
         revision: state.revision,
         columns: dimensions.cols as u16,
         rows: dimensions.rows as u16,
-        cursor: if format!("{:?}", cursor.visibility) == "Visible" {
+        cursor: if scroll == 0 && format!("{:?}", cursor.visibility) == "Visible" {
             Some((cursor.x as u16, cursor.y.max(0) as u16))
         } else {
             None
         },
-        cells: render_cells(state, dimensions.rows, dimensions.cols),
+        cells: render_cells(state, dimensions.rows, dimensions.cols, scroll),
         error: state.error.clone(),
     }
 }
 
-fn render_cells(state: &State, rows: usize, columns: usize) -> Vec<Cell> {
-    let top = state.term.screen().scrollback_or_visible_row(0);
+fn render_cells(state: &State, rows: usize, columns: usize, scroll: usize) -> Vec<Cell> {
+    let top = state
+        .term
+        .screen()
+        .scrollback_or_visible_row(0)
+        .saturating_sub(scroll);
     let lines = state.term.screen().lines_in_phys_range(top..top + rows);
     let palette = state.term.palette();
     let mut cells = Vec::with_capacity(rows * columns);
@@ -132,6 +162,7 @@ fn apply_input(state: &mut State, input: Input) -> Result<()> {
         Input::Paste { text } => apply_paste(state, &text),
         Input::Key { event } => apply_key(state, event),
         Input::Mouse { event } => apply_mouse(state, event),
+        Input::Scroll { .. } => Ok(()),
     }
 }
 

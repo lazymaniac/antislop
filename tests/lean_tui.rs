@@ -1328,7 +1328,7 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
         expanded_graph
             .nodes
             .iter()
-            .filter(|node| node.visible && (node.width > 30 || node.height > 8))
+            .filter(|node| node.visible && (node.width > 32 || node.height > 14))
             .count(),
         1,
         "only the selected card is expanded"

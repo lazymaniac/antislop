@@ -197,6 +197,66 @@ mod tests {
     }
 
     #[test]
+    fn expanded_graph_pty_opens_as_a_scrollable_console_until_i_is_pressed() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::test_app();
+        app.focus = Focus::Graph;
+        app.graph_viewport = Some((120, 48));
+        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        }];
+        app.view
+            .agents
+            .insert("worker:t1".into(), Default::default());
+        app.selected = "worker:t1".into();
+        app.graph_expanded = Some(app.selected.clone());
+        app.graph_tab = 1;
+        let mut details = Details::new(app.selected.clone());
+        details.switch_tab(crate::lean::tui::details::RESULT);
+        details.native_areas[0] = Rect::new(1, 1, 40, 10);
+        app.details = Some(details);
+        let (commands, received) = mpsc::sync_channel(8);
+        let state = Arc::new(std::sync::Mutex::new(Snapshot {
+            screen: Some(screen("console-text")),
+            error: None,
+        }));
+        app.native_views.insert(
+            format!("{}:worker:t1", app.conversation),
+            View {
+                state,
+                commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (40, 10),
+                identity: "waiting:".into(),
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.native_focused(), "the console opens read-only");
+        let graph = app.graph_area.unwrap();
+        assert!(graph.width >= 110, "the card spans the screen: {graph:?}");
+
+        while received.try_recv().is_ok() {}
+        app.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Command::Input(Input::Scroll { lines })) if lines > 0
+        ));
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Command::Input(Input::Scroll { lines: -1 }))
+        ));
+        assert!(!app.native_focused());
+
+        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.native_focused());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.native_focused(), "a redraw keeps the typing mode");
+    }
+
+    #[test]
     fn expanded_graph_pty_renders_the_owned_snapshot_and_routes_input() {
         let mut app = App::test_app();
         app.focus = Focus::Graph;

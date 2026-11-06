@@ -78,7 +78,7 @@ impl App {
 
         if self.graph_tab == 1 {
             if let Some(details) = &mut self.details {
-                details.native_focus = details.selected_round.is_none();
+                details.native_focus &= details.selected_round.is_none();
                 details.native_areas = [content, Rect::default()];
             }
             if self
@@ -225,6 +225,12 @@ impl App {
             return;
         };
         let (left, top) = &mut self.offset;
+        if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
+            // An opened card fills the view: put all of it on screen.
+            *left = node.x.saturating_sub(3);
+            *top = node.y;
+            return;
+        }
         reveal_axis(
             left,
             node.x,

@@ -37,6 +37,9 @@ impl App {
             }
             return true;
         }
+        if self.console_key(key) {
+            return true;
+        }
         let graph = self.graph_for_key();
         if let Some(handled) = self.graph_scroll_key(key, &graph) {
             return handled;
@@ -46,6 +49,45 @@ impl App {
             return true;
         }
         self.graph_action_key(key)
+    }
+
+    /// The expanded card's PTY tab is a read-only console until `i` enters it:
+    /// the arrows and page keys scroll its history.
+    fn console_key(&mut self, key: KeyEvent) -> bool {
+        let console = self.graph_expanded.is_some()
+            && self.graph_tab == 1
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.selected_round.is_none() && !details.native_focus);
+        if !console {
+            return false;
+        }
+        let height = self.details.as_ref().map_or(10, |details| {
+            i32::from(details.native_areas[0].height.max(2))
+        });
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let lines = match key.code {
+            KeyCode::Up => 1,
+            KeyCode::Down => -1,
+            KeyCode::PageUp => height - 1,
+            KeyCode::PageDown => 1 - height,
+            KeyCode::Char('u') if control => height / 2,
+            KeyCode::Char('d') if control => -(height / 2),
+            KeyCode::Char('i') if !control => {
+                if let Some(details) = &mut self.details {
+                    details.native_focus = true;
+                }
+                return true;
+            }
+            _ => return false,
+        };
+        self.scroll_console(lines);
+        true
+    }
+
+    pub(in crate::lean::tui) fn scroll_console(&mut self, lines: i32) {
+        self.native_send(crate::lean::terminal::Input::Scroll { lines });
     }
 
     fn graph_for_key(&self) -> Graph {
@@ -119,8 +161,8 @@ impl App {
                 if self.graph_expanded.is_some() {
                     self.graph_tab = usize::from(digit as u8 - b'1');
                     if let Some(details) = &mut self.details {
-                        details.native_focus =
-                            self.graph_tab == 1 && details.selected_round.is_none();
+                        // The console opens read-only; `i` types into it.
+                        details.native_focus = false;
                     }
                     if self.graph_tab == 3 {
                         self.open_graph_diff();
@@ -140,6 +182,7 @@ impl App {
                     self.details = None;
                 } else {
                     self.graph_expanded = Some(self.selected.clone());
+                    self.graph_revealed = None;
                     self.graph_tab = 0;
                     self.open_details(self.selected.clone());
                 }

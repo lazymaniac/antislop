@@ -224,6 +224,7 @@ fn help_details() -> &'static [&'static str] {
         "Graph card       , / . select round; . on newest follows live work",
         "i / a            native CLI focus / message composer",
         "Ctrl+]           leave PTY and return to Details",
+        "Graph card PTY   opens as a read-only console: ↑/↓ PgUp/PgDn wheel scroll, i types",
         "Ctrl+W           switch worker / reviewer panel",
         "h / r            JSON history / retry native attachment",
         "↑/↓ PgUp/PgDn    scroll; on Comments select",
