@@ -679,6 +679,7 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
         .unwrap();
     let prompt = review["args"].to_string();
     assert!(prompt.contains("add a name") && prompt.contains("line 1 of hello.txt"));
+    let task = core.task(&plan, "t1").unwrap();
     assert!(prompt.contains(&format!(
         "git diff {} {}",
         task.base.unwrap(),

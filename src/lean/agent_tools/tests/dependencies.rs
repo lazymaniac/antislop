@@ -458,7 +458,8 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("available results: consumer-options"),
+            error.contains("pass one of these names as dependency")
+                && error.contains("consumer-options [task id "),
             "{error}"
         );
         assert!(!error.contains(&format!("Other options ({})", tasks[1].id)));

@@ -21,9 +21,9 @@ impl Core {
                 || self.store.completed_task_result(task).is_ok_and(|(producer, _)| producer == requested)
         }).ok_or_else(|| {
             let available = scope.tasks.iter().map(|task| {
-                format!("{} ({})", task.spec["id"].as_str().unwrap_or("?"), task.id)
+                format!("{} [task id {}]", task.spec["id"].as_str().unwrap_or("?"), task.id)
             }).take(20).collect::<Vec<_>>().join(", ");
-            Error::Invalid(format!("dependency {requested:?} is not an input of this task or is unknown in its bound scope; available results: {available}"))
+            Error::Invalid(format!("dependency {requested:?} is not an input of this task or is unknown in its bound scope; pass one of these names as dependency (its task id is also accepted): {available}. A dependency is a name or task id, never a result_ref; leave result_ref out to read its current report"))
         })?;
         require(
             task.status == status::APPROVED

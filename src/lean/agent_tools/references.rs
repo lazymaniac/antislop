@@ -107,7 +107,7 @@ impl Core {
                     && task != history.producer.id
                     && !history.reports.iter().any(|r| r.producer_task == task) =>
             {
-                "wrong dependency; this reference is not a result of the requested dependency"
+                "wrong dependency; this reference is not a result of the requested dependency. Task ids, dependency names and ids from other dependencies are not valid here; leave result_ref out to read the current report, or copy one listed below"
             }
             Some((owner, _, _, status)) if owner == conversation && status != "done" => {
                 "report turn has not completed"
@@ -120,7 +120,9 @@ impl Core {
             Some((owner, _, _, _)) if owner == conversation => {
                 "reference is outside this dependency's bound report history"
             }
-            _ => "unknown or unavailable report reference in this conversation",
+            _ => {
+                "unknown or unavailable report reference in this conversation; result_ref is optional and only ever a value from report_history (not a task id or evidence id): leave it out to read the current report"
+            }
         };
         reference_error("result_ref", requested, reason, &available)
     }
