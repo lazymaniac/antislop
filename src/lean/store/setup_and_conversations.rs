@@ -317,6 +317,9 @@ impl Store {
         let tx = db.transaction()?;
         let seq = insert_message(&tx, conversation, author, &stored_text)?;
         maybe_start_requirements_checkpoint(&tx, conversation, author, text, seq)?;
+        if author == "user" {
+            super::Store::record_scope_confirmation_answer(&tx, conversation, text, seq)?;
+        }
         tx.commit()?;
         Ok(Message {
             seq,

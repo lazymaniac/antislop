@@ -572,7 +572,7 @@ fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message(
     store
         .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
         .unwrap();
-    assert!(store.finish_interview(&conversation.id).unwrap());
+    support::confirm_scope_store(&store, &conversation.id).unwrap();
     let turn = store
         .start_turn(&conversation.id, "planner", "codex", message.seq, None)
         .unwrap();
@@ -619,7 +619,7 @@ fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message(
             .messages_by(&conversation.id, "user", 0)
             .unwrap()
             .len(),
-        1
+        2
     );
 }
 

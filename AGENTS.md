@@ -329,7 +329,7 @@ src
     rounds
      - FinishedWorker
     worker/completion
-     commit_round(task,spec,worktree,round,report,summary):Result<Option<String>> > commit_worker_files,validate_change_paths
+     commit_round(task,spec,worktree,_round,report,summary):Result<Option<String>> > commit_worker_files,validate_change_paths
      complete_report(core,conversation,task,spec,worktree,raw):Result<Option<(String,(String,bool))>> > update_task,finish_report
      - save_checkpoint
     worker.rs
@@ -606,14 +606,14 @@ src
     - recover
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
-    commit_artifacts(worktree,outputs,message,require_all):Result<String> > artifact_files,stage_source
+    commit_artifacts(worktree,outputs,purpose,require_all):Result<String> > artifact_files,stage_source
    changes
     changed_files(dir,base,result):Result<Vec<String>> > changed_paths
     diff_stat(dir,base,result):Result<String>
     matching_paths(dir,left,right,paths):Result<Vec<String>> > changed_paths
     patch(dir,base,rev):Result<String> > make_patch
     source_patch(dir,base,rev):Result<String> > make_patch
-    squash(worktree,base,message):Result<String> > commit_subject
+    squash(worktree,base,purpose):Result<String> > commit_subject
     - parse_changed_paths
    integration/files
     blobs(dir,rev,files):Result<HashMap<String,String>>
@@ -622,7 +622,7 @@ src
    integration.rs
     integrate(project,base,change,commit):Result<Integration> > integrate_scoped
     integrate_scoped(project,base,change,allowed_files,commit):Result<Integration> > changed_files,target_paths,previously_landed,unchanged_since,write_files,integrate_current
-    transplant_repair(worktree,base,onto,message):Result<String> > commit_all,{changed,write}_files
+    transplant_repair(worktree,base,onto,purpose):Result<String> > commit_all,{changed,write}_files
     - MergePlan,{merge,run_merge}_tree,{merge_tree,conflict}_result,{can_cherry,cherry}_pick,unstage_paths,
       write_merge_result
    recovery
@@ -630,10 +630,10 @@ src
     - observe_non_repository_path,append_{head_and_diffs,untracked},raw_git
    snapshots
     base_with_artifacts(dir,base,artifacts):Result<String> ~55 > {absolute,snapshot,with}_index
-    commit_paths(dir,files,message):Result<String> > commit_{subject,staged_paths}
+    commit_paths(dir,files,purpose):Result<String> > commit_{subject,staged_paths}
     integrated_fingerprint(project):Result<String> > snapshot
-    snapshot(dir,message):Result<String> > snapshot_with_artifacts
-    snapshot_with_artifacts(dir,outputs,message):Result<String> > artifact_files,commit_subject,{absolute,snapshot}_index,write_snapshot
+    snapshot(dir,purpose):Result<String> > snapshot_with_artifacts
+    snapshot_with_artifacts(dir,outputs,purpose):Result<String> > artifact_files,commit_subject,{absolute,snapshot}_index,write_snapshot
     stage_source(dir,index):Result<()> ~78 > command
     uncommitted(dir):Result<Vec<String>> > git
     - staged_paths_clean,commit_only_paths
@@ -646,8 +646,8 @@ src
     branches(project,prefix):Result<Vec<String>>
     combine(project,scratch,onto,changes):Result<String> > combine_or_conflict
     combine_or_conflict(project,scratch,onto,changes):Result<CombineResult> > {remove,add}_worktree,apply_changes
-    commit_all(worktree,message):Result<String> > stage_source,commit_staged
-    commit_staged(worktree,message):Result<String> > commit_subject,git,head
+    commit_all(worktree,purpose):Result<String> > stage_source,commit_staged
+    commit_staged(worktree,purpose):Result<String> > commit_subject,git,head
     common_base(dir,left,right):Result<String>
     delete_branch(project,branch):Result<()>
     head(dir):Result<String>
@@ -667,11 +667,12 @@ src
     CombineResult(E{Applied,Conflicted})
     - is_cache_directory,apply_{change,patch}
   git.rs
-   commit_subject(message):String > conventional_subject
+   commit_subject(purpose):&'static str > subject
    git(dir,args):Result<std::process::Output>
    ok(dir,args):Result<String> > git
+   CommitPurpose(E{TaskResult,Checkpoint,ArtifactCheckpoint,Integration,Repair,ManualRecovery,{Workspace,Conflict,Dependency,ArtifactInput,SourceInput,Requirements}Snapshot,TestFixture})
+    subject():&'static str
    Integration(E{Committed,Applied,Conflict,UserEdits})
-   - valid_scope
   history
    mail/agent
     agent_message_signature(request):Result<String>
@@ -1507,9 +1508,10 @@ src
     conversation_goal(conversation):Result<String> > db,sql_text
     delete_session(conversation):Result<()> ~128 > db,remove_unreferenced
     add_message(conversation,author,text):Result<Message> > add_message_with_content_lock
-    add_message_with_content_lock(conversation,author,text):Result<Message> > db,insert_message,maybe_start_requirements_checkpoint,Message
+    add_message_with_content_lock(conversation,author,text):Result<Message> > db,insert_message,maybe_start_requirements_checkpoint,record_scope_confirmation_answer,Message
     task_progress(conversation,task):Result<Option<Value>> > db
     record_task_progress(conversation,task,run):Result<()> > append_event
+    confirm_scope_for_test(conversation) > events_since,add_message
     queue_requirements_format_repair(conversation):Result<bool> > db
     workflow(conversation):Result<Workflow> > db,Workflow
     ask_user_decision(conversation,question):Result<()> > db
@@ -1518,7 +1520,8 @@ src
     awaiting_first_plan(conversation):Result<bool> > db
     ask_interview_question(conversation,question):Result<()> > db,require
     interview_summary(conversation,summary,upto):Result<()> > require,db
-    finish_interview(conversation):Result<bool> > db,promote_current_interview,queue_planning_message
+    finish_interview(conversation):Result<bool> ~40 > db,current_interview,scope_is_confirmed,promote_current_interview,queue_planning_message,{latest,request}_scope_confirmation
+    record_scope_confirmation_answer(tx,conversation,text,seq):Result<()> ~41 > latest_scope_confirmation,current_interview
     - round_reference,{decode,current,unavailable}_round_record,load_round_messages,read_run_context,task_input_generation,
       decode_{content_json,event_row},resolve_turn_plan,insert_turn,dependency_report,summarize_earlier_checks,
       option_task_ids,selected_approach_report,decode_optional_{text,json}
@@ -2044,7 +2047,8 @@ src
        measure(builder,units,rows):Vec<Placed> > unit_width,card_height,Placed
        member_keys(view,unit):Vec<String> > is_pair
        rows(builder,units,layers):Vec<Vec<usize>> > ordered_rows,isolate_expanded_unit
-       unit_width(builder,unit):u16 > member_keys,width,cards
+       shown_members(builder,unit):Vec<(String,bool)> > member_keys
+       unit_width(builder,unit):u16 > shown_members,width
        units(builder):Vec<Unit> > options_of,unit_skeleton,populate_units
        - member_tasks,folded,append_layer_rows,sort_by_parent_position,wrap_layer,push_wrapped_unit
       links
@@ -2072,16 +2076,17 @@ src
        push_unit(builder,unit,spot,top) > Frame,push_cards
        - push_{card,internal_edge}
      units.rs
-      place(builder) > units,layers,measure,links,admin_rows,room,center_rows,lane_shift,gap_lanes,row_tops,push_{admin,unit,hidden,links}
+      place(builder) > units,fit_expanded_card,arrange,admin_rows,room,center_rows,lane_shift,gap_lanes,row_tops,push_{admin,unit,hidden,links}
     model
      Node(C{key,x,y,width,height,visible,group,collapsed}) : Default
       new(key,x,y):Self
       mid_y():u16
       right():u16
       - default
-     Size(C{w,h,admin_w,expanded_{w,h,key}})
+     Size(C{w,h,admin_w,expanded_{w,h,key},full_{w,h},step})
       fit(viewport,expanded_key):Self
-      animated(step):Self
+      animated(step):Self > grow
+      limit_expanded_width(width) > grow
       width(key,admin):u16
       layout_height(key,_admin):u16
      = FULL_STEP=16
@@ -2095,7 +2100,7 @@ src
      card.rs
       draw(view,canvas,node,selected,expanded_tab,theme,tick) > outside_viewport,paint,Card.new
       - Card
-      - Card: status_description,pair_finished,paint_{contents,background,progress}
+      - Card: paint_tabs,status_description,pair_finished,paint_{contents,background,progress}
     nodes.rs
      draw_node(view,canvas,node,selected,expanded_tab,theme,tick) > draw
     plan
@@ -2104,7 +2109,8 @@ src
       render(tasks,canvas,selected,theme) > as_str,accent,Theme.dim,draw_card
    graph.rs
     card_key(view,key):String > requirements_round,task_card
-    expanded_card_content_area(card,viewport):Rect
+    expanded_card_areas(viewport,(i32,i32),(u16,u16)):[Rect; 3] > clip
+    expanded_tab_names(view,key):&'static [&'static str] > has_delivery
     Frame(C{key,task,x,y,width,height,visible})
     Graph(C{nodes,frames,edges,width,height,scope,collapsed,grouping,expanded,expanded_tab})
      new(view):Self
@@ -2393,7 +2399,7 @@ src
      - composer_status_area,session_{block,title},ascii_border_set,session_round_label,
        {native,draw_session,composer,primary_composer}_status,place_session_cursor
     specialized_screens/graph
-     - render_card_{round_selector,round_data,history_message},
+     - render_card_round_{selector,data},agent_line,render_card_history_message,
        graph_{vertical_markers,position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
     specialized_screens.rs
      draw_secondary_or_main(app,frame) > draw_{plan,diff,details}
@@ -2451,7 +2457,7 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,tab},details_{scroll_memory,query_memory},graph_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},graph_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,new_conversation,{open_conversation,open_projects}_picker
@@ -2485,7 +2491,7 @@ src
      activate_header_token(token,controls) > run_workflow
      bar_height(area):u16
      main_areas(area):[Rect; 3]
-     mouse_scroll(down) > scroll_{console,help,details,graph,chat}
+     mouse_scroll(down) > scroll_{help,details,graph,chat}
      mouse(mouse):bool > handle_native_mouse,sync_interview,handle_{modal_mouse,content_mouse}
      register_project(conn):usize > Projects.from_env,spawn_project_poller,len
      switch_project(index,conversation) > latest_or_new,restore_project_history,switch_config_workspace,open
@@ -2508,8 +2514,11 @@ src
      details_content_key(key,plain):bool > details_{check_comment_key,round_key,control_scroll_key,scroll_key}
      details_primary_key(key,plain):bool ~46 > details_close_or_search,run_workflow,details_overview_key,show_help,details_{open_comment,comment_status}
      details_key(key) > details_{edit_key,search_key,screen_key}
-     graph_key(key):bool ~48 > card_key,fetch_task,open_graph_diff,console_key,graph_{for_key,scroll_key,direction},move_graph_selection,graph_action_key
+     graph_key(key):bool ~48 > card_key,fetch_task,open_graph_diff,expanded_card_key,graph_{for_key,scroll_key,direction},move_graph_selection,graph_action_key
+     scroll_expanded_card(lines) > graph_console_active,scroll_console
+     graph_console_active():bool
      scroll_console(lines) > native_send
+     graph_for_key():Graph > new_with_expanded
      toggle_focus()
      route_graph(key):bool > graph_{command,key}
      key_inner(key):bool > route_native_or_history,sync_{interview,approval},route_{ledger,selection_and_config,exit,overlays,screen,base_layout}
@@ -2538,7 +2547,7 @@ src
      load_plan_history(offset)
      draw_chat(frame,area,theme) > chat_layout,draw_{phase_action,sending,transcript,chat_input}
      draw(frame) > sync_interview,draw_min_term_guard,sync_native_views,draw_{history_or_ledger,secondary_or_main,remaining}
-     draw_graph(frame,area) > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
+     draw_graph(frame,area) ~43 > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
      graph_expansion():(Option<String>,u8)
      draw_main(frame) > draw_{chat,graph,footer}
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
@@ -2571,12 +2580,12 @@ src
        modal_blocks_mouse,click_{graph_filters,unblock},task_fetch_identity,mark_task_fetch,latest_round_for_key,
        {checks_are,session_is}_stale,latest_round,open_comment_editor,config_save_guard,
        details_{jump_key,resume_round,retry_native,start_composer,toggle_info,native_focus_key,route_action,fetch_current_task},
-       remove_search_grapheme,select_visible_graph_node,open_graph_comment,route_native_key,is_editing,
-       route_{graph_filters,unblock},embedded_diff_graph_active,route_{interview,plan_view,global_shortcut},
+       remove_search_grapheme,graph_tab_count,set_graph_tab,select_visible_graph_node,open_graph_comment,route_native_key,
+       is_editing,route_{graph_filters,unblock},embedded_diff_graph_active,route_{interview,plan_view,global_shortcut},
        chat_{paste_enabled,down_with_text},attach_native_view,erase_picker_query,picker_action,select_picker_node,
        show_picker_entry,close_picker_views,switch_conversation,address_recipient,open_comment,phase_action,
-       chat_input_window,paint_input,place_chat_cursor,draw_graph_frame,repair_graph_selection,fit_graph_offset,
-       reveal_selected_node,sync_transcript_context,update_transcript_entry,transcript_card_height,
+       chat_input_window,paint_input,place_chat_cursor,draw_{card_details,graph_frame},repair_graph_selection,
+       fit_graph_offset,reveal_selected_node,sync_transcript_context,update_transcript_entry,transcript_card_height,
        position_transcript_scroll,{paint_transcript,append_card}_rows,restore_active_{send,comment},clear_task_fetch,
        task_{round_moved,reply_matches_current_round},{load_active,load_background}_task,
        apply_{mail_delivered,mail_delivery_failed,view_events},update_ledger_approval,refresh_visible_ledger,
@@ -2973,8 +2982,8 @@ src
   support
    fixture_cli:*interactive
    ledger_cli.py:*_ledger_{emit,block}
-   mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
+   mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 124,468 LOC · input 1,101,173 · output 43,098 tokens · state bd3a9597d87f
+· 125,426 LOC · input 1,110,693 · output 43,358 tokens · state b427d734d298 · targets AGENTS.md
 ```
 <!-- hologram:end -->

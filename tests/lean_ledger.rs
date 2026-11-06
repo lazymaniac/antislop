@@ -76,7 +76,7 @@ impl Fixture {
         f.store
             .interview_summary(&f.conversation, "Keep scope", user)
             .unwrap();
-        f.store.finish_interview(&f.conversation).unwrap();
+        support::confirm_scope_store(&f.store, &f.conversation).unwrap();
         f
     }
 
@@ -1388,7 +1388,7 @@ fn accepted_requirements_resume_durably_after_restart_and_ignore_empty_manual_se
     f.store
         .interview_summary(&f.conversation, "Keep scope", user)
         .unwrap();
-    f.store.finish_interview(&f.conversation).unwrap();
+    support::confirm_scope_store(&f.store, &f.conversation).unwrap();
     f.apply(&f.change(0, vec![f.entry("r1")]));
     let analyst = f.turn("extraction", false);
     let mut edited = f.entry("r1");
@@ -1600,7 +1600,7 @@ fn rejected_requirements_resume_after_restart_as_a_new_unapproved_proposal() {
     f.store
         .interview_summary(&f.conversation, "Keep scope", user)
         .unwrap();
-    f.store.finish_interview(&f.conversation).unwrap();
+    support::confirm_scope_store(&f.store, &f.conversation).unwrap();
     f.apply(&f.change(0, vec![f.entry("r1")]));
     let analyst = f.turn("extraction", false);
     let mut edited = f.entry("r1");

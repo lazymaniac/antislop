@@ -11,7 +11,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     store
         .interview_summary(&conversation.id, "First scope", first.seq)
         .unwrap();
-    store.finish_interview(&conversation.id).unwrap();
+    store.confirm_scope_for_test(&conversation.id);
     let run = store.create_run(&conversation.id, "First goal").unwrap();
     store
         .select_planning_run(&conversation.id, &run.id)
@@ -69,7 +69,7 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
     store
         .interview_summary(&conversation.id, "First scope", first.seq)
         .unwrap();
-    store.finish_interview(&conversation.id).unwrap();
+    store.confirm_scope_for_test(&conversation.id);
     let run = store.create_run(&conversation.id, "First goal").unwrap();
     store
         .select_planning_run(&conversation.id, &run.id)
@@ -129,7 +129,7 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
     store
         .interview_summary(&conversation.id, "Inspect source and docs", newer.seq)
         .unwrap();
-    assert!(store.finish_interview(&conversation.id).unwrap());
+    store.confirm_scope_for_test(&conversation.id);
     assert!(!store.finish_interview(&conversation.id).unwrap());
     assert_eq!(store.workflow(&conversation.id).unwrap().phase, "planning");
     assert_eq!(
@@ -137,7 +137,7 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
             .messages_by(&conversation.id, "user", 0)
             .unwrap()
             .len(),
-        2
+        3
     );
     assert_eq!(
         store
@@ -301,7 +301,7 @@ fn every_planning_cycle_awaits_its_own_first_plan() {
         store
             .interview_summary(&conversation.id, request, message.seq)
             .unwrap();
-        assert!(store.finish_interview(&conversation.id).unwrap());
+        store.confirm_scope_for_test(&conversation.id);
     };
     assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
     settle("first request");

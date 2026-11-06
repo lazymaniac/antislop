@@ -23,7 +23,9 @@ plan = '```plan\n' + json.dumps({'tasks':[{'id':'t1','title':'Inspect','goal':'I
 if 'SESSION PHASE: INTERVIEW.' in prompt:
     # A premature plan from an agent must never bypass the interview gate.
     users = re.findall(r'\[user\]\n([^\n]+)', prompt)
-    if users and users[-1].startswith('Interview answer ('):
+    if 'Answer: Confirm scope' in prompt:
+        answer = 'The scope is confirmed; planning may begin.'
+    elif users and users[-1].startswith('Interview answer ('):
         answer = '```requirements\nGoal: inspect the project.\nScope: read only.\nAcceptance: report observations.\n```\n' + plan
     else:
         answer = '```question\n' + json.dumps({'id':'scope','context':'The scope determines what we inspect.','question':'What should we inspect?','options':[{'label':'Source code','description':'Inspect code quality first'},{'label':'Documentation','description':'Inspect documentation first'}]}) + '\n```\n' + plan
@@ -110,6 +112,39 @@ fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approv
         Config::from_toml(&source).unwrap(),
     )
     .unwrap();
+    idle(&core, &waiting.id);
+    let confirmation = core
+        .store
+        .events_since(&waiting.id, 0, 100)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == "scope_confirmation_requested")
+        .unwrap();
+    let question_id = confirmation.payload["question"]["id"].as_str().unwrap();
+    core.send(
+        &waiting.id,
+        &format!("Interview answer ({question_id})\nAnswer: Confirm scope"),
+    )
+    .unwrap();
+    idle(&core, &waiting.id);
+    let workflow = core.store.workflow(&waiting.id).unwrap();
+    assert_ne!(
+        workflow.phase,
+        "interview",
+        "workflow={workflow:?}, scope events={:?}, users={:?}",
+        core.store
+            .events_since(&waiting.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|event| matches!(
+                event.kind.as_str(),
+                "scope_confirmation_requested" | "scope_confirmed"
+            ))
+            .map(|event| (event.kind, event.payload))
+            .collect::<Vec<_>>(),
+        core.store.messages_by(&waiting.id, "user", 0).unwrap()
+    );
     finish_fixture_plan(&core, &waiting.id);
     assert_eq!(
         core.store.workflow(&waiting.id).unwrap().phase,
@@ -120,12 +155,12 @@ fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approv
             .messages_by(&waiting.id, "user", 0)
             .unwrap()
             .len(),
-        1
+        2
     );
 }
 
 #[test]
-fn checked_plan_starts_automatically_after_the_interview() {
+fn checked_plan_starts_only_after_the_user_confirms_scope() {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
     let core = Core::open(
@@ -148,8 +183,51 @@ fn checked_plan_starts_automatically_after_the_interview() {
         event.payload["id"].as_str().unwrap()
     );
     core.send(&conversation.id, &answer).unwrap();
+    idle(&core, &conversation.id);
+    assert_eq!(
+        core.store.workflow(&conversation.id).unwrap().phase,
+        "interview"
+    );
+    assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
+    assert!(
+        core.store
+            .last_turn(&conversation.id, antislop::lean::PLANNER)
+            .unwrap()
+            .is_none()
+    );
+
+    let confirmation = core
+        .store
+        .events_since(&conversation.id, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "scope_confirmation_requested")
+        .expect("the user must be asked to confirm the collected scope");
+    let question_id = confirmation.payload["question"]["id"].as_str().unwrap();
+    let question = confirmation.payload["question"]["question"]
+        .as_str()
+        .unwrap();
+    core.send(
+        &conversation.id,
+        &format!("Interview answer ({question_id})\nQuestion: {question}\nAnswer: Confirm scope"),
+    )
+    .unwrap();
+    assert!(
+        core.store
+            .events_since(&conversation.id, 0, 1000)
+            .unwrap()
+            .iter()
+            .any(|event| { event.kind == "scope_confirmed" }),
+        "scope confirmation was not recorded: {:?}",
+        core.store.events_since(&conversation.id, 0, 1000).unwrap()
+    );
+    idle(&core, &conversation.id);
+    assert_ne!(
+        core.store.workflow(&conversation.id).unwrap().phase,
+        "interview"
+    );
     finish_fixture_plan(&core, &conversation.id);
-    // Planning, the plan check and acceptance all happened without the user.
+    // Planning starts automatically after the user's explicit confirmation.
     let planner = core
         .store
         .last_turn(&conversation.id, antislop::lean::PLANNER)
@@ -185,7 +263,7 @@ fn orchestrator_requests_a_user_decision_during_execution_without_reopening_work
         std::fs::write(&script, r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-if 'Interview answer (' in prompt:
+if 'Interview answer (metadata-scope)' in prompt:
     answer = 'Decision received; existing gates remain unchanged.'
 else:
     answer = '```question\n' + json.dumps({'id':'metadata-scope','context':'Allow read-only access to the current project worktree metadata. No writes or historical evidence reconstruction.','question':'Approve this metadata scope?','options':[{'label':'Approve'},{'label':'Reject'}]}) + '\n```'
@@ -216,6 +294,7 @@ print(json.dumps({'type':'turn.completed'}))
         let events = core.store.events_since(&conversation.id, 0, 1000).unwrap();
         let question = events
             .iter()
+            .rev()
             .find(|event| event.kind == "user_decision_requested")
             .expect("execution question is delivered");
         // The runtime names the question; the agent gives only its content.

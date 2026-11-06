@@ -28,8 +28,42 @@ pub fn fixture_conversation(
     let conversation = core.store.create_conversation(&project.to_string_lossy())?;
     core.store
         .interview_summary(&conversation.id, "Fixture requirements.", 0)?;
-    core.store.finish_interview(&conversation.id)?;
+    confirm_scope(core, &conversation.id)?;
     Ok(conversation)
+}
+
+/// Confirm the current requirements summary through the same structured
+/// answer recorded by the user interface.
+#[allow(dead_code)]
+pub fn confirm_scope(core: &antislop::lean::Core, conversation: &str) -> antislop::Result<()> {
+    confirm_scope_store(&core.store, conversation)
+}
+
+#[allow(dead_code)]
+pub fn confirm_scope_store(
+    store: &antislop::lean::store::Store,
+    conversation: &str,
+) -> antislop::Result<()> {
+    store.finish_interview(conversation)?;
+    let event = store
+        .events_since(conversation, 0, 10_000)?
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == "scope_confirmation_requested")
+        .ok_or_else(|| antislop::Error::Invalid("scope confirmation was not requested".into()))?;
+    let question: antislop::lean::interview::Question =
+        serde_json::from_value(event.payload["question"].clone())?;
+    store.add_message(
+        conversation,
+        "user",
+        &format!("Interview answer ({})\nAnswer: Confirm scope", question.id),
+    )?;
+    if !store.finish_interview(conversation)? {
+        return Err(antislop::Error::Invalid(
+            "confirmed scope did not enter planning".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Keep file-writing fixtures from executing their writer branch during

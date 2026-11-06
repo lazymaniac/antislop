@@ -20,7 +20,7 @@ pub(super) fn recovery_fixture() -> (tempfile::TempDir, Arc<Core>, String, Task,
     core.store
         .interview_summary(&conversation, &message.text, message.seq)
         .unwrap();
-    assert!(core.store.finish_interview(&conversation).unwrap());
+    core.store.confirm_scope_for_test(&conversation);
     let run = core.store.create_run(&conversation, &message.text).unwrap();
     let source = core
         .store

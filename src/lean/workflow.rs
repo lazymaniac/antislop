@@ -29,6 +29,27 @@ impl Workflow {
 }
 
 impl Store {
+    #[cfg(test)]
+    pub(crate) fn confirm_scope_for_test(&self, conversation: &str) {
+        assert!(!self.finish_interview(conversation).unwrap());
+        let request = self
+            .events_since(conversation, 0, 100)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|event| event.kind == "scope_confirmation_requested")
+            .unwrap();
+        let question: crate::lean::interview::Question =
+            serde_json::from_value(request.payload["question"].clone()).unwrap();
+        self.add_message(
+            conversation,
+            "user",
+            &format!("Interview answer ({})\nAnswer: Confirm scope", question.id),
+        )
+        .unwrap();
+        assert!(self.finish_interview(conversation).unwrap());
+    }
+
     pub(crate) fn queue_requirements_format_repair(&self, conversation: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -162,23 +183,199 @@ impl Store {
         Ok(())
     }
 
-    /// Finishing the interview queues planning atomically, without inventing user approval.
-    /// A newer answer keeps the interview open until its requirements are incorporated.
+    /// Finishing the interview requests scope confirmation, then queues planning
+    /// atomically only after the user confirms the current summary.
     pub fn finish_interview(&self, conversation: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        if !promote_current_interview(&tx, conversation)? {
+        let Some((summary, upto_message)) = current_interview(&tx, conversation)? else {
+            return Ok(false);
+        };
+        let latest_user: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'",
+            [conversation],
+            |row| row.get(0),
+        )?;
+        if summary.is_empty() {
             return Ok(false);
         }
-        queue_planning_message(&tx, conversation)?;
+
+        if scope_is_confirmed(&tx, conversation, &summary, upto_message)? {
+            if promote_current_interview(&tx, conversation)? {
+                queue_planning_message(&tx, conversation)?;
+                tx.commit()?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        if let Some((_, requested_summary, requested_upto)) =
+            latest_scope_confirmation(&tx, conversation)?
+            && requested_summary == summary
+            && requested_upto == upto_message
+        {
+            return Ok(false);
+        }
+
+        if upto_message != latest_user as u64 {
+            return Ok(false);
+        }
+
+        request_scope_confirmation(&tx, conversation, &summary, upto_message)?;
         tx.commit()?;
-        Ok(true)
+        Ok(false)
     }
+}
+
+impl Store {
+    pub(super) fn record_scope_confirmation_answer(
+        tx: &rusqlite::Transaction<'_>,
+        conversation: &str,
+        text: &str,
+        seq: u64,
+    ) -> Result<()> {
+        let Some((question, summary, upto_message)) = latest_scope_confirmation(tx, conversation)?
+        else {
+            return Ok(());
+        };
+        let answer_prefix = format!("Interview answer ({})\n", question.id);
+        let Some(selection) = text.strip_prefix(&answer_prefix).and_then(|answer| {
+            answer
+                .lines()
+                .find_map(|line| line.strip_prefix("Answer: "))
+        }) else {
+            return Ok(());
+        };
+        if !selection.trim().eq_ignore_ascii_case("Confirm scope") {
+            return Ok(());
+        }
+        let current = current_interview(tx, conversation)?;
+        let previous_user: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1 AND author='user' AND seq<?2",
+            params![conversation, seq as i64],
+            |row| row.get(0),
+        )?;
+        if current.as_ref() != Some(&(summary.clone(), upto_message))
+            || previous_user as u64 != upto_message
+        {
+            return Ok(());
+        }
+        tx.execute(
+            "UPDATE session_workflow SET upto_message=?2 WHERE conversation_id=?1 AND phase='interview' AND summary=?3 AND upto_message=?4",
+            params![conversation, seq as i64, summary, upto_message as i64],
+        )?;
+        tx.execute(
+            "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'workflow',?2,?3)",
+            params![conversation,serde_json::json!({"phase":"interview","summary":summary,"upto_message":seq}).to_string(),now_ms()],
+        )?;
+        tx.execute(
+            "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'scope_confirmed',?2,?3)",
+            params![conversation,serde_json::json!({"question_id":question.id,"summary":summary,"upto_message":seq,"answer_message":seq}).to_string(),now_ms()],
+        )?;
+        Ok(())
+    }
+}
+
+fn current_interview(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+) -> Result<Option<(String, u64)>> {
+    Ok(tx
+        .query_row(
+            "SELECT summary,upto_message FROM session_workflow WHERE conversation_id=?1 AND phase='interview'",
+            [conversation],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)),
+        )
+        .optional()?)
+}
+
+fn latest_scope_confirmation(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+) -> Result<Option<(crate::lean::interview::Question, String, u64)>> {
+    let payload: Option<String> = tx
+        .query_row(
+            "SELECT payload FROM events WHERE conversation_id=?1 AND kind='scope_confirmation_requested' ORDER BY seq DESC LIMIT 1",
+            [conversation],
+            |row| row.get(0),
+        )
+        .optional()?;
+    payload
+        .map(|payload| {
+            let value: serde_json::Value = serde_json::from_str(&payload)?;
+            Ok((
+                serde_json::from_value(value["question"].clone())?,
+                value["summary"].as_str().unwrap_or_default().to_owned(),
+                value["upto_message"].as_u64().unwrap_or_default(),
+            ))
+        })
+        .transpose()
+}
+
+fn scope_is_confirmed(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    summary: &str,
+    upto_message: u64,
+) -> Result<bool> {
+    let payload: Option<String> = tx
+        .query_row(
+            "SELECT payload FROM events WHERE conversation_id=?1 AND kind='scope_confirmed' ORDER BY seq DESC LIMIT 1",
+            [conversation],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(payload) = payload else {
+        return Ok(false);
+    };
+    let payload: serde_json::Value = serde_json::from_str(&payload)?;
+    let latest_user: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'",
+        [conversation],
+        |row| row.get(0),
+    )?;
+    Ok(payload["summary"] == summary
+        && payload["upto_message"].as_u64() == Some(upto_message)
+        && payload["answer_message"].as_i64() == Some(latest_user)
+        && !summary.trim().is_empty())
+}
+
+fn request_scope_confirmation(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    summary: &str,
+    upto_message: u64,
+) -> Result<()> {
+    let question = crate::lean::interview::Question {
+        id: format!("scope-confirmation-{}", crate::id()),
+        context: "Planning must use the scope and acceptance criteria in this summary.".into(),
+        question: "Do you confirm this scope so planning can begin?".into(),
+        options: vec![
+            crate::lean::interview::Choice {
+                label: "Confirm scope".into(),
+                description: "Proceed to planning with this summary.".into(),
+            },
+            crate::lean::interview::Choice {
+                label: "Request changes".into(),
+                description: "Keep the interview open so you can clarify the scope.".into(),
+            },
+        ],
+    };
+    Store::write_user_decision(tx, conversation, &question)?;
+    tx.execute(
+        "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'scope_confirmation_requested',?2,?3)",
+        params![conversation,serde_json::json!({"question":question,"summary":summary,"upto_message":upto_message}).to_string(),now_ms()],
+    )?;
+    Ok(())
 }
 
 fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<bool> {
     let changed = tx.execute(
-        "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND upto_message >= COALESCE((SELECT MAX(seq) FROM messages WHERE conversation_id=?1 AND author='user'),0)",
+        "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND EXISTS(
+             SELECT 1 FROM events e WHERE e.conversation_id=?1 AND e.kind='scope_confirmed'
+               AND json_extract(e.payload,'$.summary')=session_workflow.summary
+               AND json_extract(e.payload,'$.upto_message')=session_workflow.upto_message
+               AND json_extract(e.payload,'$.answer_message')=(SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'))",
         [conversation],
     )?;
     Ok(changed == 1)

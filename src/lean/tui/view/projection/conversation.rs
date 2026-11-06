@@ -183,7 +183,7 @@ fn record_user_message(view: &mut View, payload: &Value) {
 
 fn update_user_message_state(view: &mut View, payload: &Value, text: &str) {
     view.latest_user_message = payload["seq"].as_u64().unwrap_or(view.latest_user_message);
-    if view.workflow_phase.as_deref() == Some("interview") {
+    if view.workflow_phase.as_deref() == Some("interview") && !view.user_decision {
         view.requirements_summary.clear();
     }
     if view.user_decision

@@ -432,7 +432,7 @@ mod tests {
         core.store
             .interview_summary(&id, "Inspect", request.seq)
             .unwrap();
-        assert!(core.store.finish_interview(&id).unwrap());
+        core.store.confirm_scope_for_test(&id);
         let plan = core.store.add_plan(&id, &[task()]).unwrap()[0]
             .plan_id
             .clone();
@@ -518,7 +518,7 @@ mod tests {
         core.store
             .interview_summary(&id, "Inspect", request.seq)
             .unwrap();
-        assert!(core.store.finish_interview(&id).unwrap());
+        core.store.confirm_scope_for_test(&id);
         let reason = json!({"reason": "the plan splits the work along the wrong seam"});
         let turn = core
             .store
