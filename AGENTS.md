@@ -1539,14 +1539,13 @@ src
     - GateDescription,gate_summaries,is_audit,gate_goal
    agents.rs
     missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > is_gate_kind
-    refresh_existing_options(tasks):Vec<TaskContract> > options_task
+    refresh_existing_options(tasks):Vec<TaskContract> > options_{task,goal}
     resolve_gate_dependencies(tasks) > expand_gate_dependencies
-    with_options(tasks):Vec<TaskContract> > options_task
+    with_options(tasks):Vec<TaskContract> > options_{task,goal}
     with_required_agents(tasks):Vec<TaskContract> > resolve_gate_dependencies,missing_quality_agents,refresh_existing_options,GatePlan.new,order_graph
     without_options(tasks):Vec<TaskContract>
     PredefinedAgent(C{id,kind,title,focus,required_for_code_changes})
     = PREDEFINED_AGENT_POOL,GATE_KINDS
-    - options_goal
    artifact_outputs
     validate_artifact_output(output):Result<()> ~58 > all,json_report_path
    bounds
@@ -2044,7 +2043,7 @@ src
        layers(builder,units):Vec<u16> > {status,dependency}_layers
        measure(builder,units,rows):Vec<Placed> > unit_width,card_height,Placed
        member_keys(view,unit):Vec<String> > is_pair
-       rows(builder,units,layers):Vec<Vec<usize>> > ordered_rows
+       rows(builder,units,layers):Vec<Vec<usize>> > ordered_rows,isolate_expanded_unit
        unit_width(builder,unit):u16 > member_keys,width,cards
        units(builder):Vec<Unit> > options_of,unit_skeleton,populate_units
        - member_tasks,folded,append_layer_rows,sort_by_parent_position,wrap_layer,push_wrapped_unit
@@ -2103,6 +2102,7 @@ src
       render(tasks,canvas,selected,theme) > as_str,accent,Theme.dim,draw_card
    graph.rs
     card_key(view,key):String > requirements_round,task_card
+    expanded_card_content_area(card,viewport):Rect
     Frame(C{key,task,x,y,width,height,visible})
     Graph(C{nodes,frames,edges,width,height,scope,collapsed,grouping,expanded,expanded_tab})
      new(view):Self
@@ -2970,6 +2970,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 123,566 LOC · input 1,092,694 · output 42,996 tokens · state f8d54b10f3df
+· 124,065 LOC · input 1,097,185 · output 43,013 tokens · state 56667c21f31b
 ```
 <!-- hologram:end -->

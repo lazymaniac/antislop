@@ -74,13 +74,7 @@ impl App {
             node.height,
         )
         .intersection(viewport);
-        let content = Rect::new(
-            card.x.saturating_add(2),
-            card.y.saturating_add(4),
-            card.width.saturating_sub(4),
-            card.height.saturating_sub(5),
-        )
-        .intersection(viewport);
+        let content = graph::expanded_card_content_area(card, viewport);
 
         if self.graph_tab == 1 {
             if let Some(details) = &mut self.details {

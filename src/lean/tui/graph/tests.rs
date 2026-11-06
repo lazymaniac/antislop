@@ -14,14 +14,30 @@ fn windowed_canvas_storage_is_exactly_the_viewport_area() {
 fn expanded_pty_content_grows_with_the_viewport() {
     let viewport = (76, 12);
     let size = Size::fit(Some(viewport), Some("worker:t1".into()));
-    let content_area = |width: u16, height: u16| usize::from(width - 4) * usize::from(height - 4);
+    let content_area = |width: u16, height: u16| {
+        super::expanded_card_content_area(
+            Rect::new(0, 0, width, height),
+            Rect::new(0, 0, viewport.0, viewport.1),
+        )
+    };
 
     // Before the viewport-fit change the 56-column ceiling produced a
-    // 52x6 PTY content area at this same viewport.
-    assert_eq!(content_area(56, 10), 312);
+    // 52x5 PTY content area at this same viewport.
+    assert_eq!(
+        usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
+        260
+    );
     assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
-    assert_eq!(content_area(size.expanded_w, size.expanded_h), 396);
-    assert!(content_area(size.expanded_w, size.expanded_h) > content_area(56, 10));
+    let expanded = content_area(size.expanded_w, size.expanded_h);
+    let baseline = content_area(56, 10);
+    assert_eq!(
+        usize::from(expanded.width) * usize::from(expanded.height),
+        330
+    );
+    assert!(
+        usize::from(expanded.width) * usize::from(expanded.height)
+            > usize::from(baseline.width) * usize::from(baseline.height)
+    );
 }
 
 #[test]

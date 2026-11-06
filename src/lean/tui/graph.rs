@@ -15,6 +15,18 @@ use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Content rectangle inside an expanded card, clipped to the visible graph.
+/// Keep this geometry shared by panel rendering and its layout measurements.
+pub(super) fn expanded_card_content_area(card: Rect, viewport: Rect) -> Rect {
+    Rect::new(
+        card.x.saturating_add(2),
+        card.y.saturating_add(4),
+        card.width.saturating_sub(4),
+        card.height.saturating_sub(5),
+    )
+    .intersection(viewport)
+}
+
 /// Current extraction and historical requirements roles share one card.
 /// These are role addresses, not a fixed number of rounds to execute.
 const REQUIREMENTS_ROUNDS: [&str; 4] = [
