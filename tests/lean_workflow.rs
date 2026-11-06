@@ -189,6 +189,13 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
         "interview"
     );
     assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
+    let events = core.store.events_since(&conversation.id, 0, 1000).unwrap();
+    assert!(
+        !events.iter().any(|event| {
+            event.kind == "turn_started" && event.payload["role"] == antislop::lean::PLANNER
+        }),
+        "the planner must not appear in the graph before scope confirmation"
+    );
     assert!(
         core.store
             .last_turn(&conversation.id, antislop::lean::PLANNER)
@@ -233,6 +240,14 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
         .last_turn(&conversation.id, antislop::lean::PLANNER)
         .unwrap()
         .expect("the planner drafted the plan");
+    assert!(
+        core.store
+            .events_since(&conversation.id, 0, 1000)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "turn_started"
+                && event.payload["role"] == antislop::lean::PLANNER)
+    );
     assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
     let proposed = core
         .store

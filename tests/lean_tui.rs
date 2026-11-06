@@ -3349,6 +3349,14 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
 
     // 1. Stable, deterministic positions based on dependency topology
     let mut view = View::default();
+    for role in [
+        "requirements-extraction-analyst",
+        antislop::lean::PLANNER,
+        PLAN_REVIEWER,
+        AUDITOR,
+    ] {
+        view.agents.insert(role.into(), Default::default());
+    }
     view.tasks = vec![
         TaskRow {
             id: "t1".into(),
@@ -3432,7 +3440,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut large_view = View::default();
     large_view.tasks = large_tasks;
     let large_graph = Graph::new(&large_view);
-    assert_eq!(large_graph.nodes.len(), 3 + 2 * 500);
+    assert_eq!(large_graph.nodes.len(), 1 + 2 * 500);
     assert!(large_graph.width > 0);
     assert!(large_graph.height > 0);
 
@@ -3470,7 +3478,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut cyclic_view = View::default();
     cyclic_view.tasks = cyclic_tasks;
     let cyclic_graph = Graph::new(&cyclic_view);
-    assert_eq!(cyclic_graph.nodes.len(), 3 + 2 * 4);
+    assert_eq!(cyclic_graph.nodes.len(), 1 + 2 * 4);
     for node in &cyclic_graph.nodes {
         assert!(node.visible);
     }
@@ -4278,7 +4286,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         GroupingMode::Dependency,
         Some((92, 20)),
     );
-    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2 * 2);
+    assert_eq!(adaptive_cycle.nodes.len(), 1 + 2 * 2);
 
     // 5. Compaction after collapsing and filtering
     let mut collapsed = std::collections::HashSet::new();
@@ -4645,9 +4653,9 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         Some((92, 20)),
     );
 
-    assert!(!filtered_graph.node(PLAN_REVIEWER).unwrap().visible);
+    assert!(filtered_graph.node(PLAN_REVIEWER).is_none());
     assert!(!filtered_graph.node(ORCHESTRATOR).unwrap().visible);
-    assert!(!filtered_graph.node(AUDITOR).unwrap().visible);
+    assert!(filtered_graph.node(AUDITOR).is_none());
 
     let w1 = filtered_graph.node("worker:t1").unwrap();
     assert!(w1.visible);
@@ -4959,7 +4967,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             app.graph_grouping,
             app.graph_viewport,
         );
-        assert_eq!(g_cycle.nodes.len(), 3 + 2 * 2);
+        assert_eq!(g_cycle.nodes.len(), 1 + 2 * 2);
 
         // 4. Filtering and compaction through App:
         app.set_graph_filter(Some("cy1".into()));

@@ -360,6 +360,8 @@ fn requirements_rounds_share_one_card_that_fits() {
 #[test]
 fn graph_includes_planning_agents_in_every_layout() {
     let mut view = View::default();
+    view.agents
+        .insert(REQUIREMENTS_ROUNDS[0].into(), Default::default());
     for key in ["planner", "options-planner", "requirements-planner"] {
         view.agents.insert(key.into(), Default::default());
     }
@@ -559,7 +561,7 @@ fn a_tasks_agents_have_cards_of_their_own_in_one_frame_even_when_collapsed_or_fi
         for viewport in [None, Some((78, 20))] {
             let graph =
                 Graph::new_with_viewport(&view, &Scope::default(), &collapsed, grouping, viewport);
-            assert_eq!(graph.nodes.len(), 7);
+            assert_eq!(graph.nodes.len(), 5);
             let worker = graph.node("worker:t1").unwrap();
             let node = graph.node("reviewer:t1").unwrap();
             assert_eq!(node.key, "reviewer:t1");
@@ -1227,13 +1229,15 @@ fn edges_join_boxes_without_crossing_them() {
 fn all_includes_every_supervision_edge() {
     let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
     view.agents
+        .insert(REQUIREMENTS_ROUNDS[0].into(), Default::default());
+    view.agents
         .insert(super::super::super::PLANNER.into(), Default::default());
     let graph = Graph::new(&view);
     let all = graph.edge_routes(Relations::all());
     // The orchestrator supervises the session's agents; tasks stand in
     // frames of their own.
     let supervision = graph.edge_routes(Relations::only(3));
-    assert_eq!(supervision.len(), 1);
+    assert_eq!(supervision.len(), 2);
     for edge in &supervision {
         assert!(all.contains(edge), "All must include {edge:?}");
     }
@@ -1449,6 +1453,59 @@ fn workflow_places_preparation_before_tasks_and_acceptance_after_them() {
             }
         }
     }
+}
+
+#[test]
+fn orchestration_cards_follow_the_projected_turn_lifecycle() {
+    let mut view = View::default();
+    let lifecycle = [
+        REQUIREMENTS_ROUNDS[0],
+        crate::lean::PLANNER,
+        PLAN_REVIEWER,
+        AUDITOR,
+    ];
+    let visible = |view: &View| {
+        Graph::new(view)
+            .nodes
+            .into_iter()
+            .filter(|node| node.visible)
+            .map(|node| node.key)
+            .collect::<Vec<_>>()
+    };
+    let expected = |roles: &[&str]| {
+        std::iter::once(ORCHESTRATOR)
+            .chain(roles.iter().copied())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(visible(&view), expected(&[]));
+    for (index, role) in lifecycle.into_iter().enumerate() {
+        view.apply(&serde_json::json!({
+            "seq": index + 1,
+            "turn_id": format!("turn-{index}"),
+            "kind": "turn_started",
+            "created_ms": 1,
+            "payload": {"role": role, "provider": "codex"}
+        }));
+        let expected_roles: Vec<_> = lifecycle.iter().take(index + 1).copied().collect();
+        assert_eq!(visible(&view), expected(&expected_roles), "after {role}");
+    }
+
+    let mut out_of_order = View::default();
+    for (index, role) in [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR]
+        .into_iter()
+        .enumerate()
+    {
+        out_of_order.apply(&serde_json::json!({
+            "seq": index + 1,
+            "turn_id": format!("early-{index}"),
+            "kind": "turn_started",
+            "created_ms": 1,
+            "payload": {"role": role, "provider": "codex"}
+        }));
+    }
+    assert_eq!(visible(&out_of_order), expected(&[]));
 }
 
 #[test]
