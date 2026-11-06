@@ -260,7 +260,16 @@ fn worker_prompt_parts(
 ) {
     let team = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
     let blocker = "If a concrete missing input or prerequisite prevents all further permitted work, end with report_blocker and its resume condition, preserving completed work. Your assigned implementation, tests, fixtures and other outputs are work to perform, not missing prerequisites: do not block until someone supplies the deliverable you were assigned to create. Break a large implementation into concrete changes and preserve progress in your worktree. Before report_blocker, explicitly assess unblocked_work_remaining. If a later control lacks input but permitted independent implementation or analysis remains, finish that work in this turn and keep only the dependent control held; do not stop the whole task. If a source contradiction or external dependency actually prevents further work, name that evidence and an actionable condition another actor can resolve; task size or unfinished implementation alone is not such a condition. This is available to every worker, including options workers with no viable choice. Do not claim success, invent a choice or finish only in terminal prose. Ask when the orchestrator can resolve an unknown decision; if the answer has not come, end with wait_for_answer. If the answer confirms the input is unavailable and no permitted independent work remains, use report_blocker instead of repeating the question or waiting for an answer already received. Do not invent requirements or implement outside this contract.";
-    let binding = if task.changes_code() {
+    // The selection exists only when the runtime generated an options prerequisite
+    // (`<id>-options`, possibly suffixed); with `local_options = false` there is none, and
+    // telling the worker to implement it would send it to wait for an input that never comes.
+    let options_prefix = format!("{}-options", task.id);
+    let binding = if task.changes_code()
+        && task
+            .depends_on
+            .iter()
+            .any(|dependency| dependency.starts_with(&options_prefix))
+    {
         OPTIONS_BINDING
     } else {
         ""

@@ -124,6 +124,17 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
 }
 
 #[test]
+fn a_code_worker_is_told_to_implement_a_selection_only_when_options_exist() {
+    let writer = options_test_task("writer", true);
+    let without = without_options(with_options(vec![writer.clone()]));
+    let prompt = worker_prompt("project", &without[0]);
+    assert!(!prompt.contains("selected_approach"), "{prompt}");
+    assert!(!prompt.contains("Never silently switch variants"));
+    let with = with_options(vec![writer]);
+    assert!(worker_prompt("project", &with[1]).contains("selected_approach"));
+}
+
+#[test]
 fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need() {
     let mut scout: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "map", "title": "Map", "goal": "Map the storage code.",
