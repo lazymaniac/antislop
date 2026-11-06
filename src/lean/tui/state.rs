@@ -88,6 +88,9 @@ pub struct App {
     /// A card growing to (opening) or shrinking from (closing) full size.
     pub animate_graph: bool,
     pub graph_anim: Option<(String, bool, std::time::Instant)>,
+    /// Where the animated card's centre was on screen when it began to grow,
+    /// so it grows out from there rather than from its top-left corner.
+    pub graph_anim_anchor: Option<(i32, i32)>,
     pub graph_tab: usize,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
@@ -187,6 +190,7 @@ macro_rules! initial_app {
             graph_expanded: None,
             animate_graph: false,
             graph_anim: None,
+            graph_anim_anchor: None,
             graph_tab: 0,
             graph_card_scroll: 0,
             graph_card_area: None,

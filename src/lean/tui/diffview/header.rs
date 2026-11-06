@@ -108,11 +108,11 @@ pub fn diff_header(
 
 pub fn diff_footer_hint(width: usize) -> &'static str {
     if width >= 95 {
-        "↑/↓ select · ←/→ file · Tab files/lines · c comment · R code review · r refresh · ? help · Esc back"
+        "↑/↓ select · [/] file · Tab files/lines · c comment · R code review · r refresh · ? help · Esc back"
     } else if width >= 65 {
-        "↑/↓ select · ←/→ file · Tab switch · c com. · R review · r refresh · Esc back"
+        "↑/↓ select · [/] file · Tab switch · c com. · R review · r refresh · Esc back"
     } else if width >= 45 {
-        "↑/↓ · ←/→ · Tab switch · c com · Esc back"
+        "↑/↓ · [/] file · Tab · c com · Esc back"
     } else {
         "Tab · c · Esc"
     }

@@ -23,6 +23,9 @@ impl App {
             },
         );
         self.keep_graph_selection_visible(&graph);
+        if step < graph::FULL_STEP {
+            self.center_animated_card(&graph, step);
+        }
         self.draw_graph_position_markers(frame, inner, &graph);
         let mut canvas =
             Canvas::new_window(self.offset.0, self.offset.1, inner.width, inner.height);
@@ -66,6 +69,37 @@ impl App {
         (Some(key), step)
     }
 
+    /// Scroll so the animated card grows out of (or shrinks into) its
+    /// centre: its centre moves from where the card was shown when the
+    /// animation began (the viewport centre when closing) to where the fully
+    /// opened card is shown, while both edges move outward.
+    fn center_animated_card(&mut self, graph: &Graph, step: u8) {
+        let Some((key, opening, _)) = self.graph_anim.as_ref() else {
+            return;
+        };
+        let (Some(node), Some((width, height))) = (graph.node(key), self.graph_viewport) else {
+            return;
+        };
+        let (node_x, node_y) = (i32::from(node.x), i32::from(node.y));
+        let (node_w, node_h) = (i32::from(node.width), i32::from(node.height));
+        let (anchor_x, anchor_y) = self
+            .graph_anim_anchor
+            .filter(|_| *opening)
+            .unwrap_or((i32::from(width) / 2, i32::from(height) / 2));
+        let progress = i32::from(step);
+        let full = i32::from(graph::FULL_STEP);
+        // Measured from the target, so the last steps settle onto it instead
+        // of stopping a cell short when `from` is above or left of the view.
+        let lerp = |from: i32, to: i32| to + (from - to) * (full - progress) / full;
+        // The fully opened card is shown at (3, 0), see reveal_selected_node.
+        let left = lerp(anchor_x - node_w / 2, 3);
+        let top = lerp(anchor_y - node_h / 2, 0);
+        let max_x = i32::from(graph.width.saturating_sub(width));
+        let max_y = i32::from(graph.height.saturating_sub(height));
+        self.offset.0 = (node_x - left).clamp(0, max_x.max(0)) as u16;
+        self.offset.1 = (node_y - top).clamp(0, max_y.max(0)) as u16;
+    }
+
     fn draw_graph_position_markers(&self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
         let Some((_, height)) = self.graph_viewport else {
             return;
@@ -100,15 +134,24 @@ impl App {
         let Some(node) = graph.node(&key).cloned().filter(|node| node.visible) else {
             return;
         };
-        let card = Rect::new(
-            viewport.x + node.x.saturating_sub(self.offset.0),
-            viewport.y + node.y.saturating_sub(self.offset.1),
-            node.width,
-            node.height,
-        )
-        .intersection(viewport);
-        let content = graph::expanded_card_content_area(card, viewport);
+        // The card's real screen position: when the graph is scrolled past
+        // its top or left edge it starts outside the viewport, and the panels
+        // must be clipped with it instead of sliding along with the scroll.
+        let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(self.offset.0);
+        let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(self.offset.1);
+        let [card, selector, content] =
+            graph::expanded_card_areas(viewport, (left, top), (node.width, node.height));
+        if card.is_empty() {
+            self.graph_card_area = None;
+            return;
+        }
         self.graph_card_area = Some(content).filter(|area| !area.is_empty());
+        if !selector.is_empty() {
+            render_card_round_selector(frame, selector, self.details.as_ref(), &self.view, &key);
+        }
+        if content.is_empty() {
+            return;
+        }
         if self.graph_tab == 0 {
             self.draw_card_details(frame, content, &key);
         }
@@ -186,7 +229,6 @@ impl App {
         {
             self.graph_card_scroll = scroll;
         }
-        render_card_round_selector(frame, card, self.details.as_ref(), &self.view, &key);
     }
 
     /// The Details tab shows the agent's dashboard: its task, state, checks,
@@ -378,12 +420,12 @@ impl App {
 
 fn render_card_round_selector(
     frame: &mut Frame,
-    card: Rect,
+    row: Rect,
     details: Option<&Details>,
     view: &View,
     key: &str,
 ) {
-    if card.height < 4 || card.width < 8 {
+    if row.width < 4 {
         return;
     }
     let details = details.filter(|details| details.key == key);
@@ -431,15 +473,8 @@ fn render_card_round_selector(
         round_text
     };
     frame.render_widget(
-        Paragraph::new(truncate(&text, usize::from(card.width.saturating_sub(4))))
-            .style(Theme::from_env().accent()),
-        Rect::new(
-            card.x.saturating_add(2),
-            card.y.saturating_add(3),
-            card.width.saturating_sub(4),
-            1,
-        )
-        .intersection(frame.area()),
+        Paragraph::new(truncate(&text, usize::from(row.width))).style(Theme::from_env().accent()),
+        row.intersection(frame.area()),
     );
 }
 

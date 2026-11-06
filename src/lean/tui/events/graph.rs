@@ -239,6 +239,7 @@ impl App {
             KeyCode::Enter => {
                 if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
                     let key = self.graph_expanded.take();
+                    self.graph_anim_anchor = None;
                     self.graph_anim = key
                         .filter(|_| self.animate_graph)
                         .map(|key| (key, false, std::time::Instant::now()));
@@ -246,6 +247,16 @@ impl App {
                     self.diff = None;
                     self.graph_card_area = None;
                 } else {
+                    // Anchor the growth at the card's centre as it is shown now.
+                    let graph = self.graph_for_key();
+                    self.graph_anim_anchor = graph.node(&self.selected).map(|node| {
+                        (
+                            i32::from(node.x) + i32::from(node.width) / 2
+                                - i32::from(self.offset.0),
+                            i32::from(node.y) + i32::from(node.height) / 2
+                                - i32::from(self.offset.1),
+                        )
+                    });
                     self.graph_expanded = Some(self.selected.clone());
                     self.graph_anim = self
                         .animate_graph

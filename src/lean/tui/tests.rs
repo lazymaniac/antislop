@@ -267,6 +267,88 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
 }
 
 #[test]
+fn code_task_card_offers_diff_and_brackets_walk_its_files() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.graph_viewport = Some((120, 48));
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        change_kind: crate::lean::tasks::ChangeKind::Code,
+        ..Default::default()
+    }];
+    app.selected = "worker:t1".into();
+    app.key(key_press(KeyCode::Enter));
+    app.key(key_press(KeyCode::Left));
+    assert_eq!(
+        app.graph_tab, 3,
+        "a code task shows Diff even before a branch is reported"
+    );
+    let file = |path: &str| {
+        serde_json::json!({
+            "path": path, "old_path": null, "status": "modified",
+            "added": 1, "removed": 0, "binary": false,
+            "lines": [{"kind": "context", "old": 1, "new": 1, "text": "x"}],
+        })
+    };
+    app.diff
+        .as_mut()
+        .expect("the Diff tab opens the DiffView")
+        .load(Ok(
+            serde_json::json!({"files": [file("a.rs"), file("b.rs")]}),
+        ));
+    let target = |app: &App| app.diff.as_ref().and_then(|diff| diff.target());
+    assert_eq!(target(&app).as_deref(), Some("diff:t1:a.rs:1"));
+    app.key(key_press(KeyCode::Char(']')));
+    assert_eq!(target(&app).as_deref(), Some("diff:t1:b.rs:1"));
+    app.key(key_press(KeyCode::Char('[')));
+    assert_eq!(target(&app).as_deref(), Some("diff:t1:a.rs:1"));
+    assert_eq!(app.graph_tab, 3, "file keys keep the Diff tab open");
+}
+
+#[test]
+fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.view.tasks = (1..=4)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("task {n}"),
+            depends_on: if n > 1 {
+                vec![format!("t{}", n - 1)]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        })
+        .collect();
+    app.selected = "worker:t2".into();
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    app.key(key_press(KeyCode::Enter));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let before = app
+        .graph_card_area
+        .expect("the expanded card has a content area");
+    // Scroll the graph so the card's top leaves the viewport.
+    app.offset.1 += 6;
+    let scrolled = app.offset.1;
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(app.offset.1, scrolled, "the draw kept the scroll");
+    let after = app
+        .graph_card_area
+        .expect("the card's lower part is still visible");
+    assert_eq!(
+        after.bottom(),
+        before.bottom() - 6,
+        "the panel's bottom follows the card frame up, not the viewport top"
+    );
+    assert!(
+        after.height < before.height,
+        "the panel is clipped with the card"
+    );
+}
+
+#[test]
 fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     let mut app = test_app();
     app.focus = Focus::Graph;

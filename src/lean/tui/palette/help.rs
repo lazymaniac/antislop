@@ -244,7 +244,7 @@ fn help_diff() -> &'static [&'static str] {
     &[
         "↑/↓ PgUp/PgDn    select line (or file)",
         "Ctrl+D / Ctrl+U  half page down / up",
-        "←/→              previous / next file",
+        "[/] or ←/→       previous / next file",
         "Tab              file list / lines",
         "c                comment on line or file",
         "R                code review of this change",

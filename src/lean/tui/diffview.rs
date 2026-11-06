@@ -123,6 +123,10 @@ impl DiffView {
             KeyCode::Tab | KeyCode::BackTab => {
                 self.on_files = !self.on_files;
             }
+            // Next or previous file from anywhere; inside an expanded graph
+            // card ←/→ switch tabs, so these are the file keys there.
+            KeyCode::Char(']' | 'n') => self.move_file(true),
+            KeyCode::Char('[' | 'p') => self.move_file(false),
             // Next or previous file from the lines too.
             KeyCode::Right | KeyCode::Left if !self.on_files => {
                 self.move_file(code == KeyCode::Right);

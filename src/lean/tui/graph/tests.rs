@@ -11,14 +11,33 @@ fn windowed_canvas_storage_is_exactly_the_viewport_area() {
 }
 
 #[test]
+fn expanded_card_areas_clip_with_a_card_scrolled_past_the_top() {
+    let viewport = Rect::new(10, 5, 80, 30);
+    let [card, selector, content] = super::expanded_card_areas(viewport, (20, -1), (40, 20));
+    assert_eq!(card, Rect::new(20, 5, 40, 14));
+    // The selector sits at top + 3 = 2, above the viewport.
+    assert!(selector.is_empty());
+    // Content spans rows 3..18 of the card; only rows 5..18 are visible.
+    assert_eq!(content, Rect::new(22, 5, 36, 13));
+    assert_eq!(
+        content.bottom(),
+        card.bottom() - 1,
+        "content ends at the frame"
+    );
+    let [card, ..] = super::expanded_card_areas(viewport, (20, -30), (40, 20));
+    assert!(card.is_empty(), "a card scrolled out of view has no area");
+}
+
+#[test]
 fn expanded_pty_content_grows_with_the_viewport() {
     let viewport = (76, 12);
     let size = Size::fit(Some(viewport), Some("worker:t1".into()));
     let content_area = |width: u16, height: u16| {
-        super::expanded_card_content_area(
-            Rect::new(0, 0, width, height),
+        super::expanded_card_areas(
             Rect::new(0, 0, viewport.0, viewport.1),
-        )
+            (0, 0),
+            (width, height),
+        )[2]
     };
 
     // Before the viewport-fit change the 56-column ceiling produced a

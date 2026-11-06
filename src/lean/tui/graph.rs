@@ -15,27 +15,53 @@ use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// Content rectangle inside an expanded card, clipped to the visible graph.
+/// The visible parts of an expanded card whose top-left corner sits at the
+/// signed screen position `(left, top)`: the whole card, its round-selector
+/// row and its content panel, each clipped to `viewport`. A card scrolled
+/// partly out of view keeps its panels inside its own frame.
 /// Keep this geometry shared by panel rendering and its layout measurements.
-pub(super) fn expanded_card_content_area(card: Rect, viewport: Rect) -> Rect {
-    Rect::new(
-        card.x.saturating_add(2),
-        card.y.saturating_add(4),
-        card.width.saturating_sub(4),
-        card.height.saturating_sub(5),
-    )
-    .intersection(viewport)
+pub(in crate::lean::tui) fn expanded_card_areas(
+    viewport: Rect,
+    (left, top): (i32, i32),
+    (width, height): (u16, u16),
+) -> [Rect; 3] {
+    let (width, height) = (i32::from(width), i32::from(height));
+    [
+        clip(viewport, left, top, width, height),
+        clip(viewport, left + 2, top + 3, width - 4, 1),
+        clip(viewport, left + 2, top + 4, width - 4, height - 5),
+    ]
+}
+
+/// The part of a signed screen rectangle that lies inside `viewport`.
+fn clip(viewport: Rect, x: i32, y: i32, width: i32, height: i32) -> Rect {
+    let x0 = x.max(i32::from(viewport.x));
+    let y0 = y.max(i32::from(viewport.y));
+    let x1 = (x + width).min(i32::from(viewport.right()));
+    let y1 = (y + height).min(i32::from(viewport.bottom()));
+    if x1 <= x0 || y1 <= y0 {
+        return Rect::default();
+    }
+    // Every bound lies within the u16 viewport, so the casts are lossless.
+    Rect::new(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16)
 }
 
 /// Every tab an expanded card can show, in key order `1`..`4`.
 const EXPANDED_TABS: [&str; 4] = ["Details", "PTY", "Results", "Diff"];
 
-/// The tabs of an expanded card: Diff only for an agent with a branch.
+/// The tabs of an expanded card: Diff for a task agent whose task delivers
+/// changes (code or artifacts), or any agent that reported a branch.
 pub(super) fn expanded_tab_names(view: &View, key: &str) -> &'static [&'static str] {
-    if view
-        .agents
-        .get(key)
-        .is_some_and(|agent| agent.branch.is_some())
+    let delivers = key.split_once(':').is_some_and(|(_, id)| {
+        view.tasks
+            .iter()
+            .any(|task| task.id == id && task.change_kind.has_delivery())
+    });
+    if delivers
+        || view
+            .agents
+            .get(key)
+            .is_some_and(|agent| agent.branch.is_some())
     {
         &EXPANDED_TABS
     } else {
