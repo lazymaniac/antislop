@@ -210,11 +210,24 @@ impl App {
             .clone()
             .or_else(|| self.plan_view.as_ref().map(|p| p.plan_id.clone()));
         if self.plan_view.is_some()
-            || self.diff.is_some()
             || target == "plan"
             || target.starts_with("plan:")
             || is_rejection_target(target)
         {
+            return (default_plan, None, None);
+        }
+        if self.diff.is_some() && self.graph_expanded.is_some() && self.graph_tab == 3 {
+            let details = self.details.as_ref();
+            let round = details
+                .and_then(|details| details.selected_round)
+                .or_else(|| self.task_row_round(self.graph_expanded.as_deref()?))
+                .or_else(|| {
+                    details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64())
+                })
+                .map(|round| round as u32);
+            return (default_plan, round, None);
+        }
+        if self.diff.is_some() {
             return (default_plan, None, None);
         }
         let round = self

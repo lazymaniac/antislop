@@ -198,6 +198,7 @@ fn help_graph() -> &'static [&'static str] {
     &[
         "arrows           nearest node in that direction",
         "Enter            agent details",
+        ", / .            previous / next round in an expanded card",
         "/                find agent",
         "d                task diff",
         "u                agent actions: restart orchestrator/worker or unblock",
@@ -220,8 +221,9 @@ fn help_graph() -> &'static [&'static str] {
 fn help_details() -> &'static [&'static str] {
     &[
         "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
+        "Graph card       , / . select round; . on newest follows live work",
         "i / a            native CLI focus / message composer",
-        "Ctrl+]           return from native CLI to antislop",
+        "Ctrl+]           leave PTY and return to Details",
         "Ctrl+W           switch worker / reviewer panel",
         "h / r            JSON history / retry native attachment",
         "↑/↓ PgUp/PgDn    scroll; on Comments select",

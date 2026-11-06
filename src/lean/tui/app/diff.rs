@@ -47,6 +47,17 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => self.diff = None,
             KeyCode::Char('?') => self.show_help(Help::Diff),
             KeyCode::Char('c') => {
+                if self.graph_expanded.is_some()
+                    && self.graph_tab == 3
+                    && self
+                        .details
+                        .as_ref()
+                        .is_some_and(|details| details.selected_round.is_some())
+                {
+                    self.notice =
+                        Some("No historical diff is retained for the selected round.".into());
+                    return;
+                }
                 if let Some(target) = diff.target() {
                     let input = self.get_comment_draft(&target);
                     self.editor = Some(Editor { target, input });

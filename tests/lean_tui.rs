@@ -1226,6 +1226,260 @@ fn app_graph_details_diff_navigation_and_search() {
 }
 
 #[test]
+fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
+    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+
+    let mut app = App::test_app();
+    app.view.tasks = vec![TaskRow {
+        id: "t1".into(),
+        title: "Alpha card content".into(),
+        ..TaskRow::default()
+    }];
+    app.view.agents.insert(
+        "orchestrator".into(),
+        antislop::lean::tui::view::Agent {
+            provider: "fixture-cli".into(),
+            ..Default::default()
+        },
+    );
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let initial_text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        initial_text.contains("Alpha card content"),
+        "{initial_text}"
+    );
+
+    let graph = Graph::new_with_expanded(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+        app.graph_expanded.clone(),
+        app.graph_tab,
+    );
+    let (direction, next) = [
+        (KeyCode::Left, (-1, 0)),
+        (KeyCode::Right, (1, 0)),
+        (KeyCode::Up, (0, -1)),
+        (KeyCode::Down, (0, 1)),
+    ]
+    .into_iter()
+    .find_map(|(key, (dx, dy))| {
+        graph
+            .neighbour("worker:t1", dx, dy)
+            .filter(|next| next == "orchestrator")
+            .map(|next| (key, next))
+    })
+    .expect("expanded card has an adjacent graph node");
+
+    app.key(KeyEvent::new(direction, KeyModifiers::NONE));
+    assert_eq!(app.selected, next);
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    assert!(app.details.is_some(), "selection alone preserves Details");
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let selected_text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(selected_text.contains("Alpha card content"));
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.graph_expanded.as_deref(), Some(next.as_str()));
+    assert!(app.details.is_some());
+    assert_eq!(app.details.as_ref().unwrap().key, next);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let expanded_text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        expanded_text.contains("CLI: fixture-cli"),
+        "expanded content belongs to {next}: {expanded_text}"
+    );
+    let expanded_graph = Graph::new_with_expanded(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+        app.graph_expanded.clone(),
+        app.graph_tab,
+    );
+    assert_eq!(
+        expanded_graph
+            .nodes
+            .iter()
+            .filter(|node| node.visible && (node.width > 30 || node.height > 8))
+            .count(),
+        1,
+        "only the selected card is expanded"
+    );
+    assert_eq!(app.graph_expanded.as_deref(), Some(next.as_str()));
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_expanded.is_none());
+    assert!(app.details.is_none());
+}
+
+#[test]
+fn graph_position_markers_follow_offscreen_nodes_and_resize() {
+    use antislop::lean::tui::graph::Graph;
+    use antislop::lean::tui::view::TaskRow;
+
+    let mut app = App::test_app();
+    app.view.tasks = (1..=24)
+        .map(|n| TaskRow {
+            id: format!("t{n}"),
+            title: format!("Task {n}"),
+            ..TaskRow::default()
+        })
+        .collect();
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    app.graph_revealed = Some(app.selected.clone());
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let graph = Graph::new_with_viewport(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let (_, viewport_height) = app.graph_viewport.unwrap();
+    assert!(
+        graph.height > viewport_height,
+        "graph fits without scrolling"
+    );
+    let area = app.graph_area.unwrap();
+    let marker_x = area.x + area.width / 2;
+
+    app.offset.1 = 0;
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(marker_x, area.y - 1)].symbol(), " ", "top boundary");
+    assert_eq!(buffer[(marker_x, area.y + area.height)].symbol(), "↓");
+
+    app.offset.1 = graph.height.saturating_sub(viewport_height);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(marker_x, area.y - 1)].symbol(), "↑");
+    assert_eq!(
+        buffer[(marker_x, area.y + area.height)].symbol(),
+        " ",
+        "bottom boundary"
+    );
+
+    let mut resized = Terminal::new(TestBackend::new(120, 35)).unwrap();
+    resized.draw(|frame| app.draw(frame)).unwrap();
+    let resized_area = app.graph_area.unwrap();
+    let (resized_width, resized_height) = app.graph_viewport.unwrap();
+    assert_eq!(resized_area.width, resized_width);
+    assert_eq!(resized_area.height, resized_height);
+    let resized_graph = Graph::new_with_viewport(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    if resized_graph.height > resized_height {
+        let buffer = resized.backend().buffer();
+        let x = resized_area.x + resized_area.width / 2;
+        assert_eq!(buffer[(x, resized_area.y - 1)].symbol(), "↑");
+    }
+
+    let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
+    tiny.draw(|frame| app.draw(frame)).unwrap();
+    assert!(
+        app.graph_area.is_none(),
+        "small terminal disables graph markers"
+    );
+}
+
+#[test]
+fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals() {
+    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+
+    for (terminal_width, terminal_height) in [(80, 24), (120, 30), (160, 50)] {
+        let mut app = App::test_app();
+        app.view.tasks = vec![TaskRow {
+            id: "t1".into(),
+            title: "Measured card".into(),
+            ..TaskRow::default()
+        }];
+        app.focus = Focus::Graph;
+        app.selected = "worker:t1".into();
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(terminal_width, terminal_height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let viewport = app.graph_viewport.expect("graph viewport after render");
+        let graph = Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope,
+            &app.graph_collapsed,
+            app.graph_grouping,
+            Some(viewport),
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        );
+        let card = graph.node("worker:t1").unwrap();
+        let content = (card.width.saturating_sub(4), card.height.saturating_sub(5));
+        let legacy_card = (56u16, viewport.1.saturating_sub(2).min(20));
+        let legacy_content = (
+            legacy_card.0.saturating_sub(4),
+            legacy_card.1.saturating_sub(4),
+        );
+        assert!(content.0 > legacy_content.0);
+        assert!(
+            usize::from(content.0) * usize::from(content.1)
+                > usize::from(legacy_content.0) * usize::from(legacy_content.1),
+            "larger card must leave a larger content area"
+        );
+        assert!(
+            card.width + 6 >= viewport.0,
+            "card keeps only its required margins"
+        );
+        println!(
+            "terminal={terminal_width}x{terminal_height} viewport={}x{} card={}x{} content={}x{} area={} legacy_card={}x{} legacy_content={}x{} area={}",
+            viewport.0,
+            viewport.1,
+            card.width,
+            card.height,
+            content.0,
+            content.1,
+            usize::from(content.0) * usize::from(content.1),
+            legacy_card.0,
+            legacy_card.1,
+            legacy_content.0,
+            legacy_content.1,
+            usize::from(legacy_content.0) * usize::from(legacy_content.1),
+        );
+    }
+}
+
+#[test]
 fn app_incoming_updates_and_rendering() {
     let mut app = App::test_app();
     let backend = TestBackend::new(80, 24);
@@ -4087,6 +4341,22 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
     assert_eq!(initial_viewport, (76, 12));
+
+    // Measure the expanded card on this renderer-derived 80x24 geometry.
+    let expanded = Graph::new_with_expanded(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+        Some("worker:t1".into()),
+        1,
+    );
+    let card = expanded.node("worker:t1").unwrap();
+    assert_eq!((card.width, card.height), (70, 10));
+    let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
+    assert_eq!(content_area, 330);
+    assert_eq!(usize::from(52u16) * usize::from(card.height - 4), 312);
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(

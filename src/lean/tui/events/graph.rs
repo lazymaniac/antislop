@@ -4,6 +4,39 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 impl App {
     pub(in crate::lean::tui) fn graph_key(&mut self, key: KeyEvent) -> bool {
         self.selected = graph::card_key(&self.view, &self.selected);
+        if self.graph_expanded.is_some()
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char(',' | '.'))
+        {
+            let before = self
+                .details
+                .as_ref()
+                .and_then(|details| details.selected_round);
+            if let Some(details) = &mut self.details {
+                details.change_round(
+                    &self.view,
+                    if key.code == KeyCode::Char(',') {
+                        -1
+                    } else {
+                        1
+                    },
+                );
+            }
+            if self
+                .details
+                .as_ref()
+                .and_then(|details| details.selected_round)
+                != before
+            {
+                self.fetch_task();
+                if self.graph_tab == 3 {
+                    self.open_graph_diff();
+                }
+            }
+            return true;
+        }
         let graph = self.graph_for_key();
         if let Some(handled) = self.graph_scroll_key(key, &graph) {
             return handled;
@@ -50,23 +83,6 @@ impl App {
             self.select_visible_graph_node(graph);
         } else if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
             self.selected = next;
-            if self.graph_expanded.is_some() {
-                self.graph_expanded = Some(self.selected.clone());
-                self.open_details(self.selected.clone());
-                if self.graph_tab == 3 {
-                    if self
-                        .view
-                        .agents
-                        .get(&self.selected)
-                        .is_some_and(|agent| agent.branch.is_some())
-                    {
-                        self.open_diff(&self.selected.clone());
-                    } else {
-                        self.graph_tab = 0;
-                        self.diff = None;
-                    }
-                }
-            }
         }
     }
 
@@ -103,10 +119,11 @@ impl App {
                 if self.graph_expanded.is_some() {
                     self.graph_tab = usize::from(digit as u8 - b'1');
                     if let Some(details) = &mut self.details {
-                        details.native_focus = self.graph_tab == 1;
+                        details.native_focus =
+                            self.graph_tab == 1 && details.selected_round.is_none();
                     }
                     if self.graph_tab == 3 {
-                        self.open_diff(&self.selected.clone());
+                        self.open_graph_diff();
                     }
                 } else {
                     self.relations.toggle(usize::from(digit as u8 - b'1'));
@@ -114,7 +131,7 @@ impl App {
             }
             KeyCode::Char('d') => {
                 self.graph_tab = 3;
-                self.open_diff(&self.selected.clone());
+                self.open_graph_diff();
             }
             KeyCode::Char('c') => self.open_graph_comment(),
             KeyCode::Enter => {
@@ -136,6 +153,25 @@ impl App {
         let target = self.selected.clone();
         let input = self.get_comment_draft(&target);
         self.editor = Some(Editor { target, input });
+    }
+
+    fn open_graph_diff(&mut self) {
+        let key = self
+            .graph_expanded
+            .as_deref()
+            .unwrap_or(&self.selected)
+            .to_owned();
+        let historical = self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.selected_round.is_some());
+        if historical {
+            if let Some((_, task)) = key.split_once(':') {
+                self.diff = Some(DiffView::new(task.to_owned()));
+            }
+        } else {
+            self.open_diff(&key);
+        }
     }
 }
 

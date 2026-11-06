@@ -201,10 +201,17 @@ mod tests {
         let mut app = App::test_app();
         app.focus = Focus::Graph;
         app.graph_viewport = Some((120, 48));
-        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
-            id: "t1".into(),
-            ..Default::default()
-        }];
+        app.view.tasks = vec![
+            crate::lean::tui::view::TaskRow {
+                id: "t1".into(),
+                ..Default::default()
+            },
+            crate::lean::tui::view::TaskRow {
+                id: "t2".into(),
+                depends_on: vec!["t1".into()],
+                ..Default::default()
+            },
+        ];
         app.view
             .agents
             .insert("worker:t1".into(), Default::default());
@@ -262,6 +269,37 @@ mod tests {
             received.try_recv(),
             Ok(Command::Input(Input::Key { .. }))
         ));
+
+        // Ctrl+] is handled by the TUI before PTY forwarding. It returns to
+        // Details, and that state survives the next graph render.
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(']'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.graph_tab, 0);
+        assert!(!app.native_focused());
+        assert!(received.try_recv().is_err(), "exit chord reached the PTY");
+        assert!(
+            !app.native_views[&format!("{}:worker:t1", app.conversation)]
+                .stop
+                .load(Ordering::SeqCst)
+        );
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.native_focused(), "redraw restored PTY focus");
+        assert!(app.view.agents.contains_key("worker:t1"));
+
+        // Normal TUI tab routing and graph navigation work after leaving.
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('3'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.graph_tab, 2);
+        let selected = app.selected.clone();
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_ne!(app.selected, selected, "graph navigation stayed blocked");
 
         let mut reviewer_details = Details::new("reviewer:t1".into());
         reviewer_details.switch_tab(crate::lean::tui::details::RESULT);

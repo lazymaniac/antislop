@@ -11,6 +11,20 @@ fn windowed_canvas_storage_is_exactly_the_viewport_area() {
 }
 
 #[test]
+fn expanded_pty_content_grows_with_the_viewport() {
+    let viewport = (76, 12);
+    let size = Size::fit(Some(viewport), Some("worker:t1".into()));
+    let content_area = |width: u16, height: u16| usize::from(width - 4) * usize::from(height - 4);
+
+    // Before the viewport-fit change the 56-column ceiling produced a
+    // 52x6 PTY content area at this same viewport.
+    assert_eq!(content_area(56, 10), 312);
+    assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
+    assert_eq!(content_area(size.expanded_w, size.expanded_h), 396);
+    assert!(content_area(size.expanded_w, size.expanded_h) > content_area(56, 10));
+}
+
+#[test]
 fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
     let tasks = (1..=6).map(|n| task(&format!("t{n}"), &[])).collect();
     let view = view(tasks);

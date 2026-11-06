@@ -56,6 +56,9 @@ impl App {
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
             }
+            if self.focus == Focus::Graph && self.graph_tab == 1 {
+                self.graph_tab = 0;
+            }
         } else {
             self.native_send(crate::lean::terminal::Input::Key { event: key });
         }
@@ -266,10 +269,12 @@ impl App {
 }
 
 fn embedded_diff_graph_key(key: KeyEvent, allow_selection: bool) -> bool {
-    matches!(key.code, KeyCode::Char('1'..='4'))
-        || (allow_selection
-            && matches!(
-                key.code,
-                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
-            ))
+    matches!(
+        key.code,
+        KeyCode::Char('1'..='4' | ',' | '.') | KeyCode::Enter
+    ) || (allow_selection
+        && matches!(
+            key.code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+        ))
 }

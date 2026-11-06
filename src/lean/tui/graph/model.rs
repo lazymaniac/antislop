@@ -82,8 +82,8 @@ impl Size {
             w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),
             admin_w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
             h: (vp_h.saturating_sub(GAP_Y) / 2).clamp(MIN_HEIGHT, HEIGHT),
-            expanded_w: vp_w.saturating_sub(2 * MARGIN).clamp(MIN_WIDTH, 56),
-            expanded_h: vp_h.saturating_sub(2).clamp(MIN_HEIGHT, 20),
+            expanded_w: vp_w.saturating_sub(2 * MARGIN).max(MIN_WIDTH),
+            expanded_h: vp_h.saturating_sub(2).max(MIN_HEIGHT),
             expanded_key,
         }
     }

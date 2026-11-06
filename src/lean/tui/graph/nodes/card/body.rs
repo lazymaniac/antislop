@@ -49,10 +49,15 @@ impl Card<'_> {
         } else {
             "1 Details | 2 PTY | 3 Results"
         };
+        let tabs = if tab == 1 {
+            format!("{tabs} | Ctrl+] leave PTY")
+        } else {
+            tabs.to_owned()
+        };
         self.canvas.text(
             self.node.x + 2,
             self.node.y + 2,
-            tabs,
+            &tabs,
             self.fill.patch(self.theme.accent()),
         );
         let mut rows = Vec::new();
@@ -141,7 +146,7 @@ impl Card<'_> {
             _ => rows.push("Choose Details, PTY, Results, or Diff".into()),
         }
         for (index, row) in rows.iter().enumerate() {
-            let y = self.node.y.saturating_add(3 + index as u16);
+            let y = self.node.y.saturating_add(4 + index as u16);
             if y + 1 >= self.node.y.saturating_add(self.node.height) {
                 break;
             }

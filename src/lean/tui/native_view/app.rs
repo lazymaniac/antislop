@@ -20,9 +20,13 @@ impl App {
     }
 
     fn graph_native_key(&self) -> Option<&str> {
-        self.graph_expanded
-            .as_deref()
-            .filter(|_| self.graph_tab == 1)
+        self.graph_expanded.as_deref().filter(|_| {
+            self.graph_tab == 1
+                && self
+                    .details
+                    .as_ref()
+                    .is_none_or(|details| details.selected_round.is_none())
+        })
     }
 
     fn retain_native_views(&mut self, wanted: &[WantedView]) -> bool {

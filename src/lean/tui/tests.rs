@@ -70,9 +70,133 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     app.key(key_press(KeyCode::Enter));
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
     app.key(key_press(KeyCode::Down));
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(key_press(KeyCode::Enter));
     assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
     app.key(key_press(KeyCode::Enter));
     assert!(app.graph_expanded.is_none());
+}
+
+#[test]
+fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty() {
+    let state = tempfile::tempdir().unwrap();
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.graph_viewport = Some((100, 28));
+    app.graph_expanded = Some("worker:t1".into());
+    app.selected = "worker:t1".into();
+    app.view.plan = Some("plan".into());
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        title: "current round two".into(),
+        round: 2,
+        ..Default::default()
+    }];
+    let mut details = Details::new("worker:t1".into());
+    details.available_rounds = vec![1, 2];
+    details.task = Some(serde_json::json!({
+        "round": 2,
+        "title": "current round two",
+        "status": "complete",
+        "_rounds": [{"round": 1}, {"round": 2}]
+    }));
+    app.details = Some(details);
+
+    // The actual graph key path selects a retained round and fetches its snapshot.
+    app.key(key_press(KeyCode::Char(',')));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
+    let details = app.details.as_mut().unwrap();
+    details.task = Some(serde_json::json!({
+        "round": 1,
+        "title": "retained round one details",
+        "status": "complete",
+        "_rounds": [{"round": 1}, {"round": 2}]
+    }));
+    details
+        .documents
+        .insert("result".into(), result_for_test(state.path()));
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    for (tab, expected) in [
+        (0, "retained round one details"),
+        (1, "Historical PTY is read-only"),
+        (2, "result for retained round one"),
+        (3, "No historical diff is retained"),
+    ] {
+        if tab > 0 {
+            app.key(key_press(KeyCode::Char(char::from(b'1' + tab as u8))));
+        }
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        if tab == 2 {
+            // The disk-backed document builds its line index asynchronously.
+            for _ in 0..20 {
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let text = terminal_text(&terminal);
+                if text.contains(expected) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
+        assert!(
+            terminal_text(&terminal).contains(expected),
+            "tab {tab}: {}",
+            terminal_text(&terminal)
+        );
+        assert!(terminal_text(&terminal).contains("Round 1"));
+        assert!(terminal_text(&terminal).contains(". next"));
+        if tab == 1 {
+            assert!(!app.native_focused());
+            app.native_send(crate::lean::terminal::Input::Key {
+                event: key_press(KeyCode::Char('x')),
+            });
+            assert!(
+                app.native_views.is_empty(),
+                "historical PTY must not attach a process"
+            );
+        }
+        if tab == 3 {
+            app.key(key_press(KeyCode::Char('c')));
+            assert!(
+                app.editor.is_none(),
+                "a missing historical diff cannot receive a comment"
+            );
+            assert!(
+                app.notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("No historical diff")
+            );
+        }
+    }
+
+    // A new live round does not dislodge the historical selection. Advancing
+    // through the newest retained round returns to follow mode.
+    app.view.tasks[0].round = 3;
+    app.key(key_press(KeyCode::Char('.')));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(2));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(2));
+    app.key(key_press(KeyCode::Char('.')));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, None);
+}
+
+fn result_for_test(state: &std::path::Path) -> document::Document {
+    let mut result = document::Builder::new(state).unwrap();
+    result
+        .append("", |sink| sink("result for retained round one"))
+        .unwrap();
+    result.finish().unwrap()
+}
+
+fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
+    terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
 }
 
 #[test]
@@ -140,6 +264,9 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     .expect("the graph contains a navigable neighboring node");
     app.key(key_press(direction));
     assert_eq!(app.selected, next);
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(key_press(KeyCode::Char('1')));
+    app.key(key_press(KeyCode::Enter));
     assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
 }
 
