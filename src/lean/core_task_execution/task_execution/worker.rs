@@ -54,8 +54,19 @@ pub(in crate::lean) fn writer_worktree(
     };
     let base = git::base_with_artifacts(project, &base, &artifacts)?;
     let path = worktree_path(&core.state, task)?;
-    let start = task.result.clone().unwrap_or_else(|| base.clone());
-    git::add_worktree(project, &path, &worktree_branch(&core.state, task)?, &start)?;
+    let mut start = task.result.clone().unwrap_or_else(|| base.clone());
+    let branch = worktree_branch(&core.state, task)?;
+    // A preserved branch tip may be a different commit with the same content
+    // as the recorded result; reattach at the tip instead of resetting it.
+    if let Ok(tip) = git::ok(
+        project,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    ) && tip != start
+        && git::tree_identity(project, &tip).ok() == git::tree_identity(project, &start).ok()
+    {
+        start = tip;
+    }
+    git::add_worktree(project, &path, &branch, &start)?;
     task.base = Some(base);
     Ok(Some(path))
 }
@@ -67,15 +78,15 @@ pub(super) fn task_directories(
     project: &Path,
     worktree: &Option<PathBuf>,
 ) -> Result<(PathBuf, Vec<PathBuf>)> {
-    let observation = observation_worktree(core, task, spec, project, worktree)?;
+    let task_worktree = task_worktree(core, task, spec, project, worktree)?;
     let workdir = worktree
         .clone()
-        .or(observation)
+        .or(task_worktree)
         .unwrap_or_else(|| project.to_path_buf());
     Ok((workdir, Vec::new()))
 }
 
-fn observation_worktree(
+fn task_worktree(
     core: &Core,
     task: &Task,
     spec: &TaskContract,
@@ -85,22 +96,33 @@ fn observation_worktree(
     if worktree.is_some() || !git::is_repository(project) {
         return Ok(None);
     }
+    if let Some(owner_id) = spec.options_for.as_deref() {
+        let mut owner = core
+            .store
+            .task_in_plan_by_id(&task.plan_id, owner_id)?
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "options task {} has no owner task {owner_id}",
+                    task.id
+                ))
+            })?;
+        require(
+            owner.input_generation == task.input_generation,
+            "options task and owner task have different input generations",
+        )?;
+        let owner_spec: TaskContract = serde_json::from_value(owner.spec.clone())?;
+        let owner_worktree = writer_worktree(core, &mut owner, &owner_spec, project)?;
+        require(
+            owner_worktree.is_some(),
+            "options task owner does not have a writer worktree",
+        )?;
+        core.store.update_task(&owner)?;
+        return Ok(owner_worktree);
+    }
     let onto = core.writer_base(&task.plan_id, spec, project)?;
-    // A narrowed read-only continuation must inspect its own retained changes,
-    // even when the unfinished writer's checkpoint has not landed yet.
-    // Generated options run before their owner, but must inspect the owner's
-    // retained implementation when choosing how to continue it.
-    let owner = spec
-        .options_for
-        .as_deref()
-        .map(|id| core.store.task_in_plan_by_id(&task.plan_id, id))
-        .transpose()?
-        .flatten();
-    let source = owner
-        .as_ref()
-        .filter(|owner| owner.status != status::APPROVED)
-        .unwrap_or(task);
-    let base = match (&source.base, &source.result) {
+    // Read-only continuations inspect their own retained changes, even when
+    // another task's checkpoint has not landed yet.
+    let base = match (&task.base, &task.result) {
         (Some(base), Some(result)) => {
             match combine_saved_checkpoint(core, task, project, &onto, base, result)? {
                 git::CombineResult::Applied(combined) => combined,
@@ -357,6 +379,11 @@ mod tests {
             "change_kind": "none", "kind":"options", "options_for":"recover"
         }))
         .unwrap();
+        let isolated_spec: TaskContract = serde_json::from_value(json!({
+            "id":"isolated", "title":"Isolated", "goal":"Keep another task isolated",
+            "change_kind": "code", "kind":"implementation"
+        }))
+        .unwrap();
         let mut tasks = core
             .store
             .add_plan(
@@ -364,25 +391,45 @@ mod tests {
                 &[
                     serde_json::to_value(&owner_spec).unwrap(),
                     serde_json::to_value(&options_spec).unwrap(),
+                    serde_json::to_value(&isolated_spec).unwrap(),
                 ],
             )
             .unwrap();
-        let (stale_view, _) =
-            task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(stale_view.join("instrument.txt")).unwrap(),
-            "old instrument"
-        );
         tasks[0].base = task.base.clone();
         tasks[0].result = task.result.clone();
         tasks[0].status = status::QUEUED.into();
+        tasks[0].feedback = Some(json!({"continuation_review":true}));
         core.store.update_task(&tasks[0]).unwrap();
         let (options_view, _) =
             task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(options_view, worktree_path(&core.state, &tasks[0]).unwrap());
         assert_eq!(
             std::fs::read_to_string(options_view.join("instrument.txt")).unwrap(),
             "repaired instrument"
         );
+        core.set_status(&conversation.id, &mut tasks[1], status::APPROVED)
+            .unwrap();
+        core.drain_worktree_cleanup();
+        assert!(
+            options_view.exists(),
+            "options cleanup must retain the owner's checkout"
+        );
+        let plan_id = tasks[0].plan_id.clone();
+        let state = directory.path().join("state");
+        drop(core);
+        let core = Core::open(
+            &state,
+            Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap(),
+        )
+        .unwrap();
+        let mut tasks = core.store.plan(&plan_id).unwrap();
+        let (restarted_options_view, _) =
+            task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(restarted_options_view, options_view);
+        let isolated_worktree = writer_worktree(&core, &mut tasks[2], &isolated_spec, &project)
+            .unwrap()
+            .unwrap();
+        assert_ne!(isolated_worktree, restarted_options_view);
         assert_eq!(
             std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
             "old instrument"
@@ -393,16 +440,17 @@ mod tests {
             .unwrap();
         let (conflict_view, _) =
             task_directories(&core, &tasks[1], &options_spec, &project, &None).unwrap();
+        assert_eq!(conflict_view, options_view);
         assert_eq!(
             std::fs::read_to_string(conflict_view.join("instrument.txt")).unwrap(),
             "repaired instrument"
         );
-        tasks[0].feedback = Some(json!({"continuation_review":true}));
         let saved_base = tasks[0].base.clone();
         let saved_result = tasks[0].result.clone();
         let writer = writer_worktree(&core, &mut tasks[0], &owner_spec, &project)
             .unwrap()
             .unwrap();
+        assert_eq!(writer, options_view);
         assert_eq!(
             std::fs::read_to_string(writer.join("instrument.txt")).unwrap(),
             "repaired instrument"

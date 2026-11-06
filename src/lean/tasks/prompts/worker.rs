@@ -157,6 +157,8 @@ fn worker_checks(task: &TaskContract) -> String {
 fn worker_change_rules(task: &TaskContract) -> &'static str {
     if task.change_kind.has_delivery() {
         "Work only in this allocated worktree, within the task goal and user constraints. Do not commit; the runtime records changes. Resolve technical blockers autonomously; use plan revision when the task goal or dependencies need to change.\n\n"
+    } else if task.kind == WorkKind::Options {
+        "This options task shares its owner's writer worktree. Treat the checkout as read-only: inspect files and diffs, but do not modify, create, delete or commit project files. Deliver the selection in your report.\n\n"
     } else if task.kind == WorkKind::Context {
         "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, so the reviewer can verify it.\n\n"
     } else {

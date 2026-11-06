@@ -308,6 +308,83 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
 }
 
 #[test]
+fn options_worker_review_and_repair_rounds_share_one_checkout_in_role_order() {
+    let (stored, calls, _) = run_scenario(
+        json!({"tasks":[writer("w")]}),
+        false,
+        REPORT,
+        "A",
+        "",
+        "A",
+        "shared-worktree-repair",
+    );
+    let options = stored
+        .iter()
+        .find(|task| task.spec["kind"] == "options")
+        .unwrap();
+    let writer_task = stored.iter().find(|task| task.spec["id"] == "w").unwrap();
+    assert_eq!(options.status, "approved");
+    assert_eq!(writer_task.status, "approved");
+
+    let role_calls: Vec<_> = calls
+        .iter()
+        .filter(|call| {
+            call["worker"].as_bool() == Some(true)
+                || call["reviewed"]
+                    .as_str()
+                    .is_some_and(|task| !task.is_empty())
+        })
+        .collect();
+    let worker_calls: Vec<_> = role_calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call["worker"] == true)
+        .collect();
+    assert_eq!(worker_calls.len(), 3);
+    assert_eq!(worker_calls[0].1["task"], "w-options");
+    assert_eq!(worker_calls[1].1["task"], "w");
+    assert_eq!(worker_calls[2].1["task"], "w");
+    let option_review = role_calls
+        .iter()
+        .position(|call| call["reviewed"] == options.spec["title"])
+        .unwrap();
+    let writer_reviews: Vec<_> = role_calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call["reviewed"] == "w")
+        .collect();
+    assert!(!writer_reviews.is_empty());
+    assert!(worker_calls[0].0 < option_review);
+    assert!(option_review < worker_calls[1].0);
+    assert!(writer_reviews[0].0 > worker_calls[1].0);
+    assert!(writer_reviews[0].0 < worker_calls[2].0);
+    assert!(writer_reviews[1].0 > worker_calls[2].0);
+    assert!(writer_reviews[0].1["approved"] == false);
+    assert!(writer_reviews.last().unwrap().1["approved"] == true);
+
+    let checkout = role_calls[0]["cwd"].as_str().unwrap();
+    assert!(checkout.contains("worktrees"));
+    assert!(
+        role_calls.iter().all(|call| call["cwd"] == checkout),
+        "role cwd values: {:?}",
+        role_calls
+            .iter()
+            .map(|call| (
+                call.get("worker"),
+                call.get("task"),
+                call.get("reviewed"),
+                call.get("cwd")
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(writer_reviews[0].1["files"]["result-w.txt"], "B");
+    assert_eq!(
+        writer_reviews.last().unwrap().1["files"]["result-w.txt"],
+        "A"
+    );
+}
+
+#[test]
 fn shared_analysis_never_substitutes_for_dedicated_options() {
     let mut w = writer("w");
     w["depends_on"] = json!(["shared"]);

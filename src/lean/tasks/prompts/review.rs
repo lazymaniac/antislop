@@ -13,7 +13,8 @@ pub fn reviewer_prompt(
     let risks = risks_note(task);
     format!(
         "You review another agent's work. The project is your current working \
-         directory: {project}. Check the worker's claims against the actual \
+         directory: {project}. Inspect the actual files and diffs independently; \
+         do not modify project files. Check the worker's claims against the actual \
          files yourself with your tools. {REVIEW_RULES} {PROJECT_RULES}\n\n\
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's goal, its assigned acceptance criteria, then \

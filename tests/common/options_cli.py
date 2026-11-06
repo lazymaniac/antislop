@@ -20,7 +20,7 @@ else:
     count_file = os.path.join(root, counter_name + '-count')
     count = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, 'w').write(str(count))
-    record_call({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})
+    record_call({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'cwd':os.getcwd(),'count':count})
     if task == 'w' and count == 1:
         if scenario == ('resume-worker' if worker else 'resume-reviewer'):
             print(json.dumps({'event':'init','conversation_id':session}), flush=True)
@@ -41,7 +41,7 @@ else:
               or any(t['id'] == task and t['change_kind'] == 'none' for t in settings['plan']['tasks'])):
             answer = 'Inspected files read-only.'
         else:
-            implementation = 'B' if scenario == 'reject-once' and count == 1 else settings['implementation']
+            implementation = 'B' if scenario in ('reject-once', 'shared-worktree-repair') and count == 1 else settings['implementation']
             if implementation == 'selected':
                 implementation = re.findall(r'"id":\s*"([AB])"', prompt)[-1]
             open('result-'+task+'.txt','w').write(implementation)
@@ -62,7 +62,7 @@ else:
             if isinstance(local, dict) and isinstance(local.get('variant'), dict):
                 selected = local['variant']['id']
         approved = not actual or all(value == selected and value == required for value in actual)
-        record_call({'reviewed':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})
+        record_call({'reviewed':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved,'cwd':os.getcwd()})
         ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':approved,'findings':[] if approved else [{'severity':'high','issue':'Implementation B contradicts Selected: A without evidence'}], 'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
 if os.path.basename(sys.argv[0]) == 'codex':

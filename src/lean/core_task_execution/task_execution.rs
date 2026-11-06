@@ -53,6 +53,15 @@ impl Prepared {
             core.store.db().execute("INSERT OR IGNORE INTO task_source_revisions(task_id,generation,revision) VALUES(?1,?2,?3)",rusqlite::params![task.id,task.input_generation,git::head(&workdir)?])?;
         }
         let mut upstream = core.upstream(&task.plan_id, &spec)?;
+        if let Some(owner_id) = spec.options_for.as_deref()
+            && let Some(owner) = core.store.task_in_plan_by_id(&task.plan_id, owner_id)?
+            && let Some(base) = owner.base.as_deref()
+        {
+            let head = git::head(&workdir)?;
+            upstream.push_str(&format!(
+                "\nOptions review checkout context: this options task shares the owner's read-only worktree. Owner task: {owner_id}. Owner base: {base}. Current checkout HEAD: {head}. Independently inspect the current files, `git diff {base} HEAD` for the owner's committed changes, and `git diff` for any current uncommitted changes. Do not modify files.\n"
+            ));
+        }
         if let Some(conflict) = task
             .feedback
             .as_ref()
