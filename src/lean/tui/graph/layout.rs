@@ -24,9 +24,36 @@ impl Graph {
         expanded: Option<String>,
         expanded_tab: usize,
     ) -> Self {
-        let mut graph =
-            builder::Builder::new(view, scope, collapsed, grouping, viewport, expanded.clone())
-                .build();
+        Self::new_animated(
+            view,
+            scope,
+            collapsed,
+            grouping,
+            viewport,
+            (expanded, expanded_tab),
+            super::FULL_STEP,
+        )
+    }
+
+    pub fn new_animated(
+        view: &View,
+        scope: &Scope,
+        collapsed: &std::collections::HashSet<String>,
+        grouping: GroupingMode,
+        viewport: Option<(u16, u16)>,
+        (expanded, expanded_tab): (Option<String>, usize),
+        step: u8,
+    ) -> Self {
+        let mut graph = builder::Builder::new(
+            view,
+            scope,
+            collapsed,
+            grouping,
+            viewport,
+            expanded.clone(),
+            step,
+        )
+        .build();
         graph.expanded = expanded;
         graph.expanded_tab = expanded_tab;
         graph

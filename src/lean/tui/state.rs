@@ -85,6 +85,9 @@ pub struct App {
     pub graph_grouping: graph::GroupingMode,
     /// The only card expanded in the graph, if any.
     pub graph_expanded: Option<String>,
+    /// A card growing to (opening) or shrinking from (closing) full size.
+    pub animate_graph: bool,
+    pub graph_anim: Option<(String, bool, std::time::Instant)>,
     pub graph_tab: usize,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
@@ -178,6 +181,8 @@ macro_rules! initial_app {
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
             graph_expanded: None,
+            animate_graph: false,
+            graph_anim: None,
             graph_tab: 0,
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),

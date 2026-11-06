@@ -168,7 +168,18 @@ impl Graph {
         theme: &Theme,
         tick: u64,
     ) {
-        for node in self.nodes.iter().filter(|n| n.visible) {
+        // The expanded card goes last so nothing shows through it.
+        let expanded = self.expanded.as_deref();
+        let ordered = self
+            .nodes
+            .iter()
+            .filter(|n| n.visible && Some(n.key.as_str()) != expanded)
+            .chain(
+                self.nodes
+                    .iter()
+                    .filter(|n| n.visible && Some(n.key.as_str()) == expanded),
+            );
+        for node in ordered {
             draw_node(
                 view,
                 canvas,

@@ -83,11 +83,7 @@ impl App {
         let [body, _, footer] = Self::main_areas(area);
 
         let theme = Theme::from_env();
-        if self.graph_expanded.is_some() && self.focus == Focus::Graph {
-            // An opened card takes the whole width.
-            self.chat_area = Rect::default();
-            self.draw_graph(frame, body);
-        } else if area.width >= SIDE_BY_SIDE_BREAKPOINT {
+        if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, _, team] = Layout::horizontal([
                 Constraint::Length(chat_width),

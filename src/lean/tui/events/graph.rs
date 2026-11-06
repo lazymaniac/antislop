@@ -178,10 +178,16 @@ impl App {
             KeyCode::Char('c') => self.open_graph_comment(),
             KeyCode::Enter => {
                 if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
-                    self.graph_expanded = None;
+                    let key = self.graph_expanded.take();
+                    self.graph_anim = key
+                        .filter(|_| self.animate_graph)
+                        .map(|key| (key, false, std::time::Instant::now()));
                     self.details = None;
                 } else {
                     self.graph_expanded = Some(self.selected.clone());
+                    self.graph_anim = self
+                        .animate_graph
+                        .then(|| (self.selected.clone(), true, std::time::Instant::now()));
                     self.graph_revealed = None;
                     self.graph_tab = 0;
                     self.open_details(self.selected.clone());

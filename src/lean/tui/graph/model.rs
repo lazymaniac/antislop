@@ -50,6 +50,9 @@ impl Node {
     }
 }
 
+/// Animation steps from a normal card to a fully expanded one.
+pub const FULL_STEP: u8 = 16;
+
 /// The card size of one layout: full size, or smaller so that a unit's
 /// three cards fit across the viewport and two rows down it.
 #[derive(Debug, Clone)]
@@ -86,6 +89,22 @@ impl Size {
             expanded_h: vp_h.saturating_sub(2).max(MIN_HEIGHT),
             expanded_key,
         }
+    }
+
+    /// Grow the expanded card from its normal size: `step` of `FULL_STEP`.
+    pub(super) fn animated(mut self, step: u8) -> Self {
+        let step = u16::from(step.min(FULL_STEP));
+        let full = u16::from(FULL_STEP);
+        let lerp = |from: u16, to: u16| {
+            if to <= from {
+                to
+            } else {
+                from + (to - from) * step / full
+            }
+        };
+        self.expanded_w = lerp(self.w.max(MIN_WIDTH), self.expanded_w);
+        self.expanded_h = lerp(self.h.max(MIN_HEIGHT), self.expanded_h);
+        self
     }
 
     pub(super) fn width(&self, key: &str, admin: bool) -> u16 {

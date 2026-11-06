@@ -211,6 +211,7 @@ mod card_content;
 mod filters;
 pub use cache::{LayoutCache, LayoutIdentity};
 pub use filters::{RELATIONS, Relations, Scope};
+pub use model::FULL_STEP;
 
 /// Which of a task's agents a card stands for. A task that only proposes
 /// options is one short exchange, so its worker and reviewer share a card.

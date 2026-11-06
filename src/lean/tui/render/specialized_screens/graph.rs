@@ -4,6 +4,11 @@ impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
         self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
+        if self.graph_anim.is_some() {
+            // The card moves while it grows: keep it in view each frame.
+            self.graph_revealed = None;
+        }
+        let (expanded, step) = self.graph_expansion();
         let graph = self.graph_layout_cache.get_with_expanded(
             &self.view,
             &self.graph_scope,
@@ -12,8 +17,9 @@ impl App {
             self.graph_viewport,
             graph::LayoutIdentity {
                 generation: self.generation,
-                expanded: self.graph_expanded.clone(),
+                expanded,
                 tab: self.graph_tab,
+                step,
             },
         );
         self.keep_graph_selection_visible(&graph);
@@ -29,8 +35,34 @@ impl App {
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
-        self.draw_expanded_card_panels(frame, inner, &graph);
+        if step == graph::FULL_STEP {
+            self.draw_expanded_card_panels(frame, inner, &graph);
+        }
         self.draw_progress(frame, now_area, &progress);
+    }
+
+    /// The card being laid out as expanded and how far it has grown: it eases
+    /// out over `ANIMATION` both when opening and when closing.
+    pub(in crate::lean::tui) fn graph_expansion(&mut self) -> (Option<String>, u8) {
+        const ANIMATION: std::time::Duration = std::time::Duration::from_millis(220);
+        let Some((key, opening, started)) = self.graph_anim.clone() else {
+            return (self.graph_expanded.clone(), graph::FULL_STEP);
+        };
+        let t = started.elapsed().as_secs_f32() / ANIMATION.as_secs_f32();
+        if t >= 1.0 {
+            self.graph_anim = None;
+            let settled = opening.then_some(key);
+            return (settled, graph::FULL_STEP);
+        }
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let full = f32::from(graph::FULL_STEP);
+        let grown = (eased * full).round() as u8;
+        let step = if opening {
+            grown
+        } else {
+            graph::FULL_STEP - grown
+        };
+        (Some(key), step)
     }
 
     fn draw_graph_position_markers(&self, frame: &mut Frame, viewport: Rect, graph: &Graph) {

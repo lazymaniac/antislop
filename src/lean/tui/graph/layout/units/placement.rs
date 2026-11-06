@@ -103,6 +103,11 @@ fn admin_row_tops(builder: &Builder<'_>, admin: &[Vec<&str>], mut y: u16) -> (Ve
                     builder.size.layout_height(key, true),
                     false,
                 )
+                .max(if builder.size.expanded_key.as_deref() == Some(key) {
+                    builder.size.layout_height(key, true)
+                } else {
+                    0
+                })
             })
             .max()
             .unwrap_or(0);

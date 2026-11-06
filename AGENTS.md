@@ -1626,7 +1626,7 @@ src
      worker_resume(findings):String
      worker_turn_prompt(project,task,continuation,upstream):String > worker_prompt,change_kind
      DependencyReport(C{id,title,report})
-     - worker_{prompt_opening,prompt_closing,checks,change_rules}
+     - worker_{prompt_opening,prompt_closing,checks,change_rules},has_options_prerequisite
    validation
     check_comments_text(comments):String
     obligations(task):Vec<(String,String)> > for_kind
@@ -1673,7 +1673,7 @@ src
      Session: attached():bool; submit(state,text):Result<()> > require; interrupt(state):Result<()>; press(state,keys):Result<()> > require; shared():Arc<Mutex<State>>; exited():Option<String> > flatten
      - Session: attach,resize
     lifecycle
-     Session: snapshot(handle,after):Result<Option<Screen>> > render_screen; input(handle,sequence,input):Result<()> > require,apply_input
+     Session: snapshot(handle,after):Result<Option<Screen>> > render_screen; input(handle,sequence,input):Result<()> ~42 > require,apply_input
      - render_{cells,cell},resolve_color,cell_modifiers,apply_{paste,key},terminal_key,apply_mouse,mouse_event,modifiers,
        mouse_button
      - Session: drop
@@ -1682,7 +1682,7 @@ src
      - PtyChild,process_marker,register_child,start_{writer,reader_thread},read_{terminal,chunk},{update,disconnect}_terminal
   terminal.rs
    Cell(C{x,y,text,width,foreground,background,modifiers})
-   Input(E{Key,Paste,Mouse})
+   Input(E{Key,Paste,Mouse,Scroll})
    Screen(C{handle,revision,columns,rows,cursor,cells,error})
    Session(C{master,child,state,handles,registration,marker})
    State(C{term,revision,error,output})
@@ -1971,11 +1971,11 @@ src
      - embedded_diff_graph_key
    graph
     cache
-     CachedGraph(C{generation,revision,counts,idle,viewport,expanded,expanded_tab,expires,graph})
+     CachedGraph(C{generation,revision,counts,idle,viewport,expanded,expanded_tab,step,expires,graph})
      LayoutCache(C{entry})
       get(view,generation,scope,collapsed,grouping,viewport):std::rc::Rc<Graph> > get_with_expanded,LayoutIdentity
       get_with_expanded(view,scope,collapsed,grouping,viewport,identity):std::rc::Rc<Graph> > CacheRequest,matches,rebuild
-     LayoutIdentity(C{generation,expanded,tab})
+     LayoutIdentity(C{generation,expanded,tab,step})
      - counts
     canvas
      Canvas(C{origin_{x,y},width,height,cells})
@@ -2030,7 +2030,7 @@ src
     layout
      builder
       Builder(C{view,graph,size,index,admin,extra_agents,viewport})
-       new(view,scope,collapsed,grouping,viewport,expanded):Self > Size.fit,empty_graph,task_index,{extra,admin}_agents
+       new(view,scope,collapsed,grouping,viewport,expanded,step):Self > animated,Size.fit,empty_graph,task_index,{extra,admin}_agents
        build():Graph > place,add_edges,set_graph_bounds
        matches_query(key):bool > scope_matches
       - task_{matches,fields_match},query_matches
@@ -2081,8 +2081,10 @@ src
       - default
      Size(C{w,h,admin_w,expanded_{w,h,key}})
       fit(viewport,expanded_key):Self
+      animated(step):Self
       width(key,admin):u16
       layout_height(key,_admin):u16
+     = FULL_STEP=16
     nodes
      card
       body
@@ -2109,6 +2111,7 @@ src
      new_with_options(view,filter_query,collapsed,grouping):Self > Scope
      new_with_viewport(view,scope,collapsed,grouping,viewport):Self
      new_with_expanded(view,scope,collapsed,grouping,viewport,expanded,expanded_tab):Self
+     new_animated(view,scope,collapsed,grouping,viewport,(Option<String>,usize),step):Self
      render(view,canvas,relations,selected) > render_with,Theme.new
      render_with(view,canvas,relations,selected,theme,tick) > as_str,card_key,render_{frames,edges,nodes}
      node(key):Option<&Node>
@@ -2448,7 +2451,7 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,revealed,collapsed,grouping,expanded,tab},details_{scroll_memory,query_memory},graph_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,tab},details_{scroll_memory,query_memory},graph_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,new_conversation,{open_conversation,open_projects}_picker
@@ -2482,7 +2485,7 @@ src
      activate_header_token(token,controls) > run_workflow
      bar_height(area):u16
      main_areas(area):[Rect; 3]
-     mouse_scroll(down) > scroll_{help,details,graph,chat}
+     mouse_scroll(down) > scroll_{console,help,details,graph,chat}
      mouse(mouse):bool > handle_native_mouse,sync_interview,handle_{modal_mouse,content_mouse}
      register_project(conn):usize > Projects.from_env,spawn_project_poller,len
      switch_project(index,conversation) > latest_or_new,restore_project_history,switch_config_workspace,open
@@ -2505,7 +2508,8 @@ src
      details_content_key(key,plain):bool > details_{check_comment_key,round_key,control_scroll_key,scroll_key}
      details_primary_key(key,plain):bool ~46 > details_close_or_search,run_workflow,details_overview_key,show_help,details_{open_comment,comment_status}
      details_key(key) > details_{edit_key,search_key,screen_key}
-     graph_key(key):bool ~45 > card_key,fetch_task,open_graph_diff,graph_{for_key,scroll_key,direction},move_graph_selection,graph_action_key
+     graph_key(key):bool ~48 > card_key,fetch_task,open_graph_diff,console_key,graph_{for_key,scroll_key,direction},move_graph_selection,graph_action_key
+     scroll_console(lines) > native_send
      toggle_focus()
      route_graph(key):bool > graph_{command,key}
      key_inner(key):bool > route_native_or_history,sync_{interview,approval},route_{ledger,selection_and_config,exit,overlays,screen,base_layout}
@@ -2534,7 +2538,8 @@ src
      load_plan_history(offset)
      draw_chat(frame,area,theme) > chat_layout,draw_{phase_action,sending,transcript,chat_input}
      draw(frame) > sync_interview,draw_min_term_guard,sync_native_views,draw_{history_or_ledger,secondary_or_main,remaining}
-     draw_graph(frame,area) > card_key,graph_areas,get_with_expanded,keep_graph_selection_visible,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
+     draw_graph(frame,area) > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
+     graph_expansion():(Option<String>,u8)
      draw_main(frame) > draw_{chat,graph,footer}
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
@@ -2970,6 +2975,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 124,111 LOC · input 1,097,693 · output 43,013 tokens · state f63ee05c3812
+· 124,471 LOC · input 1,101,021 · output 43,098 tokens · state 117325699f48
 ```
 <!-- hologram:end -->

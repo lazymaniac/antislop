@@ -19,8 +19,9 @@ impl<'a> Builder<'a> {
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
         expanded: Option<String>,
+        step: u8,
     ) -> Self {
-        let size = Size::fit(viewport, expanded);
+        let size = Size::fit(viewport, expanded).animated(step);
         let graph = empty_graph(scope, collapsed, grouping);
         let index = task_index(view);
         let extra_agents = extra_agents(view);

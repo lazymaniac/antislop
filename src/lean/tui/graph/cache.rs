@@ -5,6 +5,7 @@ pub struct LayoutIdentity {
     pub generation: u64,
     pub expanded: Option<String>,
     pub tab: usize,
+    pub step: u8,
 }
 
 #[derive(Default)]
@@ -20,6 +21,7 @@ pub(super) struct CachedGraph {
     viewport: Option<(u16, u16)>,
     expanded: Option<String>,
     expanded_tab: usize,
+    step: u8,
     pub(super) expires: Option<std::time::Instant>,
     graph: std::rc::Rc<Graph>,
 }
@@ -33,6 +35,7 @@ struct CacheRequest<'a> {
     viewport: Option<(u16, u16)>,
     expanded: Option<String>,
     expanded_tab: usize,
+    step: u8,
 }
 
 impl LayoutCache {
@@ -55,6 +58,7 @@ impl LayoutCache {
                 generation,
                 expanded: None,
                 tab: 0,
+                step: super::FULL_STEP,
             },
         )
     }
@@ -71,6 +75,7 @@ impl LayoutCache {
         let generation = identity.generation;
         let expanded = identity.expanded;
         let expanded_tab = identity.tab;
+        let step = identity.step;
         let request = CacheRequest {
             view,
             generation,
@@ -80,6 +85,7 @@ impl LayoutCache {
             viewport,
             expanded,
             expanded_tab,
+            step,
         };
         let now = std::time::Instant::now();
         if self.matches(&request, now) {
@@ -98,6 +104,7 @@ impl LayoutCache {
                 && entry.viewport == request.viewport
                 && entry.expanded == request.expanded
                 && entry.expanded_tab == request.expanded_tab
+                && entry.step == request.step
                 && &entry.graph.scope == request.scope
                 && &entry.graph.collapsed == request.collapsed
                 && entry.graph.grouping == request.grouping
@@ -111,14 +118,14 @@ impl LayoutCache {
         now: std::time::Instant,
     ) -> std::rc::Rc<Graph> {
         let view = request.view;
-        let graph = std::rc::Rc::new(Graph::new_with_expanded(
+        let graph = std::rc::Rc::new(Graph::new_animated(
             view,
             request.scope,
             request.collapsed,
             request.grouping,
             request.viewport,
-            request.expanded.clone(),
-            request.expanded_tab,
+            (request.expanded.clone(), request.expanded_tab),
+            request.step,
         ));
         let expires = view
             .links
@@ -134,6 +141,7 @@ impl LayoutCache {
             viewport: request.viewport,
             expanded: request.expanded,
             expanded_tab: request.expanded_tab,
+            step: request.step,
             expires,
             graph: std::rc::Rc::clone(&graph),
         });

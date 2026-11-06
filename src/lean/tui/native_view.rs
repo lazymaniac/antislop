@@ -235,7 +235,10 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert!(!app.native_focused(), "the console opens read-only");
         let graph = app.graph_area.unwrap();
-        assert!(graph.width >= 110, "the card spans the screen: {graph:?}");
+        assert!(
+            graph.width >= 60,
+            "the card spans the graph canvas: {graph:?}"
+        );
 
         while received.try_recv().is_ok() {}
         app.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
@@ -254,6 +257,40 @@ mod tests {
         assert!(app.native_focused());
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert!(app.native_focused(), "a redraw keeps the typing mode");
+    }
+
+    #[test]
+    fn the_expanded_card_grows_and_shrinks_with_an_animation() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::test_app();
+        app.animate_graph = true;
+        app.focus = Focus::Graph;
+        app.graph_viewport = Some((120, 48));
+        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        }];
+        app.view
+            .agents
+            .insert("worker:t1".into(), Default::default());
+        app.selected = "worker:t1".into();
+        let width = |app: &mut App| {
+            let (key, step) = app.graph_expansion();
+            (key.is_some(), step)
+        };
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let (open, step) = width(&mut app);
+        assert!(
+            open && step < crate::lean::tui::graph::FULL_STEP,
+            "opening starts small"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(260));
+        assert_eq!(width(&mut app), (true, crate::lean::tui::graph::FULL_STEP));
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let (open, step) = width(&mut app);
+        assert!(open && step > 0, "closing still shows the shrinking card");
+        std::thread::sleep(std::time::Duration::from_millis(260));
+        assert!(!width(&mut app).0);
     }
 
     #[test]

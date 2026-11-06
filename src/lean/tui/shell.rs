@@ -44,6 +44,7 @@ fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateR
     let conversation = options.conversation(client)?;
     let (updates, received) = super::update_channel(256);
     let mut app = App::bootstrap(client.clone(), updates);
+    app.animate_graph = true;
     app.project = options
         .project
         .file_name()
@@ -146,7 +147,8 @@ fn copy_clipboard(app: &mut App) {
 }
 
 fn handle_events(app: &mut App) -> Result<bool> {
-    if !event::poll(Duration::from_millis(100))? {
+    let wait = if app.graph_anim.is_some() { 16 } else { 100 };
+    if !event::poll(Duration::from_millis(wait))? {
         return Ok(true);
     }
     let event = event::read()?;
