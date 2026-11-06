@@ -79,6 +79,8 @@ fn options_reuse_existing_dependency_and_resolve_id_collisions() {
     let full = with_options(input);
     validate(&full).unwrap();
     assert_eq!(full[2].id, "writer-options-3");
+    let writer = full.iter().find(|task| task.id == "writer").unwrap();
+    assert!(worker_prompt("project", writer).contains("selected_approach"));
     let read_only = vec![options_test_task("read", false)];
     assert_eq!(with_options(read_only.clone()), read_only);
 }
@@ -233,6 +235,12 @@ fn options_keep_writer_instructions_in_reference_data_only() {
     assert!(!instructions.contains("Edit src/store.rs"));
     assert!(instructions.contains("Do not execute builds, tests, linters"));
     let subject: Value = serde_json::from_str(reference).unwrap();
+    let mut finalized_writer = writer.clone();
+    finalized_writer.depends_on.push("writer-options".into());
+    assert_eq!(
+        subject["owner_contract"],
+        serde_json::to_value(&finalized_writer).unwrap()
+    );
     assert_eq!(subject["owner_contract"]["goal"], writer.goal);
     assert_eq!(subject["task"], writer.id);
     assert_eq!(tasks[1].goal, writer.goal);

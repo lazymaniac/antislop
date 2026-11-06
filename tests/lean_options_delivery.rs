@@ -5,7 +5,8 @@ use serde_json::json;
 fn task(writes: bool) -> TaskContract {
     serde_json::from_value(json!({
         "id": "writer", "title": "Writer", "goal": "Implement chosen variant",
-        "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",  "depends_on": ["shared"],
+        "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",
+        "depends_on": if writes { vec!["writer-options".to_owned()] } else { vec![] },
         "reviewer": {"summary": "Check selection"}}))
     .unwrap()
 }
@@ -20,7 +21,8 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
         "Selected: A\nSelected: B",
         "For writer: Selected: A\nFor other: Selected: B",
     ] {
-        let upstream = tasks::upstream_note(&[("shared", "Shared options", report)]);
+        let upstream =
+            tasks::upstream_note(&[("selected_approach", "Selected approach for Writer", report)]);
         for (path, continuation) in [
             ("resume", Some(tasks::worker_resume(&[]))),
             (
@@ -63,7 +65,8 @@ fn options_delivery_and_missing_choice_obligation_survive_reviewer_followups() {
         "Selected: A\nSelected: B",
         "For writer: Selected: A\nFor other: Selected: B",
     ] {
-        let upstream = tasks::upstream_note(&[("shared", "Shared options", report)]);
+        let upstream =
+            tasks::upstream_note(&[("selected_approach", "Selected approach for Writer", report)]);
         // New rounds use full instructions; compatible turns within one round use continuation.
         for (path, fresh) in [
             ("reviewer-fresh-round", true),
