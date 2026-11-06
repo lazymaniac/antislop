@@ -30,8 +30,7 @@ impl App {
 
     fn route_native_or_history(&mut self, key: KeyEvent) -> Option<bool> {
         if self.native_focused() {
-            if self.diff.is_some()
-                && self.graph_expanded.is_some()
+            if self.embedded_diff_graph_active()
                 && embedded_diff_graph_key(key, self.graph_tab == 3)
             {
                 return None;
@@ -185,7 +184,7 @@ impl App {
         if let Some(result) = self.route_plan_view(key) {
             return Some(result);
         }
-        if self.diff.is_some() && self.graph_expanded.is_some() {
+        if self.embedded_diff_graph_active() {
             if embedded_diff_graph_key(key, self.graph_tab == 3) {
                 return Some(self.graph_key(key));
             }
@@ -201,6 +200,10 @@ impl App {
             return Some(true);
         }
         None
+    }
+
+    fn embedded_diff_graph_active(&self) -> bool {
+        self.diff.is_some() && self.graph_expanded.is_some()
     }
 
     fn route_interview(&mut self, key: KeyEvent) -> Option<bool> {
