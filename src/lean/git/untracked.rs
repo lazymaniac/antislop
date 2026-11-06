@@ -142,7 +142,7 @@ mod tests {
         ok(root, &["init", "-q"]).unwrap();
         std::fs::write(root.join(".gitignore"), ".antislop/\n").unwrap();
         std::fs::write(root.join("tracked.md"), "existing").unwrap();
-        commit_all(root, "base").unwrap();
+        commit_all(root, CommitPurpose::TestFixture).unwrap();
         std::fs::remove_file(root.join("tracked.md")).unwrap();
         std::fs::create_dir(root.join(".antislop")).unwrap();
         std::fs::write(root.join(".antislop/existing.md"), "user content").unwrap();
@@ -178,11 +178,11 @@ mod tests {
         let root = dir.path();
         ok(root, &["init", "-q"]).unwrap();
         std::fs::write(root.join("existing.md"), "original").unwrap();
-        let base = commit_all(root, "base").unwrap();
+        let base = commit_all(root, CommitPurpose::TestFixture).unwrap();
         std::fs::write(root.join("new.md"), "new report").unwrap();
-        let checkpoint = commit_all(root, "checkpoint").unwrap();
+        let checkpoint = commit_all(root, CommitPurpose::TestFixture).unwrap();
         std::fs::write(root.join("new.md"), "corrected report").unwrap();
-        let corrected = commit_all(root, "corrected").unwrap();
+        let corrected = commit_all(root, CommitPurpose::TestFixture).unwrap();
         require_added_files(root, &base, &checkpoint, &Default::default()).unwrap();
         require_added_files(root, &base, &corrected, &Default::default()).unwrap();
         for content in [Some("changed existing report"), None] {
@@ -191,7 +191,7 @@ mod tests {
             } else {
                 std::fs::remove_file(root.join("existing.md")).unwrap();
             }
-            let change = commit_all(root, "invalid").unwrap();
+            let change = commit_all(root, CommitPurpose::TestFixture).unwrap();
             let error = require_added_files(root, &base, &change, &Default::default())
                 .unwrap_err()
                 .to_string();
@@ -204,9 +204,9 @@ mod tests {
         let root = dir.path();
         ok(root, &["init", "-q"]).unwrap();
         std::fs::write(root.join("source"), "original").unwrap();
-        let base = commit_all(root, "base").unwrap();
+        let base = commit_all(root, CommitPurpose::TestFixture).unwrap();
         std::fs::write(root.join("report.md"), "all 16 findings").unwrap();
-        let change = snapshot(root, "artifact").unwrap();
+        let change = snapshot(root, CommitPurpose::TestFixture).unwrap();
         std::fs::remove_file(root.join("report.md")).unwrap();
         std::fs::write(root.join("source"), "staged user edit").unwrap();
         ok(root, &["add", "source"]).unwrap();

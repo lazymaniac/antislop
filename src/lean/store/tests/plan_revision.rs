@@ -614,7 +614,9 @@ fn a_changed_project_input_outside_legacy_scope_invalidates_a_report() {
             .success()
     );
     std::fs::write(project.join("input.txt"), "initial source").unwrap();
-    let revision = crate::lean::git::commit_all(&project, "base").unwrap();
+    let revision =
+        crate::lean::git::commit_all(&project, crate::lean::git::CommitPurpose::TestFixture)
+            .unwrap();
     store
         .db()
         .execute(

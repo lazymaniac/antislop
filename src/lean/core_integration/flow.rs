@@ -78,7 +78,7 @@ impl<'a> Integration<'a> {
     }
 
     fn create_change(&mut self, base: &str) -> Result<String> {
-        let change = git::squash(self.worktree, base, &self.spec.title)?;
+        let change = git::squash(self.worktree, base, git::CommitPurpose::TaskResult)?;
         self.task.result = Some(change.clone());
         Ok(change)
     }
@@ -134,7 +134,7 @@ impl<'a> Integration<'a> {
         let Some((kind, files)) = conflict_with_files(outcome) else {
             return Ok(None);
         };
-        let onto = git::snapshot(self.project, "Current project for conflict resolution")?;
+        let onto = git::snapshot(self.project, git::CommitPurpose::ConflictSnapshot)?;
         let basis = crate::hash(serde_json::to_vec(&(
             git::tree_identity(self.project, self.task.base.as_deref().unwrap_or(change))?,
             git::tree_identity(self.project, change)?,

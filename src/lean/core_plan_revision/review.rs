@@ -145,11 +145,11 @@ impl Core {
                     git::commit_artifacts(
                         &path,
                         &spec.outputs,
-                        "Checkpoint before contract revision",
+                        git::CommitPurpose::ArtifactCheckpoint,
                         false,
                     )?
                 } else {
-                    git::commit_all(&path, "Checkpoint before contract revision")?
+                    git::commit_all(&path, git::CommitPurpose::Checkpoint)?
                 });
                 self.store.update_task(&task)?;
             }
@@ -423,7 +423,7 @@ mod tests {
                 .success()
         );
         std::fs::write(project.join("source"), "original").unwrap();
-        let base = git::commit_all(&project, "base").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         let index = std::fs::read(project.join(".git/index")).unwrap();
         let config =
             crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))

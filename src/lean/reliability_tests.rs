@@ -62,7 +62,7 @@ fn worktrees_bind_exact_task_generation_and_reject_foreign_branches() {
             .success()
     );
     std::fs::write(root.join("initial"), "initial").unwrap();
-    let base = git::commit_all(root, "initial").unwrap();
+    let base = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
     let mut task: Task = serde_json::from_value(json!({
         "id": "12345678-1111-4111-8111-111111111111", "plan_id": "plan",
         "spec": {}, "status": "pending", "round": 0, "report": null,
@@ -90,7 +90,7 @@ fn worktrees_bind_exact_task_generation_and_reject_foreign_branches() {
     git::add_worktree(root, &other, &unique, &base).unwrap();
     assert_eq!(git::worktree_branch(&other).unwrap(), unique);
     std::fs::write(other.join("initial"), "changed").unwrap();
-    let changed = git::commit_all(&other, "changed").unwrap();
+    let changed = git::commit_all(&other, git::CommitPurpose::TestFixture).unwrap();
     git::remove_worktree_keep_branch(root, &other).unwrap();
     assert!(git::add_worktree(root, &other, &unique, &base).is_err());
     git::add_worktree(root, &other, &unique, &changed).unwrap();
@@ -189,7 +189,7 @@ fn a_task_keeps_only_its_current_view_and_settling_removes_the_rest() {
             .success()
     );
     std::fs::write(root.join("initial"), "initial").unwrap();
-    let base = git::commit_all(root, "initial").unwrap();
+    let base = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
     let state = root.join(".antislop");
     let task = "12345678-1111-4111-8111-111111111111";
     let other = "12345678-2222-4222-8222-222222222222";
@@ -251,7 +251,7 @@ fn a_restart_releases_the_views_and_branches_of_settled_tasks_only() {
             .success()
     );
     std::fs::write(root.join("initial"), "initial").unwrap();
-    let base = git::commit_all(&root, "initial").unwrap();
+    let base = git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
     let state = root.join(".antislop");
     std::fs::create_dir_all(&state).unwrap();
     let store = Store::open(&state.join("core.db")).unwrap();

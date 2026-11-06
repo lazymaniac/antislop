@@ -76,7 +76,7 @@ fn integrate_current(
     let onto = if dirty.is_empty() {
         head(project)?
     } else {
-        snapshot(project, "Working tree before integration")?
+        snapshot(project, CommitPurpose::WorkspaceSnapshot)?
     };
     let committed_base = common_base(project, base, "HEAD")?;
     let (tree, conflict) = merge_tree(project, base, change, &onto, target, &dirty)?;
@@ -91,7 +91,7 @@ fn integrate_current(
     if can_cherry_pick(&plan, base, files, target, unrestricted) {
         return cherry_pick(project, change, files, commit);
     }
-    write_merge_result(project, change, target, &plan.tree, commit)
+    write_merge_result(project, target, &plan.tree, commit)
 }
 
 fn merge_tree(
@@ -198,11 +198,16 @@ fn cherry_pick(
                 "-c",
                 "user.email=antislop@localhost",
                 "cherry-pick",
+                "--no-commit",
                 "--allow-empty",
                 change,
             ],
         )?;
-        return Ok(Integration::Committed(head(project)?));
+        return Ok(Integration::Committed(commit_paths(
+            project,
+            files,
+            CommitPurpose::Integration,
+        )?));
     }
     ok(project, &["cherry-pick", "--no-commit", change])?;
     unstage_paths(project, files);
@@ -217,7 +222,6 @@ fn unstage_paths(project: &Path, files: &[String]) {
 
 fn write_merge_result(
     project: &Path,
-    change: &str,
     target: &[String],
     tree: &str,
     commit: bool,
@@ -226,23 +230,27 @@ fn write_merge_result(
     if !commit {
         return Ok(Integration::Applied);
     }
-    let message = ok(project, &["log", "-1", "--format=%B", change])?;
     Ok(Integration::Committed(commit_paths(
         project,
         target,
-        message.trim(),
+        CommitPurpose::Integration,
     )?))
 }
 
 /// Rebuild a repaired result on the current project snapshot, carrying only
 /// the writer's changed paths. `worktree` must be the allocated task worktree;
 /// unrelated stale files in it must never revert concurrent project edits.
-pub fn transplant_repair(worktree: &Path, base: &str, onto: &str, message: &str) -> Result<String> {
-    let repaired = commit_all(worktree, message)?;
+pub fn transplant_repair(
+    worktree: &Path,
+    base: &str,
+    onto: &str,
+    purpose: CommitPurpose,
+) -> Result<String> {
+    let repaired = commit_all(worktree, purpose)?;
     let files = changed_files(worktree, base, &repaired)?;
     ok(worktree, &["reset", "--hard", onto])?;
     write_files(worktree, &repaired, &files)?;
-    commit_all(worktree, message)
+    commit_all(worktree, purpose)
 }
 
 /// Applies the squashed commit `change` (made on `base`) to the project's

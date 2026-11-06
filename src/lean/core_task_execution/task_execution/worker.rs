@@ -326,11 +326,11 @@ mod tests {
                 .success()
         );
         std::fs::write(project.join("instrument.txt"), "old instrument").unwrap();
-        let base = git::commit_all(&project, "base").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         let checkpoint = directory.path().join("checkpoint");
         git::add_worktree(&project, &checkpoint, "antislop/checkpoint", &base).unwrap();
         std::fs::write(checkpoint.join("instrument.txt"), "repaired instrument").unwrap();
-        let result = git::commit_all(&checkpoint, "repair").unwrap();
+        let result = git::commit_all(&checkpoint, git::CommitPurpose::TestFixture).unwrap();
         std::fs::write(project.join("user.txt"), "new local input").unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
         let core = Core::open(&directory.path().join("state"), config).unwrap();
@@ -431,7 +431,7 @@ mod tests {
             "old instrument"
         );
         std::fs::write(project.join("instrument.txt"), "reviewed upstream change").unwrap();
-        let upstream = git::commit_all(&project, "upstream edit").unwrap();
+        let upstream = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         core.record_plan_landing(&tasks[0].plan_id, "upstream", &upstream)
             .unwrap();
         let (conflict_view, _) =
@@ -480,7 +480,7 @@ mod tests {
                 .success()
         );
         std::fs::write(project.join("input.txt"), "current input").unwrap();
-        git::commit_all(&project, "base").unwrap();
+        git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core

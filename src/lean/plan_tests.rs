@@ -90,7 +90,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         .unwrap();
     assert!(init.success());
     std::fs::write(root.join("user.txt"), "committed\n").unwrap();
-    let head = git::commit_all(root, "initial").unwrap();
+    let head = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
     let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
     let core = Core::open(&root.join(".antislop"), config).unwrap();
     let conversation = core.start(root).unwrap();
@@ -153,7 +153,8 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         let name = if index < 2 { "config.txt" } else { "ui.txt" };
         std::fs::write(path.join(name), format!("revision {index}\n")).unwrap();
         tasks[index].base = Some(base);
-        tasks[index].result = Some(git::commit_all(&path, name).unwrap());
+        tasks[index].result =
+            Some(git::commit_all(&path, git::CommitPurpose::TestFixture).unwrap());
         tasks[index].status = status::APPROVED.into();
         tasks[index].round = 1;
         core.store.update_task(&tasks[index]).unwrap();
@@ -227,7 +228,7 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
     assert!(init.success());
     std::fs::write(root.join(".gitignore"), ".antislop/\n").unwrap();
     std::fs::write(root.join("a.txt"), "v0\n").unwrap();
-    let head = git::commit_all(root, "initial").unwrap();
+    let head = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
     let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
     let core = Core::open(&root.join(".antislop"), config).unwrap();
     let conversation = core.start(root).unwrap();
@@ -249,14 +250,14 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
     let path = root.join(".antislop/worktrees/t1");
     git::add_worktree(root, &path, "test/t1", &base).unwrap();
     std::fs::write(path.join("a.txt"), "v1\n").unwrap();
-    let result = git::commit_all(&path, "t1").unwrap();
+    let result = git::commit_all(&path, git::CommitPurpose::TestFixture).unwrap();
     git::remove_worktree(root, &path, "test/t1").unwrap();
     tasks[0].base = Some(base);
     tasks[0].result = Some(result.clone());
     tasks[0].status = status::APPROVED.into();
     core.store.update_task(&tasks[0]).unwrap();
     std::fs::write(root.join("a.txt"), "v2\n").unwrap();
-    let moved = git::commit_all(root, "t1 landed and moved on").unwrap();
+    let moved = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
     core.record_plan_landing(&tasks[0].plan_id, &tasks[0].id, &result)
         .unwrap();
 

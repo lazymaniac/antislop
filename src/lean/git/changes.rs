@@ -110,9 +110,8 @@ fn parse_changed_paths(output: std::process::Output) -> Result<Vec<String>> {
 }
 
 /// One commit holding everything from `base` to `result`, titled `message`.
-pub fn squash(worktree: &Path, base: &str, message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
+pub fn squash(worktree: &Path, base: &str, purpose: CommitPurpose) -> Result<String> {
+    let message = commit_subject(purpose);
     let tree = ok(worktree, &["rev-parse", "HEAD^{tree}"])?;
     ok(
         worktree,

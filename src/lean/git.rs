@@ -48,40 +48,50 @@ pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
-/// Keep generated commits to one Conventional Commits subject, without a body.
-pub(super) fn commit_subject(message: &str) -> String {
-    let subject = message.split_whitespace().collect::<Vec<_>>().join(" ");
-    if conventional_subject(&subject) {
-        subject
-    } else if subject.is_empty() {
-        "chore: update task changes".to_owned()
-    } else {
-        format!("chore: {subject}")
+/// Application-owned commit purposes. User and task text must never become a
+/// generated commit subject.
+#[derive(Clone, Copy, Debug)]
+pub enum CommitPurpose {
+    TaskResult,
+    Checkpoint,
+    ArtifactCheckpoint,
+    Integration,
+    Repair,
+    ManualRecovery,
+    WorkspaceSnapshot,
+    ConflictSnapshot,
+    DependencySnapshot,
+    ArtifactInputSnapshot,
+    SourceInputSnapshot,
+    RequirementsSnapshot,
+    #[cfg(test)]
+    TestFixture,
+}
+
+impl CommitPurpose {
+    pub(super) fn subject(self) -> &'static str {
+        match self {
+            Self::TaskResult => "chore: record task result",
+            Self::Checkpoint => "chore: save task checkpoint",
+            Self::ArtifactCheckpoint => "chore: save artifact checkpoint",
+            Self::Integration => "chore: integrate task changes",
+            Self::Repair => "chore: repair integration changes",
+            Self::ManualRecovery => "chore: apply reviewed recovery fixes",
+            Self::WorkspaceSnapshot => "chore: snapshot workspace changes",
+            Self::ConflictSnapshot => "chore: snapshot integration conflict state",
+            Self::DependencySnapshot => "chore: snapshot dependency changes",
+            Self::ArtifactInputSnapshot => "chore: snapshot artifact inputs",
+            Self::SourceInputSnapshot => "chore: snapshot source inputs",
+            Self::RequirementsSnapshot => "chore: snapshot requirements changes",
+            #[cfg(test)]
+            Self::TestFixture => "chore: update test fixture",
+        }
     }
 }
 
-fn conventional_subject(subject: &str) -> bool {
-    let Some((header, description)) = subject.split_once(": ") else {
-        return false;
-    };
-    let header = header.strip_suffix('!').unwrap_or(header);
-    let kind = match header.split_once('(') {
-        Some((kind, scope)) if valid_scope(scope) => kind,
-        Some(_) => return false,
-        None => header,
-    };
-    !description.is_empty()
-        && !kind.is_empty()
-        && kind.bytes().all(|byte| byte.is_ascii_lowercase())
-}
-
-fn valid_scope(scope: &str) -> bool {
-    scope.ends_with(')')
-        && scope.len() > 1
-        && !scope
-            .strip_suffix(')')
-            .unwrap_or(scope)
-            .contains(['(', ')', ' '])
+/// Return the fixed English subject for an application-owned commit purpose.
+pub(super) fn commit_subject(purpose: CommitPurpose) -> &'static str {
+    purpose.subject()
 }
 
 /// The working tree as it is now (tracked and untracked files, ignored ones
@@ -105,32 +115,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_commits_have_one_conventional_subject() {
+    fn generated_commit_subjects_are_fixed_english() {
         let repo = repo();
         let path = repo.path();
         let base = head(path).unwrap();
         std::fs::write(path.join("a.txt"), "changed").unwrap();
-        let commit = commit_paths(
-            path,
-            &["a.txt".into()],
-            "fix(core): repair task\n\nwith details",
-        )
-        .unwrap();
+        let commit = commit_paths(path, &["a.txt".into()], CommitPurpose::TaskResult).unwrap();
         assert_eq!(
             ok(path, &["show", "-s", "--format=%B", &commit]).unwrap(),
-            "fix(core): repair task with details"
+            "chore: record task result"
         );
-        let snapshot = snapshot(path, "Save state\nfor retry").unwrap();
+        assert_eq!(
+            commit_subject(CommitPurpose::TaskResult),
+            "chore: record task result"
+        );
+        let snapshot = snapshot(path, CommitPurpose::TestFixture).unwrap();
         assert_eq!(
             ok(path, &["show", "-s", "--format=%B", &snapshot]).unwrap(),
-            "chore: Save state for retry"
+            "chore: update test fixture"
         );
-        let squashed = squash(path, &base, "feat(ui)!: show branch\n").unwrap();
+        let squashed = squash(path, &base, CommitPurpose::TestFixture).unwrap();
         assert_eq!(
             ok(path, &["show", "-s", "--format=%B", &squashed]).unwrap(),
-            "feat(ui)!: show branch"
+            "chore: update test fixture"
         );
-        assert_eq!(commit_subject("  "), "chore: update task changes");
     }
 
     fn repo() -> tempfile::TempDir {
@@ -139,7 +147,7 @@ mod tests {
         ok(path, &["init", "--quiet", "-b", "main"]).unwrap();
         std::fs::write(path.join("a.txt"), "one\n").unwrap();
         std::fs::write(path.join("b.txt"), "two\n").unwrap();
-        commit_all(path, "base").unwrap();
+        commit_all(path, CommitPurpose::TestFixture).unwrap();
         dir
     }
 
@@ -162,8 +170,8 @@ mod tests {
         let base = head(project).unwrap();
         add_worktree(project, &worktree, &format!("antislop/{task}"), &base).unwrap();
         std::fs::write(worktree.join(file), text).unwrap();
-        commit_all(&worktree, "work").unwrap();
-        let change = squash(&worktree, &base, "Task t1").unwrap();
+        commit_all(&worktree, CommitPurpose::TestFixture).unwrap();
+        let change = squash(&worktree, &base, CommitPurpose::TestFixture).unwrap();
         (trees, base, change)
     }
 
@@ -175,7 +183,7 @@ mod tests {
         let base = head(project.path()).unwrap();
         add_worktree(project.path(), &worktree, "antislop/t1", &base).unwrap();
         std::fs::write(worktree.join("partial.txt"), "half done\n").unwrap();
-        let partial = commit_all(&worktree, "partial").unwrap();
+        let partial = commit_all(&worktree, CommitPurpose::TestFixture).unwrap();
 
         remove_worktree_keep_branch(project.path(), &worktree).unwrap();
         rename_branch(project.path(), "antislop/t1", "antislop/t1-before-split").unwrap();
@@ -238,7 +246,7 @@ mod tests {
         let (_t1, base1, change1) = worker_change(project.path(), "a.txt", "from first\n");
         // The user changed the same line differently and committed.
         std::fs::write(project.path().join("a.txt"), "user\n").unwrap();
-        commit_all(project.path(), "user edit").unwrap();
+        commit_all(project.path(), CommitPurpose::TestFixture).unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let onto = head(project.path()).unwrap();
         let error = combine(
@@ -279,7 +287,26 @@ mod tests {
     #[test]
     fn a_clean_result_becomes_one_commit_and_keeps_other_user_edits() {
         let project = repo();
-        let (_trees, base, change) = worker_change(project.path(), "a.txt", "changed\n");
+        let trees = tempfile::tempdir().unwrap();
+        let worktree = trees.path().join("worker");
+        let base = head(project.path()).unwrap();
+        add_worktree(project.path(), &worktree, "antislop/polish-task", &base).unwrap();
+        std::fs::write(worktree.join("a.txt"), "changed\n").unwrap();
+        ok(&worktree, &["add", "a.txt"]).unwrap();
+        ok(
+            &worktree,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-m",
+                "Popraw błędną obsługę plików",
+            ],
+        )
+        .unwrap();
+        let change = head(&worktree).unwrap();
         std::fs::write(project.path().join("b.txt"), "user edit\n").unwrap();
         let result = integrate(project.path(), &base, &change, true).unwrap();
         assert!(matches!(result, Integration::Committed(_)));
@@ -293,7 +320,7 @@ mod tests {
         );
         assert_eq!(
             ok(project.path(), &["log", "-1", "--format=%s"]).unwrap(),
-            "chore: Task t1"
+            "chore: integrate task changes"
         );
     }
 
@@ -335,13 +362,13 @@ mod tests {
             std::fs::write(project.path().join("b.txt"), "unrelated draft\n").unwrap();
             ok(project.path(), &["add", "b.txt"]).unwrap();
             let index_before = ok(project.path(), &["ls-files", "--stage", "b.txt"]).unwrap();
-            let base = snapshot(project.path(), "starting edits").unwrap();
+            let base = snapshot(project.path(), CommitPurpose::TestFixture).unwrap();
             let trees = tempfile::tempdir().unwrap();
             let worktree = trees.path().join("worker");
             add_worktree(project.path(), &worktree, "antislop/local", &base).unwrap();
             std::fs::write(worktree.join("a.txt"), "user draft\nworker addition\n").unwrap();
-            commit_all(&worktree, "work").unwrap();
-            let change = squash(&worktree, &base, "Task local").unwrap();
+            commit_all(&worktree, CommitPurpose::TestFixture).unwrap();
+            let change = squash(&worktree, &base, CommitPurpose::TestFixture).unwrap();
             let outcome = integrate(project.path(), &base, &change, commit).unwrap();
             assert!(matches!(
                 outcome,
@@ -366,7 +393,7 @@ mod tests {
     fn concurrent_disjoint_edits_in_one_dirty_file_merge() {
         let project = repo();
         std::fs::write(project.path().join("a.txt"), "first\n2\n3\n4\nlast\n").unwrap();
-        commit_all(project.path(), "multiline").unwrap();
+        commit_all(project.path(), CommitPurpose::TestFixture).unwrap();
         let (_trees, base, change) =
             worker_change(project.path(), "a.txt", "worker\n2\n3\n4\nlast\n");
         std::fs::write(project.path().join("a.txt"), "first\n2\n3\n4\nuser\n").unwrap();
@@ -389,7 +416,7 @@ mod tests {
             integrate(project.path(), &base, &change, true).unwrap(),
             Integration::UserEdits(vec!["a.txt".into()])
         );
-        commit_all(project.path(), "user commit").unwrap();
+        commit_all(project.path(), CommitPurpose::TestFixture).unwrap();
         let before = head(project.path()).unwrap();
         assert_eq!(
             integrate(project.path(), &base, &change, true).unwrap(),
@@ -430,8 +457,8 @@ mod tests {
         std::fs::write(worktree.join("a.txt"), "second\n").unwrap();
         std::fs::write(worktree.join("c.txt"), "new\n").unwrap();
         std::fs::remove_file(worktree.join("b.txt")).unwrap();
-        commit_all(&worktree, "work").unwrap();
-        let second = squash(&worktree, &first, "Task t2").unwrap();
+        commit_all(&worktree, CommitPurpose::TestFixture).unwrap();
+        let second = squash(&worktree, &first, CommitPurpose::TestFixture).unwrap();
         assert_eq!(
             integrate(project.path(), &first, &second, false).unwrap(),
             Integration::Applied
@@ -482,12 +509,12 @@ mod snapshot_tests {
         ok(path, &["config", "core.filemode", "true"]).unwrap();
         std::fs::write(path.join(" file[1].txt"), "literal\n").unwrap();
         std::fs::write(path.join(" file1.txt"), "glob neighbour\n").unwrap();
-        let before = snapshot(path, "before").unwrap();
+        let before = snapshot(path, CommitPurpose::TestFixture).unwrap();
         std::fs::rename(path.join("a.txt"), path.join("renamed.txt")).unwrap();
         std::fs::set_permissions(path.join("b.txt"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
         std::fs::write(path.join(" file1.txt"), "changed neighbour\n").unwrap();
-        let after = snapshot(path, "after").unwrap();
+        let after = snapshot(path, CommitPurpose::TestFixture).unwrap();
         let paths = [
             " file[1].txt",
             " file1.txt",
@@ -525,7 +552,7 @@ mod snapshot_tests {
         };
         let before = status(path);
 
-        let snapshot = snapshot(path, "s").unwrap();
+        let snapshot = snapshot(path, CommitPurpose::TestFixture).unwrap();
         assert_eq!(status(path), before, "index and files untouched");
         assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
         assert_eq!(
@@ -601,7 +628,7 @@ mod snapshot_tests {
         std::fs::write(clean.join(".antislop/runtime"), "leave on disk").unwrap();
         std::fs::write(clean.join("new.txt"), "source").unwrap();
         ok(&clean, &["add", "--force", ".antislop/runtime"]).unwrap();
-        let saved = commit_all(&clean, "checkpoint").unwrap();
+        let saved = commit_all(&clean, CommitPurpose::TestFixture).unwrap();
         assert_eq!(changed_files(project, &base, &saved).unwrap(), ["new.txt"]);
         assert!(clean.join(".antislop/runtime").exists());
     }
@@ -619,7 +646,7 @@ mod snapshot_tests {
         let commit = commit_paths(
             path,
             &["a.txt".into(), "c.txt".into(), ".gitignore".into()],
-            "task",
+            CommitPurpose::TestFixture,
         )
         .unwrap();
         let mut files = changed_files(path, &format!("{commit}^"), &commit).unwrap();
@@ -628,7 +655,12 @@ mod snapshot_tests {
         let status =
             String::from_utf8(git(path, &["status", "--porcelain"]).unwrap().stdout).unwrap();
         assert_eq!(status, "M  b.txt\n", "the user's staged edit stays staged");
-        let again = commit_paths(path, &["a.txt".into(), "c.txt".into()], "task").unwrap();
+        let again = commit_paths(
+            path,
+            &["a.txt".into(), "c.txt".into()],
+            CommitPurpose::TestFixture,
+        )
+        .unwrap();
         assert_eq!(again, commit, "nothing committed twice");
     }
 }

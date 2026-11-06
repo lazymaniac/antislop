@@ -63,7 +63,11 @@ fn save_checkpoint(task: &mut Task, spec: &TaskContract, worktree: Option<&Path>
         task.result = Some(commit_worker_files(
             path,
             spec,
-            &format!("{} checkpoint", spec.title),
+            if spec.change_kind() == tasks::ChangeKind::Artifact {
+                git::CommitPurpose::ArtifactCheckpoint
+            } else {
+                git::CommitPurpose::Checkpoint
+            },
             false,
         )?);
     }
@@ -74,7 +78,7 @@ pub(in crate::lean) fn commit_round(
     task: &mut Task,
     spec: &TaskContract,
     worktree: Option<&Path>,
-    round: u32,
+    _round: u32,
     report: &str,
     summary: &str,
 ) -> Result<Option<String>> {
@@ -82,7 +86,7 @@ pub(in crate::lean) fn commit_round(
     let (Some(path), Some(base)) = (worktree, task.base.as_ref()) else {
         return Ok(None);
     };
-    let result = commit_worker_files(path, spec, &format!("{} (round {round})", spec.title), true)?;
+    let result = commit_worker_files(path, spec, git::CommitPurpose::TaskResult, true)?;
     task.result = Some(result.clone());
     let stat = git::diff_stat(path, base, &result)?;
     let files = git::changed_files(path, base, &result)?;
@@ -94,13 +98,13 @@ pub(in crate::lean) fn commit_round(
 fn commit_worker_files(
     path: &Path,
     spec: &TaskContract,
-    message: &str,
+    purpose: git::CommitPurpose,
     require_all: bool,
 ) -> Result<String> {
     if spec.change_kind() == tasks::ChangeKind::Artifact {
-        git::commit_artifacts(path, &spec.outputs, message, require_all)
+        git::commit_artifacts(path, &spec.outputs, purpose, require_all)
     } else {
-        git::commit_all(path, message)
+        git::commit_all(path, purpose)
     }
 }
 
@@ -121,7 +125,7 @@ mod tests {
                 .success()
         );
         std::fs::write(project.join(".gitignore"), ".antislop/\n").unwrap();
-        let base = git::commit_all(&project, "base").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         let index = std::fs::read(project.join(".git/index")).unwrap();
         let store = store::Store::open(&directory.path().join("core.db")).unwrap();
         let conversation = store
@@ -131,7 +135,7 @@ mod tests {
             ".antislop/continuation-plan-review.md".to_owned(),
             ".antislop/appendix.md".to_owned(),
         ];
-        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Report","goal":"Deliver analysis","kind":"analysis","change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Przygotuj raport i napraw błędne załączniki","goal":"Dostarcz analizę zgodnie z ustaleniami rozmowy","kind":"analysis","change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
         let mut task = store
             .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
             .unwrap()
@@ -151,16 +155,35 @@ mod tests {
             git::changed_files(&worktree, &base, task.result.as_ref().unwrap()).unwrap(),
             [outputs[0].clone()]
         );
-        let error = commit_round(&mut task, &spec, Some(&worktree), 1, "Report", "Summary")
-            .unwrap_err()
-            .to_string();
+        let error = commit_round(
+            &mut task,
+            &spec,
+            Some(&worktree),
+            1,
+            "Raport z rozmowy: napraw załączniki",
+            "Podsumowanie ustaleń",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             error.contains("artifact output missing: .antislop/appendix.md"),
             "{error}"
         );
         std::fs::write(worktree.join(&outputs[1]), "supporting evidence").unwrap();
-        commit_round(&mut task, &spec, Some(&worktree), 1, "Report", "Summary").unwrap();
+        commit_round(
+            &mut task,
+            &spec,
+            Some(&worktree),
+            1,
+            "Raport z rozmowy: napraw załączniki",
+            "Podsumowanie ustaleń",
+        )
+        .unwrap();
         let result = task.result.as_ref().unwrap();
+        assert_eq!(
+            git::ok(&worktree, &["show", "-s", "--format=%B", result]).unwrap(),
+            "chore: record task result"
+        );
         let mut files = git::changed_files(&worktree, &base, result).unwrap();
         files.sort();
         let mut expected = outputs.to_vec();
@@ -178,7 +201,8 @@ mod tests {
             git::Integration::Applied
         );
         let current =
-            git::snapshot_with_artifacts(&project, &outputs, "Check delivered artifacts").unwrap();
+            git::snapshot_with_artifacts(&project, &outputs, git::CommitPurpose::TestFixture)
+                .unwrap();
         assert!(
             git::changed_files(&project, result, &current)
                 .unwrap()
@@ -186,7 +210,8 @@ mod tests {
         );
         std::fs::write(project.join(&outputs[0]), "edited by user").unwrap();
         let changed =
-            git::snapshot_with_artifacts(&project, &outputs, "Check changed artifact").unwrap();
+            git::snapshot_with_artifacts(&project, &outputs, git::CommitPurpose::TestFixture)
+                .unwrap();
         assert_eq!(
             git::changed_files(&project, result, &changed).unwrap(),
             [outputs[0].clone()]

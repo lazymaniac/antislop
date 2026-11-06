@@ -24,10 +24,7 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
 }
 
 fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> {
-    let snapshot = git::snapshot(
-        &work.project,
-        &format!("manual fix review: {}", work.spec.title),
-    )?;
+    let snapshot = git::snapshot(&work.project, git::CommitPurpose::ConflictSnapshot)?;
     let base = work
         .task
         .base

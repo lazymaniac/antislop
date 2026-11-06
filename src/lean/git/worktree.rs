@@ -246,14 +246,13 @@ pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
 
 /// Commits everything the worker changed. Returns the new HEAD (unchanged if
 /// the worker changed nothing).
-pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+pub fn commit_all(worktree: &Path, purpose: CommitPurpose) -> Result<String> {
     super::snapshots::stage_source(worktree, None)?;
-    commit_staged(worktree, message)
+    commit_staged(worktree, purpose)
 }
 
-pub(super) fn commit_staged(worktree: &Path, message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
+pub(super) fn commit_staged(worktree: &Path, purpose: CommitPurpose) -> Result<String> {
+    let message = commit_subject(purpose);
     if !git(worktree, &["diff", "--cached", "--quiet"])?
         .status
         .success()
@@ -343,7 +342,7 @@ fn apply_changes(
     for (base, change) in changes {
         apply_change(project, scratch, onto, base, change, file)?;
     }
-    commit_all(scratch, "Results of the tasks this one depends on")
+    commit_all(scratch, CommitPurpose::DependencySnapshot)
 }
 
 fn apply_change(

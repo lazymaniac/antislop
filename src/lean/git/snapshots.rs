@@ -1,6 +1,6 @@
 use super::*;
-pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
-    snapshot_with_artifacts(dir, &[], message)
+pub fn snapshot(dir: &Path, purpose: CommitPurpose) -> Result<String> {
+    snapshot_with_artifacts(dir, &[], purpose)
 }
 
 /// Include explicit artifact outputs in a scratch index, keeping the user's
@@ -8,14 +8,14 @@ pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
 pub(crate) fn snapshot_with_artifacts(
     dir: &Path,
     outputs: &[String],
-    message: &str,
+    purpose: CommitPurpose,
 ) -> Result<String> {
     let files = super::artifacts::artifact_files(dir, outputs, false)?;
-    let subject = commit_subject(message);
+    let subject = commit_subject(purpose);
     let index = PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?);
     let index = absolute_index(dir, index);
     let scratch = snapshot_index(&index);
-    let result = write_snapshot(dir, &index, &scratch, &subject, &files);
+    let result = write_snapshot(dir, &index, &scratch, subject, &files);
     let _ = std::fs::remove_file(scratch);
     result
 }
@@ -90,9 +90,8 @@ fn with_index(dir: &Path, index: &Path, args: &[&str]) -> Result<String> {
 
 /// Commits exactly `files` as they are in the working tree, whatever else
 /// the user has staged or changed.
-pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
+pub fn commit_paths(dir: &Path, files: &[String], purpose: CommitPurpose) -> Result<String> {
+    let message = commit_subject(purpose);
     let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
     add.extend(files.iter().map(String::as_str));
     ok(dir, &add)?;
@@ -160,7 +159,7 @@ pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
 /// Stable identity of the integrated files, including uncommitted content.
 /// Git's copied index reuses unchanged objects; no repository text enters SQLite.
 pub fn integrated_fingerprint(project: &Path) -> Result<String> {
-    let snapshot = snapshot(project, "requirements integrated snapshot")?;
+    let snapshot = snapshot(project, CommitPurpose::RequirementsSnapshot)?;
     ok(project, &["rev-parse", &format!("{snapshot}^{{tree}}")])
 }
 

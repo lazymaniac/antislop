@@ -140,7 +140,7 @@ fn source_changes(
         crate::lean::git::snapshot_with_artifacts(
             project,
             &spec.outputs,
-            "Artifact inputs before reusing approved work",
+            crate::lean::git::CommitPurpose::ArtifactInputSnapshot,
         )?
     } else {
         match snapshot {
@@ -148,7 +148,7 @@ fn source_changes(
             None => {
                 let current = crate::lean::git::snapshot(
                     project,
-                    "Source inputs before reusing approved work",
+                    crate::lean::git::CommitPurpose::SourceInputSnapshot,
                 )?;
                 *snapshot = Some(current.clone());
                 current

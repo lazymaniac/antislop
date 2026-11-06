@@ -13,7 +13,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>, String) {
     );
     std::fs::write(root.join(".gitignore"), ".antislop/\ncache/\n").unwrap();
     std::fs::write(root.join("initial"), "initial").unwrap();
-    let commit = git::commit_all(&root, "Initial").unwrap();
+    let commit = git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
     let config = Config::from_toml(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/examples/antislop.toml"
@@ -119,7 +119,7 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
     let task = &tasks[0];
     let old = checkout(&core, task, "g0", &commit);
     std::fs::write(old.join("result"), "unique result").unwrap();
-    let result = git::commit_all(&old, "Work retained on branch").unwrap();
+    let result = git::commit_all(&old, git::CommitPurpose::TestFixture).unwrap();
     let dirty = checkout(&core, task, "g1", &commit);
     std::fs::write(dirty.join("unsaved"), "unsaved").unwrap();
     let current = checkout(&core, task, "g2", &commit);
@@ -195,7 +195,7 @@ fn cleanup_does_not_follow_a_worktree_directory_symlink_into_another_repository(
             .success()
     );
     std::fs::write(root.join("precious"), "foreign data").unwrap();
-    let base = git::commit_all(&root, "Foreign data").unwrap();
+    let base = git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
     let name = format!("{}-observation-g0", tasks[0].id);
     let foreign = root.join("views").join(&name);
     git::add_worktree(&root, &foreign, &format!("antislop/{name}"), &base).unwrap();
@@ -277,7 +277,7 @@ fn retired_checkouts_discard_tagged_build_caches_but_keep_other_ignored_state() 
     std::fs::write(cache.join("debug/artifact"), "bin").unwrap();
     std::fs::write(writer.join(".gitignore"), "target/\n").unwrap();
     git::git(&writer, &["add", ".gitignore"]).unwrap();
-    git::commit_all(&writer, "ignore target").unwrap();
+    git::commit_all(&writer, git::CommitPurpose::TestFixture).unwrap();
     core.set_status(&conversation, &mut task, "superseded")
         .unwrap();
     core.drain_worktree_cleanup();
@@ -289,7 +289,7 @@ fn retired_checkouts_discard_tagged_build_caches_but_keep_other_ignored_state() 
     std::fs::write(kept.join("target/data"), "x").unwrap();
     std::fs::write(kept.join(".gitignore"), "target/\n").unwrap();
     git::git(&kept, &["add", ".gitignore"]).unwrap();
-    git::commit_all(&kept, "ignore target").unwrap();
+    git::commit_all(&kept, git::CommitPurpose::TestFixture).unwrap();
     assert!(
         crate::lean::git::remove_clean_writer(
             &core.state.join("unused"),

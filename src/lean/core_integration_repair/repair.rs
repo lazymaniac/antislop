@@ -91,7 +91,7 @@ impl<'a> Repair<'a> {
     fn wait_for_repair_input(&mut self, request: String, checkpoint: String) -> Result<()> {
         self.task.result = Some(git::commit_all(
             self.worktree,
-            &format!("{} checkpoint", self.spec.title),
+            git::CommitPurpose::Checkpoint,
         )?);
         let branch = super::super::core_path_helpers::worktree_branch(&self.core.state, self.task)?;
         super::super::core_feedback_helpers::land(
@@ -200,7 +200,7 @@ impl<'a> Repair<'a> {
             self.worktree,
             &self.base,
             self.onto,
-            &format!("{} (conflict resolution)", self.spec.title),
+            git::CommitPurpose::Repair,
         )?;
         self.task.base = Some(self.onto.to_owned());
         self.task.result = Some(result);

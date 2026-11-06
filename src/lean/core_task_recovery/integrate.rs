@@ -133,7 +133,7 @@ fn mark_remaining_changes(work: &mut RecoveryWork, change: &str, all: &[String])
     if work.integrated_files.len() >= all.len() {
         return Ok(());
     }
-    let snapshot = git::snapshot(&work.project, "Check remaining task changes")?;
+    let snapshot = git::snapshot(&work.project, git::CommitPurpose::WorkspaceSnapshot)?;
     if git::matching_paths(&work.project, &snapshot, change, all)?.len() != all.len() {
         work.task.status = status::NEEDS_USER.into();
     }

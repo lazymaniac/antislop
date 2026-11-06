@@ -17,7 +17,7 @@ fn untracked_report_overrides_local_commits_and_conflicts_keep_the_worktree() {
             );
             std::fs::write(project.join("source.txt"), "user source").unwrap();
             std::fs::write(project.join(".gitignore"), ".antislop/\n").unwrap();
-            let base = git::commit_all(&project, "base").unwrap();
+            let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
             let mut config =
                 Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
 
@@ -71,7 +71,13 @@ fn untracked_report_overrides_local_commits_and_conflicts_keep_the_worktree() {
             std::fs::write(worktree.join(output), "complete report").unwrap();
             task.base = Some(base.clone());
             task.result = Some(
-                git::commit_artifacts(&worktree, &spec.outputs, "report checkpoint", true).unwrap(),
+                git::commit_artifacts(
+                    &worktree,
+                    &spec.outputs,
+                    git::CommitPurpose::TestFixture,
+                    true,
+                )
+                .unwrap(),
             );
             core.store.update_task(&task).unwrap();
             if conflict {

@@ -5,7 +5,7 @@ use super::*;
 pub(crate) fn commit_artifacts(
     worktree: &Path,
     outputs: &[String],
-    message: &str,
+    purpose: CommitPurpose,
     require_all: bool,
 ) -> Result<String> {
     let files = artifact_files(worktree, outputs, require_all)?;
@@ -15,7 +15,7 @@ pub(crate) fn commit_artifacts(
         args.extend(files.iter().map(String::as_str));
         ok(worktree, &args)?;
     }
-    super::worktree::commit_staged(worktree, message)
+    super::worktree::commit_staged(worktree, purpose)
 }
 
 pub(super) fn artifact_files(
@@ -63,7 +63,7 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         ok(&project, &["init", "-q"]).unwrap();
         std::fs::write(project.join(".gitignore"), ".antislop/\n").unwrap();
-        let base = commit_all(&project, "base").unwrap();
+        let base = commit_all(&project, CommitPurpose::TestFixture).unwrap();
         let index = std::fs::read(project.join(".git/index")).unwrap();
         std::fs::create_dir(project.join(".antislop")).unwrap();
         let outside = directory.path().join("outside");
@@ -78,9 +78,10 @@ mod tests {
             ".antislop/alias/report.md",
             ".antislop/directory.md",
         ] {
-            let error = commit_artifacts(&project, &[output.into()], "artifact", true)
-                .unwrap_err()
-                .to_string();
+            let error =
+                commit_artifacts(&project, &[output.into()], CommitPurpose::TestFixture, true)
+                    .unwrap_err()
+                    .to_string();
             assert!(error.contains("regular"), "{output}: {error}");
             assert_eq!(head(&project).unwrap(), base);
             assert_eq!(std::fs::read(project.join(".git/index")).unwrap(), index);

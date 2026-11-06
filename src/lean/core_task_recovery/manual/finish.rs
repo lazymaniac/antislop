@@ -35,7 +35,11 @@ fn commit_manual_fixes(work: &RecoveryWork, fixed: &[String]) -> Result<(Outcome
     {
         Ok((
             Outcome::Committed,
-            Some(git::commit_paths(&work.project, fixed, &work.spec.title)?),
+            Some(git::commit_paths(
+                &work.project,
+                fixed,
+                git::CommitPurpose::ManualRecovery,
+            )?),
         ))
     } else {
         Ok((Outcome::Applied, None))

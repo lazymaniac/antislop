@@ -27,7 +27,7 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
     std::fs::write(project.join("source"), "user source").unwrap();
     std::fs::write(project.join("user.md"), "user document").unwrap();
     std::fs::write(project.join(".gitignore"), ".antislop/\n").unwrap();
-    let head = git::commit_all(&project, "base").unwrap();
+    let head = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
     let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
     let core = Core::open(&directory.path().join("state"), config).unwrap();
     let conversation = core
@@ -56,7 +56,13 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
         .unwrap();
     std::fs::create_dir_all(worktree.join(output).parent().unwrap()).unwrap();
     std::fs::write(worktree.join(output), "old report").unwrap();
-    let change = git::commit_artifacts(&worktree, &specs[0].outputs, "report", true).unwrap();
+    let change = git::commit_artifacts(
+        &worktree,
+        &specs[0].outputs,
+        git::CommitPurpose::TestFixture,
+        true,
+    )
+    .unwrap();
     tasks[0].result = Some(change.clone());
     core.store.update_task(&tasks[0]).unwrap();
     let base = tasks[0].base.clone().unwrap();
@@ -99,8 +105,15 @@ fn correction(f: &mut Fixture, n: usize, text: &str) -> PathBuf {
         "old report"
     );
     std::fs::write(path.join(&f.specs[n].outputs[0]), text).unwrap();
-    f.tasks[n].result =
-        Some(git::commit_artifacts(&path, &f.specs[n].outputs, "correction", true).unwrap());
+    f.tasks[n].result = Some(
+        git::commit_artifacts(
+            &path,
+            &f.specs[n].outputs,
+            git::CommitPurpose::TestFixture,
+            true,
+        )
+        .unwrap(),
+    );
     f.core.store.update_task(&f.tasks[n]).unwrap();
     f.core
         .validate_artifact_delta(&f.tasks[n], &f.specs[n], &path)

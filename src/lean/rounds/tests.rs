@@ -848,7 +848,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
         )
         .unwrap();
     task.round = 1;
-    task.base = Some(git::snapshot(dir.path(), "user baseline").unwrap());
+    task.base = Some(git::snapshot(dir.path(), git::CommitPurpose::TestFixture).unwrap());
     core.store.update_task(&task).unwrap();
     let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
     assert_eq!(handoff.protected_paths, ["user.txt"]);

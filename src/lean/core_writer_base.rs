@@ -62,7 +62,7 @@ impl Core {
         let base = if git::uncommitted(project)?.is_empty() {
             git::head(project)?
         } else {
-            git::snapshot(project, "User working tree before task")?
+            git::snapshot(project, git::CommitPurpose::WorkspaceSnapshot)?
         };
         record.base = Some(base.clone());
         self.save_plan_base_record(plan_id, &record)?;

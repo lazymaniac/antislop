@@ -6,15 +6,15 @@ fn owned_update_keeps_head_index_permissions_and_the_displaced_inode() {
     let root = dir.path();
     ok(root, &["init", "-q"]).unwrap();
     std::fs::write(root.join("source"), "source").unwrap();
-    let head = commit_all(root, "base").unwrap();
+    let head = commit_all(root, CommitPurpose::TestFixture).unwrap();
     std::fs::write(root.join("report.md"), "old").unwrap();
-    let previous = snapshot(root, "delivered").unwrap();
+    let previous = snapshot(root, CommitPurpose::TestFixture).unwrap();
     let mut editor = OpenOptions::new()
         .write(true)
         .open(root.join("report.md"))
         .unwrap();
     std::fs::write(root.join("report.md"), "new").unwrap();
-    let change = snapshot(root, "correction").unwrap();
+    let change = snapshot(root, CommitPurpose::TestFixture).unwrap();
     std::fs::write(root.join("report.md"), "old").unwrap();
     let index = std::fs::read(root.join(".git/index")).unwrap();
     let expected = BTreeMap::from([("report.md".into(), previous.clone())]);
@@ -56,12 +56,12 @@ fn changed_tracked_missing_and_symlink_artifacts_are_never_adopted() {
         let root = dir.path();
         ok(root, &["init", "-q"]).unwrap();
         std::fs::write(root.join("source"), "source").unwrap();
-        commit_all(root, "base").unwrap();
+        commit_all(root, CommitPurpose::TestFixture).unwrap();
         std::fs::create_dir(root.join("docs")).unwrap();
         std::fs::write(root.join("docs/report.md"), "old").unwrap();
-        let previous = snapshot(root, "report").unwrap();
+        let previous = snapshot(root, CommitPurpose::TestFixture).unwrap();
         std::fs::write(root.join("docs/report.md"), "new").unwrap();
-        let change = snapshot(root, "update").unwrap();
+        let change = snapshot(root, CommitPurpose::TestFixture).unwrap();
         std::fs::write(root.join("docs/report.md"), "old").unwrap();
         match kind {
             "edited" => std::fs::write(root.join("docs/report.md"), "USER").unwrap(),
@@ -181,7 +181,7 @@ fn index_lease_blocks_git_writers_and_never_removes_an_existing_user_lock() {
     let root = dir.path();
     ok(root, &["init", "-q"]).unwrap();
     std::fs::write(root.join("source"), "source").unwrap();
-    commit_all(root, "base").unwrap();
+    commit_all(root, CommitPurpose::TestFixture).unwrap();
     std::fs::write(root.join("report.md"), "report").unwrap();
     let index = std::fs::read(root.join(".git/index")).unwrap();
     let lease = index::Lease::acquire(root).unwrap();

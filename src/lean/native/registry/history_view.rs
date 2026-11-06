@@ -57,7 +57,7 @@ mod tests {
         );
         std::fs::write(root.join(".gitignore"), ".antislop/\n").unwrap();
         std::fs::write(root.join("data"), "original").unwrap();
-        let commit = git::commit_all(&root, "Original").unwrap();
+        let commit = git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
         let config = crate::config::Config::from_toml(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/examples/antislop.toml"
@@ -107,7 +107,7 @@ mod tests {
         assert!(restore_view_directory(&core, &wrong).is_err());
         assert!(!path.exists());
         std::fs::write(root.join("data"), "new primary data").unwrap();
-        git::commit_all(&root, "Primary advanced").unwrap();
+        git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
         let graph = core.graph_updates.lock().unwrap();
         let restored = recorded_context(&core, &conversation.id, &turn.id).unwrap();
         assert_eq!(restored, context);
