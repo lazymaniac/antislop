@@ -583,6 +583,7 @@ fn daemon_rejects_foreign_scope_requests() {
     let err_comment_foreign = daemon_a.client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Comment {
             conversation: conv_a_id.clone(),
+            operation_id: None,
             plan: Some("non_existent_plan".into()),
             target: "t1".into(),
             text: "comment".into(),

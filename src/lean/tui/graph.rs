@@ -190,12 +190,14 @@ pub struct Graph {
     pub scope: Scope,
     pub collapsed: std::collections::HashSet<String>,
     pub grouping: GroupingMode,
+    pub expanded: Option<String>,
+    pub expanded_tab: usize,
 }
 
 mod cache;
 mod card_content;
 mod filters;
-pub use cache::LayoutCache;
+pub use cache::{LayoutCache, LayoutIdentity};
 pub use filters::{RELATIONS, Relations, Scope};
 
 /// Which of a task's agents a card stands for. A task that only proposes

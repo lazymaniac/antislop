@@ -61,7 +61,7 @@ fn lane_shift(
         .chain(
             admin_rows
                 .iter()
-                .map(|row| MARGIN + (room - admin_width(builder.size, row)) / 2),
+                .map(|row| MARGIN + (room - admin_width(&builder.size, row)) / 2),
         )
         .min()
         .unwrap_or(lanes_end);

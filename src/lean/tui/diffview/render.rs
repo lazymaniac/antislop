@@ -6,7 +6,10 @@ mod lines;
 
 impl DiffView {
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
-        let area = frame.area();
+        self.paint_at(frame, frame.area(), view);
+    }
+
+    pub fn paint_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
         if area.width == 0 || area.height == 0 {
             return;
         }

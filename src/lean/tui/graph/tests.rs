@@ -36,6 +36,77 @@ fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
 }
 
 #[test]
+fn expanded_card_reflows_the_graph_without_overlapping_its_neighbours() {
+    let view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((120, 48)),
+        Some("worker:t1".into()),
+        0,
+    );
+    let expanded = graph.node("worker:t1").unwrap();
+    assert!(expanded.width > WIDTH);
+    assert!(expanded.height > HEIGHT);
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .filter(|node| node.visible && node.key != expanded.key)
+            .all(|node| expanded.right() <= node.x
+                || node.right() <= expanded.x
+                || expanded.y.saturating_add(expanded.height) <= node.y
+                || node.y.saturating_add(node.height) <= expanded.y)
+    );
+}
+
+#[test]
+fn expanded_details_tab_shows_agent_and_task_metadata_in_card() {
+    let mut task = task("t1", &[]);
+    task.title = "Implement graph cards".into();
+    task.round = 2;
+    let mut view = view(vec![task]);
+    view.agents.insert(
+        "worker:t1".into(),
+        super::super::view::Agent {
+            provider: "codex".into(),
+            model: Some("gpt-test".into()),
+            last_ms: Some(1_200),
+            ..Default::default()
+        },
+    );
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((120, 48)),
+        Some("worker:t1".into()),
+        0,
+    );
+    let mut canvas = Canvas::new(graph.width, graph.height);
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
+    let text = canvas.lines().join("\n");
+    for expected in [
+        "1 Details",
+        "CLI: codex",
+        "Model: gpt-test",
+        "Elapsed:",
+        "Task: Implement graph cards",
+        "Round: 2",
+    ] {
+        assert!(text.contains(expected), "missing {expected} in {text}");
+    }
+    assert_eq!(text.matches("Round: 2").count(), 1, "{text}");
+    assert!(
+        !text.contains("round 2"),
+        "status duplicates Details round: {text}"
+    );
+}
+
+#[test]
 fn agent_card_shows_recorded_branch() {
     let mut view = View::default();
     view.agents.insert(
@@ -403,6 +474,7 @@ fn compact_cards_with_effects_can_have_no_effect_rows() {
         &mut canvas,
         &node,
         false,
+        None,
         &Theme::new(true, false),
         0,
     );
@@ -625,7 +697,7 @@ fn card_progress_waits_at_top_bounces_while_working_and_finishes_at_bottom() {
             };
             let frame = |view: &View, tick| {
                 let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-                draw_node(view, &mut canvas, node, selected, &theme, tick);
+                draw_node(view, &mut canvas, node, selected, None, &theme, tick);
                 canvas
             };
             let marker_rows = |canvas: &mut Canvas| {
@@ -699,7 +771,7 @@ fn session_agent_marker_moves_from_top_to_bottom_after_its_turn() {
     let theme = Theme::new(true, false);
     let frame = |view: &View| {
         let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        draw_node(view, &mut canvas, node, false, &theme, 0);
+        draw_node(view, &mut canvas, node, false, None, &theme, 0);
         canvas
     };
     assert!(frame(&view).lines()[1].contains("working"));
@@ -1100,7 +1172,7 @@ fn reviewer_marker_waits_for_worker_before_animating_and_finishing() {
     ] {
         view.tasks[0].status = status.into();
         let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        draw_node(&view, &mut canvas, node, false, &theme, 1);
+        draw_node(&view, &mut canvas, node, false, None, &theme, 1);
         let markers: Vec<_> = (0..node.height)
             .filter(|row| {
                 canvas.cell(node.x, node.y + row).unwrap().style
@@ -1190,7 +1262,15 @@ fn requirements_card_names_the_activity_without_a_fixed_round_count() {
         let graph = Graph::new(&view);
         let node = graph.node(key).unwrap();
         let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        draw_node(&view, &mut canvas, node, false, &Theme::new(true, false), 0);
+        draw_node(
+            &view,
+            &mut canvas,
+            node,
+            false,
+            None,
+            &Theme::new(true, false),
+            0,
+        );
         let status = &canvas.lines()[1];
         assert!(status.contains("extracting"), "{status}");
         assert!(

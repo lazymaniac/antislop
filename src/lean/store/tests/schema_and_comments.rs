@@ -84,6 +84,32 @@ fn current_schema_initializes_and_reopens_without_removed_columns() {
 }
 
 #[test]
+fn comment_operation_retries_return_the_same_persisted_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let operation = uuid::Uuid::new_v4().to_string();
+    let comment = Comment {
+        id: 0,
+        plan_id: None,
+        target: "worker:task-uuid".into(),
+        label: "worker task".into(),
+        text: "address this line".into(),
+        status: "open".into(),
+        message: 0,
+    };
+    let send = |id| format!("[user comment #{id}] address this line");
+    let first = store
+        .add_comment_at_with_operation(&conversation.id, &operation, &comment, None, None, send)
+        .unwrap();
+    let retry = store
+        .add_comment_at_with_operation(&conversation.id, &operation, &comment, None, None, send)
+        .unwrap();
+    assert_eq!(retry.id, first.id);
+    assert_eq!(store.comments(&conversation.id, "open").unwrap().len(), 1);
+}
+
+#[test]
 fn failed_initialization_is_atomic() {
     let db = Connection::open_in_memory().unwrap();
     db.execute_batch("CREATE TABLE ledger_versions(conflict TEXT);")

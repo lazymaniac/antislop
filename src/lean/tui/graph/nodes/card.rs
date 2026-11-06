@@ -9,6 +9,7 @@ struct Card<'a> {
     view: &'a View,
     canvas: &'a mut Canvas,
     node: &'a Node,
+    expanded_tab: Option<usize>,
     theme: &'a Theme,
     task: Option<&'a TaskRow>,
     role: Option<Role>,
@@ -22,13 +23,14 @@ pub(super) fn draw(
     canvas: &mut Canvas,
     node: &Node,
     selected: bool,
+    expanded_tab: Option<usize>,
     theme: &Theme,
     tick: u64,
 ) {
     if outside_viewport(canvas, node) {
         return;
     }
-    Card::new(view, canvas, node, selected, theme).paint(selected, tick);
+    Card::new(view, canvas, node, selected, expanded_tab, theme).paint(selected, tick);
 }
 
 fn outside_viewport(canvas: &Canvas, node: &Node) -> bool {
@@ -44,6 +46,7 @@ impl Card<'_> {
         canvas: &'a mut Canvas,
         node: &'a Node,
         selected: bool,
+        expanded_tab: Option<usize>,
         theme: &'a Theme,
     ) -> Card<'a> {
         let card = task_card(view, &node.key);
@@ -52,6 +55,7 @@ impl Card<'_> {
             view,
             canvas,
             node,
+            expanded_tab,
             theme,
             task,
             role: card.map(|(_, role)| role),

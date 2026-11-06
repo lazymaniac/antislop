@@ -132,6 +132,7 @@ impl App {
         let Update::CommentResult {
             conversation,
             plan,
+            operation_id,
             request_id,
             editor,
             result,
@@ -140,6 +141,7 @@ impl App {
         else {
             unreachable!("update routed to wrong handler");
         };
+        let succeeded = result.is_ok();
         if conversation == self.conversation && request_id == self.comment_request_id {
             self.finish_active_comment(editor, result);
         } else {
@@ -150,6 +152,9 @@ impl App {
                 editor,
                 result,
             );
+        }
+        if succeeded {
+            self.comment_operations.retain(|_, id| id != &operation_id);
         }
     }
 

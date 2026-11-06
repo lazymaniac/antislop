@@ -1,6 +1,7 @@
 use super::view::render_header;
 use super::*;
 use ratatui::buffer::Buffer;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn ascii_replaces_box_drawing_marks_and_letters() {
@@ -46,6 +47,137 @@ fn without_color_keeps_dim_and_reversed_as_modifiers() {
     assert!(buffer.content[0].modifier.contains(Modifier::DIM));
     assert!(!buffer.content[1].modifier.contains(Modifier::DIM));
     assert!(buffer.content[2].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.graph_viewport = Some((120, 48));
+    app.view.tasks = vec![
+        view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        },
+        view::TaskRow {
+            id: "t2".into(),
+            depends_on: vec!["t1".into()],
+            ..Default::default()
+        },
+    ];
+    app.selected = "worker:t1".into();
+
+    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(key_press(KeyCode::Down));
+    assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
+    app.key(key_press(KeyCode::Enter));
+    assert!(app.graph_expanded.is_none());
+}
+
+#[test]
+fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.graph_viewport = Some((120, 48));
+    app.view.tasks = vec![
+        view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        },
+        view::TaskRow {
+            id: "t2".into(),
+            depends_on: vec!["t1".into()],
+            ..Default::default()
+        },
+    ];
+    app.selected = "worker:t1".into();
+    app.key(key_press(KeyCode::Enter));
+    app.key(key_press(KeyCode::Char('d')));
+    assert!(app.diff.is_some());
+    assert_eq!(app.graph_tab, 3);
+
+    app.key(key_press(KeyCode::Char('1')));
+    assert_eq!(
+        app.graph_tab, 0,
+        "Details tab remains reachable inside Diff"
+    );
+    app.key(key_press(KeyCode::Char('2')));
+    assert_eq!(app.graph_tab, 1, "PTY tab remains reachable inside Diff");
+    assert!(
+        app.diff.is_some(),
+        "switching tabs keeps the DiffView available"
+    );
+    app.key(key_press(KeyCode::Char('3')));
+    assert_eq!(
+        app.graph_tab, 2,
+        "Results tab remains reachable inside Diff"
+    );
+    app.key(key_press(KeyCode::Char('4')));
+    assert_eq!(app.graph_tab, 3, "Diff tab remains selectable");
+
+    let graph = graph::Graph::new_with_expanded(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+        app.graph_expanded.clone(),
+        app.graph_tab,
+    );
+    let (direction, next) = [
+        (KeyCode::Left, -1, 0),
+        (KeyCode::Right, 1, 0),
+        (KeyCode::Up, 0, -1),
+        (KeyCode::Down, 0, 1),
+    ]
+    .into_iter()
+    .find_map(|(key, dx, dy)| {
+        graph
+            .neighbour(&app.selected, dx, dy)
+            .map(|next| (key, next))
+    })
+    .expect("the graph contains a navigable neighboring node");
+    app.key(key_press(direction));
+    assert_eq!(app.selected, next);
+    assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
+}
+
+#[test]
+fn graph_comment_popup_shows_scoped_history_and_keeps_the_element_draft() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    app.comment_drafts.insert(
+        App::comment_key(&app.conversation, app.view.plan.as_deref(), "worker:t1"),
+        "draft comment".into(),
+    );
+    app.view.comments.insert(
+        7,
+        view::Comment {
+            id: 7,
+            plan_id: None,
+            target: "worker:t1".into(),
+            text: "existing element note".into(),
+            status: "open".into(),
+        },
+    );
+
+    app.key(key_press(KeyCode::Char('c')));
+    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t1");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "draft comment");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("existing element note"));
+    assert!(text.contains("draft comment"));
 }
 
 pub fn test_app() -> App {
@@ -609,6 +741,7 @@ fn failed_background_comment_keeps_its_grapheme_cursor() {
     app.apply_update(Update::CommentResult {
         conversation: "conversation-a".into(),
         plan: None,
+        operation_id: crate::id(),
         generation: 1,
         request_id: 17,
         editor: Editor {

@@ -4,6 +4,7 @@ fn decode_comment(wire: WireRequest) -> std::result::Result<Request, Box<WireReq
     match wire {
         WireRequest::Comment {
             conversation,
+            operation_id,
             plan,
             target,
             text,
@@ -12,6 +13,7 @@ fn decode_comment(wire: WireRequest) -> std::result::Result<Request, Box<WireReq
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Comment {
                 conversation,
+                operation_id,
                 plan,
                 target,
                 text,

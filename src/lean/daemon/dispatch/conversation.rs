@@ -99,6 +99,7 @@ fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
             conversation,
+            operation_id,
             plan,
             target,
             text,
@@ -107,6 +108,7 @@ fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
         }) => Ok(Route::Handled(comment_at(
             context,
             conversation,
+            operation_id,
             plan,
             target,
             text,
@@ -117,9 +119,11 @@ fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn comment_at(
     context: &Context<'_>,
     conversation: String,
+    operation_id: Option<String>,
     plan: Option<String>,
     target: String,
     text: String,
@@ -137,8 +141,9 @@ fn comment_at(
             .assert_comment_run(&conversation, plan.as_deref(), &target, run)?;
     }
     validate_round_comment(context.core, plan.as_deref(), &target, round)?;
-    Ok(json!(context.core.comment_at(
+    Ok(json!(context.core.comment_at_with_operation(
         &conversation,
+        operation_id.as_deref(),
         plan.as_deref(),
         &target,
         &text,

@@ -12,12 +12,13 @@ pub(super) fn push_admin(
     left: u16,
     room: u16,
 ) {
-    let width = builder.size.admin_w;
     let mut shown = HashMap::<&str, (u16, u16)>::new();
     for (row, &y) in rows.iter().zip(tops) {
-        let x = left + (room - admin_width(builder.size, row)) / 2;
-        for (slot, key) in row.iter().enumerate() {
-            shown.insert(*key, (x + slot as u16 * (width + GAP_X), y));
+        let x = left + (room - admin_width(&builder.size, row)) / 2;
+        let mut offset = 0;
+        for key in row {
+            shown.insert(*key, (x + offset, y));
+            offset += builder.size.width(key, true) + GAP_X;
         }
     }
     let admin = builder.admin.clone();
@@ -27,8 +28,19 @@ pub(super) fn push_admin(
             key: key.to_owned(),
             x: spot.map_or(0, |(x, _)| x),
             y: spot.map_or(0, |(_, y)| y),
-            width,
-            height: card_content::height(builder.view, key, width, builder.size.h, false),
+            width: builder.size.width(key, true),
+            height: card_content::height(
+                builder.view,
+                key,
+                builder.size.width(key, true),
+                builder.size.layout_height(key, true),
+                false,
+            )
+            .max(if builder.size.expanded_key.as_deref() == Some(key) {
+                builder.size.layout_height(key, true)
+            } else {
+                0
+            }),
             visible: spot.is_some(),
             group: None,
             collapsed: false,
@@ -57,9 +69,12 @@ fn push_cards(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16, g
     let keys = member_keys(builder.view, unit);
     let y = top + FRAME_Y;
     let mut previous: Option<(String, u16)> = None;
-    for (slot, (key, folded)) in keys.into_iter().zip(&unit.folded).enumerate() {
-        let x = spot.x + FRAME_X + slot as u16 * (builder.size.w + GAP_X);
-        push_card(builder, &key, *folded, x, y, group, &mut previous);
+    let mut offset = 0;
+    for (key, folded) in keys.iter().zip(&unit.folded) {
+        let key = key.as_str();
+        let x = spot.x + FRAME_X + offset;
+        push_card(builder, key, *folded, x, y, group, &mut previous);
+        offset += builder.size.width(key, false) + GAP_X;
     }
 }
 
@@ -77,13 +92,13 @@ fn push_card(
         key: key.to_owned(),
         x,
         y,
-        width: builder.size.w,
+        width: builder.size.width(key, false),
         height: card_height(builder, key, folded),
         visible: true,
         group: Some(group.to_owned()),
         collapsed: folded,
     });
-    *previous = Some((key.to_owned(), x + builder.size.w));
+    *previous = Some((key.to_owned(), x + builder.size.width(key, false)));
 }
 
 fn push_internal_edge(
@@ -124,10 +139,10 @@ pub(super) fn push_hidden(builder: &mut Builder<'_>, units: &[Unit], placed: &[P
             .zip(&unit.folded)
         {
             builder.graph.nodes.push(Node {
-                key,
+                key: key.clone(),
                 x: 0,
                 y: 0,
-                width: builder.size.w,
+                width: builder.size.width(&key, false),
                 height: builder.size.h,
                 visible: false,
                 group: Some(group.clone()),

@@ -46,6 +46,7 @@ pub(crate) enum WireRequest {
     },
     Comment {
         conversation: String,
+        operation_id: Option<String>,
         plan: Option<String>,
         target: String,
         text: String,

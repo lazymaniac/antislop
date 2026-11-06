@@ -1176,30 +1176,14 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
 
-    // Open Details on Enter
+    // Enter expands the selected card in the graph; digits select its tabs.
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.details.is_some());
-    assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+    assert_eq!(app.graph_tab, 2);
 
-    // Details tab navigation
-    let tab0 = app.details.as_ref().unwrap().tab;
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_ne!(app.details.as_ref().unwrap().tab, tab0);
-    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    assert_eq!(app.details.as_ref().unwrap().tab, tab0);
-
-    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
-    assert_ne!(app.details.as_ref().unwrap().tab, tab0);
-    app.key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
-    assert_eq!(app.details.as_ref().unwrap().tab, tab0);
-    // Brackets wrap through the same tabs as Tab and Shift+Tab.
-    app.key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
-    assert_ne!(app.details.as_ref().unwrap().tab, tab0);
-    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
-    assert_eq!(app.details.as_ref().unwrap().tab, tab0);
-
-    // Open Diff from Details
+    // d keeps the established diff review and comment path.
     app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(app.diff.is_some());
     assert_eq!(app.diff.as_ref().unwrap().task, "t1");
@@ -1207,15 +1191,14 @@ fn app_graph_details_diff_navigation_and_search() {
     // Diff tab navigation
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-    // Esc from Diff returns to Details
+    // Esc from Diff returns to the expanded graph card.
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.diff.is_none());
     assert!(app.details.is_some());
-
-    // Esc from Details returns to Graph
-    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.details.is_none());
     assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.details.is_none());
 
     // Search in conversation history
     app.view.apply(&json!({
@@ -1505,6 +1488,7 @@ fn tui_isolated_fake_request_capture() {
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Comment {
             conversation: "conv-1".into(),
+            operation_id: None,
             target: "worker:t1".into(),
             text: "code feedback".into(),
             plan: None,
@@ -1820,6 +1804,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
     app.apply_update(Update::CommentResult {
         conversation: app.conversation.clone(),
         plan: app.view.plan.clone(),
+        operation_id: String::new(),
         generation: app.generation,
         request_id: req_id,
         editor,
@@ -1849,6 +1834,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
     app.apply_update(Update::CommentResult {
         conversation: app.conversation.clone(),
         plan: app.view.plan.clone(),
+        operation_id: String::new(),
         generation: app.generation,
         request_id: req_id_2,
         editor: editor_2,
@@ -2068,6 +2054,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
     app.apply_update(Update::CommentResult {
         conversation: "conv-A".into(),
         plan: None,
+        operation_id: String::new(),
         generation: 1,
         request_id: conv_a_comment_id,
         editor: Editor {
@@ -2333,6 +2320,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
     app.apply_update(Update::CommentResult {
         conversation: "conv-a".into(),
         plan: None,
+        operation_id: String::new(),
         generation: 1,
         request_id: 102,
         editor: Editor {
@@ -2452,6 +2440,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     app.apply_update(Update::CommentResult {
         conversation: "conv-flight-a".into(),
         plan: None,
+        operation_id: String::new(),
         generation: gen_comment_start,
         request_id: comment_req,
         editor: pending_editor,
@@ -4050,24 +4039,11 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.graph_collapsed.contains("t2"));
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let details = app.details.as_ref().unwrap();
-    assert_eq!(details.key, "worker:t2");
-    assert_eq!(
-        details.tab, 0,
-        "opening the worker keeps its role even during review"
-    );
-    assert!(
-        !antislop::lean::tui::details::tabs_for(&details.key)
-            .contains(&antislop::lean::tui::details::CHECKS)
-    );
-    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t2");
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t2"));
     app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-    assert_eq!(
-        app.details.as_ref().unwrap().tab,
-        antislop::lean::tui::details::CHECKS
-    );
-    app.details = None;
+    assert_eq!(app.graph_tab, 2);
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_expanded.is_none());
     let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
     tiny.draw(|frame| app.draw(frame)).unwrap();
     assert!(

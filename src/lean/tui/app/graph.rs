@@ -30,6 +30,10 @@ impl App {
 
     pub fn select_node(&mut self, key: String) {
         self.selected = graph::card_key(&self.view, &key);
+        if self.graph_expanded.is_some() {
+            self.graph_expanded = Some(self.selected.clone());
+            self.open_details(self.selected.clone());
+        }
     }
 
     pub fn toggle_selected_collapse(&mut self) {

@@ -10,8 +10,13 @@ pub(super) fn admin_rows<'a>(builder: &Builder<'a>) -> Vec<Vec<&'a str>> {
         .filter(|(_, visible)| *visible)
         .map(|(key, _)| *key)
         .collect();
+    let max_width = visible
+        .iter()
+        .map(|key| builder.size.width(key, true))
+        .max()
+        .unwrap_or(builder.size.admin_w);
     let across = builder.viewport.map_or(visible.len().max(1), |(width, _)| {
-        usize::from(width.saturating_sub(MARGIN) / (builder.size.admin_w + GAP_X)).max(1)
+        usize::from(width.saturating_sub(MARGIN) / (max_width + GAP_X)).max(1)
     });
     let mut rows: Vec<Vec<&str>> = Vec::new();
     for key in visible {
@@ -27,9 +32,9 @@ pub(super) fn admin_rows<'a>(builder: &Builder<'a>) -> Vec<Vec<&'a str>> {
     rows
 }
 
-pub(super) fn admin_width(size: Size, row: &[&str]) -> u16 {
-    let cards = row.len() as u16;
-    cards * size.admin_w + cards.saturating_sub(1) * GAP_X
+pub(super) fn admin_width(size: &Size, row: &[&str]) -> u16 {
+    row.iter().map(|key| size.width(key, true)).sum::<u16>()
+        + (row.len() as u16).saturating_sub(1) * GAP_X
 }
 
 /// The width every row is centered in, right of the lanes: the viewport's,
@@ -43,7 +48,7 @@ pub(super) fn room(
     let widest = placed
         .iter()
         .map(|spot| spot.x + spot.width)
-        .chain(admin.iter().map(|row| admin_width(builder.size, row)))
+        .chain(admin.iter().map(|row| admin_width(&builder.size, row)))
         .max()
         .unwrap_or(0);
     builder.viewport.map_or(widest, |(width, _)| {
@@ -94,8 +99,8 @@ fn admin_row_tops(builder: &Builder<'_>, admin: &[Vec<&str>], mut y: u16) -> (Ve
                 card_content::height(
                     builder.view,
                     key,
-                    builder.size.admin_w,
-                    builder.size.h,
+                    builder.size.width(key, true),
+                    builder.size.layout_height(key, true),
                     false,
                 )
             })

@@ -71,6 +71,9 @@ pub struct App {
     pub failed_comment: Option<Editor>,
     pub conversation_drafts: std::collections::HashMap<String, String>,
     pub comment_drafts: std::collections::HashMap<String, String>,
+    /// Stable idempotency ids for comment submissions, keyed by conversation,
+    /// target and text so a failed retry keeps the same durable identity.
+    pub comment_operations: std::collections::HashMap<(String, String, String), String>,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
     /// Which cards the graph shows.
@@ -80,6 +83,9 @@ pub struct App {
     pub graph_revealed: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
+    /// The only card expanded in the graph, if any.
+    pub graph_expanded: Option<String>,
+    pub graph_tab: usize,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
@@ -164,12 +170,15 @@ macro_rules! initial_app {
             failed_comment: None,
             conversation_drafts: std::collections::HashMap::new(),
             comment_drafts: std::collections::HashMap::new(),
+            comment_operations: std::collections::HashMap::new(),
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
             graph_scope: graph::Scope::default(),
             graph_revealed: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
+            graph_expanded: None,
+            graph_tab: 0,
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,

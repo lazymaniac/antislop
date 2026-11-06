@@ -164,16 +164,34 @@ impl App {
         self.sending_comment = true;
         self.pending_comment = Some(editor.clone());
         self.failed_comment = None;
-        self.prepare_comment_send(request_id, editor);
+        let operation_id = self.comment_operation_id(&editor);
+        self.prepare_comment_send(request_id, editor, operation_id);
     }
 
-    fn prepare_comment_send(&self, request_id: u64, editor: Editor) {
+    fn comment_operation_id(&mut self, editor: &Editor) -> String {
+        let key = (
+            self.conversation.clone(),
+            Self::comment_key(
+                &self.conversation,
+                self.view.plan.as_deref(),
+                &editor.target,
+            ),
+            editor.input.text.clone(),
+        );
+        self.comment_operations
+            .entry(key)
+            .or_insert_with(crate::id)
+            .clone()
+    }
+
+    fn prepare_comment_send(&self, request_id: u64, editor: Editor, operation_id: String) {
         let (plan, round, run) = self.comment_context(&editor.target);
         let text = comment_text(&editor, &self.view);
         CommentSend {
             client: self.client.clone(),
             updates: self.updates.clone(),
             conversation: self.conversation.clone(),
+            operation_id,
             plan,
             generation: self.generation,
             request_id,

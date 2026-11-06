@@ -28,6 +28,9 @@ fn draw_plan(app: &mut App, frame: &mut Frame) -> bool {
 }
 
 fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
+    if app.graph_expanded.is_some() {
+        return false;
+    }
     let Some(diff) = &mut app.diff else {
         return false;
     };
@@ -36,6 +39,9 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
 }
 
 fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
+    if app.graph_expanded.is_some() {
+        return false;
+    }
     let Some(details) = &mut app.details else {
         return false;
     };

@@ -3,6 +3,7 @@ pub enum ConversationRequest {
     Recover(crate::lean::TaskRecoveryRequest),
     Comment {
         conversation: String,
+        operation_id: Option<String>,
         plan: Option<String>,
         target: String,
         text: String,

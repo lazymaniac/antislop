@@ -28,6 +28,7 @@ pub(super) struct CommentSend {
     pub(super) client: Client,
     pub(super) updates: UpdateSender,
     pub(super) conversation: String,
+    pub(super) operation_id: String,
     pub(super) plan: Option<String>,
     pub(super) generation: u64,
     pub(super) request_id: u64,
@@ -50,6 +51,7 @@ impl CommentSend {
         let _ = self.updates.send(Update::CommentResult {
             conversation: self.conversation,
             plan: self.plan,
+            operation_id: self.operation_id,
             generation: self.generation,
             request_id: self.request_id,
             editor: self.editor,
@@ -107,6 +109,7 @@ impl CommentSend {
             self.client.call(&Request::Conversation(
                 crate::lean::daemon::ConversationRequest::Comment {
                     conversation: self.conversation.clone(),
+                    operation_id: Some(self.operation_id.clone()),
                     plan: self.plan.clone(),
                     target,
                     text: self.text.clone(),
@@ -118,6 +121,7 @@ impl CommentSend {
             self.client.call(&Request::Conversation(
                 crate::lean::daemon::ConversationRequest::Comment {
                     conversation: self.conversation.clone(),
+                    operation_id: Some(self.operation_id.clone()),
                     plan: self.plan.clone(),
                     target,
                     text: self.text.clone(),

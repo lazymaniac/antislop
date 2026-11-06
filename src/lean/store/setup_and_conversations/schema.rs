@@ -47,6 +47,11 @@ const BASE_TABLE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS conversations(
                plan_id TEXT, target TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL,
                status TEXT NOT NULL, message INTEGER NOT NULL,
                created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS comment_operations(
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               operation_id TEXT NOT NULL,
+               comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+               PRIMARY KEY(conversation_id, operation_id), UNIQUE(comment_id));
              CREATE TABLE IF NOT EXISTS checks(
                task_id TEXT NOT NULL, round INTEGER NOT NULL, check_id TEXT NOT NULL,
                state TEXT NOT NULL, status TEXT, note TEXT NOT NULL DEFAULT '',

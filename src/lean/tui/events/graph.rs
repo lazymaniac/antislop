@@ -16,12 +16,14 @@ impl App {
     }
 
     fn graph_for_key(&self) -> Graph {
-        Graph::new_with_viewport(
+        Graph::new_with_expanded(
             &self.view,
             &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
+            self.graph_expanded.clone(),
+            self.graph_tab,
         )
     }
 
@@ -48,6 +50,23 @@ impl App {
             self.select_visible_graph_node(graph);
         } else if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
             self.selected = next;
+            if self.graph_expanded.is_some() {
+                self.graph_expanded = Some(self.selected.clone());
+                self.open_details(self.selected.clone());
+                if self.graph_tab == 3 {
+                    if self
+                        .view
+                        .agents
+                        .get(&self.selected)
+                        .is_some_and(|agent| agent.branch.is_some())
+                    {
+                        self.open_diff(&self.selected.clone());
+                    } else {
+                        self.graph_tab = 0;
+                        self.diff = None;
+                    }
+                }
+            }
         }
     }
 
@@ -81,11 +100,33 @@ impl App {
             KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
             KeyCode::Char('f') => self.open_graph_filters(),
             KeyCode::Char(digit @ '1'..='4') => {
-                self.relations.toggle(usize::from(digit as u8 - b'1'));
+                if self.graph_expanded.is_some() {
+                    self.graph_tab = usize::from(digit as u8 - b'1');
+                    if let Some(details) = &mut self.details {
+                        details.native_focus = self.graph_tab == 1;
+                    }
+                    if self.graph_tab == 3 {
+                        self.open_diff(&self.selected.clone());
+                    }
+                } else {
+                    self.relations.toggle(usize::from(digit as u8 - b'1'));
+                }
             }
-            KeyCode::Char('d') => self.open_diff(&self.selected.clone()),
+            KeyCode::Char('d') => {
+                self.graph_tab = 3;
+                self.open_diff(&self.selected.clone());
+            }
             KeyCode::Char('c') => self.open_graph_comment(),
-            KeyCode::Enter => self.open_details(self.selected.clone()),
+            KeyCode::Enter => {
+                if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
+                    self.graph_expanded = None;
+                    self.details = None;
+                } else {
+                    self.graph_expanded = Some(self.selected.clone());
+                    self.graph_tab = 0;
+                    self.open_details(self.selected.clone());
+                }
+            }
             _ => {}
         }
         true

@@ -18,8 +18,9 @@ impl<'a> Builder<'a> {
         collapsed: &std::collections::HashSet<String>,
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
+        expanded: Option<String>,
     ) -> Self {
-        let size = Size::fit(viewport);
+        let size = Size::fit(viewport, expanded);
         let graph = empty_graph(scope, collapsed, grouping);
         let index = task_index(view);
         let extra_agents = extra_agents(view);
@@ -61,6 +62,8 @@ fn empty_graph(
         scope: scope.clone(),
         collapsed: collapsed.clone(),
         grouping,
+        expanded: None,
+        expanded_tab: 0,
     }
 }
 

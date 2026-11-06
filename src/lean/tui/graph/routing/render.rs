@@ -169,7 +169,15 @@ impl Graph {
         tick: u64,
     ) {
         for node in self.nodes.iter().filter(|n| n.visible) {
-            draw_node(view, canvas, node, node.key == selected, theme, tick);
+            draw_node(
+                view,
+                canvas,
+                node,
+                node.key == selected,
+                (self.expanded.as_deref() == Some(node.key.as_str())).then_some(self.expanded_tab),
+                theme,
+                tick,
+            );
         }
     }
 }

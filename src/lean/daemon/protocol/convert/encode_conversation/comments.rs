@@ -4,6 +4,7 @@ fn encode_comment(request: Request) -> std::result::Result<WireRequest, Box<Requ
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
             conversation,
+            operation_id,
             plan,
             target,
             text,
@@ -11,6 +12,7 @@ fn encode_comment(request: Request) -> std::result::Result<WireRequest, Box<Requ
             run,
         }) => Ok(WireRequest::Comment {
             conversation,
+            operation_id,
             plan,
             target,
             text,

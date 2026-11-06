@@ -240,7 +240,7 @@ fn push_wrapped_unit(
     row: &mut Vec<usize>,
     rows: &mut Vec<Vec<usize>>,
 ) {
-    let width = unit_width(builder.size, &units[unit]);
+    let width = unit_width(builder, &units[unit]);
     if !row.is_empty() && used.saturating_add(GAP_X + width) > limit {
         rows.push(std::mem::take(row));
         *used = 0;
@@ -257,13 +257,25 @@ fn cards(unit: &Unit) -> u16 {
     unit.folded.len() as u16
 }
 
-pub(super) fn unit_width(size: Size, unit: &Unit) -> u16 {
-    let cards = cards(unit);
-    2 * FRAME_X + cards * size.w + cards.saturating_sub(1) * GAP_X
+pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
+    let keys = member_keys(builder.view, unit);
+    let widths = keys.iter().map(|key| builder.size.width(key, false));
+    2 * FRAME_X + widths.sum::<u16>() + cards(unit).saturating_sub(1) * GAP_X
 }
 
 pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {
-    card_content::height(builder.view, key, builder.size.w, builder.size.h, folded)
+    let content = card_content::height(
+        builder.view,
+        key,
+        builder.size.width(key, false),
+        builder.size.layout_height(key, false),
+        folded,
+    );
+    if builder.size.expanded_key.as_deref() == Some(key) {
+        content.max(builder.size.layout_height(key, false))
+    } else {
+        content
+    }
 }
 
 pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]) -> Vec<Placed> {
@@ -271,7 +283,7 @@ pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]
     for (row, members) in rows.iter().enumerate() {
         let mut x = 0;
         for &unit in members {
-            let width = unit_width(builder.size, &units[unit]);
+            let width = unit_width(builder, &units[unit]);
             let tallest = member_keys(builder.view, &units[unit])
                 .iter()
                 .zip(&units[unit].folded)

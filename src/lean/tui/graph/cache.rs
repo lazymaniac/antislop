@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutIdentity {
+    pub generation: u64,
+    pub expanded: Option<String>,
+    pub tab: usize,
+}
+
 #[derive(Default)]
 pub struct LayoutCache {
     pub(super) entry: Option<CachedGraph>,
@@ -11,6 +18,8 @@ pub(super) struct CachedGraph {
     counts: (usize, usize, usize),
     idle: bool,
     viewport: Option<(u16, u16)>,
+    expanded: Option<String>,
+    expanded_tab: usize,
     pub(super) expires: Option<std::time::Instant>,
     graph: std::rc::Rc<Graph>,
 }
@@ -22,6 +31,8 @@ struct CacheRequest<'a> {
     collapsed: &'a std::collections::HashSet<String>,
     grouping: GroupingMode,
     viewport: Option<(u16, u16)>,
+    expanded: Option<String>,
+    expanded_tab: usize,
 }
 
 impl LayoutCache {
@@ -34,6 +45,32 @@ impl LayoutCache {
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
     ) -> std::rc::Rc<Graph> {
+        self.get_with_expanded(
+            view,
+            scope,
+            collapsed,
+            grouping,
+            viewport,
+            LayoutIdentity {
+                generation,
+                expanded: None,
+                tab: 0,
+            },
+        )
+    }
+
+    pub fn get_with_expanded(
+        &mut self,
+        view: &View,
+        scope: &Scope,
+        collapsed: &std::collections::HashSet<String>,
+        grouping: GroupingMode,
+        viewport: Option<(u16, u16)>,
+        identity: LayoutIdentity,
+    ) -> std::rc::Rc<Graph> {
+        let generation = identity.generation;
+        let expanded = identity.expanded;
+        let expanded_tab = identity.tab;
         let request = CacheRequest {
             view,
             generation,
@@ -41,6 +78,8 @@ impl LayoutCache {
             collapsed,
             grouping,
             viewport,
+            expanded,
+            expanded_tab,
         };
         let now = std::time::Instant::now();
         if self.matches(&request, now) {
@@ -57,6 +96,8 @@ impl LayoutCache {
                 && entry.counts == counts(view)
                 && entry.idle == view.idle
                 && entry.viewport == request.viewport
+                && entry.expanded == request.expanded
+                && entry.expanded_tab == request.expanded_tab
                 && &entry.graph.scope == request.scope
                 && &entry.graph.collapsed == request.collapsed
                 && entry.graph.grouping == request.grouping
@@ -70,12 +111,14 @@ impl LayoutCache {
         now: std::time::Instant,
     ) -> std::rc::Rc<Graph> {
         let view = request.view;
-        let graph = std::rc::Rc::new(Graph::new_with_viewport(
+        let graph = std::rc::Rc::new(Graph::new_with_expanded(
             view,
             request.scope,
             request.collapsed,
             request.grouping,
             request.viewport,
+            request.expanded.clone(),
+            request.expanded_tab,
         ));
         let expires = view
             .links
@@ -89,6 +132,8 @@ impl LayoutCache {
             counts: counts(view),
             idle: view.idle,
             viewport: request.viewport,
+            expanded: request.expanded,
+            expanded_tab: request.expanded_tab,
             expires,
             graph: std::rc::Rc::clone(&graph),
         });

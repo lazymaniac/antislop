@@ -66,10 +66,44 @@ impl Store {
         run: Option<&str>,
         text: impl Fn(u64) -> String,
     ) -> Result<Comment> {
+        self.add_comment_at_with_operation(conversation, &crate::id(), comment, round, run, text)
+    }
+
+    /// Persists one comment identity under an operation id so retries return
+    /// the same comment instead of creating another one.
+    pub fn add_comment_at_with_operation(
+        &self,
+        conversation: &str,
+        operation_id: &str,
+        comment: &Comment,
+        round: Option<u32>,
+        run: Option<&str>,
+        text: impl Fn(u64) -> String,
+    ) -> Result<Comment> {
+        crate::require(
+            uuid::Uuid::parse_str(operation_id).is_ok(),
+            "operation_id must be a UUID",
+        )?;
         let _content_write = self.content_write.lock().expect("content write mutex");
         let mut db = self.db();
         let tx = db.transaction()?;
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT comment_id FROM comment_operations WHERE conversation_id=?1 AND operation_id=?2",
+                params![conversation, operation_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            let comment = comments::load_comment(self, &tx, id as u64)?;
+            tx.commit()?;
+            return Ok(comment);
+        }
         let saved = persist_comment(self, &tx, conversation, comment, round, run, text)?;
+        tx.execute(
+            "INSERT INTO comment_operations(conversation_id,operation_id,comment_id) VALUES(?1,?2,?3)",
+            params![conversation, operation_id, saved.id as i64],
+        )?;
         tx.commit()?;
         Ok(saved)
     }

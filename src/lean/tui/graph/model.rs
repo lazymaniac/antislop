@@ -52,20 +52,26 @@ impl Node {
 
 /// The card size of one layout: full size, or smaller so that a unit's
 /// three cards fit across the viewport and two rows down it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct Size {
     pub(super) w: u16,
     pub(super) h: u16,
     /// The session's own agents stand two across, not three.
     pub(super) admin_w: u16,
+    pub(super) expanded_w: u16,
+    pub(super) expanded_h: u16,
+    pub(super) expanded_key: Option<String>,
 }
 
 impl Size {
-    pub(super) fn fit(viewport: Option<(u16, u16)>) -> Self {
+    pub(super) fn fit(viewport: Option<(u16, u16)>, expanded_key: Option<String>) -> Self {
         let full = Self {
             w: WIDTH,
             h: HEIGHT,
             admin_w: WIDTH,
+            expanded_w: 52,
+            expanded_h: 20,
+            expanded_key: expanded_key.clone(),
         };
         let Some((vp_w, vp_h)) = viewport else {
             return full;
@@ -76,6 +82,27 @@ impl Size {
             w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),
             admin_w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
             h: (vp_h.saturating_sub(GAP_Y) / 2).clamp(MIN_HEIGHT, HEIGHT),
+            expanded_w: vp_w.saturating_sub(2 * MARGIN).clamp(MIN_WIDTH, 56),
+            expanded_h: vp_h.saturating_sub(2).clamp(MIN_HEIGHT, 20),
+            expanded_key,
+        }
+    }
+
+    pub(super) fn width(&self, key: &str, admin: bool) -> u16 {
+        if self.expanded_key.as_deref() == Some(key) {
+            self.expanded_w
+        } else if admin {
+            self.admin_w
+        } else {
+            self.w
+        }
+    }
+
+    pub(super) fn layout_height(&self, key: &str, _admin: bool) -> u16 {
+        if self.expanded_key.as_deref() == Some(key) {
+            self.expanded_h
+        } else {
+            self.h
         }
     }
 }

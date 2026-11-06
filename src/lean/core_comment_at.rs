@@ -11,14 +11,31 @@ impl Core {
         round: Option<u32>,
         run: Option<&str>,
     ) -> Result<Comment> {
+        self.comment_at_with_operation(conversation, None, plan_id, target, text, round, run)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn comment_at_with_operation(
+        self: &Arc<Self>,
+        conversation: &str,
+        operation_id: Option<&str>,
+        plan_id: Option<&str>,
+        target: &str,
+        text: &str,
+        round: Option<u32>,
+        run: Option<&str>,
+    ) -> Result<Comment> {
         self.store.conversation(conversation)?;
         let text = text.trim();
         require(!text.is_empty(), "the comment is empty")?;
         require(!target.trim().is_empty(), "the comment has no element")?;
         let (plan, resolved_plan_id) = self.comment_plan(conversation, plan_id)?;
+        let diff_author = diff_author(&plan, target)?;
         let label = contextual_comment_label(target, &plan, round, run);
-        self.persist_comment(
+        let operation_id = operation_id.map(str::to_owned).unwrap_or_else(crate::id);
+        let comment = self.persist_comment(
             conversation,
+            &operation_id,
             CommentDraft {
                 target,
                 text,
@@ -27,7 +44,25 @@ impl Core {
                 round,
                 run,
             },
-        )
+            diff_author.is_none(),
+        )?;
+        if let Some(task) = diff_author {
+            let recipient = format!("worker:{}", task.id);
+            let message = store::AgentMessage {
+                conversation: conversation.into(),
+                plan: Some(task.plan_id.clone()),
+                recipient,
+                operation_id,
+                expected_round: Some(task.round),
+                expected_run: None,
+                text: format!(
+                    "Diff comment #{} at {} (task round {}):\n{}\nAddress this location-specific feedback in your changes.",
+                    comment.id, target, task.round, text
+                ),
+            };
+            self.send_to_agent(&message)?;
+        }
+        Ok(comment)
     }
 
     fn comment_plan(
@@ -48,7 +83,9 @@ impl Core {
     fn persist_comment(
         self: &Arc<Self>,
         conversation: &str,
+        operation_id: &str,
         draft: CommentDraft<'_>,
+        notify_orchestrator: bool,
     ) -> Result<Comment> {
         let new = Comment {
             id: 0,
@@ -62,12 +99,17 @@ impl Core {
         if is_plan_target(draft.target) {
             return self.store.add_draft_comment(conversation, &new);
         }
-        let comment =
-            self.store
-                .add_comment_at(conversation, &new, draft.round, draft.run, |id| {
-                    format!("{COMMENT_PREFIX}{id} on {}] {}", draft.label, draft.text)
-                })?;
-        self.wake(conversation);
+        let comment = self.store.add_comment_at_with_operation(
+            conversation,
+            operation_id,
+            &new,
+            draft.round,
+            draft.run,
+            |id| format!("{COMMENT_PREFIX}{id} on {}] {}", draft.label, draft.text),
+        )?;
+        if notify_orchestrator {
+            self.wake(conversation);
+        }
         Ok(comment)
     }
 
@@ -229,6 +271,23 @@ impl Core {
         let task = self.task_unscoped(plan_id, task_id)?;
         self.freshness_for_task(conversation, plan_id, &task)
     }
+}
+
+fn diff_author<'a>(plan: &'a [Task], target: &str) -> Result<Option<&'a Task>> {
+    let Some(rest) = target.strip_prefix("diff:") else {
+        return Ok(None);
+    };
+    let Some((task_ref, location)) = rest.split_once(':') else {
+        return Err(Error::Invalid("diff comment has no file location".into()));
+    };
+    require(
+        !location.trim().is_empty(),
+        "diff comment has no file location",
+    )?;
+    plan.iter()
+        .find(|task| task.id == task_ref || task.spec["id"].as_str() == Some(task_ref))
+        .map(Some)
+        .ok_or_else(|| Error::Invalid(format!("diff comment task {task_ref} is unavailable")))
 }
 
 fn contextual_comment_label(

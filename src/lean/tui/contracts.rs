@@ -95,6 +95,7 @@ pub enum Update {
     CommentResult {
         conversation: String,
         plan: Option<String>,
+        operation_id: String,
         generation: u64,
         request_id: u64,
         editor: Editor,

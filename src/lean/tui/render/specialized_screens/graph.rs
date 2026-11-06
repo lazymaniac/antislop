@@ -4,13 +4,17 @@ impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
         self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
-        let graph = self.graph_layout_cache.get(
+        let graph = self.graph_layout_cache.get_with_expanded(
             &self.view,
-            self.generation,
             &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
+            graph::LayoutIdentity {
+                generation: self.generation,
+                expanded: self.graph_expanded.clone(),
+                tab: self.graph_tab,
+            },
         );
         self.keep_graph_selection_visible(&graph);
         let mut canvas =
@@ -24,7 +28,52 @@ impl App {
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
+        self.draw_expanded_card_panels(frame, inner, &graph);
         self.draw_progress(frame, now_area, &progress);
+    }
+
+    fn draw_expanded_card_panels(&mut self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
+        let Some(key) = self.graph_expanded.clone() else {
+            return;
+        };
+        let Some(node) = graph.node(&key).cloned().filter(|node| node.visible) else {
+            return;
+        };
+        let card = Rect::new(
+            viewport.x + node.x.saturating_sub(self.offset.0),
+            viewport.y + node.y.saturating_sub(self.offset.1),
+            node.width,
+            node.height,
+        )
+        .intersection(viewport);
+        let content = Rect::new(
+            card.x.saturating_add(2),
+            card.y.saturating_add(3),
+            card.width.saturating_sub(4),
+            card.height.saturating_sub(4),
+        )
+        .intersection(viewport);
+
+        if self.graph_tab == 1 {
+            if let Some(details) = &mut self.details {
+                details.native_focus = true;
+                details.native_areas = [content, Rect::default()];
+            }
+            self.sync_native_views();
+            if let Some(screen) = self
+                .details
+                .as_ref()
+                .and_then(|details| details.native.get(&key))
+                .and_then(|snapshot| snapshot.screen.as_ref())
+            {
+                native_view::render(frame, content, screen, self.native_focused());
+            }
+        }
+        if self.graph_tab == 3
+            && let Some(diff) = &mut self.diff
+        {
+            diff.paint_at(frame, card, &self.view);
+        }
     }
 
     fn graph_areas(&mut self, frame: &mut Frame, area: Rect) -> (Rect, Option<Rect>, Vec<String>) {

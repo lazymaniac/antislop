@@ -179,6 +179,93 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
 }
 
 #[test]
+fn diff_comments_are_delivered_to_the_validated_worker_once_with_location() {
+    use antislop::lean::store::Store;
+    let dir = common::tempdir();
+    let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
+    let conversation = core.store.create_conversation("project").unwrap();
+    let task = core
+        .store
+        .add_plan(
+            &conversation.id,
+            &[serde_json::json!({
+                "id": "local-task",
+                "title": "Implement feature",
+                "goal": "Change source",
+                "kind": "implementation",
+                "change_kind": "code",
+                "reviewer": {"summary": "Check the change"}
+            })],
+        )
+        .unwrap()
+        .remove(0);
+    let operation = uuid::Uuid::new_v4().to_string();
+    let target = "diff:local-task:src/lib.rs:line:19";
+    let first = core
+        .comment_at_with_operation(
+            &conversation.id,
+            Some(&operation),
+            Some(&task.plan_id),
+            target,
+            "handle the bounds case",
+            None,
+            None,
+        )
+        .unwrap();
+    let recipient = format!("worker:{}", task.id);
+    let messages = core
+        .store
+        .pending_mail(&conversation.id, &recipient)
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].text.contains(target));
+    assert!(messages[0].text.contains("handle the bounds case"));
+    assert!(
+        core.store
+            .pending_mail(&conversation.id, "orchestrator")
+            .unwrap()
+            .is_empty()
+    );
+
+    let retry = core
+        .comment_at_with_operation(
+            &conversation.id,
+            Some(&operation),
+            Some(&task.plan_id),
+            target,
+            "handle the bounds case",
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(retry.id, first.id);
+    assert_eq!(
+        core.store
+            .pending_mail(&conversation.id, &recipient)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        core.store.comments(&conversation.id, "open").unwrap().len(),
+        1
+    );
+    drop(core);
+    let reopened = Store::open(&dir.path().join("state/core.db")).unwrap();
+    assert_eq!(
+        reopened.comments(&conversation.id, "open").unwrap().len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .pending_mail(&conversation.id, &recipient)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
     use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
     let dir = common::tempdir();

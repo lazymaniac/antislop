@@ -95,6 +95,9 @@ impl Card<'_> {
         if requirements_round(&self.node.key).is_some() {
             return describe(self.view, &self.node.key);
         }
+        if self.expanded_tab == Some(0) {
+            return "working".into();
+        }
         self.task
             .map(|task| task.round)
             .filter(|round| *round > 0)
