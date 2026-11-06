@@ -195,6 +195,102 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn expanded_graph_pty_renders_the_owned_snapshot_and_routes_input() {
+        let mut app = App::test_app();
+        app.focus = Focus::Graph;
+        app.graph_viewport = Some((120, 48));
+        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        }];
+        app.view
+            .agents
+            .insert("worker:t1".into(), Default::default());
+        app.selected = "worker:t1".into();
+        app.graph_expanded = Some(app.selected.clone());
+        app.graph_tab = 1;
+
+        let mut details = Details::new(app.selected.clone());
+        details.switch_tab(crate::lean::tui::details::RESULT);
+        details.native_focus = true;
+        // Keep the shared native owner alive through App::draw's first sync;
+        // draw_graph replaces this with the card's actual PTY viewport.
+        details.native_areas[0] = Rect::new(1, 1, 40, 10);
+        app.details = Some(details);
+
+        let (commands, received) = mpsc::sync_channel(8);
+        let state = Arc::new(std::sync::Mutex::new(Snapshot {
+            screen: Some(screen("live-pty-snapshot")),
+            error: None,
+        }));
+        let key = format!("{}:worker:t1", app.conversation);
+        app.native_views.insert(
+            key,
+            View {
+                state,
+                commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (40, 10),
+                identity: "waiting:".into(),
+            },
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("live-pty-snapshot"), "{rendered}");
+        assert!(app.native_focused());
+        assert!(
+            app.native_views
+                .contains_key(&format!("{}:worker:t1", app.conversation))
+        );
+        assert!(matches!(received.try_recv(), Ok(Command::Resize(_, _))));
+
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Command::Input(Input::Key { .. }))
+        ));
+
+        let mut reviewer_details = Details::new("reviewer:t1".into());
+        reviewer_details.switch_tab(crate::lean::tui::details::RESULT);
+        reviewer_details.native_focus = true;
+        app.details = Some(reviewer_details);
+        app.graph_expanded = Some("reviewer:t1".into());
+        app.graph_tab = 1;
+        let (reviewer_commands, reviewer_received) = mpsc::sync_channel(8);
+        app.native_views.insert(
+            format!("{}:reviewer:t1", app.conversation),
+            View {
+                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+                commands: reviewer_commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (40, 10),
+                identity: "waiting:".into(),
+            },
+        );
+        assert!(app.native_focused());
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(matches!(
+            reviewer_received.try_recv(),
+            Ok(Command::Input(Input::Key { .. }))
+        ));
+    }
+
     #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
         std::fs::create_dir_all(".antislop/tmp").unwrap();

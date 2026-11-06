@@ -8,13 +8,21 @@ impl App {
     }
 
     fn wanted_native_views(&self) -> Vec<WantedView> {
+        let graph_key = self.graph_native_key();
         self.details
             .as_ref()
             .filter(|details| {
-                details.terminal_visible()
-                    && (details.selected_round.is_none() || details.resume_round)
+                graph_key.is_some()
+                    || (details.terminal_visible()
+                        && (details.selected_round.is_none() || details.resume_round))
             })
-            .map_or_else(Vec::new, native_panels)
+            .map_or_else(Vec::new, |details| native_panels(details, graph_key))
+    }
+
+    fn graph_native_key(&self) -> Option<&str> {
+        self.graph_expanded
+            .as_deref()
+            .filter(|_| self.graph_tab == 1)
     }
 
     fn retain_native_views(&mut self, wanted: &[WantedView]) -> bool {
@@ -62,10 +70,15 @@ impl App {
         }
     }
     fn native_key_role(&self) -> Option<String> {
-        let details = self
-            .details
-            .as_ref()
-            .filter(|d| d.terminal_visible() && (d.selected_round.is_none() || d.resume_round))?;
+        let details = self.details.as_ref()?;
+        if let Some(key) = self.graph_native_key() {
+            return Some(details.composer_recipient(key));
+        }
+        if !details.terminal_visible()
+            || (details.selected_round.is_some() && !details.resume_round)
+        {
+            return None;
+        }
         details
             .session_keys()
             .get(details.active_panel)
@@ -73,7 +86,10 @@ impl App {
     }
     pub(in crate::lean::tui) fn native_focused(&self) -> bool {
         !self.ledger_view.as_ref().is_some_and(|v| v.visible)
-            && self.details.as_ref().is_some_and(|d| d.native_focus)
+            && self.details.as_ref().is_some_and(|details| {
+                details.native_focus
+                    && (self.graph_native_key().is_some() || details.terminal_visible())
+            })
             && self.native_key_role().is_some()
     }
     pub(in crate::lean::tui) fn native_send(&mut self, input: Input) {
@@ -152,7 +168,22 @@ struct WantedView {
     rows: u16,
 }
 
-fn native_panels(details: &Details) -> Vec<WantedView> {
+fn native_panels(details: &Details, graph_key: Option<&str>) -> Vec<WantedView> {
+    if let Some(key) = graph_key {
+        let area = details.native_areas[0];
+        if area.is_empty() {
+            return Vec::new();
+        }
+        let role = details.composer_recipient(key);
+        let (role, identity) = native_identity(details, &role);
+        return vec![WantedView {
+            role,
+            local_key: key.to_owned(),
+            identity,
+            columns: area.width.max(1),
+            rows: area.height.max(1),
+        }];
+    }
     details
         .session_keys()
         .iter()
