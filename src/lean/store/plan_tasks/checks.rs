@@ -26,6 +26,7 @@ impl Store {
     }
 
     pub fn update_task(&self, task: &Task) -> Result<()> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let stored = StoredTaskContent::encode(self, task)?;
         let snapshot = task_snapshot(self, task, &stored)?;
         let content = self.content.write(&serde_json::to_string(&snapshot)?)?;

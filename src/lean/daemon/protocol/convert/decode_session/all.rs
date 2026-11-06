@@ -58,6 +58,15 @@ fn decode_sessions(wire: WireRequest) -> std::result::Result<Request, Box<WireRe
     }
 }
 
+fn decode_delete_session(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::DeleteSession { conversation } => Ok(Request::Session(
+            crate::lean::daemon::SessionRequest::DeleteSession { conversation },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn decode_group_all(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
@@ -65,4 +74,5 @@ pub(super) fn decode_group_all(
         .or_else(|wire| decode_session_events(*wire))
         .or_else(|wire| decode_session_content(*wire))
         .or_else(|wire| decode_sessions(*wire))
+        .or_else(|wire| decode_delete_session(*wire))
 }

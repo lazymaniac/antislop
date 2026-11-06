@@ -7,6 +7,7 @@ pub mod content;
 mod core;
 mod core_agent_review;
 mod core_agent_turn;
+mod core_approvals;
 mod core_artifacts;
 mod core_change_review;
 mod core_comment_at;
@@ -97,6 +98,7 @@ pub(crate) fn task_role(key: &str) -> Option<(&str, bool)> {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSummary {
     pub id: String,
+    pub goal: String,
     pub project: String,
     pub created_ms: i64,
     pub status: String,
@@ -233,6 +235,8 @@ pub struct Core {
     worktree_pins: Mutex<HashMap<PathBuf, usize>>,
     orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
     turn_locks: Mutex<mail::TurnLocks>,
+    /// Serializes starting an orchestrator with permanent session deletion.
+    session_lifecycle: Mutex<()>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a plan running, and its cancel flag.
@@ -248,6 +252,30 @@ impl Drop for Core {
     fn drop(&mut self) {
         let _ = self.native.shutdown();
     }
+}
+
+fn record_message_and_wake_locked(
+    core: &Arc<Core>,
+    conversation: &str,
+    text: &str,
+) -> Result<Message> {
+    core.store.conversation(conversation)?;
+    let message = core.store.add_message(conversation, "user", text)?;
+    wake_locked(core, conversation);
+    Ok(message)
+}
+
+fn wake_locked(core: &Arc<Core>, conversation: &str) {
+    let mut running = core.running.lock().expect("running mutex");
+    if running.contains_key(conversation) {
+        return;
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    running.insert(conversation.to_owned(), cancel.clone());
+    drop(running);
+    let core = core.clone();
+    let conversation = conversation.to_owned();
+    std::thread::spawn(move || core.orchestrate(&conversation, &cancel));
 }
 
 /// Who runs a turn, where, and with what access.

@@ -28,9 +28,12 @@ pub enum Command {
     ConversationDetails,
     Projects,
     TaskActions,
+    ApprovalsSupervised,
+    ApprovalsAutonomous,
+    PendingApprovals,
 }
 
-pub(super) const COMMANDS: [(Command, &str); 25] = [
+pub(super) const COMMANDS: [(Command, &str); 28] = [
     (
         Command::InterviewQuestion,
         "Open pending interview question · F3",
@@ -52,6 +55,18 @@ pub(super) const COMMANDS: [(Command, &str); 25] = [
     (Command::SwitchConversation, "Switch conversation · Ctrl+O"),
     (Command::Projects, "Open or switch project · Ctrl+G"),
     (Command::TaskActions, "Actions for a stopped task · F5"),
+    (
+        Command::PendingApprovals,
+        "Answer agents' pending approval requests",
+    ),
+    (
+        Command::ApprovalsSupervised,
+        "Approvals: you decide what agents may do",
+    ),
+    (
+        Command::ApprovalsAutonomous,
+        "Approvals: the orchestrator decides, you can overrule",
+    ),
     (Command::Find, "Find agent · /"),
     (Command::Search, "Search conversation · Ctrl+F"),
     (Command::Details, "Selected agent details · Enter"),
@@ -115,4 +130,5 @@ pub struct Picker {
     pub selected: usize,
     pub conversations: Vec<ConversationItem>,
     pub projects: Vec<ProjectItem>,
+    pub confirm_delete: bool,
 }

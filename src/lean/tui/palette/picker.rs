@@ -114,6 +114,7 @@ impl Picker {
             selected: 0,
             conversations: Vec::new(),
             projects: Vec::new(),
+            confirm_delete: false,
         }
     }
 
@@ -170,7 +171,11 @@ impl Picker {
             return;
         };
         let lines = self.draw_lines(&items, layout);
-        let title = picker_title(self.kind, layout.width);
+        let title = if self.kind == Kind::Conversations && self.confirm_delete {
+            " delete session? y confirm · n/Esc cancel "
+        } else {
+            picker_title(self.kind, layout.width)
+        };
         draw_picker(frame, layout.box_area, lines, title);
         if show_cursor {
             self.place_cursor(frame, layout);
@@ -250,7 +255,9 @@ fn picker_title(kind: Kind, width: u16) -> &'static str {
         Kind::History if width >= 45 => " search conversation · Enter show · Esc close ",
         Kind::History if width >= 20 => " search · Esc ",
         Kind::History => " search ",
-        Kind::Conversations if width >= 45 => " switch conversation · Enter open · Esc close ",
+        Kind::Conversations if width >= 45 => {
+            " switch conversation · Enter open · x delete · Esc close "
+        }
         Kind::Conversations if width >= 20 => " conversations · Esc ",
         Kind::Conversations => " conversations ",
         Kind::Recipients if width >= 45 => " message recipient · Enter select · Esc close ",

@@ -135,6 +135,65 @@ impl Content {
             offset = chunk.next_offset;
         }
     }
+
+    /// Removes content files whose UUID is no longer referenced by any stored row.
+    pub fn remove_unreferenced(&self, db: &rusqlite::Connection) -> Result<usize> {
+        if !self.directory.exists() {
+            return Ok(0);
+        }
+        let mut referenced = std::collections::HashSet::new();
+        let tables = {
+            let mut statement = db.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for table in tables {
+            let columns = {
+                let mut statement = db.prepare(&format!(
+                    "PRAGMA table_info(\"{}\")",
+                    table.replace('"', "\"\"")
+                ))?;
+                statement
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for column in columns {
+                let sql = format!(
+                    "SELECT CAST(\"{}\" AS TEXT) FROM \"{}\" WHERE \"{}\" IS NOT NULL",
+                    column.replace('"', "\"\""),
+                    table.replace('"', "\"\""),
+                    column.replace('"', "\"\"")
+                );
+                let mut statement = db.prepare(&sql)?;
+                let values = statement.query_map([], |row| row.get::<_, Option<String>>(0))?;
+                for value in values {
+                    let Some(value) = value? else {
+                        continue;
+                    };
+                    for part in value
+                        .split(|character: char| !character.is_ascii_hexdigit() && character != '-')
+                    {
+                        if part.len() == 36 && uuid::Uuid::parse_str(part).is_ok() {
+                            referenced.insert(part.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if uuid::Uuid::parse_str(&name).is_ok() && !referenced.contains(&name) {
+                std::fs::remove_file(entry.path())?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]

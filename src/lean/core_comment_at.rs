@@ -119,7 +119,7 @@ impl Core {
         self.store.conversation(conversation)?;
         let running = self.running.lock().expect("running mutex");
         self.store.add_message(conversation, RUNTIME,
-            "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. All agents have full access without execution budgets. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
+            "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. The runtime imposes no access limits or execution budgets on agents. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
         self.orchestrator_restarts
             .lock()
             .expect("orchestrator restart mutex")
@@ -160,6 +160,29 @@ impl Core {
         // A plan hands its report to the orchestrator while holding plans.
         // Read those two slots in the same order to observe that handoff atomically.
         let plans = self.plans.lock().expect("plans mutex");
+        self.is_idle_with_plans(conversation, &plans)
+    }
+
+    /// Delete only while no in-memory worker is active, excluding a concurrent wake.
+    pub fn delete_session(&self, conversation: &str) -> Result<()> {
+        // Keep the established plan-to-running lock order used by idle checks.
+        let plans = self.plans.lock().expect("plans mutex");
+        let _lifecycle = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        require(
+            self.is_idle_with_plans(conversation, &plans),
+            "stop this session's work before deleting it",
+        )?;
+        self.store.delete_session(conversation)
+    }
+
+    fn is_idle_with_plans(
+        &self,
+        conversation: &str,
+        plans: &HashMap<String, Arc<AtomicBool>>,
+    ) -> bool {
         let running = self.running.lock().expect("running mutex");
         !self
             .agent_reviews

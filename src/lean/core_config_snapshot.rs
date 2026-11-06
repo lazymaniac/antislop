@@ -16,6 +16,18 @@ impl Core {
             .unwrap_or_else(|error| error.into_inner()) = Arc::new(config);
     }
 
+    /// Records the message at once; the orchestrator answers in the background.
+    pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
+        // Serialize the durable write and work registration with deletion.
+        // Otherwise delete_session could purge the accepted message after
+        // add_message but before wake installs the running slot.
+        let _lifecycle = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        super::record_message_and_wake_locked(self, conversation, text)
+    }
+
     pub fn start(&self, project: &Path) -> Result<Conversation> {
         let project = project.canonicalize()?;
         self.store.record_project_identity(
@@ -35,14 +47,6 @@ impl Core {
         Ok(conversation)
     }
 
-    /// Records the message at once; the orchestrator answers in the background.
-    pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
-        self.store.conversation(conversation)?;
-        let message = self.store.add_message(conversation, "user", text)?;
-        self.wake(conversation);
-        Ok(message)
-    }
-
     /// Sends an addressed or broadcast message after validating recipient, plan, and delivery.
     pub fn submit(self: &Arc<Self>, conversation: &str, text: &str) -> Result<serde_json::Value> {
         self.submit_addressed(conversation, text, None)
@@ -54,7 +58,7 @@ impl Core {
     ) -> Result<serde_json::Value> {
         let reply = self.enqueue_and_refresh(message)?;
         if reply["state"] != "delivered" {
-            self.resume_after_delivery(message);
+            self.resume_after_delivery(message)?;
         }
         Ok(reply)
     }
@@ -100,13 +104,14 @@ impl Core {
         self.maybe_continue_plan(&message.conversation, plan)
     }
 
-    fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) {
+    fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) -> Result<()> {
         if matches!(message.recipient.as_str(), PLAN_REVIEWER | AUDITOR) {
-            self.resume_agent_reviews(&message.conversation);
+            self.resume_agent_reviews(&message.conversation)?;
         }
         if message.recipient == ORCHESTRATOR {
             self.wake(&message.conversation);
         }
+        Ok(())
     }
 
     pub fn conversation_revision_token(&self, conversation: &str) -> Result<String> {
@@ -172,6 +177,7 @@ impl Core {
             .unwrap_or_default();
         Ok(ConversationSummary {
             id: conversation.id.clone(),
+            goal: self.store.conversation_goal(&conversation.id)?,
             project: conversation.project.clone(),
             created_ms: conversation.created_ms,
             status,

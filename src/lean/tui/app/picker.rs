@@ -4,11 +4,22 @@ fn conversation_title(value: &Value, id: &str, current: bool) -> String {
     let status = value["status"].as_str().unwrap_or("idle");
     let mark = if current { " (current)" } else { "" };
     let total = value["tasks_total"].as_u64().unwrap_or(0);
+    let goal = value["goal"]
+        .as_str()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let subject = if goal.is_empty() {
+        format!("New session · {id}")
+    } else {
+        goal
+    };
     if total == 0 {
-        format!("{id}{mark} · {status}")
+        format!("{subject}{mark} · {status}")
     } else {
         let done = value["tasks_done"].as_u64().unwrap_or(0);
-        format!("{id}{mark} · {status} · {done}/{total} tasks")
+        format!("{subject}{mark} · {status} · {done}/{total} tasks")
     }
 }
 
@@ -63,9 +74,8 @@ impl App {
                 let Some(id) = conversation["id"].as_str().filter(|id| !id.is_empty()) else {
                     continue;
                 };
-                let status = conversation["status"].as_str().unwrap_or("idle");
                 items.push(palette::ConversationItem {
-                    title: format!("{} · {id} · {status}", project.name),
+                    title: conversation_title(conversation, id, false),
                     project: project.path.to_string_lossy().into_owned(),
                     id: id.to_owned(),
                 });
@@ -147,5 +157,24 @@ impl App {
             || self.diff.is_some()
             || self.unblock.is_some()
             || self.config_editor.as_ref().is_some_and(|e| e.visible)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_picker_uses_goal_and_a_clear_empty_goal_fallback() {
+        let named = conversation_title(
+            &serde_json::json!({"goal":"  Add   session deletion ","status":"done"}),
+            "session-id",
+            false,
+        );
+        assert_eq!(named, "Add session deletion · done");
+        assert_eq!(
+            conversation_title(&serde_json::json!({"status":"idle"}), "session-id", false),
+            "New session · session-id · idle"
+        );
     }
 }

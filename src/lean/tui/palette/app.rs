@@ -60,8 +60,19 @@ impl App {
         let Some(picker) = &mut self.picker else {
             return true;
         };
+        if picker.kind == Kind::Conversations && picker.confirm_delete {
+            match key.code {
+                KeyCode::Char('y') => return self.delete_selected_conversation(),
+                KeyCode::Char('n') | KeyCode::Esc => picker.confirm_delete = false,
+                _ => {}
+            }
+            return true;
+        }
         match key.code {
             KeyCode::Esc => self.picker = None,
+            KeyCode::Char('x') if picker.kind == Kind::Conversations => {
+                picker.confirm_delete = true
+            }
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
             KeyCode::Down => picker.selected += 1,
             KeyCode::Backspace => Self::erase_picker_query(picker),
@@ -71,6 +82,58 @@ impl App {
             }
             KeyCode::Enter => return self.pick_selected(),
             _ => {}
+        }
+        true
+    }
+
+    fn delete_selected_conversation(&mut self) -> bool {
+        let selected = self.picker.as_ref().and_then(|picker| {
+            picker
+                .items(&self.view)
+                .get(picker.selected)
+                .and_then(|(_, action)| {
+                    let Action::SwitchConversation(id) = action else {
+                        return None;
+                    };
+                    picker
+                        .conversations
+                        .iter()
+                        .find(|item| item.id == *id)
+                        .cloned()
+                })
+        });
+        let Some(selected) = selected else {
+            return true;
+        };
+        if selected.id == self.conversation {
+            self.notice =
+                Some("Stop this session and switch to another session before deleting it.".into());
+            if let Some(picker) = &mut self.picker {
+                picker.confirm_delete = false;
+            }
+            return true;
+        }
+        match self.client.call(&crate::lean::daemon::Request::Session(
+            crate::lean::daemon::SessionRequest::DeleteSession {
+                conversation: selected.id.clone(),
+            },
+        )) {
+            Ok(_) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.conversations.retain(|item| item.id != selected.id);
+                    picker.selected = picker
+                        .selected
+                        .min(picker.conversations.len().saturating_sub(1));
+                    picker.confirm_delete = false;
+                }
+                self.notice = Some("Session and its history permanently deleted.".into());
+            }
+            Err(error) => {
+                self.notice = Some(error.to_string());
+                if let Some(picker) = &mut self.picker {
+                    picker.confirm_delete = false;
+                }
+            }
         }
         true
     }

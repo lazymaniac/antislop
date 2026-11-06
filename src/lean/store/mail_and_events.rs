@@ -179,6 +179,7 @@ impl Store {
         kind: &str,
         payload: &Value,
     ) -> Result<u64> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let payload = self.encode_event_payload(kind, payload)?;
         let db = self.db();
         let resolved_plan = self.resolve_event_plan(&db, turn, plan_id, &payload)?;

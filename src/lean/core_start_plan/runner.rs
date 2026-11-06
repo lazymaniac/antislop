@@ -180,16 +180,11 @@ impl Core {
     }
 
     pub(in crate::lean) fn wake(self: &Arc<Self>, conversation: &str) {
-        let mut running = self.running.lock().expect("running mutex");
-        if running.contains_key(conversation) {
-            return;
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        running.insert(conversation.to_owned(), cancel.clone());
-        drop(running);
-        let core = self.clone();
-        let conversation = conversation.to_owned();
-        std::thread::spawn(move || core.orchestrate(&conversation, &cancel));
+        let _lifecycle = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        super::super::wake_locked(self, conversation);
     }
 
     pub(in crate::lean) fn orchestrate(self: &Arc<Self>, conversation: &str, cancel: &AtomicBool) {
@@ -456,5 +451,43 @@ mod cancellation_tests {
                     .is_none()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod send_deletion_tests {
+    use super::*;
+
+    #[test]
+    fn send_registration_is_serialized_with_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let session = core.store.create_conversation(".").unwrap();
+
+        // Queue deletion behind the lifecycle gate, then perform the exact
+        // write-and-wake section used by send while still holding that gate.
+        let lifecycle = core
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        let deleting_core = core.clone();
+        let conversation = session.id.clone();
+        let deleting = std::thread::spawn(move || deleting_core.delete_session(&conversation));
+        while core.plans.try_lock().is_ok() {
+            std::thread::yield_now();
+        }
+
+        super::super::record_message_and_wake_locked(
+            &core,
+            &session.id,
+            "Keep this accepted request",
+        )
+        .unwrap();
+        drop(lifecycle);
+
+        let error = deleting.join().unwrap().unwrap_err().to_string();
+        assert!(error.contains("stop this session's work"), "{error}");
+        assert_eq!(core.store.messages_after(&session.id, 0).unwrap().len(), 1);
     }
 }

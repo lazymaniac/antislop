@@ -6,14 +6,27 @@ impl Core {
     /// reviewer profile in a session of its own. The findings go to the
     /// orchestrator; the review never changes the task's status.
     pub fn review_change(self: &Arc<Self>, conversation: &str, plan: &str, id: &str) -> Result<()> {
+        // Serialize review preparation and slot registration with session
+        // deletion. Deletion takes plans before this lock, so this path must
+        // not acquire plans while holding the lifecycle lock.
+        let _lifecycle = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
         let work = self.prepare_code_review(conversation, plan, id)?;
-        self.store.append_event(
+        if let Err(error) = self.store.append_event(
             conversation,
             None,
             Some(plan),
             "code_review",
             &json!({"id": id, "status": "running"}),
-        )?;
+        ) {
+            self.reviews
+                .lock()
+                .expect("reviews mutex")
+                .remove(conversation);
+            return Err(error);
+        }
         let core = self.clone();
         std::thread::spawn(move || core.run_code_review(work));
         Ok(())
@@ -23,8 +36,8 @@ impl Core {
         let task = self.task_unscoped(plan, id)?;
         let spec = serde_json::from_value(task.spec.clone())?;
         let (dir, base, result) = self.change(conversation, &task)?;
-        let cancel = self.reserve_review(conversation)?;
         let comments = review_comments(&self.store, conversation, plan, id)?;
+        let cancel = self.reserve_review(conversation)?;
         Ok(CodeReview {
             cancel,
             conversation: conversation.to_owned(),
@@ -260,4 +273,36 @@ fn publish_review_message(core: &Core, work: &CodeReview, verdict: &Verdict) {
     let _ = core
         .store
         .add_message(&work.conversation, CODE_REVIEW, &text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deletion_waits_for_review_registration_and_then_rejects_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let session = core.store.create_conversation(".").unwrap();
+
+        // Model review preparation holding the lifecycle gate while it
+        // registers its active slot. Deletion queues behind that gate.
+        let lifecycle = core
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        let deleting_core = core.clone();
+        let conversation = session.id.clone();
+        let deleting = std::thread::spawn(move || deleting_core.delete_session(&conversation));
+        while core.plans.try_lock().is_ok() {
+            std::thread::yield_now();
+        }
+        core.reserve_review(&session.id).unwrap();
+        drop(lifecycle);
+
+        let error = deleting.join().unwrap().unwrap_err().to_string();
+        assert!(error.contains("stop this session's work"), "{error}");
+        assert!(core.store.conversation(&session.id).is_ok());
+    }
 }

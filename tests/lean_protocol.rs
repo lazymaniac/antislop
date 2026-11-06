@@ -675,13 +675,29 @@ fn grouped_requests_reach_each_daemon_dispatch_domain() {
     let terminal_error = daemon
         .client
         .call(&Request::Terminal(TerminalRequest::TerminalRead {
-            conversation,
+            conversation: conversation.clone(),
             role: "writer".into(),
             handle: "missing-handle".into(),
             after: 0,
         }))
         .unwrap_err();
     assert!(terminal_error.to_string().contains("native session ended"));
+    daemon
+        .client
+        .call(&Request::Session(SessionRequest::DeleteSession {
+            conversation: conversation.clone(),
+        }))
+        .unwrap();
+    assert!(
+        !daemon
+            .client
+            .call(&Request::Control(ControlRequest::Conversations))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|summary| summary["id"] == conversation)
+    );
 }
 
 #[test]

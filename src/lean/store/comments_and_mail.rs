@@ -37,6 +37,7 @@ impl Store {
         mail: &Mail,
         source_turn: Option<&str>,
     ) -> Result<Mail> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let stored_text = self.content.encode(&mail.text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -65,6 +66,7 @@ impl Store {
         run: Option<&str>,
         text: impl Fn(u64) -> String,
     ) -> Result<Comment> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let mut db = self.db();
         let tx = db.transaction()?;
         let saved = persist_comment(self, &tx, conversation, comment, round, run, text)?;
@@ -75,6 +77,7 @@ impl Store {
     /// Stores a comment on the plan as a draft: the user is still writing,
     /// and the orchestrator hears of it only when the user sends the review.
     pub fn add_draft_comment(&self, conversation: &str, comment: &Comment) -> Result<Comment> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let stored_text = self.content.encode(&comment.text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -86,6 +89,7 @@ impl Store {
     /// Hands every draft comment on `plan_id` to the orchestrator as one
     /// message, so that they are answered together in one turn.
     pub fn send_draft_comments(&self, conversation: &str, plan_id: &str) -> Result<Vec<Comment>> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let mut db = self.db();
         let tx = db.transaction()?;
         let drafts = draft_comments(self, &tx, conversation, plan_id)?;
@@ -98,6 +102,7 @@ impl Store {
     }
 
     pub fn set_comment_status(&self, conversation: &str, id: u64, status: &str) -> Result<Comment> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         let mut db = self.db();
         let tx = db.transaction()?;
         update_comment_status(&tx, conversation, id, status)?;

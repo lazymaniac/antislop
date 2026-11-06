@@ -213,6 +213,15 @@ pub(crate) enum WireRequest {
         conversation: String,
         paused: bool,
     },
+    SetApprovalMode {
+        conversation: String,
+        mode: String,
+    },
+    AnswerApproval {
+        conversation: String,
+        request: String,
+        choice: String,
+    },
     Plans {
         conversation: String,
         #[serde(default)]
@@ -268,6 +277,9 @@ pub(crate) enum WireRequest {
         limit: Option<usize>,
     },
     Sessions {
+        conversation: String,
+    },
+    DeleteSession {
         conversation: String,
     },
     History {

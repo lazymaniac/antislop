@@ -20,4 +20,7 @@ pub enum SessionRequest {
     Sessions {
         conversation: String,
     },
+    DeleteSession {
+        conversation: String,
+    },
 }

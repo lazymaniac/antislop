@@ -201,6 +201,13 @@ fn paged_events_and_sessions(context: &Context<'_>, request: Request) -> Result<
                 json!(core.sessions(&conversation)?)
             })
         }
+        Request::Session(crate::lean::daemon::SessionRequest::DeleteSession { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                core.delete_session(&conversation)?;
+                Value::Null
+            })
+        }
         request => Route::Unmatched(request),
     })
 }

@@ -48,6 +48,9 @@ mod task_progress;
 pub struct Store {
     connection: Mutex<Connection>,
     content: super::content::Content,
+    // Serializes file-backed message writes through their SQLite commit with
+    // session deletion's reference scan and file cleanup.
+    content_write: Mutex<()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,6 +265,9 @@ pub fn now_ms() -> i64 {
 /// Incompatible databases are never modified or migrated.
 const SCHEMA: u32 = 16;
 
+#[path = "store/approvals.rs"]
+mod approvals;
+pub(in crate::lean) use approvals::{AUTONOMOUS, ApprovalRequest};
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;
 #[path = "store/comments_and_mail.rs"]

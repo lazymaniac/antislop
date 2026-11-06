@@ -13,23 +13,34 @@ struct PreparedRevision {
 }
 
 struct RevisionRegistration<'a> {
-    _guard: std::sync::MutexGuard<'a, ()>,
+    _graph_guard: std::sync::MutexGuard<'a, ()>,
+    _lifecycle_guard: std::sync::MutexGuard<'a, ()>,
     request: String,
     fresh: bool,
 }
 
 impl<'a> RevisionRegistration<'a> {
-    fn fresh(guard: std::sync::MutexGuard<'a, ()>, request: String) -> Self {
+    fn fresh(
+        graph_guard: std::sync::MutexGuard<'a, ()>,
+        lifecycle_guard: std::sync::MutexGuard<'a, ()>,
+        request: String,
+    ) -> Self {
         Self {
-            _guard: guard,
+            _graph_guard: graph_guard,
+            _lifecycle_guard: lifecycle_guard,
             request,
             fresh: true,
         }
     }
 
-    fn existing(guard: std::sync::MutexGuard<'a, ()>, request: String) -> Self {
+    fn existing(
+        graph_guard: std::sync::MutexGuard<'a, ()>,
+        lifecycle_guard: std::sync::MutexGuard<'a, ()>,
+        request: String,
+    ) -> Self {
         Self {
-            _guard: guard,
+            _graph_guard: graph_guard,
+            _lifecycle_guard: lifecycle_guard,
             request,
             fresh: false,
         }
@@ -85,6 +96,14 @@ impl Core {
         request_key: &str,
         revision: &PlanRevision,
     ) -> Result<RevisionRegistration<'_>> {
+        // Keep the graph lock order used by plan execution, then serialize
+        // durable reservation and worker registration against session deletion.
+        let graph_guard = self.graph_updates.lock().expect("graph update mutex");
+        let lifecycle_guard = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        self.store.conversation(conversation)?;
         require(
             self.store
                 .plan_belongs_to_conversation(conversation, &revision.plan)?,
@@ -93,14 +112,21 @@ impl Core {
                 revision.plan.chars().take(40).collect::<String>()
             ),
         )?;
-        let guard = self.graph_updates.lock().expect("graph update mutex");
         let (request, fresh) =
             self.store
                 .reserve_revision_job(conversation, request_key, revision)?;
         if !fresh {
-            return Ok(RevisionRegistration::existing(guard, request));
+            return Ok(RevisionRegistration::existing(
+                graph_guard,
+                lifecycle_guard,
+                request,
+            ));
         }
-        Ok(RevisionRegistration::fresh(guard, request))
+        Ok(RevisionRegistration::fresh(
+            graph_guard,
+            lifecycle_guard,
+            request,
+        ))
     }
 
     fn spawn_revision_worker(
@@ -267,6 +293,72 @@ mod tests {
 
     fn contract(writes: bool, _paths: &[&str]) -> TaskContract {
         serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","change_kind": if writes { "code" } else { "none" }, "kind":"implementation","reviewer":{"summary": "Check local behavior"}})).unwrap()
+    }
+
+    #[test]
+    fn delayed_revision_registration_cannot_start_after_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let session = core.store.create_conversation(".").unwrap();
+        let revision = PlanRevision {
+            plan: crate::id(),
+            base_revision: 0,
+            reason: "race with session deletion".into(),
+            tasks: vec![],
+            retire: vec![],
+            redo: vec![],
+            replacements: Default::default(),
+        };
+
+        // Hold deletion's lifecycle gate until submit_revision has acquired
+        // the graph lock and is waiting to register its durable job.
+        let lifecycle = core
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let submit_core = Arc::clone(&core);
+        let conversation = session.id.clone();
+        let submit = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            submit_core.submit_revision(&conversation, "delayed", revision)
+        });
+        started_rx.recv().unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match core.graph_updates.try_lock() {
+                Ok(guard) => drop(guard),
+                Err(std::sync::TryLockError::WouldBlock) => break,
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("graph update mutex poisoned: {error}");
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "revision submission did not acquire graph lock"
+            );
+            std::thread::yield_now();
+        }
+
+        core.store.delete_session(&session.id).unwrap();
+        drop(lifecycle);
+        let error = submit.join().unwrap().unwrap_err().to_string();
+
+        assert!(error.contains("no conversation"), "{error}");
+        assert!(core.store.conversation(&session.id).is_err());
+        assert!(core.revision_jobs.lock().unwrap().is_empty());
+        let durable_jobs: i64 = core
+            .store
+            .db()
+            .query_row(
+                "SELECT count(*) FROM plan_revision_jobs WHERE conversation_id=?1",
+                [&session.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(durable_jobs, 0);
     }
 
     #[test]

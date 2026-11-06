@@ -20,6 +20,7 @@ impl Store {
         Ok(Self {
             connection: Mutex::new(connection),
             content: crate::lean::content::Content::new(path),
+            content_write: Mutex::new(()),
         })
     }
 
@@ -151,8 +152,166 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// The latest recorded work goal, falling back to the first user request.
+    pub fn conversation_goal(&self, conversation: &str) -> Result<String> {
+        let db = self.db();
+        let goal: Option<String> = db.query_row(
+            "SELECT goal FROM runs WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1",
+            [conversation],
+            |row| row.get(0),
+        ).optional()?;
+        if let Some(goal) = goal.filter(|goal| !goal.trim().is_empty()) {
+            return Ok(goal);
+        }
+        Ok(db.query_row(
+            "SELECT text FROM messages WHERE conversation_id=?1 AND author='user' ORDER BY seq LIMIT 1",
+            [conversation],
+            |row| self.content.sql_text(row, 0),
+        ).optional()?.unwrap_or_default())
+    }
+
+    /// Permanently removes a stopped conversation and its persisted history.
+    pub fn delete_session(&self, conversation: &str) -> Result<()> {
+        // Match add_message's lock order: content writes acquire this before
+        // the database mutex and keep it until their reference is committed.
+        let _content_write = self.content_write.lock().expect("content write mutex");
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute_batch("PRAGMA defer_foreign_keys=ON;")?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1)",
+            [conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(exists, "session does not exist")?;
+        let running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')",
+            [conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(!running, "stop this session's work before deleting it")?;
+        tx.execute("DELETE FROM ledger_source_coverage WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM result_evidence WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM agent_answer_waits WHERE request IN (SELECT id FROM agent_questions WHERE conversation_id=?1)", [conversation])?;
+        tx.execute(
+            "DELETE FROM agent_questions WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM agent_results WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM agent_evidence WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM turn_inputs WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_turns WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_reviews WHERE producer_turn IN (SELECT id FROM turns WHERE conversation_id=?1) OR reviewer_turn IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM requirements_resumptions WHERE message IN (SELECT seq FROM messages WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_rejections WHERE comment_message IN (SELECT seq FROM messages WHERE conversation_id=?1) OR resume_message IN (SELECT seq FROM messages WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_rejections WHERE proposal_id IN (SELECT id FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1))", [conversation])?;
+        tx.execute("DELETE FROM ledger_source_coverage WHERE source_id IN (SELECT ls.id FROM ledger_sources ls JOIN runs r ON r.id=ls.run_id WHERE r.conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_evidence WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_relations WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_criteria WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_versions WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_entries WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_proposal_tasks WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_decisions WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_sources WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_reviews WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_ledger_inputs WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_inputs WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_result_sources WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1) OR producer_task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_source_revisions WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_artifact_inputs WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1) OR source_task IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_resume_results WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1) OR source_task IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_contracts WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM integration_attempts WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM ledger_proposal_tasks WHERE proposal_id IN (SELECT id FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1))", [conversation])?;
+        tx.execute("DELETE FROM plan_runs WHERE plan_id IN (SELECT id FROM plans WHERE conversation_id=?1)", [conversation])?;
+        tx.execute(
+            "DELETE FROM planning_runs WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM plan_revision_jobs WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM plan_heads WHERE plan_id IN (SELECT id FROM plans WHERE conversation_id=?1)", [conversation])?;
+        tx.execute(
+            "DELETE FROM plan_activations WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM comment_scopes WHERE comment_id IN (SELECT id FROM comments WHERE conversation_id=?1)", [conversation])?;
+        tx.execute(
+            "DELETE FROM comments WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM approvals WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM approval_modes WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM artifact_deliveries WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM replan_blockers WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_operations WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM mail_scopes WHERE mail_id IN (SELECT id FROM mail WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM mail_sources WHERE mail_id IN (SELECT id FROM mail WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM turn_scopes WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM run_contexts WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM task_rounds WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute(
+            "DELETE FROM checks WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM runs WHERE conversation_id=?1", [conversation])?;
+        tx.execute("DELETE FROM tasks WHERE conversation_id=?1", [conversation])?;
+        tx.execute("DELETE FROM turns WHERE conversation_id=?1", [conversation])?;
+        tx.execute("DELETE FROM plans WHERE conversation_id=?1", [conversation])?;
+        tx.execute(
+            "DELETE FROM session_workflow WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM messages WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM events WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM mail WHERE conversation_id=?1", [conversation])?;
+        tx.execute(
+            "DELETE FROM pauses WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute("DELETE FROM conversations WHERE id=?1", [conversation])?;
+        tx.commit()?;
+        self.content.remove_unreferenced(&db)?;
+        Ok(())
+    }
+
     /// Stores a message and announces it in the event log in one transaction.
     pub fn add_message(&self, conversation: &str, author: &str, text: &str) -> Result<Message> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
+        self.add_message_with_content_lock(conversation, author, text)
+    }
+
+    pub(super) fn add_message_with_content_lock(
+        &self,
+        conversation: &str,
+        author: &str,
+        text: &str,
+    ) -> Result<Message> {
         let stored_text = self.content.encode(text)?;
         let mut db = self.db();
         let tx = db.transaction()?;

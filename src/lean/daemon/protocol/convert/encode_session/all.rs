@@ -55,9 +55,19 @@ fn encode_sessions(request: Request) -> std::result::Result<WireRequest, Box<Req
     }
 }
 
+fn encode_delete_session(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Session(crate::lean::daemon::SessionRequest::DeleteSession { conversation }) => {
+            Ok(WireRequest::DeleteSession { conversation })
+        }
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn encode_group_all(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     encode_run_context(request)
         .or_else(|request| encode_session_events(*request))
         .or_else(|request| encode_session_content(*request))
         .or_else(|request| encode_sessions(*request))
+        .or_else(|request| encode_delete_session(*request))
 }

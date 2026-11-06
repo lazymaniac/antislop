@@ -20,6 +20,7 @@ impl Store {
         label: &str,
         text: &str,
     ) -> Result<EvidenceReference> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
         crate::require(
             !label.trim().is_empty() && label.len() <= 160 && !label.chars().any(char::is_control),
             "label: use 1–160 bytes without control characters",

@@ -80,6 +80,26 @@ fn help_and_picker_keep_ownership_when_routing_keys() {
 }
 
 #[test]
+fn conversation_delete_requires_confirmation_and_explains_current_session_lock() {
+    let mut app = test_app();
+    app.conversation = "current-session".into();
+    let mut picker = Picker::new(Kind::Conversations);
+    picker
+        .conversations
+        .push(crate::lean::tui::palette::ConversationItem {
+            id: "current-session".into(),
+            project: app.project.clone(),
+            title: "Current work".into(),
+        });
+    app.picker = Some(picker);
+    assert!(app.key(key_press(KeyCode::Char('x'))));
+    assert!(app.picker.as_ref().unwrap().confirm_delete);
+    assert!(app.key(key_press(KeyCode::Char('y'))));
+    assert!(!app.picker.as_ref().unwrap().confirm_delete);
+    assert!(app.notice.as_deref().unwrap().contains("Stop this session"));
+}
+
+#[test]
 fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
     for ch in [']', '5'] {
         let mut app = test_app();

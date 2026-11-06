@@ -2,21 +2,31 @@
 use super::*;
 
 impl Core {
-    pub(in crate::lean) fn resume_agent_reviews(self: &Arc<Self>, conversation: &str) {
-        let Some(cancel) = self.register_agent_review(conversation) else {
-            return;
+    pub(in crate::lean) fn resume_agent_reviews(
+        self: &Arc<Self>,
+        conversation: &str,
+    ) -> Result<()> {
+        let Some(cancel) = self.register_agent_review(conversation)? else {
+            return Ok(());
         };
         self.spawn_agent_review_worker(conversation, cancel);
+        Ok(())
     }
 
-    fn register_agent_review(&self, conversation: &str) -> Option<Arc<AtomicBool>> {
+    fn register_agent_review(&self, conversation: &str) -> Result<Option<Arc<AtomicBool>>> {
+        // Make the active slot visible before deletion can pass its idle check.
+        let _lifecycle = self
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        self.store.conversation(conversation)?;
         let mut jobs = self.agent_reviews.lock().expect("agent reviews mutex");
         if jobs.contains_key(conversation) {
-            return None;
+            return Ok(None);
         }
         let cancel = Arc::new(AtomicBool::new(false));
         jobs.insert(conversation.into(), cancel.clone());
-        Some(cancel)
+        Ok(Some(cancel))
     }
 
     fn spawn_agent_review_worker(self: &Arc<Self>, conversation: &str, cancel: Arc<AtomicBool>) {
@@ -148,5 +158,47 @@ fn plan_review_prompt(
         tasks::plan_review_prompt(&project.to_string_lossy(), request, specs)
     } else {
         tasks::plan_review_followup(request, specs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delayed_agent_review_registration_cannot_start_after_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let session = core.store.create_conversation(".").unwrap();
+
+        // Hold the same lifecycle gate as deletion, queue a review resume,
+        // then remove the session before allowing registration to continue.
+        let lifecycle = core
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let review_core = Arc::clone(&core);
+        let conversation = session.id.clone();
+        let review = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            review_core.resume_agent_reviews(&conversation)
+        });
+        started_rx.recv().unwrap();
+
+        core.store.delete_session(&session.id).unwrap();
+        drop(lifecycle);
+        let error = review.join().unwrap().unwrap_err().to_string();
+
+        assert!(error.contains("no conversation"), "{error}");
+        assert!(core.store.conversation(&session.id).is_err());
+        assert!(
+            !core
+                .agent_reviews
+                .lock()
+                .expect("agent reviews mutex")
+                .contains_key(&session.id)
+        );
     }
 }

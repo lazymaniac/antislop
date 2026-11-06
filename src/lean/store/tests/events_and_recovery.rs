@@ -6,6 +6,110 @@ fn test_tempdir() -> tempfile::TempDir {
 }
 
 #[test]
+fn deleting_a_session_removes_history_and_its_external_content() {
+    let dir = test_tempdir();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("/p").unwrap();
+    let run = store
+        .create_run(&conversation.id, "Remove this recorded goal")
+        .unwrap();
+    assert_eq!(
+        store.conversation_goal(&conversation.id).unwrap(),
+        "Remove this recorded goal"
+    );
+    let task = store
+        .add_plan(
+            &conversation.id,
+            &[serde_json::json!({"id":"remove-me","title":"Purge","goal":"Remove the stored plan","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check purge"}})],
+        )
+        .unwrap()
+        .remove(0);
+    store
+        .link_plan_run(&conversation.id, &task.plan_id, &run.id)
+        .unwrap();
+    store
+        .add_message(&conversation.id, "user", &"history ".repeat(20_000))
+        .unwrap();
+    let content_dir = dir.path().join("session-content");
+    assert_eq!(std::fs::read_dir(&content_dir).unwrap().count(), 1);
+    store.delete_session(&conversation.id).unwrap();
+    assert!(store.conversation(&conversation.id).is_err());
+    assert!(
+        store
+            .messages_after(&conversation.id, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .db()
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .db()
+            .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(
+        store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(std::fs::read_dir(content_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn deleting_a_session_cannot_remove_content_from_a_concurrent_message_write() {
+    let dir = test_tempdir();
+    let store = std::sync::Arc::new(Store::open(&dir.path().join("core.db")).unwrap());
+    let deleted = store.create_conversation("/deleted").unwrap();
+    let retained = store.create_conversation("/retained").unwrap();
+    let content_write = store.content_write.lock().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let deleting_store = std::sync::Arc::clone(&store);
+    let deleting_id = deleted.id.clone();
+    let delete = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        deleting_store.delete_session(&deleting_id)
+    });
+    started_rx.recv().unwrap();
+
+    // This is the window that used to let deletion clean up the newly written
+    // file before its message row could reference it.
+    store
+        .add_message_with_content_lock(&retained.id, "user", &"concurrent ".repeat(20_000))
+        .unwrap();
+    drop(content_write);
+    delete.join().unwrap().unwrap();
+
+    let messages = store.messages_after(&retained.id, 0).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "concurrent ".repeat(20_000));
+    assert!(store.conversation(&retained.id).is_ok());
+}
+
+#[test]
+fn deleting_a_session_with_a_running_turn_is_rejected() {
+    let dir = test_tempdir();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("/p").unwrap();
+    store
+        .start_turn(&conversation.id, "orchestrator", "agy", 0, None)
+        .unwrap();
+    let error = store
+        .delete_session(&conversation.id)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("stop this session's work"));
+    assert!(store.conversation(&conversation.id).is_ok());
+}
+
+#[test]
 fn large_agent_text_is_kept_out_of_the_sqlite_event_row() {
     let dir = test_tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
