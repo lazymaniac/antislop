@@ -922,7 +922,7 @@ src
     wait_for_answer_tool(conversation,role,turn,args):Result<Value> ~63 > open_question_of_turn,local_questions,as_str,record_task_result
     finish_tool(conversation,role,turn,tool,args):Result<Value> > require_{plan_correction,refused_plan},record_result
     interview_tool(conversation,role,turn,tool,args):Result<Value> > require,interviewing,workflow,record_result
-    report_reference_error(conversation,requested,history):Error ~44 > flatten,db,reference_error
+    report_reference_error(conversation,requested,history):Error ~46 > flatten,db,reference_error
     evidence_reference_error(conversation,requested,reason):Error > db,reference_error
     record_result(turn,result):Result<Value> > save_turn_result
     record_task_result(conversation,role,turn,result):Result<Value> > record_task_result_with_evidence
@@ -2970,6 +2970,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 123,564 LOC · input 1,092,665 · output 42,996 tokens · state d3c885080588
+· 123,566 LOC · input 1,092,694 · output 42,996 tokens · state f8d54b10f3df
 ```
 <!-- hologram:end -->
