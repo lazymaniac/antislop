@@ -27,12 +27,13 @@ fn expanded_pty_content_grows_with_the_viewport() {
         usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
         260
     );
-    assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
+    // The layout keeps MARGIN left and GAP_X right of the card.
+    assert_eq!((size.expanded_w, size.expanded_h), (67, 10));
     let expanded = content_area(size.expanded_w, size.expanded_h);
     let baseline = content_area(56, 10);
     assert_eq!(
         usize::from(expanded.width) * usize::from(expanded.height),
-        330
+        315
     );
     assert!(
         usize::from(expanded.width) * usize::from(expanded.height)
@@ -80,6 +81,21 @@ fn expanded_card_reflows_the_graph_without_overlapping_its_neighbours() {
     let expanded = graph.node("worker:t1").unwrap();
     assert!(expanded.width > WIDTH);
     assert!(expanded.height > HEIGHT);
+    // The expanded card, its reviewer and their frame stay within the
+    // viewport: opening a card never needs a horizontal scroll.
+    for (width, key) in [(120, "worker:t1"), (90, "reviewer:t2"), (120, ORCHESTRATOR)] {
+        let graph = Graph::new_with_expanded(
+            &view,
+            &Scope::default(),
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((width, 48)),
+            Some(key.into()),
+            0,
+        );
+        assert!(graph.width <= width, "{key} at {width}: {}", graph.width);
+        assert!(graph.node(key).unwrap().width > WIDTH);
+    }
     assert!(
         graph
             .nodes

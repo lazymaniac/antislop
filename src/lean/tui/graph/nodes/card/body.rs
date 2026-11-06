@@ -39,27 +39,7 @@ impl Card<'_> {
     }
 
     fn paint_expanded(&mut self, tab: usize) {
-        let tabs = if self
-            .view
-            .agents
-            .get(&self.node.key)
-            .is_some_and(|agent| agent.branch.is_some())
-        {
-            "1 Details | 2 PTY | 3 Results | 4 Diff"
-        } else {
-            "1 Details | 2 PTY | 3 Results"
-        };
-        let tabs = if tab == 1 {
-            format!("{tabs} | i type · PgUp/PgDn scroll · Ctrl+] stop typing")
-        } else {
-            tabs.to_owned()
-        };
-        self.canvas.text(
-            self.node.x + 2,
-            self.node.y + 2,
-            &tabs,
-            self.fill.patch(self.theme.accent()),
-        );
+        self.paint_tabs(tab);
         let mut rows = Vec::new();
         let agent = self.view.agents.get(&self.node.key).or_else(|| {
             card_members(self.view, &self.node.key)
@@ -158,6 +138,54 @@ impl Card<'_> {
                 y,
                 &truncate(row, self.inner_width()),
                 self.fill.patch(self.theme.text()),
+            );
+        }
+    }
+}
+
+impl Card<'_> {
+    /// The tab strip: the open tab stands out reversed, the others dim, and
+    /// the keys of the open tab follow while they fit.
+    fn paint_tabs(&mut self, tab: usize) {
+        // A Diff opened with `4` or `d` shows its tab even without a branch.
+        let names = &EXPANDED_TABS[..expanded_tab_names(self.view, &self.node.key)
+            .len()
+            .max(tab + 1)
+            .min(EXPANDED_TABS.len())];
+        let y = self.node.y + 2;
+        let right = self.node.x + self.node.width.saturating_sub(2);
+        let mut x = self.node.x + 2;
+        for (index, name) in names.iter().enumerate() {
+            let label = format!(" {} {name} ", index + 1);
+            let style = if index == tab {
+                self.fill
+                    .patch(self.theme.accent())
+                    .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+            } else {
+                self.fill.patch(self.theme.dim())
+            };
+            let room = usize::from(right.saturating_sub(x));
+            if room == 0 {
+                return;
+            }
+            self.canvas.text(x, y, &truncate(&label, room), style);
+            x = x.saturating_add(label.width() as u16 + 1);
+        }
+        let hint = match (tab == 1, self.theme.ascii) {
+            (true, false) => "←/→ tab · ↑/↓ PgUp/PgDn scroll · i type · Ctrl+] stop typing",
+            (true, true) => {
+                "Left/Right tab - Up/Down PgUp/PgDn scroll - i type - Ctrl+] stop typing"
+            }
+            (false, false) => "←/→ tab · ↑/↓ PgUp/PgDn scroll",
+            (false, true) => "Left/Right tab - Up/Down PgUp/PgDn scroll",
+        };
+        let room = usize::from(right.saturating_sub(x + 1));
+        if room > 8 {
+            self.canvas.text(
+                x + 1,
+                y,
+                &truncate(hint, room),
+                self.fill.patch(self.theme.dim()),
             );
         }
     }

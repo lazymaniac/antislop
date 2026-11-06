@@ -279,14 +279,26 @@ fn push_wrapped_unit(
     row.push(unit);
 }
 
-fn cards(unit: &Unit) -> u16 {
-    unit.folded.len() as u16
+/// The unit's cards the layout places, each with whether it is folded: all
+/// of them, or only the expanded one, which then takes the unit's width.
+pub(super) fn shown_members(builder: &Builder<'_>, unit: &Unit) -> Vec<(String, bool)> {
+    let members: Vec<(String, bool)> = member_keys(builder.view, unit)
+        .into_iter()
+        .zip(unit.folded.iter().copied())
+        .collect();
+    match builder.size.expanded_key.as_deref() {
+        Some(expanded) if members.iter().any(|(key, _)| key == expanded) => members
+            .into_iter()
+            .filter(|(key, _)| key == expanded)
+            .collect(),
+        _ => members,
+    }
 }
 
 pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
-    let keys = member_keys(builder.view, unit);
-    let widths = keys.iter().map(|key| builder.size.width(key, false));
-    2 * FRAME_X + widths.sum::<u16>() + cards(unit).saturating_sub(1) * GAP_X
+    let shown = shown_members(builder, unit);
+    let widths = shown.iter().map(|(key, _)| builder.size.width(key, false));
+    2 * FRAME_X + widths.sum::<u16>() + (shown.len() as u16).saturating_sub(1) * GAP_X
 }
 
 pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {
@@ -310,9 +322,8 @@ pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]
         let mut x = 0;
         for &unit in members {
             let width = unit_width(builder, &units[unit]);
-            let tallest = member_keys(builder.view, &units[unit])
+            let tallest = shown_members(builder, &units[unit])
                 .iter()
-                .zip(&units[unit].folded)
                 .map(|(key, folded)| card_height(builder, key, *folded))
                 .max()
                 .unwrap_or(builder.size.h);

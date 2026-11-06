@@ -89,6 +89,10 @@ pub struct App {
     pub animate_graph: bool,
     pub graph_anim: Option<(String, bool, std::time::Instant)>,
     pub graph_tab: usize,
+    /// Lines the expanded card's Results tab is scrolled down.
+    pub graph_card_scroll: usize,
+    /// The expanded card's content area as last drawn, for hit testing.
+    pub graph_card_area: Option<Rect>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
@@ -184,6 +188,8 @@ macro_rules! initial_app {
             animate_graph: false,
             graph_anim: None,
             graph_tab: 0,
+            graph_card_scroll: 0,
+            graph_card_area: None,
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,

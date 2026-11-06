@@ -27,6 +27,22 @@ pub(super) fn expanded_card_content_area(card: Rect, viewport: Rect) -> Rect {
     .intersection(viewport)
 }
 
+/// Every tab an expanded card can show, in key order `1`..`4`.
+const EXPANDED_TABS: [&str; 4] = ["Details", "PTY", "Results", "Diff"];
+
+/// The tabs of an expanded card: Diff only for an agent with a branch.
+pub(super) fn expanded_tab_names(view: &View, key: &str) -> &'static [&'static str] {
+    if view
+        .agents
+        .get(key)
+        .is_some_and(|agent| agent.branch.is_some())
+    {
+        &EXPANDED_TABS
+    } else {
+        &EXPANDED_TABS[..3]
+    }
+}
+
 /// Current extraction and historical requirements roles share one card.
 /// These are role addresses, not a fixed number of rounds to execute.
 const REQUIREMENTS_ROUNDS: [&str; 4] = [

@@ -69,8 +69,18 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
 
     app.key(key_press(KeyCode::Enter));
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    // The arrows act inside the expanded card: the selection stays on it.
     app.key(key_press(KeyCode::Down));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(key_press(KeyCode::Right));
+    assert_eq!(app.selected, "worker:t1");
+    assert_eq!(app.graph_tab, 1);
+    app.key(key_press(KeyCode::Left));
+    app.key(key_press(KeyCode::Left));
+    assert_eq!(app.graph_tab, 2, "tabs wrap around");
+    app.key(key_press(KeyCode::Enter));
+    assert!(app.graph_expanded.is_none());
+    app.key(key_press(KeyCode::Down));
+    assert_ne!(app.selected, "worker:t1");
     app.key(key_press(KeyCode::Enter));
     assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
     app.key(key_press(KeyCode::Enter));
@@ -229,8 +239,8 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     app.key(key_press(KeyCode::Char('2')));
     assert_eq!(app.graph_tab, 1, "PTY tab remains reachable inside Diff");
     assert!(
-        app.diff.is_some(),
-        "switching tabs keeps the DiffView available"
+        app.diff.is_none(),
+        "the DiffView closes with its tab so it stops taking keys"
     );
     app.key(key_press(KeyCode::Char('3')));
     assert_eq!(
@@ -239,35 +249,63 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     );
     app.key(key_press(KeyCode::Char('4')));
     assert_eq!(app.graph_tab, 3, "Diff tab remains selectable");
+    assert!(app.diff.is_some(), "the Diff tab reopens the DiffView");
 
-    let graph = graph::Graph::new_with_expanded(
-        &app.view,
-        &app.graph_scope,
-        &app.graph_collapsed,
-        app.graph_grouping,
-        app.graph_viewport,
-        app.graph_expanded.clone(),
-        app.graph_tab,
+    // Inside the diff, ←/→ still switch tabs and the selection stays put.
+    app.key(key_press(KeyCode::Up));
+    app.key(key_press(KeyCode::Down));
+    assert_eq!(app.selected, "worker:t1");
+    assert_eq!(app.graph_tab, 3);
+    app.key(key_press(KeyCode::Right));
+    assert_eq!(app.graph_tab, 0, "→ wraps from Diff to Details");
+    app.key(key_press(KeyCode::Left));
+    assert_eq!(
+        app.graph_tab, 2,
+        "without a branch the card has no Diff tab"
     );
-    let (direction, next) = [
-        (KeyCode::Left, -1, 0),
-        (KeyCode::Right, 1, 0),
-        (KeyCode::Up, 0, -1),
-        (KeyCode::Down, 0, 1),
-    ]
-    .into_iter()
-    .find_map(|(key, dx, dy)| {
-        graph
-            .neighbour(&app.selected, dx, dy)
-            .map(|next| (key, next))
-    })
-    .expect("the graph contains a navigable neighboring node");
-    app.key(key_press(direction));
-    assert_eq!(app.selected, next);
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-    app.key(key_press(KeyCode::Char('1')));
+}
+
+#[test]
+fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.view.tasks = (1..=4)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("task {n}"),
+            depends_on: if n > 1 {
+                vec![format!("t{}", n - 1)]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        })
+        .collect();
+    app.selected = "worker:t2".into();
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Enter));
-    assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let area = app
+        .graph_card_area
+        .expect("the expanded card has a content area");
+    let offset = app.offset;
+    let wheel = |kind| event::MouseEvent {
+        kind,
+        column: area.x + area.width / 2,
+        row: area.y + area.height / 2,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(wheel(event::MouseEventKind::ScrollDown));
+    app.mouse(wheel(event::MouseEventKind::ScrollDown));
+    assert_eq!(
+        app.offset, offset,
+        "the wheel moved the graph under the card"
+    );
+    assert_eq!(app.details.as_ref().unwrap().dash_scroll, 6);
+    app.mouse(wheel(event::MouseEventKind::ScrollUp));
+    assert_eq!(app.details.as_ref().unwrap().dash_scroll, 3);
 }
 
 #[test]

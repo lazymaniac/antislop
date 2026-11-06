@@ -21,16 +21,6 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn mouse_scroll(&mut self, down: bool) {
-        if self.graph_expanded.is_some()
-            && self.graph_tab == 1
-            && self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.selected_round.is_none() && !details.native_focus)
-        {
-            self.scroll_console(if down { -3 } else { 3 });
-            return;
-        }
         if self.scroll_help(down) {
             return;
         }
@@ -50,7 +40,7 @@ impl App {
             diff.key(if down { KeyCode::Down } else { KeyCode::Up });
             return;
         }
-        if self.scroll_details(down) {
+        if self.graph_expanded.is_none() && self.scroll_details(down) {
             return;
         }
         if self.focus == Focus::Graph {
@@ -100,13 +90,8 @@ impl App {
     }
 
     fn scroll_graph(&mut self, down: bool, sideways: bool) {
-        let graph = Graph::new_with_viewport(
-            &self.view,
-            &self.graph_scope,
-            &self.graph_collapsed,
-            self.graph_grouping,
-            self.graph_viewport,
-        );
+        // The expanded card is part of the layout the view pans over.
+        let graph = self.graph_for_key();
         self.pan_graph(&graph, down, if sideways { 6 } else { 3 }, sideways);
     }
 
@@ -140,6 +125,18 @@ impl App {
         }
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self
+                    .graph_card_area
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into())) =>
+            {
+                // The wheel over an expanded card scrolls what it shows.
+                self.scroll_expanded_card(if mouse.kind == MouseEventKind::ScrollDown {
+                    -3
+                } else {
+                    3
+                });
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 if self.over_graph(mouse.column, mouse.row) =>
             {
                 let sideways = mouse.modifiers.contains(KeyModifiers::SHIFT);
@@ -164,8 +161,24 @@ impl App {
         if !self.native_focused() {
             return false;
         }
+        let in_graph = self.graph_expanded.is_some() && self.graph_tab == 1;
+        if in_graph
+            && matches!(
+                mouse.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+        {
+            // The wheel scrolls the agent's history, not the graph.
+            self.scroll_console(if mouse.kind == MouseEventKind::ScrollDown {
+                -3
+            } else {
+                3
+            });
+            return true;
+        }
         if let Some(details) = &self.details {
-            let area = details.native_areas[details.active_panel];
+            let panel = if in_graph { 0 } else { details.active_panel };
+            let area = details.native_areas[panel];
             if area.contains((mouse.column, mouse.row).into()) {
                 mouse.column -= area.x;
                 mouse.row -= area.y;

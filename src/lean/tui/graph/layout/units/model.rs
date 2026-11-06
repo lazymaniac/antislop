@@ -6,6 +6,7 @@ pub(super) struct Unit {
     pub(super) folded: Vec<bool>,
 }
 
+#[derive(Clone)]
 pub(super) struct Placed {
     pub(super) unit: usize,
     pub(super) row: usize,

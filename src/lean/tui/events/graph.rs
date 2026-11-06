@@ -37,7 +37,7 @@ impl App {
             }
             return true;
         }
-        if self.console_key(key) {
+        if self.expanded_card_key(key) {
             return true;
         }
         let graph = self.graph_for_key();
@@ -51,22 +51,34 @@ impl App {
         self.graph_action_key(key)
     }
 
-    /// The expanded card's PTY tab is a read-only console until `i` enters it:
-    /// the arrows and page keys scroll its history.
-    fn console_key(&mut self, key: KeyEvent) -> bool {
-        let console = self.graph_expanded.is_some()
-            && self.graph_tab == 1
-            && self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.selected_round.is_none() && !details.native_focus);
-        if !console {
+    /// An expanded card keeps the selection: ←/→ switch its tabs, and the
+    /// arrows and page keys scroll the open tab's content. The PTY tab is a
+    /// read-only console until `i` enters it.
+    fn expanded_card_key(&mut self, key: KeyEvent) -> bool {
+        if self.graph_expanded.is_none() || key.modifiers.contains(KeyModifiers::ALT) {
             return false;
         }
-        let height = self.details.as_ref().map_or(10, |details| {
-            i32::from(details.native_areas[0].height.max(2))
-        });
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Left | KeyCode::Right if !control => {
+                let count = self.graph_tab_count();
+                let next = if key.code == KeyCode::Left {
+                    (self.graph_tab + count - 1) % count
+                } else {
+                    (self.graph_tab + 1) % count
+                };
+                self.set_graph_tab(next);
+                return true;
+            }
+            KeyCode::Char('i') if !control && self.graph_console_active() => {
+                if let Some(details) = &mut self.details {
+                    details.native_focus = true;
+                }
+                return true;
+            }
+            _ => {}
+        }
+        let height = i32::from(self.graph_card_area.map_or(10, |area| area.height.max(2)));
         let lines = match key.code {
             KeyCode::Up => 1,
             KeyCode::Down => -1,
@@ -74,23 +86,81 @@ impl App {
             KeyCode::PageDown => 1 - height,
             KeyCode::Char('u') if control => height / 2,
             KeyCode::Char('d') if control => -(height / 2),
-            KeyCode::Char('i') if !control => {
-                if let Some(details) = &mut self.details {
-                    details.native_focus = true;
-                }
-                return true;
-            }
             _ => return false,
         };
-        self.scroll_console(lines);
+        self.scroll_expanded_card(lines);
         true
+    }
+
+    /// Scrolls the open tab of the expanded card: positive `lines` go back
+    /// towards the top.
+    pub(in crate::lean::tui) fn scroll_expanded_card(&mut self, lines: i32) {
+        match self.graph_tab {
+            1 if self.graph_console_active() => self.scroll_console(lines),
+            0 => {
+                if let Some(details) = &mut self.details {
+                    details.dash_scroll(-(lines as isize));
+                }
+            }
+            2 => {
+                self.graph_card_scroll =
+                    (self.graph_card_scroll as i64 - i64::from(lines)).max(0) as usize;
+            }
+            3 => {
+                if let Some(diff) = &mut self.diff {
+                    let code = if lines > 0 {
+                        KeyCode::Up
+                    } else {
+                        KeyCode::Down
+                    };
+                    for _ in 0..lines.unsigned_abs() {
+                        diff.key(code);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the expanded card shows the live PTY, read-only.
+    pub(in crate::lean::tui) fn graph_console_active(&self) -> bool {
+        self.graph_expanded.is_some()
+            && self.graph_tab == 1
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.selected_round.is_none() && !details.native_focus)
+    }
+
+    /// The expanded card's tabs; a Diff opened with `4` or `d` counts too.
+    fn graph_tab_count(&self) -> usize {
+        self.graph_expanded
+            .as_deref()
+            .map_or(1, |key| graph::expanded_tab_names(&self.view, key).len())
+            .max(self.graph_tab + 1)
+    }
+
+    fn set_graph_tab(&mut self, tab: usize) {
+        self.graph_tab = tab;
+        self.graph_card_scroll = 0;
+        if let Some(details) = &mut self.details {
+            // The console opens read-only; `i` types into it.
+            details.native_focus = false;
+            details.dash_scroll = 0;
+        }
+        if tab == 3 {
+            self.open_graph_diff();
+        } else {
+            // The diff takes keys while it is open: close it with its tab.
+            self.diff = None;
+        }
     }
 
     pub(in crate::lean::tui) fn scroll_console(&mut self, lines: i32) {
         self.native_send(crate::lean::terminal::Input::Scroll { lines });
     }
 
-    fn graph_for_key(&self) -> Graph {
+    pub(in crate::lean::tui) fn graph_for_key(&self) -> Graph {
         Graph::new_with_expanded(
             &self.view,
             &self.graph_scope,
@@ -159,22 +229,12 @@ impl App {
             KeyCode::Char('f') => self.open_graph_filters(),
             KeyCode::Char(digit @ '1'..='4') => {
                 if self.graph_expanded.is_some() {
-                    self.graph_tab = usize::from(digit as u8 - b'1');
-                    if let Some(details) = &mut self.details {
-                        // The console opens read-only; `i` types into it.
-                        details.native_focus = false;
-                    }
-                    if self.graph_tab == 3 {
-                        self.open_graph_diff();
-                    }
+                    self.set_graph_tab(usize::from(digit as u8 - b'1'));
                 } else {
                     self.relations.toggle(usize::from(digit as u8 - b'1'));
                 }
             }
-            KeyCode::Char('d') => {
-                self.graph_tab = 3;
-                self.open_graph_diff();
-            }
+            KeyCode::Char('d') => self.set_graph_tab(3),
             KeyCode::Char('c') => self.open_graph_comment(),
             KeyCode::Enter => {
                 if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
@@ -183,6 +243,8 @@ impl App {
                         .filter(|_| self.animate_graph)
                         .map(|key| (key, false, std::time::Instant::now()));
                     self.details = None;
+                    self.diff = None;
+                    self.graph_card_area = None;
                 } else {
                     self.graph_expanded = Some(self.selected.clone());
                     self.graph_anim = self
@@ -190,6 +252,8 @@ impl App {
                         .then(|| (self.selected.clone(), true, std::time::Instant::now()));
                     self.graph_revealed = None;
                     self.graph_tab = 0;
+                    self.graph_card_scroll = 0;
+                    self.diff = None;
                     self.open_details(self.selected.clone());
                 }
             }

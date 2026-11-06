@@ -1,4 +1,4 @@
-use super::build::member_keys;
+use super::build::{member_keys, shown_members};
 use super::*;
 use std::collections::{HashMap, HashSet};
 
@@ -66,15 +66,31 @@ pub(super) fn push_unit(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, t
 }
 
 fn push_cards(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16, group: &str) {
-    let keys = member_keys(builder.view, unit);
+    let shown = shown_members(builder, unit);
     let y = top + FRAME_Y;
     let mut previous: Option<(String, u16)> = None;
     let mut offset = 0;
-    for (key, folded) in keys.iter().zip(&unit.folded) {
-        let key = key.as_str();
+    for (key, folded) in &shown {
         let x = spot.x + FRAME_X + offset;
         push_card(builder, key, *folded, x, y, group, &mut previous);
         offset += builder.size.width(key, false) + GAP_X;
+    }
+    // The expanded card's partners step aside until it closes.
+    for (key, folded) in member_keys(builder.view, unit)
+        .into_iter()
+        .zip(&unit.folded)
+        .filter(|(key, _)| !shown.iter().any(|(shown, _)| shown == key))
+    {
+        builder.graph.nodes.push(Node {
+            key: key.clone(),
+            x: 0,
+            y: 0,
+            width: builder.size.width(&key, false),
+            height: builder.size.h,
+            visible: false,
+            group: Some(group.to_owned()),
+            collapsed: *folded,
+        });
     }
 }
 

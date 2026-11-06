@@ -272,9 +272,5 @@ fn embedded_diff_graph_key(key: KeyEvent, allow_selection: bool) -> bool {
     matches!(
         key.code,
         KeyCode::Char('1'..='4' | ',' | '.') | KeyCode::Enter
-    ) || (allow_selection
-        && matches!(
-            key.code,
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
-        ))
+    ) || (allow_selection && matches!(key.code, KeyCode::Left | KeyCode::Right))
 }

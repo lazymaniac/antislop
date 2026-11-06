@@ -35,6 +35,7 @@ impl App {
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
+        self.graph_card_area = None;
         if step == graph::FULL_STEP {
             self.draw_expanded_card_panels(frame, inner, &graph);
         }
@@ -107,6 +108,10 @@ impl App {
         )
         .intersection(viewport);
         let content = graph::expanded_card_content_area(card, viewport);
+        self.graph_card_area = Some(content).filter(|area| !area.is_empty());
+        if self.graph_tab == 0 {
+            self.draw_card_details(frame, content, &key);
+        }
 
         if self.graph_tab == 1 {
             if let Some(details) = &mut self.details {
@@ -170,10 +175,80 @@ impl App {
         let has_round_snapshot = self.details.as_ref().is_some_and(|details| {
             details.key == key && (details.task_id().is_some() || details.selected_round.is_some())
         });
-        if has_round_snapshot && matches!(self.graph_tab, 0 | 2) {
-            render_card_round_data(frame, content, self.graph_tab, self.details.as_ref());
+        if has_round_snapshot
+            && self.graph_tab == 2
+            && let Some(scroll) = render_card_round_data(
+                frame,
+                content,
+                self.graph_card_scroll,
+                self.details.as_ref(),
+            )
+        {
+            self.graph_card_scroll = scroll;
         }
         render_card_round_selector(frame, card, self.details.as_ref(), &self.view, &key);
+    }
+
+    /// The Details tab shows the agent's dashboard: its task, state, checks,
+    /// findings and history, scrolled within the card.
+    fn draw_card_details(&mut self, frame: &mut Frame, content: Rect, key: &str) {
+        let theme = Theme::from_env();
+        let Some(details) = self
+            .details
+            .as_mut()
+            .filter(|details| details.key == key && details.key != "conversation")
+        else {
+            return;
+        };
+        if content.width < 24 || content.height < 3 {
+            return;
+        }
+        frame.render_widget(ratatui::widgets::Clear, content);
+        frame.render_widget(Block::default().style(theme.raised()), content);
+        // The card names only its role: say which task, as of the round shown.
+        let row = key
+            .split_once(':')
+            .and_then(|(_, id)| self.view.tasks.iter().find(|task| task.id == id));
+        let snapshot = |field: &str| {
+            details
+                .task
+                .as_ref()
+                .and_then(|task| task[field].as_str())
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        let title = snapshot("title").or_else(|| row.map(|row| row.title.clone()));
+        let status = snapshot("status").or_else(|| row.map(|row| row.status.clone()));
+        let heading = match (title.filter(|t| !t.is_empty()), status) {
+            (Some(title), Some(status)) if !status.is_empty() => format!("{title} · {status}"),
+            (Some(title), _) => title,
+            _ => String::new(),
+        };
+        let mut lines = Vec::new();
+        if !heading.is_empty() {
+            lines.push(Line::styled(
+                truncate(&theme.clean(&heading), usize::from(content.width)),
+                theme.title().add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(agent) = self.view.agents.get(key) {
+            lines.push(Line::styled(
+                truncate(&theme.clean(&agent_line(agent)), usize::from(content.width)),
+                theme.dim(),
+            ));
+        }
+        let used = (lines.len() as u16).min(content.height);
+        frame.render_widget(
+            Paragraph::new(lines),
+            Rect::new(content.x, content.y, content.width, used),
+        );
+        let body = Rect::new(
+            content.x,
+            content.y + used,
+            content.width,
+            content.height - used,
+        );
+        details.draw_dashboard(frame, &self.view, body, &theme);
     }
 
     fn graph_areas(&mut self, frame: &mut Frame, area: Rect) -> (Rect, Option<Rect>, Vec<String>) {
@@ -368,12 +443,19 @@ fn render_card_round_selector(
     );
 }
 
-fn render_card_round_data(frame: &mut Frame, area: Rect, tab: usize, details: Option<&Details>) {
+/// Draws the selected round's results from `scroll`; returns the scroll the
+/// page settled at.
+fn render_card_round_data(
+    frame: &mut Frame,
+    area: Rect,
+    scroll: usize,
+    details: Option<&Details>,
+) -> Option<usize> {
     let Some(details) = details else {
         render_card_history_message(frame, area, "Round data is unavailable.");
-        return;
+        return None;
     };
-    let Some(task) = details.task.as_ref() else {
+    if details.task.is_none() {
         let message = if let Some(error) = details.fetch_error.as_deref() {
             format!("Round data unavailable: {error}")
         } else if details.fetch_in_flight {
@@ -382,55 +464,31 @@ fn render_card_round_data(frame: &mut Frame, area: Rect, tab: usize, details: Op
             "No stored data is available for this round.".to_owned()
         };
         render_card_history_message(frame, area, &message);
-        return;
-    };
+        return None;
+    }
     let theme = Theme::from_env();
-    if tab == 0 {
-        let lines = [
-            task["title"].as_str().map(|value| format!("Task: {value}")),
-            task["status"]
-                .as_str()
-                .map(|value| format!("Status: {value}")),
-            task["result"]
-                .as_str()
-                .map(|value| format!("Result: {value}")),
-            task["base"].as_str().map(|value| format!("Base: {value}")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        if lines.is_empty() {
-            render_card_history_message(frame, area, "No details are retained for this round.");
-        } else {
-            frame.render_widget(
-                Paragraph::new(
-                    lines
-                        .into_iter()
-                        .map(|line| Line::raw(theme.clean(&line)))
-                        .collect::<Vec<_>>(),
-                )
-                .style(theme.text()),
-                area,
-            );
-        }
-    } else if let Some(document) = details.documents.get("result") {
+    if let Some(document) = details.documents.get("result") {
         match document.viewport_filtered(
             usize::from(area.width),
             usize::from(area.height),
-            0,
+            scroll,
             false,
             "",
         ) {
-            Ok(Some(page)) => frame.render_widget(
-                Paragraph::new(
-                    page.lines
-                        .into_iter()
-                        .map(|(_, line)| Line::raw(theme.clean(&line)))
-                        .collect::<Vec<_>>(),
-                )
-                .style(theme.text()),
-                area,
-            ),
+            Ok(Some(page)) => {
+                let settled = page.scroll;
+                frame.render_widget(
+                    Paragraph::new(
+                        page.lines
+                            .into_iter()
+                            .map(|(_, line)| Line::raw(theme.clean(&line)))
+                            .collect::<Vec<_>>(),
+                    )
+                    .style(theme.text()),
+                    area,
+                );
+                return Some(settled);
+            }
             Ok(None) => {
                 render_card_history_message(frame, area, "Preparing selected round results…")
             }
@@ -443,6 +501,40 @@ fn render_card_round_data(frame: &mut Frame, area: Rect, tab: usize, details: Op
     } else {
         render_card_history_message(frame, area, "No result data is retained for this round.");
     }
+    None
+}
+
+/// The CLI behind a card and what its turns cost so far.
+fn agent_line(agent: &crate::lean::tui::view::Agent) -> String {
+    let mut parts = vec![format!(
+        "CLI: {}",
+        if agent.provider.is_empty() {
+            "unknown"
+        } else {
+            &agent.provider
+        }
+    )];
+    if let Some(model) = agent.model.as_deref() {
+        parts.push(match agent.effort.as_deref() {
+            Some(effort) => format!("model {model} ({effort})"),
+            None => format!("model {model}"),
+        });
+    }
+    parts.push(if agent.running {
+        "running".to_owned()
+    } else {
+        format!("{} turns", agent.turns)
+    });
+    if agent.tokens_in.is_some() {
+        parts.push(format!("tokens {}", agent.tokens()));
+    }
+    if agent.busy_ms > 0 {
+        parts.push(format!(
+            "busy {}",
+            crate::lean::tui::view::duration(agent.busy_ms)
+        ));
+    }
+    parts.join(" · ")
 }
 
 fn render_card_history_message(frame: &mut Frame, area: Rect, message: &str) {

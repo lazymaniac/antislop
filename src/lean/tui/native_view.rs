@@ -385,13 +385,27 @@ mod tests {
         assert!(!app.native_focused(), "redraw restored PTY focus");
         assert!(app.view.agents.contains_key("worker:t1"));
 
-        // Normal TUI tab routing and graph navigation work after leaving.
+        // Normal TUI tab routing works after leaving; the expanded card keeps
+        // the selection and graph navigation resumes once it closes.
         app.key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('3'),
             crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(app.graph_tab, 2);
         let selected = app.selected.clone();
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(
+            app.selected, selected,
+            "the expanded card lost the selection"
+        );
+        app.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(app.graph_expanded.is_none());
         app.key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Down,
             crossterm::event::KeyModifiers::NONE,

@@ -1261,14 +1261,25 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
         "{initial_text}"
     );
 
-    let graph = Graph::new_with_expanded(
+    // The arrows act inside the expanded card: ←/→ switch its tabs and the
+    // selection stays on it.
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.graph_tab, 1);
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.graph_tab, 0);
+    assert_eq!(app.selected, "worker:t1");
+    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    assert!(app.details.is_some(), "tab switching preserves Details");
+
+    // Enter closes the card; the arrows then move through the graph.
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_expanded.is_none());
+    let graph = Graph::new_with_viewport(
         &app.view,
         &app.graph_scope,
         &app.graph_collapsed,
         app.graph_grouping,
         app.graph_viewport,
-        app.graph_expanded.clone(),
-        app.graph_tab,
     );
     let (direction, next) = [
         (KeyCode::Left, (-1, 0)),
@@ -1283,21 +1294,9 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
             .filter(|next| next == "orchestrator")
             .map(|next| (key, next))
     })
-    .expect("expanded card has an adjacent graph node");
-
+    .expect("worker card has an adjacent graph node");
     app.key(KeyEvent::new(direction, KeyModifiers::NONE));
     assert_eq!(app.selected, next);
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-    assert!(app.details.is_some(), "selection alone preserves Details");
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let selected_text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect();
-    assert!(selected_text.contains("Alpha card content"));
 
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.graph_expanded.as_deref(), Some(next.as_str()));
@@ -1449,6 +1448,13 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
         expanded_first.node("worker:t2").unwrap().y
     );
 
+    // The arrows stay inside the expanded card; Enter closes it first.
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.selected, "worker:t1");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_expanded.is_none());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let closed = graph(&app);
     let next = [
         (KeyCode::Left, -1, 0),
         (KeyCode::Right, 1, 0),
@@ -1457,7 +1463,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
     ]
     .into_iter()
     .find_map(|(key, dx, dy)| {
-        expanded_first
+        closed
             .neighbour("worker:t1", dx, dy)
             .filter(|next| next == "worker:t2")
             .map(|_| key)
@@ -1465,7 +1471,6 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
     .expect("second root remains reachable by graph navigation");
     app.key(KeyEvent::new(next, KeyModifiers::NONE));
     assert_eq!(app.selected, "worker:t2");
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_geometry(&graph(&app), (160, 50));
 
@@ -1608,15 +1613,14 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             legacy_card.1.saturating_sub(4),
         );
         assert!(content.0 > legacy_content.0);
-        assert!(
-            usize::from(content.0) * usize::from(content.1)
-                > usize::from(legacy_content.0) * usize::from(legacy_content.1),
-            "larger card must leave a larger content area"
-        );
-        assert!(
-            card.width + 6 >= viewport.0,
+        // The left margin, the right gap and its task frame: nothing more,
+        // and nothing past the viewport.
+        assert_eq!(
+            card.width + 13,
+            viewport.0,
             "card keeps only its required margins"
         );
+        assert!(graph.width <= viewport.0, "the graph fits the canvas");
         println!(
             "terminal={terminal_width}x{terminal_height} viewport={}x{} card={}x{} content={}x{} area={} legacy_card={}x{} legacy_content={}x{} area={}",
             viewport.0,
@@ -4509,9 +4513,11 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
         1,
     );
     let card = expanded.node("worker:t1").unwrap();
-    assert_eq!((card.width, card.height), (70, 10));
+    // Margin, gap and the task frame keep the card within the viewport.
+    assert_eq!((card.width, card.height), (63, 10));
+    assert!(expanded.width <= 76);
     let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
-    assert_eq!(content_area, 330);
+    assert_eq!(content_area, 295);
     assert_eq!(usize::from(52u16) * usize::from(card.height - 4), 312);
 
     // Capture node coordinates
