@@ -233,7 +233,7 @@ fn options_keep_writer_instructions_in_reference_data_only() {
     assert!(!instructions.contains("Edit src/store.rs"));
     assert!(instructions.contains("Do not execute builds, tests, linters"));
     let subject: Value = serde_json::from_str(reference).unwrap();
-    assert_eq!(subject["objective"], writer.goal);
+    assert_eq!(subject["owner_contract"]["goal"], writer.goal);
     assert_eq!(subject["task"], writer.id);
     assert_eq!(tasks[1].goal, writer.goal);
     for prompt in [
