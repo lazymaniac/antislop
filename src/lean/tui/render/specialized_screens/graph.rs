@@ -24,6 +24,18 @@ impl App {
                 step,
             },
         );
+        self.now_click_targets = progress
+            .iter()
+            .map(|entry| {
+                entry.agent.as_ref().map(|agent| {
+                    let key = graph::card_key(&self.view, agent);
+                    (
+                        agent.clone(),
+                        graph.node(&key).is_some_and(|node| node.visible),
+                    )
+                })
+            })
+            .collect();
         self.keep_graph_selection_visible(&graph);
         if step < graph::FULL_STEP {
             self.center_animated_card(&graph, step);
@@ -296,18 +308,27 @@ impl App {
         details.draw_dashboard(frame, &self.view, body, &theme);
     }
 
-    fn graph_areas(&mut self, frame: &mut Frame, area: Rect) -> (Rect, Option<Rect>, Vec<String>) {
+    fn graph_areas(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+    ) -> (
+        Rect,
+        Option<Rect>,
+        Vec<crate::lean::tui::view::ProgressEntry>,
+    ) {
         let frame_inner = self.draw_graph_frame(frame, area);
-        let progress = self.view.now_click_rows();
+        let max_rows = if frame_inner.height / 2 >= 3 {
+            usize::from((frame_inner.height / 2).saturating_sub(2).min(6))
+        } else {
+            0
+        };
+        let progress = self.view.now_click_rows(max_rows);
         let (graph_area, now_area) = graph_progress_areas(frame_inner, progress.len());
         let inner = padded(graph_area);
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
-        (
-            inner,
-            now_area,
-            progress.into_iter().map(|entry| entry.text).collect(),
-        )
+        (inner, now_area, progress)
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect) -> Rect {
@@ -408,7 +429,12 @@ impl App {
         );
     }
 
-    fn draw_progress(&self, frame: &mut Frame, area: Option<Rect>, progress: &[String]) {
+    fn draw_progress(
+        &self,
+        frame: &mut Frame,
+        area: Option<Rect>,
+        progress: &[crate::lean::tui::view::ProgressEntry],
+    ) {
         let Some(area) = area else {
             return;
         };
@@ -416,7 +442,7 @@ impl App {
         let lines = progress
             .iter()
             .take(usize::from(area.height.saturating_sub(2)))
-            .map(|line| Line::raw(truncate(line, width)))
+            .map(|entry| Line::raw(truncate(&entry.text, width)))
             .collect::<Vec<_>>();
         frame.render_widget(
             Paragraph::new(lines).block(

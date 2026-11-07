@@ -259,6 +259,31 @@ fn clicking_now_focuses_and_scrolls_to_active_agent() {
 }
 
 #[test]
+fn now_click_mapping_contains_only_the_rows_shown_in_the_bar() {
+    let mut app = test_app();
+    app.view.tasks = (0..12)
+        .map(|index| view::TaskRow {
+            id: format!("t{index}"),
+            status: "working".into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let now = app.now_area.expect("Now panel rendered");
+    assert_eq!(app.now_click_targets.len(), 6);
+
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: now.x + 1,
+        row: now.y + 6,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected, "worker:t5");
+    assert_eq!(app.focus, Focus::Graph);
+}
+
+#[test]
 fn clicking_now_keeps_an_already_visible_agent_in_view() {
     let mut app = test_app();
     app.view.tasks = vec![view::TaskRow {
@@ -279,6 +304,12 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
     });
     assert_eq!(app.selected, "worker:t1");
     assert_eq!(app.focus, Focus::Graph);
+    assert!(app.graph_visibility_exception.is_none());
+    assert_eq!(
+        app.now_click_targets[0],
+        Some(("worker:t1".into(), true)),
+        "the row mapping retains the cached layout visibility"
+    );
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_eq!(app.offset, initial_offset);
 }

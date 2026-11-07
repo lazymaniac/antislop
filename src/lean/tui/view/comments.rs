@@ -56,17 +56,26 @@ impl View {
     /// What is happening now, one line per active step, for the progress
     /// overlay. Waiting and idle states are named, never shown as activity.
     pub fn progress(&self) -> Vec<String> {
-        self.now_click_rows()
+        self.now_click_rows(usize::MAX)
             .into_iter()
             .map(|entry| entry.text)
             .collect()
     }
 
-    pub(in crate::lean::tui) fn now_click_rows(&self) -> Vec<ProgressEntry> {
-        let mut entries = initial_progress(self);
-        entries.extend(task_progress(&self.tasks));
-        entries.extend(agent_progress(self));
+    pub(in crate::lean::tui) fn now_click_rows(&self, limit: usize) -> Vec<ProgressEntry> {
+        let mut entries = initial_progress(self)
+            .into_iter()
+            .take(limit)
+            .collect::<Vec<_>>();
+        entries.extend(task_progress(
+            &self.tasks,
+            limit.saturating_sub(entries.len()),
+        ));
+        entries.extend(agent_progress(self, limit.saturating_sub(entries.len())));
         if entries.is_empty() {
+            if limit == 0 {
+                return entries;
+            }
             entries.push(ProgressEntry {
                 text: self.waiting_progress(),
                 agent: None,
@@ -112,7 +121,7 @@ fn initial_progress(view: &View) -> Vec<ProgressEntry> {
     lines
 }
 
-fn task_progress(tasks: &[TaskRow]) -> Vec<ProgressEntry> {
+fn task_progress(tasks: &[TaskRow], limit: usize) -> impl Iterator<Item = ProgressEntry> + '_ {
     tasks
         .iter()
         .filter_map(|task| match task.status.as_str() {
@@ -138,10 +147,10 @@ fn task_progress(tasks: &[TaskRow]) -> Vec<ProgressEntry> {
             }),
             _ => None,
         })
-        .collect()
+        .take(limit)
 }
 
-fn agent_progress(view: &View) -> Vec<ProgressEntry> {
+fn agent_progress(view: &View, limit: usize) -> impl Iterator<Item = ProgressEntry> + '_ {
     [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR]
         .into_iter()
         .filter_map(|key| {
@@ -154,7 +163,7 @@ fn agent_progress(view: &View) -> Vec<ProgressEntry> {
                 }
             })
         })
-        .collect()
+        .take(limit)
 }
 
 fn review_word(review: &Value) -> String {

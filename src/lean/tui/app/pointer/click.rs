@@ -108,17 +108,14 @@ impl App {
             return true;
         }
         let line = row.saturating_sub(area.y).saturating_sub(1) as usize;
-        let Some(agent) = self
-            .view
-            .now_click_rows()
-            .get(line)
-            .and_then(|entry| entry.agent.clone())
-        else {
+        let Some((agent, visible)) = self.now_click_targets.get(line).and_then(Clone::clone) else {
             return true;
         };
         let selected = graph::card_key(&self.view, &agent);
         self.selected = selected.clone();
-        self.graph_visibility_exception = Some(selected);
+        if !visible {
+            self.graph_visibility_exception = Some(selected);
+        }
         self.graph_revealed = None;
         self.focus = Focus::Graph;
         true

@@ -104,6 +104,8 @@ pub struct App {
     pub graph_area: Option<Rect>,
     /// The last rendered Now panel, for row-to-agent click mapping.
     pub(super) now_area: Option<Rect>,
+    /// Agent ids and visibility in the last rendered Now rows, in display order.
+    pub(super) now_click_targets: Vec<Option<(String, bool)>>,
     pub phase_action_area: Option<Rect>,
     pub phase_action_command: Option<Command>,
     pub chat_area: Rect,
@@ -204,6 +206,7 @@ macro_rules! initial_app {
             graph_viewport: None,
             graph_area: None,
             now_area: None,
+            now_click_targets: Vec::new(),
             phase_action_area: None,
             phase_action_command: None,
             chat_area: Rect::default(),
