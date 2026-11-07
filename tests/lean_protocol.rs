@@ -127,17 +127,34 @@ impl DaemonGuard {
         // Parallel protocol tests launch independent PTYs and daemons. Use the
         // same budget as plan completion instead of assuming a five-second startup.
         let deadline = Instant::now() + Duration::from_secs(120);
+        let mut confirmed: Option<String> = None;
         loop {
             let reply = self
                 .call_raw(&json!({"op":"events","conversation":conversation,"after":0,"wait_ms":0}))
                 .unwrap();
-            if reply["events"]
-                .as_array()
-                .unwrap()
+            let events = reply["events"].as_array().unwrap();
+            if events
                 .iter()
                 .any(|event| event["kind"] == "workflow" && event["payload"]["phase"] == "planning")
             {
                 return;
+            }
+            // Planning starts once the user confirms the summarised scope.
+            let confirmation = events
+                .iter()
+                .rev()
+                .find(|event| event["kind"] == "scope_confirmation_requested")
+                .and_then(|event| event["payload"]["question"]["id"].as_str());
+            if let Some(id) = confirmation
+                && confirmed.as_deref() != Some(id)
+            {
+                self.call_raw(&json!({
+                    "op": "send",
+                    "conversation": conversation,
+                    "text": format!("Interview answer ({id})\nAnswer: Confirm scope"),
+                }))
+                .unwrap();
+                confirmed = Some(id.to_owned());
             }
             assert!(
                 Instant::now() < deadline,

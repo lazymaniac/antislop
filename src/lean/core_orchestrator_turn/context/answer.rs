@@ -320,8 +320,8 @@ mod tests {
             assert!(retry.asked[0].text.contains("still awaiting your response"));
             assert!(retry.audit_response.is_some());
             let prompt = super::super::render_prompt(&retry, false, false);
-            assert!(prompt.contains("AUDIT RESPONSE GATE"));
-            assert!(prompt.contains("## Independent audit\nThe request is not fully delivered"));
+            assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
+            assert!(prompt.contains(r"## Independent audit\nThe request is not fully delivered"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
 
             finish(
@@ -376,7 +376,7 @@ mod tests {
             );
             assert_eq!(setup.role, ORCHESTRATOR);
             let prompt = super::super::render_prompt(context, false, false);
-            assert!(prompt.contains("AUDIT RESPONSE GATE"));
+            assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
             assert!(prompt.contains("finding N: resolved -"));
             assert!(prompt.contains("finding N: open -"));
@@ -414,7 +414,7 @@ mod tests {
             assert_eq!(setup.role, ORCHESTRATOR);
 
             let prompt = super::super::render_prompt(context, false, false);
-            assert!(prompt.contains("AUDIT RESPONSE GATE"));
+            assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
             assert!(prompt.contains("Address each new user comment explicitly"));
 

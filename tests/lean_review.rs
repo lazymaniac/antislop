@@ -293,7 +293,11 @@ else:
         "{}",
         report.text
     );
-    assert_eq!(messages.last().unwrap().text, "gap noted");
+    let reply = &messages.last().unwrap().text;
+    assert!(
+        reply.starts_with("gap noted\n") && reply.contains("\nAudit response:\n"),
+        "{reply}"
+    );
 }
 
 #[test]

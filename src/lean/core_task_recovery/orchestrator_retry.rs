@@ -165,6 +165,7 @@ mod tests {
                 core.store
                     .open_user_decision(&conversation)
                     .unwrap()
+                    .flatten()
                     .is_none()
             );
         }

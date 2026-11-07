@@ -1642,6 +1642,11 @@ elif ('Independently compare' in prompt) or 'You review' in prompt or 'new plan:
 elif 'You are the planner' in prompt:
     answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','change_kind':'none','requirement_ids':['r1'],'criterion_ids':['r1.accept'],'reviewer':{'summary':'Check the observations'}}]})+'\n```'
 else:answer='Inspected the fixture.'
+import re
+audit=re.search(r'BEGIN UNTRUSTED AUDITOR DATA[^\n]*\n(.*?)\nEND UNTRUSTED AUDITOR DATA\.',prompt,re.S)
+if audit:
+    findings=json.loads(audit.group(1)).get('findings_in_report_order') or []
+    answer+='\n\nAudit response:\n'+'\n'.join('finding %d: resolved - the fixture accepts its result'%(n+1) for n in range(len(findings)))
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
 print(json.dumps({'type':'turn.completed','usage':{}}))

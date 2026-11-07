@@ -364,7 +364,12 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
         .rev()
         .find(|message| message.author == "orchestrator")
         .unwrap();
-    assert_eq!(reply.text, "summary: fixed report");
+    assert!(
+        reply.text.starts_with("summary: fixed report\n")
+            && reply.text.contains("\nAudit response:\n"),
+        "{}",
+        reply.text
+    );
 
     let calls = calls(dir.path());
     let workers: Vec<_> = calls

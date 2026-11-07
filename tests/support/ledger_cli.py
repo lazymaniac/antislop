@@ -47,7 +47,23 @@ if _ledger_head.startswith('Review this audit independently'):
 if len(_ledger_context)==2:
     prompt = _ledger_context[0].rstrip()
 _ledger_cache = _lo.path.join(_lo.path.dirname(sys.argv[0]), 'ledger-fixture-plan.json')
+# The orchestrator answers a pending audit report finding by finding, as the
+# runtime requires before any other transition; the fixtures accept it as is.
+_ledger_audit = _lr.search(r'BEGIN UNTRUSTED AUDITOR DATA[^\n]*\n(.*?)\nEND UNTRUSTED AUDITOR DATA\.', _ledger_prompt, _lr.S)
+def _ledger_audit_response(answer):
+    if not _ledger_audit or 'Audit response:' in answer:
+        return answer
+    data = json.loads(_ledger_audit.group(1))
+    findings = data.get('findings_in_report_order') or []
+    if data.get('error'):
+        lines = ['Audit status: unaudited - the fixture audit failed']
+    elif not findings:
+        lines = ['Audit status: complete - the fixture audit approved the result']
+    else:
+        lines = ['Audit response:'] + ['finding %d: resolved - the fixture accepts its result' % (n + 1) for n in range(len(findings))]
+    return answer.rstrip() + '\n\n' + '\n'.join(lines)
 def _ledger_answer(answer):
+    answer = _ledger_audit_response(answer)
     match = _lr.search(r'```plan\s*\n(.*?)\n```',answer,_lr.S)
     if match:
         payload = json.loads(match.group(1))

@@ -311,6 +311,9 @@ def words_result(text, prompt=""):
     return "finish_turn", {"text": text or "Done"}
 
 
+COMMIT_MESSAGE = "feat: deliver the task's changes"
+
+
 def task_result(text, prompt):
     """The tool and arguments that end the turn with `text`."""
     try:
@@ -320,7 +323,8 @@ def task_result(text, prompt):
     if isinstance(result, dict) and result.get("type") == "completed":
         if result.get("selection"):
             return "select", selection_args(result["selection"])
-        return "complete", {"summary": result["summary"], "report": result["report"]}
+        return "complete", {"summary": result["summary"], "report": result["report"],
+                            "commit_message": result.get("commit_message") or COMMIT_MESSAGE}
     if isinstance(result, dict) and result.get("type") == "review":
         return "review", review_args(result["report"], result["verdict"], prompt)
     if "Task role:" not in prompt:
@@ -343,7 +347,8 @@ def task_result(text, prompt):
             "selected": (re.findall(r"Selected:\s*([AB])", text) or ["A"])[-1],
             "rationale": "The focused approach satisfies this local contract",
         }
-    return "complete", {"summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text}
+    return "complete", {"summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text,
+                        "commit_message": COMMIT_MESSAGE}
 
 
 PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary")
