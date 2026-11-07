@@ -120,6 +120,20 @@ fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
     )
     .unwrap();
     assert_eq!(core.store.approval_state(&request).unwrap().2, "user");
+    let stale = core
+        .decide_approval_tool(&conversation, &json!({"request":request,"choice":"1"}))
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("owned by another decider"), "{stale}");
+    let stale_at_store = core
+        .store
+        .answer_approval(&conversation, &request, "1", "orchestrator")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        stale_at_store.contains("owned by another decider"),
+        "{stale_at_store}"
+    );
     core.answer_approval(&conversation, &request, "4").unwrap();
     let (verdict, _) = done.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(verdict.unwrap(), Verdict::Choose("4".into()));
@@ -212,6 +226,30 @@ fn trusting_a_directory_the_runtime_allocated_is_answered_without_asking() {
     let done = settle(&core, &seat, approval, true);
     open_request(&core, &conversation);
     drop(done);
+}
+
+#[test]
+fn trust_approval_does_not_match_a_sibling_prefix_or_ambiguous_target() {
+    let (_directory, core, conversation) = setup();
+    let mut seat = seat(&core, &conversation, "worker:t1");
+    let mut approval = dialog(TRUST);
+    let allocated = PathBuf::from("/runtime/work/project");
+    seat.directories = vec![allocated.clone()];
+
+    approval.summary = "/runtime/work/project-evil".into();
+    assert!(automatic_choice(&seat, &approval).is_none());
+    let done = settle(&core, &seat, approval.clone(), true);
+    let (request, decider) = open_request(&core, &conversation);
+    assert_eq!(decider, "user");
+    core.answer_approval(&conversation, &request, "1").unwrap();
+    let (verdict, _) = done.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(verdict.unwrap(), Verdict::Choose("1".into()));
+
+    approval.summary = format!("{}\n/runtime/work/project-evil", allocated.display());
+    assert!(automatic_choice(&seat, &approval).is_none());
+
+    approval.summary = allocated.to_string_lossy().into_owned();
+    assert!(automatic_choice(&seat, &approval).is_some());
 }
 
 #[test]

@@ -196,7 +196,7 @@ src
   core_approvals
    approver(core,conversation,role,turn,spec):Arc<approvals::Approver> > ApprovalSeat,name,settle_approval
    ApprovalSeat(C{conversation,role,turn,provider,directories})
-   - decision_name
+   - {parse_trust,same_directory}_target,decision_name
   core_change_review
    - CodeReview,review_comments,execute_code_review,review_{turn_setup,prompt,failure},publish_{code_review,review_message}
   core_comment_helpers
@@ -1375,7 +1375,7 @@ src
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
     open_approval(conversation,request):Result<String> > append_event
     approval_state(id):Result<(String,Option<String>,String)> > db
-    answer_approval(conversation,id,choice,by):Result<()> ~56 > flatten,append_event
+    answer_approval(conversation,id,choice,by):Result<()> ~66 > flatten,append_event
     escalate_approval(conversation,id):Result<()> > append_event
     close_approval(conversation,id,reason):Result<()> > append_event
     artifact_output_history(task):Result<Vec<String>> > db,flatten
@@ -2988,6 +2988,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 126,493 LOC · input 1,120,920 · output 43,502 tokens · state 295b2b6baa1d · targets AGENTS.md
+· 126,590 LOC · input 1,122,018 · output 43,511 tokens · state 1261938a57a3 · targets AGENTS.md
 ```
 <!-- hologram:end -->

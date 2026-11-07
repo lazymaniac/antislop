@@ -107,8 +107,9 @@ impl Store {
             .ok_or_else(|| Error::Invalid("request: unknown approval ID".into()))
     }
 
-    /// Records the decision. `by` is `user` or `orchestrator`. Repeating the
-    /// same decision is accepted; a different one is not.
+    /// Records the decision. `by` must own the open approval; a user may
+    /// override an orchestrator-owned approval. Same-actor retries of the
+    /// same decision are idempotent.
     pub(in crate::lean) fn answer_approval(
         &self,
         conversation: &str,
@@ -116,12 +117,16 @@ impl Store {
         choice: &str,
         by: &str,
     ) -> Result<()> {
-        let (state, previous, options): (String, Option<String>, String) = self
+        crate::require(
+            matches!(by, "user" | "orchestrator"),
+            "approval answerer must be user or orchestrator",
+        )?;
+        let (state, previous, previous_by, options): (String, Option<String>, Option<String>, String) = self
             .db()
             .query_row(
-                "SELECT state,choice,options FROM approvals WHERE id=?1 AND conversation_id=?2",
+                "SELECT state,choice,answered_by,options FROM approvals WHERE id=?1 AND conversation_id=?2",
                 params![id, conversation],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?
             .ok_or_else(|| {
@@ -148,18 +153,24 @@ impl Store {
         )?;
         match state.as_str() {
             "answered" => crate::require(
-                previous.as_deref() == Some(choice),
-                "approval already has a different answer",
+                previous.as_deref() == Some(choice) && previous_by.as_deref() == Some(by),
+                "approval already has a different answer or answerer",
             ),
             "closed" => Err(Error::Invalid(
                 "approval is closed; the agent no longer waits for it".into(),
             )),
             _ => {
+                // Ownership is checked in the mutation predicate itself. A
+                // concurrent escalation therefore cannot be bypassed by a
+                // stale orchestrator decision. The user retains override.
                 let changed = self.db().execute(
-                    "UPDATE approvals SET state='answered',choice=?2,answered_by=?3 WHERE id=?1 AND state='open'",
-                    params![id, choice, by],
+                    "UPDATE approvals SET state='answered',choice=?3,answered_by=?4 WHERE id=?1 AND conversation_id=?2 AND state='open' AND (decider=?4 OR ?4='user')",
+                    params![id, conversation, choice, by],
                 )?;
-                crate::require(changed == 1, "approval changed while answering")?;
+                crate::require(
+                    changed == 1,
+                    "approval is owned by another decider or changed while answering",
+                )?;
                 self.append_event(
                     conversation,
                     None,

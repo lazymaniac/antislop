@@ -5,7 +5,7 @@ use super::native::approvals::{self, Approval, Decision, Kind, Verdict};
 use super::{Core, store};
 use crate::{Error, Result};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -44,14 +44,11 @@ fn automatic_choice(seat: &ApprovalSeat, approval: &Approval) -> Option<String> 
     if approval.kind != Kind::Trust {
         return None;
     }
-    let compact = |text: &str| text.split_whitespace().collect::<String>();
-    let shown = compact(&approval.summary);
-    let ours = seat.directories.iter().any(|directory| {
-        [Some(directory.clone()), directory.canonicalize().ok()]
-            .into_iter()
-            .flatten()
-            .any(|path| shown.contains(&compact(&path.to_string_lossy())))
-    });
+    let target = parse_trust_target(&approval.summary)?;
+    let ours = seat
+        .directories
+        .iter()
+        .any(|directory| same_directory_target(&target, directory));
     ours.then(|| {
         approval
             .choices
@@ -60,6 +57,27 @@ fn automatic_choice(seat: &ApprovalSeat, approval: &Approval) -> Option<String> 
             .map(|choice| choice.id.clone())
     })
     .flatten()
+}
+
+/// Trust dialogs currently expose only the target path in `Approval.summary`.
+/// Reject multiline/relative summaries because they do not identify one
+/// unambiguous filesystem target.
+fn parse_trust_target(summary: &str) -> Option<PathBuf> {
+    let target = summary.trim();
+    if target.is_empty() || target.contains('\n') || target.contains('\r') {
+        return None;
+    }
+    let path = Path::new(target);
+    path.is_absolute().then(|| path.to_path_buf())
+}
+
+fn same_directory_target(target: &Path, allocated: &Path) -> bool {
+    target == allocated
+        || target
+            .canonicalize()
+            .ok()
+            .zip(allocated.canonicalize().ok())
+            .is_some_and(|(target, allocated)| target == allocated)
 }
 
 fn decision_name(decision: Decision) -> &'static str {
