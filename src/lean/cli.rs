@@ -2,8 +2,8 @@
 //! it opens the TUI; otherwise it prints events line by line. Either way the
 //! project's daemon does the work, so it goes on after the frontend exits.
 //! Lines typed while agents work are accepted at once and answered in the
-//! orchestrator's next turn. Reviewed plans start automatically; `/resume`
-//! runs again what the last plan left unfinished, `/cancel` stops running
+//! orchestrator's next turn. Reviewed plans wait for explicit user acceptance;
+//! `/resume` runs again what the last plan left unfinished, `/cancel` stops running
 //! work.
 
 use super::daemon::{Client, Request};

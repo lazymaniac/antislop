@@ -103,6 +103,10 @@ impl Core {
         conversation: &str,
         plan_id: &str,
     ) -> Result<Vec<Task>> {
+        require(
+            self.store.plan_review_approved(conversation, plan_id)?,
+            "this plan must pass independent review before it can be accepted",
+        )?;
         let open = self.open_plan_comments(conversation, plan_id)?;
         require(
             open.is_empty(),

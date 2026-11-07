@@ -245,7 +245,7 @@ fn workflow_card_text(view: &View) -> Option<(&'static str, String)> {
         view::Stage::Interview if view.requirements_summary.is_empty() => ("Phase 1/3: Interview and requirements", "Describe your goal and answer the orchestrator's questions. Agree on scope, constraints and acceptance criteria. A requirements summary will appear here for approval.".to_owned()),
         view::Stage::Interview => ("Phase 1/3: Review requirements", format!("{}\n\nReview the summary. Confirm scope in the decision card to begin planning, or request changes to continue the interview.", view.requirements_summary)),
         view::Stage::Planning => ("Phase 2/3: Planning", "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned()),
-        view::Stage::Review => ("Phase 2/3: Review and comment on the plan", "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Execution starts automatically after successful review.".to_owned()),
+        view::Stage::Review => ("Phase 2/3: Review and comment on the plan", "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Accept the reviewed plan to start execution.".to_owned()),
         _ => ("Phase 3/3: Implementation", "Follow task progress and review in the graph. Open task details to inspect results, diffs or add comments.".to_owned()),
     })
 }

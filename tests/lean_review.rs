@@ -110,12 +110,43 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
         .collect()
 }
 
+fn accept_approved_plan(core: &Arc<Core>, conversation: &str) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(plan) = events(core, conversation, "plan_proposed")
+            .into_iter()
+            .rev()
+            .find(|event| event["review"]["approved"] == true)
+            .and_then(|event| event["plan"].as_str().map(str::to_owned))
+        {
+            core.resume_plan(conversation, &plan).unwrap();
+            return;
+        }
+        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
     let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
         .id;
     core.send(&conversation, text).unwrap();
-    wait_idle(core, &conversation);
+    loop {
+        wait_idle(core, &conversation);
+        let proposal = events(core, &conversation, "plan_proposed")
+            .into_iter()
+            .rev()
+            .find_map(|event| {
+                let plan = event["plan"].as_str()?;
+                let tasks = core.store.plan(plan).ok()?;
+                (event["review"]["approved"] == true
+                    && tasks.iter().all(|task| task.status == "proposed"))
+                .then(|| plan.to_owned())
+            });
+        let Some(plan) = proposal else { break };
+        core.resume_plan(&conversation, &plan).unwrap();
+    }
     conversation
 }
 
@@ -174,8 +205,8 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     assert_eq!(proposed[0]["review"]["approved"], true);
     assert_eq!(proposed[0]["tasks"][1]["title"], "Uses model, fixed");
     assert_eq!(
-        proposed[0]["automatic"], true,
-        "checked plans start without a permission gate"
+        proposed[0]["automatic"], false,
+        "a checked plan waits for the user's separate acceptance"
     );
 
     let messages = core.store.messages_after(&conversation, 0).unwrap();
@@ -253,7 +284,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
 }
 
 #[test]
-fn checked_plan_runs_automatically_and_reports_audit_gaps() {
+fn checked_plan_runs_after_acceptance_and_reports_audit_gaps() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -277,7 +308,7 @@ else:
     let conversation = ask(&core, dir.path(), "analyze and describe in README");
 
     let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(tasks[0].status, "approved", "ran without /accept");
+    assert_eq!(tasks[0].status, "approved", "ran after explicit acceptance");
     let audits = events(&core, &conversation, "audit");
     assert_eq!(audits.len(), 1);
     assert_eq!(audits[0]["approved"], false);
@@ -323,7 +354,7 @@ else:
         .iter()
         .map(|plan| plan["automatic"] == true)
         .collect();
-    assert_eq!(automatic, [true, true, true, true, true]);
+    assert_eq!(automatic, [false, false, false, false, false]);
     assert!(proposed[4]["waiting"].is_null());
     let repeated = proposed[4]["plan"].as_str().unwrap();
     assert!(
@@ -412,6 +443,7 @@ else:
         .unwrap()
         .id;
     core.send(&conversation, "fix").unwrap();
+    accept_approved_plan(&core, &conversation);
     let deadline = Instant::now() + Duration::from_secs(120);
     let task = loop {
         let tasks = core.store.latest_plan(&conversation).unwrap();
@@ -523,6 +555,13 @@ sys.exit(1)
     assert_eq!(proposed[0]["automatic"], false);
     let tasks = core.store.latest_plan(&conversation).unwrap();
     assert_eq!(tasks[0].status, "proposed", "the user can still accept it");
+    let plan = proposed[0]["plan"].as_str().unwrap();
+    assert!(
+        core.resume_plan(&conversation, plan)
+            .unwrap_err()
+            .to_string()
+            .contains("must pass independent review")
+    );
 }
 
 const RISKY_PLAN: &str = r#"
@@ -551,6 +590,7 @@ else:
         .unwrap()
         .id;
     core.send(&conversation, "calculate revenue").unwrap();
+    accept_approved_plan(&core, &conversation);
     let deadline = Instant::now() + Duration::from_secs(120);
     while std::fs::read_to_string(dir.path().join("agy.rejections"))
         .map_or(0, |text| text.lines().count())

@@ -43,10 +43,16 @@ pub(super) fn on_user_decision_requested(
 ) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);
-    if let Ok(question) =
+    if let Ok(mut question) =
         serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
     {
         view.user_decision = true;
+        if question.id.starts_with("scope-confirmation-") && !view.requirements_summary.is_empty() {
+            question.context = format!(
+                "Collected requirements:\n{}\n\n{}",
+                view.requirements_summary, question.context
+            );
+        }
         view.system_card(
             "Decision required",
             question.transcript(),

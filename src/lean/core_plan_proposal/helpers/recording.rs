@@ -60,7 +60,7 @@ pub(super) fn plan_event_payload(
         "parallel": tasks::parallel_peers(specs),
         "tasks": plan.tasks.iter().map(|task| task.spec.clone()).collect::<Vec<_>>(),
         "review": review_json(review),
-        "automatic": waiting.is_none(),
+        "automatic": false,
         "waiting": waiting,
         "revision_token": revision_token,
     }))

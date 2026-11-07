@@ -222,7 +222,7 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
 /// opens unblock, `c` comments, Enter opens details.
 pub fn next_step(view: &View, row: &TaskRow) -> String {
     match row.status.as_str() {
-        status::PROPOSED => "next: automatic execution after plan review".to_owned(),
+        status::PROPOSED => "next: accept the reviewed plan to start execution".to_owned(),
         status::QUEUED => {
             let waiting = waiting_on(view, row);
             if waiting.is_empty() {

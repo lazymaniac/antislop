@@ -229,6 +229,21 @@ fn project(dir: &Path) -> std::path::PathBuf {
 fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
     let conversation = support::fixture_conversation(core, project).unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let plan = loop {
+        if let Some(task) = core.store.latest_plan(&conversation.id).unwrap().first()
+            && task.status == "proposed"
+            && core
+                .store
+                .plan_review_approved(&conversation.id, &task.plan_id)
+                .unwrap()
+        {
+            break task.plan_id.clone();
+        }
+        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    core.resume_plan(&conversation.id, &plan).unwrap();
     wait_idle(core, &conversation.id);
     wait_idle(core, &conversation.id);
     conversation.id

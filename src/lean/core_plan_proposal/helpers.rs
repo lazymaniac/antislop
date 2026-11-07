@@ -148,9 +148,6 @@ impl Core {
             "plan_proposed",
             &plan_event_payload(text, plan, specs, review, waiting, revision_token)?,
         )?;
-        if waiting.is_none() {
-            self.activate_reviewed_plan(conversation, &plan.id)?;
-        }
         Ok(())
     }
 

@@ -1897,6 +1897,54 @@ fn transcript_workflow_fallback_replaces_empty_message() {
 }
 
 #[test]
+fn scope_confirmation_card_shows_the_complete_requirements_summary() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = test_app();
+    app.view.apply(&serde_json::json!({
+        "seq": 1,
+        "kind": "workflow",
+        "payload": {
+            "phase": "interview",
+            "summary": "Build the import flow. Acceptance: preserve duplicate rows and report rejected records."
+        }
+    }));
+    app.view.apply(&serde_json::json!({
+        "seq": 2,
+        "kind": "user_decision_requested",
+        "payload": {
+            "id": "scope-confirmation-test",
+            "context": "Planning must use this scope.",
+            "question": "Do you confirm this scope so planning can begin?",
+            "options": [
+                {"label": "Confirm scope", "description": "Proceed to planning."},
+                {"label": "Request changes", "description": "Continue the interview."}
+            ]
+        }
+    }));
+    assert_eq!(
+        app.view.interview_question.as_ref().unwrap().1.context,
+        "Collected requirements:\nBuild the import flow. Acceptance: preserve duplicate rows and report rejected records.\n\nPlanning must use this scope."
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .flat_map(|row| row.iter().take(40))
+        .flat_map(|cell| cell.symbol().chars())
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(screen.contains("Buildtheimportflow."));
+    assert!(screen.contains("preserveduplicaterows"));
+    assert!(screen.contains("rejectedrecords."));
+    assert!(screen.contains("Doyouconfirmthisscope"));
+    assert!(screen.contains("planningcanbegin?"));
+}
+
+#[test]
 fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

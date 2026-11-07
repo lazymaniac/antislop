@@ -175,7 +175,7 @@ fn restart_resumes_scope_interview_and_starts_planning_after_confirmation() {
             .collect::<Vec<_>>(),
         core.store.messages_by(&waiting.id, "user", 0).unwrap()
     );
-    assert_eq!(proposed["automatic"], true);
+    assert_eq!(proposed["automatic"], false);
     assert_eq!(
         core.store
             .messages_by(&waiting.id, "user", 0)
@@ -186,7 +186,7 @@ fn restart_resumes_scope_interview_and_starts_planning_after_confirmation() {
 }
 
 #[test]
-fn checked_plan_starts_only_after_the_user_confirms_scope() {
+fn checked_plan_starts_only_after_the_user_accepts_the_reviewed_plan() {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
     let core = Core::open(
@@ -236,6 +236,16 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
         .into_iter()
         .find(|event| event.kind == "scope_confirmation_requested")
         .expect("the user must be asked to confirm the collected scope");
+    assert_eq!(
+        confirmation.payload["summary"],
+        core.store.workflow(&conversation.id).unwrap().summary
+    );
+    assert!(
+        confirmation.payload["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Acceptance:")
+    );
     let question_id = confirmation.payload["question"]["id"].as_str().unwrap();
     let question = confirmation.payload["question"]["question"]
         .as_str()
@@ -255,13 +265,29 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
         core.store.events_since(&conversation.id, 0, 1000).unwrap()
     );
     let proposed = plan_proposed(&core, &conversation.id);
-    core.cancel(&conversation.id);
+    assert_eq!(proposed["automatic"], false);
+    let plan = proposed["plan"].as_str().unwrap();
+    assert_eq!(core.store.accepted_plan(&conversation.id).unwrap(), None);
+    assert!(
+        core.store
+            .latest_plan(&conversation.id)
+            .unwrap()
+            .iter()
+            .all(|task| task.status == "proposed")
+    );
+    assert!(
+        core.store
+            .last_turn(&conversation.id, "worker:t1")
+            .unwrap()
+            .is_none()
+    );
+    core.resume_plan(&conversation.id, plan).unwrap();
     idle(&core, &conversation.id);
     assert_ne!(
         core.store.workflow(&conversation.id).unwrap().phase,
         "interview"
     );
-    // Planning starts automatically after the user's explicit confirmation.
+    // Planning starts after scope confirmation, but execution waits for a separate plan acceptance.
     let planner = core
         .store
         .last_turn(&conversation.id, antislop::lean::PLANNER)
@@ -276,7 +302,13 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
                 && event.payload["role"] == antislop::lean::PLANNER)
     );
     assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
-    assert_eq!(proposed["automatic"], true);
+    assert_eq!(
+        core.store
+            .accepted_plan(&conversation.id)
+            .unwrap()
+            .as_deref(),
+        Some(plan)
+    );
 }
 
 #[test]

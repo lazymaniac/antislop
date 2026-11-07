@@ -11,6 +11,8 @@ pub(super) fn on_plan_proposed(
     view.plan_preview = None;
     view.requirements_progress = Some(if payload["automatic"] == true {
         (false, "Reviewed plan starts automatically.".into())
+    } else if payload["review"]["approved"] == true {
+        (false, "Plan reviewed; waiting for your acceptance.".into())
     } else if let Some(error) = payload["review"]["error"].as_str() {
         (true, format!("Plan review failed: {error}"))
     } else if let Some(reason) = payload["waiting"].as_str() {

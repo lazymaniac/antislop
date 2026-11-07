@@ -112,6 +112,9 @@ fn plan_status(payload: &Value) -> String {
     if payload["automatic"] == true {
         return "Running.".to_owned();
     }
+    if payload["review"]["approved"] == true {
+        return "Plan reviewed; waiting for your acceptance.".to_owned();
+    }
     if let Some(error) = payload["review"]["error"].as_str() {
         return format!("Plan review failed: {error}");
     }

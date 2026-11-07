@@ -382,7 +382,7 @@ fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str)
 }
 
 fn queue_planning_message(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
-    let text = "Interview complete. Prepare the plan from the collected requirements for review. The runtime starts implementation automatically after successful plan review.";
+    let text = "Interview complete. Prepare the plan from the collected requirements for review. After successful review, present the plan for the user's explicit acceptance before implementation starts.";
     tx.execute(
         "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",
         params![conversation, text, now_ms()],

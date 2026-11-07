@@ -23,6 +23,7 @@ fn a_reviewer_started_after_a_live_update_uses_the_new_profile_in_the_same_round
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
+    accept_latest_reviewed_plan(&core, &conversation.id);
     let deadline = Instant::now() + Duration::from_secs(120);
     while !marker.exists() {
         assert!(Instant::now() < deadline, "worker did not reach the gate");
@@ -168,6 +169,35 @@ fn wait_idle(core: &Core, conversation: &str) {
     }
 }
 
+fn accept_latest_reviewed_plan(core: &std::sync::Arc<Core>, conversation: &str) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let proposal = core
+            .store
+            .events_since(conversation, 0, 10_000)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|event| {
+                event.kind == "plan_proposed"
+                    && event.payload["review"]["approved"] == true
+                    && event.payload["plan"].as_str().is_some_and(|plan| {
+                        core.store
+                            .plan(plan)
+                            .is_ok_and(|tasks| tasks.iter().all(|task| task.status == "proposed"))
+                    })
+            });
+        if let Some(event) = proposal
+            && let Some(plan) = event.payload["plan"].as_str()
+        {
+            core.resume_plan(conversation, plan).unwrap();
+            return;
+        }
+        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn plan_summaries_survive_core_storage_and_event_replay() {
     use antislop::lean::{store::Store, tui::view::View};
@@ -248,7 +278,7 @@ fn a_plan_comment_gets_an_independent_revision_and_review() {
     );
     let refused = core.resume_plan(&conversation.id, &initial).unwrap_err();
     assert!(
-        refused.to_string().contains("nothing to resume"),
+        refused.to_string().contains("open ones before activating"),
         "{refused}"
     );
     assert!(
@@ -339,6 +369,14 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
 
     core.send(&conversation.id, "analyze the project architecture")
         .unwrap();
+    wait_idle(&core, &conversation.id);
+    assert!(
+        core.store
+            .accepted_plan(&conversation.id)
+            .unwrap()
+            .is_none()
+    );
+    accept_latest_reviewed_plan(&core, &conversation.id);
     wait_idle(&core, &conversation.id);
     let messages = core.store.messages_after(&conversation.id, 0).unwrap();
     let shown = messages
@@ -723,6 +761,7 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
+    accept_latest_reviewed_plan(&core, &conversation.id);
     let deadline = Instant::now() + Duration::from_secs(120);
     while !started.exists() {
         assert!(Instant::now() < deadline, "worker did not start");
@@ -915,6 +954,7 @@ if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
+    accept_latest_reviewed_plan(&core, &conversation.id);
     let deadline = Instant::now() + Duration::from_secs(120);
     while !started.exists() {
         assert!(Instant::now() < deadline, "worker did not start");

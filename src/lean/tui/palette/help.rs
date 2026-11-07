@@ -217,7 +217,7 @@ fn help_chat() -> &'static [&'static str] {
         "Ctrl+P           command palette",
         "F1 / [?]         help",
         "F2 / F3          requirements / current interview question",
-        "Planning starts automatically after requirements are collected",
+        "Planning starts after you confirm the requirements",
         "F4 / F5          plan history / actions for a stopped task",
         "F7 / F8          reject proposed plan / configuration",
         "text             always sent as chat; actions use keys or Ctrl+P",

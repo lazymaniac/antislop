@@ -149,6 +149,20 @@ impl Store {
             .optional()?)
     }
 
+    pub fn plan_review_approved(&self, conversation: &str, plan_id: &str) -> Result<bool> {
+        let reviewed: Option<bool> = self
+            .db()
+            .query_row(
+                "SELECT json_extract(payload,'$.review.approved') FROM events
+                 WHERE conversation_id=?1 AND plan_id=?2 AND kind='plan_proposed'
+                 ORDER BY seq DESC LIMIT 1",
+                params![conversation, plan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(reviewed == Some(true))
+    }
+
     /// Queues every task of a proposed plan, all or none; tasks approved in
     /// the previous plan with the same contract stay approved.
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {

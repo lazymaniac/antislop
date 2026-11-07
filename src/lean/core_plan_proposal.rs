@@ -46,7 +46,7 @@ pub(in crate::lean) fn checked_plan(
 impl Core {
     /// Stores the plan and has it checked. A plan the reviewer sends back
     /// goes back to the planner until review approves it. A checked plan
-    /// starts automatically; failures and missing inputs remain visible.
+    /// waits for explicit user acceptance after review; failures and missing inputs remain visible.
     pub(in crate::lean) fn propose(
         self: &Arc<Self>,
         conversation: &str,

@@ -191,16 +191,32 @@ fn wait_idle(core: &Core, conversation: &str) {
 }
 
 fn propose(core: &std::sync::Arc<Core>, conversation: &str, name: &str) -> String {
-    let before = core.store.accepted_plan(conversation).unwrap();
     core.send(conversation, name).unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
-    while core.store.accepted_plan(conversation).unwrap() == before {
-        assert!(Instant::now() < deadline, "reviewed plan was not activated");
+    let plan = loop {
+        if let Some(task) = core.store.latest_plan(conversation).unwrap().first()
+            && core
+                .store
+                .plan(&task.plan_id)
+                .unwrap()
+                .iter()
+                .all(|task| task.status == "proposed")
+            && core
+                .store
+                .plan_review_approved(conversation, &task.plan_id)
+                .unwrap()
+        {
+            break task.plan_id.clone();
+        }
+        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
         std::thread::sleep(Duration::from_millis(20));
-    }
-    core.store.latest_plan(conversation).unwrap()[0]
-        .plan_id
-        .clone()
+    };
+    core.resume_plan(conversation, &plan).unwrap();
+    assert_eq!(
+        core.store.accepted_plan(conversation).unwrap().as_deref(),
+        Some(plan.as_str())
+    );
+    plan
 }
 
 fn statuses(core: &Core, plan: &str) -> Vec<String> {
@@ -267,7 +283,7 @@ fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
 }
 
 #[test]
-fn reviewed_plans_start_automatically_and_keep_distinct_results() {
+fn reviewed_plans_require_acceptance_and_keep_distinct_results() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
