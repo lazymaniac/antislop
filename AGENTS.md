@@ -234,7 +234,7 @@ src
   core_orchestrator_turn
    context
     answer
-     finish(core,context,answer,cancel):Result<()> > TurnResult.decode,submitted_plan,record_answer_progress,add_message,finish_interview,handle_plan_answer
+     finish(core,context,answer,cancel):Result<()> > TurnResult.decode,submitted_graph,audit_response_error,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
     comments
      comment_context(core,conversation,upto,answered,is_comment):Result<String> > append_comment_{instructions,plans,followup}
      - append_{last_orchestrator_reply,latest_plan,original_request,referenced_plans}
@@ -244,12 +244,13 @@ src
    context.rs
     ask(core,context,cancel):Result<Option<String>> > turn_setup,turn,render_prompt
     finish(core,context,answer,cancel):Result<()>
-    prepare(core,conversation,upto):Result<OrchestrationContext<'a>> > request_context,config_snapshot,plan_view.load,history_context,OrchestrationContext,interviewing,open_user_decision
-    OrchestrationContext(C{conversation,upto,answered,asked,is_comment,config,project,open,comment_text,workflow,interviewing,graph,editable_graph,graph_json,history,ledger_context,decision})
+    prepare(core,conversation,upto):Result<OrchestrationContext<'a>> > request_context,config_snapshot,plan_view.load,history_context,audit_response,OrchestrationContext,interviewing,open_user_decision
+    AuditResponse(C{approved,findings,error,report})
+    OrchestrationContext(C{conversation,upto,answered,asked,is_comment,config,project,open,comment_text,workflow,interviewing,graph,editable_graph,graph_json,history,ledger_context,decision,audit_response})
     - RequestContext,open_comments
    prompt
-    orchestrator_prompt_text(context):String > orchestrator_prompt,append_{history,decision,graph},prepend_phase,append_ledger
-    PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision})
+    orchestrator_prompt_text(context):String > orchestrator_prompt,append_{history,decision,graph},prepend_phase,append_{audit_response,ledger}
+    PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision,audit_response})
   core_path_helpers
    branch(task):Result<String>
    release_settled_views(store,state):Result<()> > worktree_directory,{release_settled_view,release_writer}_checkouts,prune_settled_view_branches
@@ -1444,6 +1445,7 @@ src
     publish_config_with_event(path,publish):Result<()> > db
     append_event(conversation,turn,plan_id,kind,payload):Result<u64> > encode_event_payload,db,resolve_event_plan
     events_since(conversation,after,limit):Result<Vec<Event>> > events_since_budget
+    latest_audit_event(conversation):Result<Option<Event>> > db,decode_event_row
     events_since_budget(conversation,after,limit,budget):Result<Vec<Event>> > db,collect_events
     messages_after(conversation,after):Result<Vec<Message>> > db,Message,sql_text
     recent_messages_through(conversation,through):Result<Vec<Message>> > db,Message,sql_text
@@ -1523,8 +1525,8 @@ src
     finish_interview(conversation):Result<bool> ~40 > db,current_interview,scope_is_confirmed,promote_current_interview,queue_planning_message,{latest,request}_scope_confirmation
     record_scope_confirmation_answer(tx,conversation,text,seq):Result<()> ~41 > latest_scope_confirmation,current_interview
     - round_reference,{decode,current,unavailable}_round_record,load_round_messages,read_run_context,task_input_generation,
-      decode_{content_json,event_row},resolve_turn_plan,insert_turn,dependency_report,summarize_earlier_checks,
-      option_task_ids,selected_approach_report,decode_optional_{text,json}
+      decode_content_json,resolve_turn_plan,insert_turn,dependency_report,summarize_earlier_checks,option_task_ids,
+      selected_approach_report,decode_optional_{text,json}
    Task(C{input_generation,id,plan_id,spec,status,round,report,verdict,base,result,feedback,freshness_token,checks})
    TaskReportInfo(C{task_{id,label},round,report})
    TaskVerdictInfo(C{task_{id,label},round,verdict})
@@ -2076,7 +2078,7 @@ src
        push_unit(builder,unit,spot,top) > Frame,push_cards
        - push_{card,internal_edge}
      units.rs
-      place(builder) > units,fit_expanded_card,arrange,admin_rows,room,center_rows,lane_shift,gap_lanes,row_tops,push_{admin,unit,hidden,links}
+      place(builder) ~48 > units,fit_expanded_card,arrange,expanded_row,crossing_lanes,admin_rows,room,center_rows,lane_shift,center_free_row,gap_lanes,row_tops,push_{admin,unit,hidden,links}
     model
      Node(C{key,x,y,width,height,visible,group,collapsed}) : Default
       new(key,x,y):Self
@@ -2984,6 +2986,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 125,538 LOC · input 1,111,681 · output 43,358 tokens · state 273238dd43da · targets AGENTS.md
+· 126,214 LOC · input 1,118,175 · output 43,425 tokens · state b7fab47fcfb6 · targets AGENTS.md
 ```
 <!-- hologram:end -->

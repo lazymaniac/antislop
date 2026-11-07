@@ -1,4 +1,5 @@
 use super::super::*;
+use super::context::AuditResponse;
 use crate::lean::core_planning_context::append_ledger;
 use crate::lean::core_prompt_helpers::orchestrator_prompt;
 use crate::lean::store::Workflow;
@@ -22,6 +23,7 @@ pub(super) struct PromptContext<'a> {
     pub(super) ledger_context: Option<&'a str>,
     /// The open user decision, if any was ever asked.
     pub(super) decision: Option<&'a Option<crate::lean::interview::Question>>,
+    pub(super) audit_response: Option<&'a AuditResponse>,
 }
 
 pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
@@ -47,9 +49,37 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
         context.graph_json,
     );
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
+    append_audit_response(&mut prompt, context.audit_response);
     append_ledger(context.ledger_context, &mut prompt);
     prompt.insert_str(0, "\nOnly the orchestrator calls revise_plan for incremental changes: provide changed/added contracts and explicit retire entries. request_replan delegates a complete replacement draft to the planner. The runtime imposes no access or execution limits on agents. A deferred task remains a deliberate scheduling hold until a reviewed revision releases it; do not infer a permission hold from historical instructions. Preserve actual prerequisites, evidence and user decisions.\n");
     prompt
+}
+
+fn append_audit_response(prompt: &mut String, audit: Option<&AuditResponse>) {
+    let Some(audit) = audit else { return };
+    prompt.push_str("\nAUDIT RESPONSE GATE: this auditor report must be answered before any workflow transition. Record `Audit response:` followed by one line for each finding, in report order: `finding N: resolved - <why it is resolved>` or `finding N: open - <why it remains open and what happens next>`. An open finding that needs work must be routed through a reviewed plan revision. The response is recorded as the orchestrator's answer.\n");
+    prompt.push_str("Original auditor report:\n");
+    prompt.push_str(&audit.report);
+    prompt.push('\n');
+    if let Some(error) = &audit.error {
+        prompt.push_str(&format!("The audit failed: {error}. Explicitly report `audit status: unaudited - <reason>` and keep the result open.\n"));
+    } else if audit.findings.is_empty() {
+        let state = if audit.approved { "complete" } else { "open" };
+        prompt.push_str(&format!("The audit recorded no findings and its verdict is {}. Record `audit status: {state} - <your assessment>` before answering the user.\n", if audit.approved { "approved" } else { "not approved" }));
+    } else {
+        for (index, finding) in audit.findings.iter().enumerate() {
+            prompt.push_str(&format!(
+                "finding {} [{}] ({} at {}): {}\n",
+                index + 1,
+                finding["id"].as_str().unwrap_or("no id"),
+                finding["severity"]
+                    .as_str()
+                    .unwrap_or("unspecified severity"),
+                finding["where"].as_str().unwrap_or("unspecified location"),
+                finding["issue"].as_str().unwrap_or("unspecified issue"),
+            ));
+        }
+    }
 }
 
 fn append_history(prompt: &mut String, first: bool, answered: u64, history: &[Message]) {
@@ -99,10 +129,39 @@ fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: &Workflow) {
     prompt.insert_str(
         0,
         &format!(
-            "\nSESSION PHASE: {}. Collected requirements:\n{}\nThe planner drafts plans and corrects plan reviewer findings; you handle user comments and planner blockers. Never start implementation yourself; the runtime starts it after independent plan review. During implementation, follow progress and respond to results or questions; submit revisions for independent review when necessary.\n",
+            "\nSESSION PHASE: {}. Collected requirements:\n{}\nThe planner drafts plans and corrects plan reviewer findings; you handle user comments and planner blockers. Never start implementation yourself; the runtime starts it after independent plan review. During implementation, follow progress and respond to results or questions; submit revisions for independent review when necessary. The final independent auditor report is addressed to you, the orchestrator. Read and preserve its findings, then explicitly answer them: explain why each finding is resolved or remains open, and route remediation through a reviewed plan revision when work is needed. Do not treat the report as user-facing output to forward unchanged, and do not advance the workflow or claim completion until you have recorded this response.\n",
             workflow.phase, workflow.summary
         ),
     );
 }
 
 const INTERVIEW_INSTRUCTIONS: &str = "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. When the request is self-contained, summarize it directly without asking a question. Ask one question at a time with ask_user: context (why the decision matters), question and options, each with a label and a description of its tradeoff. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. When no more questions are needed, call submit_requirements with a Markdown summary of the agreed requirements and any explicit assumptions. The runtime then asks the user to confirm that exact scope. Do not plan while confirmation is missing. If the user requests changes, clarify or revise the summary and ask for confirmation again. After the user selects Confirm scope, planning may begin. Do not submit a plan, schedule work or implement anything during the interview. The user can steer ongoing work with comments.\n";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn implementation_phase_requires_orchestrator_to_handle_audit_before_advancing() {
+        let mut prompt = String::new();
+        prepend_phase(
+            &mut prompt,
+            false,
+            &Workflow {
+                phase: "implementation".into(),
+                summary: "deliver the request".into(),
+                upto_message: 0,
+            },
+        );
+
+        assert!(
+            prompt
+                .contains("final independent auditor report is addressed to you, the orchestrator")
+        );
+        assert!(prompt.contains("explicitly answer them"));
+        assert!(prompt.contains(
+            "do not advance the workflow or claim completion until you have recorded this response"
+        ));
+        assert!(prompt.contains("planner drafts plans and corrects plan reviewer findings"));
+    }
+}

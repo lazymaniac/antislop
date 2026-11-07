@@ -28,6 +28,14 @@ pub(super) struct OrchestrationContext<'a> {
     history: Vec<store::Message>,
     ledger_context: Option<String>,
     decision: Option<Option<crate::lean::interview::Question>>,
+    audit_response: Option<AuditResponse>,
+}
+
+pub(super) struct AuditResponse {
+    pub(super) approved: bool,
+    pub(super) findings: Vec<serde_json::Value>,
+    pub(super) error: Option<String>,
+    pub(super) report: String,
 }
 
 pub(super) fn prepare<'a>(
@@ -40,6 +48,7 @@ pub(super) fn prepare<'a>(
     let project = PathBuf::from(core.store.conversation(conversation)?.project);
     let view = plan_view::load(core, conversation)?;
     let (history, ledger_context) = history_context(core, conversation, request.answered)?;
+    let audit_response = audit_response(core, conversation)?;
     Ok(OrchestrationContext {
         conversation,
         upto,
@@ -58,7 +67,44 @@ pub(super) fn prepare<'a>(
         history,
         ledger_context,
         decision: core.store.open_user_decision(conversation)?,
+        audit_response,
     })
+}
+
+fn audit_response(core: &Core, conversation: &str) -> Result<Option<AuditResponse>> {
+    let reports = core.store.messages_by(conversation, RUNTIME, 0)?;
+    let Some(report) = reports
+        .iter()
+        .rev()
+        .find(|message| message.text.contains("## Independent audit"))
+    else {
+        return Ok(None);
+    };
+    if core
+        .store
+        .messages_by(conversation, ORCHESTRATOR, report.seq)?
+        .last()
+        .is_some()
+    {
+        return Ok(None);
+    }
+    let Some(event) = core.store.latest_audit_event(conversation)? else {
+        return Ok(Some(AuditResponse {
+            approved: false,
+            findings: Vec::new(),
+            error: Some("the auditor report has no persisted audit verdict".into()),
+            report: report.text.clone(),
+        }));
+    };
+    Ok(Some(AuditResponse {
+        approved: event.payload["approved"].as_bool().unwrap_or(false),
+        findings: event.payload["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        error: event.payload["error"].as_str().map(str::to_owned),
+        report: report.text.clone(),
+    }))
 }
 
 struct RequestContext {
@@ -99,12 +145,15 @@ fn turn_setup<'a>(
     project: &Path,
     config: &Config,
     is_comment: bool,
+    audit_response: bool,
 ) -> TurnSetup<'a> {
     TurnSetup {
         session_policy: SessionPolicy::Role,
         conversation,
         plan_id: None,
-        role: if is_comment {
+        role: if audit_response {
+            ORCHESTRATOR
+        } else if is_comment {
             COMMENT_ORCHESTRATOR
         } else {
             ORCHESTRATOR
@@ -135,6 +184,7 @@ fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -
         workflow: &context.workflow,
         ledger_context: context.ledger_context.as_deref(),
         decision: context.decision.as_ref(),
+        audit_response: context.audit_response.as_ref(),
     })
 }
 
@@ -149,6 +199,7 @@ pub(super) fn ask(
         &context.project,
         &context.config,
         context.is_comment,
+        context.audit_response.is_some(),
     );
     setup.plan_id = context.graph.first().map(|task| task.plan_id.clone());
     core.turn(setup, cancel, |first, fresh| {

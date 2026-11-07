@@ -194,6 +194,28 @@ impl Store {
         self.events_since_budget(conversation, after, limit, usize::MAX)
     }
 
+    pub(in crate::lean) fn latest_audit_event(&self, conversation: &str) -> Result<Option<Event>> {
+        let db = self.db();
+        let row = db
+            .query_row(
+                "SELECT seq,turn_id,plan_id,kind,payload,created_ms FROM events
+                 WHERE conversation_id=?1 AND kind='audit' ORDER BY seq DESC LIMIT 1",
+                [conversation],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|row| self.decode_event_row(row)).transpose()
+    }
+
     /// The first event is always returned whole, even when it is larger than
     /// the page budget. No later event is discarded from the durable stream.
     pub fn events_since_budget(
