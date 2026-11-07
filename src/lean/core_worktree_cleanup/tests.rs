@@ -266,82 +266,34 @@ fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
 }
 
 #[test]
-fn retired_checkouts_discard_tagged_build_caches_but_keep_other_ignored_state() {
-    let (_directory, core, conversation, tasks, commit) = fixture();
-    let mut task = tasks[0].clone();
-    let writer = checkout(&core, &task, "g0", &commit);
-    let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# cache\n";
-    let cache = writer.join("target");
-    std::fs::create_dir_all(cache.join("debug")).unwrap();
-    std::fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
-    std::fs::write(cache.join("debug/artifact"), "bin").unwrap();
-    std::fs::write(writer.join(".gitignore"), "target/\n").unwrap();
-    git::git(&writer, &["add", ".gitignore"]).unwrap();
-    git::commit_all(&writer, git::CommitPurpose::TestFixture).unwrap();
-    core.set_status(&conversation, &mut task, "superseded")
-        .unwrap();
-    core.drain_worktree_cleanup();
-    drain_until(&core, || !writer.exists());
-
-    // An ignored directory without the tag is still protected.
-    let kept = checkout(&core, &tasks[1].clone(), "g0", &commit);
-    std::fs::create_dir_all(kept.join("target")).unwrap();
-    std::fs::write(kept.join("target/data"), "x").unwrap();
-    std::fs::write(kept.join(".gitignore"), "target/\n").unwrap();
-    git::git(&kept, &["add", ".gitignore"]).unwrap();
-    git::commit_all(&kept, git::CommitPurpose::TestFixture).unwrap();
-    assert!(
-        crate::lean::git::remove_clean_writer(
-            &core.state.join("unused"),
-            &kept,
-            &git::worktree_branch(&kept).unwrap(),
-            &[]
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("ignored files")
-    );
-}
-
-#[test]
-fn retired_checkouts_preserve_undeclared_ignored_experiment_state() {
+fn retired_checkouts_leave_no_ignored_files_behind() {
     let (_directory, core, conversation, tasks, commit) = fixture();
     let mut task = tasks[0].clone();
     let writer = checkout(&core, &task, "g0", &commit);
     let view = checkout(&core, &task, "observation-g0", &commit);
     for path in [&writer, &view] {
-        let state = path.join(".antislop/qualification/generation-19");
-        std::fs::create_dir_all(&state).unwrap();
-        for file in ["journal", "snapshot", "training.json"] {
-            std::fs::write(state.join(file), file).unwrap();
-        }
-        assert!(
-            git::is_clean(path),
-            "Git does not protect ignored experiment data"
-        );
+        // A tagged build cache, an untagged one and other ignored state.
+        let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# cache\n";
+        std::fs::create_dir_all(path.join("target/debug")).unwrap();
+        std::fs::write(path.join("target/CACHEDIR.TAG"), tag).unwrap();
+        std::fs::create_dir_all(path.join("benchmark/__pycache__")).unwrap();
+        std::fs::write(path.join("benchmark/__pycache__/run.pyc"), "pyc").unwrap();
+        std::fs::create_dir_all(path.join(".antislop/qualification")).unwrap();
+        std::fs::write(path.join(".antislop/qualification/journal"), "j").unwrap();
+        std::fs::write(
+            path.join(".gitignore"),
+            "target/\n__pycache__/\n.antislop/\n",
+        )
+        .unwrap();
+        git::git(path, &["add", ".gitignore"]).unwrap();
+        git::commit_all(path, git::CommitPurpose::TestFixture).unwrap();
+        assert!(git::is_clean(path), "Git ignores all of them");
     }
     core.set_status(&conversation, &mut task, "superseded")
         .unwrap();
     core.drain_worktree_cleanup();
-    // Both live cleanup and the daemon startup sweep must retain these files.
-    assert!(
-        super::super::core_path_helpers::release_settled_views(&core.store, &core.state)
-            .unwrap_err()
-            .to_string()
-            .contains("ignored files")
-    );
-    for path in [&writer, &view] {
-        for file in ["journal", "snapshot", "training.json"] {
-            assert_eq!(
-                std::fs::read_to_string(
-                    path.join(".antislop/qualification/generation-19")
-                        .join(file)
-                )
-                .unwrap(),
-                file
-            );
-        }
-    }
+    drain_until(&core, || !writer.exists() && !view.exists());
+    super::super::core_path_helpers::release_settled_views(&core.store, &core.state).unwrap();
     assert_eq!(
         core.store.task_by_id(&task.id).unwrap().unwrap().status,
         "superseded"

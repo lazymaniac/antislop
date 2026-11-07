@@ -82,7 +82,8 @@ pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> 
 }
 
 /// Keep an exact, lightweight history reference before deleting a clean view.
-/// Normal removal refuses tracked/untracked edits, including changes racing the check.
+/// Normal removal refuses tracked/untracked edits, including changes racing the check;
+/// ignored files go with the checkout, so a retired one leaves nothing on disk.
 pub(crate) fn remove_clean_view(project: &Path, path: &Path, branch: &str) -> Result<()> {
     require_worktree_branch(path, branch)?;
     crate::require(
@@ -92,7 +93,6 @@ pub(crate) fn remove_clean_view(project: &Path, path: &Path, branch: &str) -> Re
             path.display()
         ),
     )?;
-    require_no_ignored_files(path)?;
     let snapshot = view_snapshot_ref(path);
     let commit = head(path)?;
     ok(project, &["update-ref", &snapshot, &commit])?;
@@ -118,6 +118,7 @@ fn view_snapshot_ref(path: &Path) -> String {
 }
 
 /// Remove only the checkout of retired writer work; its branch retains all commits.
+/// Declared outputs must be committed; ignored files go with the checkout.
 pub(crate) fn remove_clean_writer(
     project: &Path,
     path: &Path,
@@ -125,7 +126,6 @@ pub(crate) fn remove_clean_writer(
     outputs: &[String],
 ) -> Result<()> {
     require_worktree_branch(path, branch)?;
-    require_no_ignored_files(path)?;
     for output in outputs {
         crate::require(
             !output.is_empty()
@@ -146,49 +146,6 @@ pub(crate) fn remove_clean_writer(
         }
     }
     ok(project, &["worktree", "remove", &path.to_string_lossy()]).map(|_| ())
-}
-
-/// Git cleanliness excludes ignored files, including irreplaceable runtime state.
-/// Never infer that an undeclared ignored file is a disposable build cache.
-fn require_no_ignored_files(path: &Path) -> Result<()> {
-    let ignored = ok(
-        path,
-        &[
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-            "--no-empty-directory",
-            "-z",
-        ],
-    )?;
-    let durable = ignored
-        .split('\0')
-        .find(|entry| !entry.is_empty() && !is_cache_directory(&path.join(entry)));
-    crate::require(
-        durable.is_none(),
-        &format!(
-            "ignored files are not preserved by the Git checkpoint; worktree {} preserved ({}). Declare durable outputs before handoff; remove only verified disposable files explicitly",
-            path.display(),
-            crate::lean::agent::clip(durable.unwrap_or_default(), 300)
-        ),
-    )
-}
-
-/// A directory that marks itself as a regenerable cache with the standard
-/// `CACHEDIR.TAG` signature (written by cargo for `target/`, among others).
-fn is_cache_directory(directory: &Path) -> bool {
-    use std::io::Read;
-    const SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
-    let Ok(tag) = std::fs::File::open(directory.join("CACHEDIR.TAG")) else {
-        return false;
-    };
-    let mut head = Vec::with_capacity(SIGNATURE.len());
-    tag.take(SIGNATURE.len() as u64)
-        .read_to_end(&mut head)
-        .is_ok()
-        && head == SIGNATURE
 }
 
 /// The repository a linked worktree belongs to, read from the worktree itself.
