@@ -439,26 +439,35 @@ def turn_of(prompt):
 
 
 def wait_for_readiness_reminder(fd):
-    """Hold a finished response at an OpenCode-like prompt until reminded."""
-    sys.stdout.write("\x1b[2J\x1b[H⠋ Running\r\n")
-    sys.stdout.flush()
-    time.sleep(0.25)
-    sys.stdout.write("\x1b[2J\x1b[H❯\r\n")
-    sys.stdout.flush()
-    buffer = b""
-    while True:
-        chunk = os.read(fd, 65536)
-        if not chunk:
-            return
-        buffer += chunk
-        end = buffer.find(b"\x1b[201~")
-        if end < 0 or b"\r" not in buffer[end:]:
-            continue
-        start = buffer.find(b"\x1b[200~")
-        reminder = buffer[start + 6 : end].decode(errors="replace").replace("\r", "\n")
-        with open(here + ".reminders", "a") as record:
-            record.write(json.dumps(reminder) + "\n")
-        return
+    """Hold each ready state until reminded, optionally resuming between them."""
+    cycles_path = here + ".readiness_cycles"
+    cycles = int(open(cycles_path).read()) if os.path.exists(cycles_path) else 1
+    work_signal_path = here + ".readiness_work_signal"
+    work_signal = open(work_signal_path).read() if os.path.exists(work_signal_path) else "⠋ Running"
+    for _ in range(cycles):
+        sys.stdout.write("\x1b[2J\x1b[H" + work_signal + "\r\n")
+        sys.stdout.flush()
+        if os.path.exists(here + ".hold_after_work"):
+            open(here + ".working", "w").close()
+            while not os.path.exists(here + ".release_work"):
+                time.sleep(0.01)
+        time.sleep(0.25)
+        sys.stdout.write("\x1b[2J\x1b[H❯\r\n")
+        sys.stdout.flush()
+        buffer = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return
+            buffer += chunk
+            end = buffer.find(b"\x1b[201~")
+            if end < 0 or b"\r" not in buffer[end:]:
+                continue
+            start = buffer.find(b"\x1b[200~")
+            reminder = buffer[start + 6 : end].decode(errors="replace").replace("\r", "\n")
+            with open(here + ".reminders", "a") as record:
+                record.write(json.dumps(reminder) + "\n")
+            break
 
 
 def run_fixture(prompt, turn):
@@ -550,7 +559,13 @@ def main():
             termios.tcsetattr(fd, termios.TCSADRAIN, termios.tcgetattr(fd))
             sys.stderr.write((done.stderr or done.stdout or "no answer") + "\n")
             return done.returncode or 1
-        if os.path.exists(here + ".wait_for_reminder"):
+        # A readiness test can place a real provider approval screen after
+        # work completes, while the MCP result is still pending.
+        dialog("after_work", fd)
+        if any(
+            os.path.exists(here + suffix)
+            for suffix in (".wait_for_reminder", ".readiness_cycles", ".hold_after_work")
+        ):
             wait_for_readiness_reminder(fd)
         # Like the real CLIs, the next prompt continues this session.
         global resume

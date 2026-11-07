@@ -82,10 +82,10 @@ fn continuous_terminal_redraw_does_not_block_connected_first_or_followup_turns()
     let shim_path = binary.with_extension("shim.py");
     let shim = std::fs::read_to_string(&shim_path).unwrap();
     let shim = shim.replacen(
-            "    buffer = b\"\"\n",
-            "    import threading, time\n    def animate():\n        while True:\n            sys.stdout.write('\\rWorking')\n            sys.stdout.flush()\n            time.sleep(0.05)\n    threading.Thread(target=animate, daemon=True).start()\n    buffer = b\"\"\n",
-            1,
-        );
+        "        buffer = b\"\"\n",
+        "        import threading, time\n        def animate():\n            while True:\n                sys.stdout.write('\\rWorking')\n                sys.stdout.flush()\n                time.sleep(0.05)\n        threading.Thread(target=animate, daemon=True).start()\n        buffer = b\"\"\n",
+        1,
+    );
     assert!(shim.contains("def animate():"));
     std::fs::write(shim_path, shim).unwrap();
     let spec = agent::Spec {
@@ -169,6 +169,107 @@ fn ready_cli_receives_one_reminder_and_finishes_through_its_mcp_tool() {
         "one reminder for one ready state"
     );
     assert!(reminders.contains("MCP turn is still open"));
+}
+
+#[test]
+fn ready_cli_gets_another_reminder_only_after_work_resumes() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = opencode(dir.path());
+    std::fs::write(binary.with_extension("readiness_cycles"), "2").unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.clone(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "ready-cycles", "orchestrator", &spec, "")
+        .unwrap();
+    let outcome = session
+        .run(
+            &core.native,
+            "ready-cycles-turn",
+            "answer this",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+    assert_eq!(outcome.text, "opencode answer");
+    let reminders = std::fs::read_to_string(binary.with_extension("reminders")).unwrap();
+    let reminders: Vec<&str> = reminders.lines().collect();
+    assert_eq!(
+        reminders.len(),
+        2,
+        "each resumed ready cycle gets one reminder"
+    );
+    assert!(
+        reminders
+            .iter()
+            .all(|reminder| { reminder.contains("MCP turn is still open") })
+    );
+}
+
+#[test]
+fn cancelling_during_recognized_work_sends_no_readiness_reminder() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = opencode(dir.path());
+    std::fs::write(binary.with_extension("hold_after_work"), "hold").unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.clone(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "cancel-ready", "orchestrator", &spec, "")
+        .unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let worker = session.clone();
+    let registry = core.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = worker.run(
+            &registry.native,
+            "cancel-ready-turn",
+            "answer this",
+            &worker_cancel,
+        );
+        let _ = send.send(result);
+    });
+    let working = binary.with_extension("working");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !working.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not reach its work state"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    cancel.store(true, Ordering::SeqCst);
+    std::fs::write(binary.with_extension("release_work"), "release").unwrap();
+    let error = receive
+        .recv_timeout(Duration::from_secs(5))
+        .expect("cancellation should end the open MCP turn")
+        .unwrap_err();
+    assert_eq!(error.to_string(), mcp::CANCELLED);
+    assert!(!binary.with_extension("reminders").exists());
+    core.native.shutdown().unwrap();
 }
 
 #[test]
@@ -865,6 +966,78 @@ fn run_turn(core: &Arc<Core>, session: &Arc<Session>) -> Result<agent::Outcome> 
     });
     let waited = receive.recv_timeout(Duration::from_secs(60));
     waited.expect("the turn must end")
+}
+
+#[test]
+fn a_pending_approval_dialog_suppresses_readiness_reminder_until_answered() {
+    let dir = test_tempdir();
+    let dialog = dialog_text(include_str!(
+        "../../../tests/fixtures/approvals/claude/command.txt"
+    ));
+    let (core, session, keys) = session_with_dialog(dir.path(), "after_work", &dialog);
+    let binary = dir.path().join("opencode");
+    std::fs::write(binary.with_extension("wait_for_reminder"), "hold").unwrap();
+    std::fs::write(binary.with_extension("readiness_work_signal"), "✻ Thinking").unwrap();
+
+    let (approval_seen_tx, approval_seen_rx) = std::sync::mpsc::channel();
+    let (release_approval_tx, release_approval_rx) = std::sync::mpsc::channel();
+    let release_approval_rx = Mutex::new(release_approval_rx);
+    session
+        .set_approver(Arc::new(move |approval, _, shown| {
+            let visible = shown();
+            approval_seen_tx.send((approval.kind, visible)).unwrap();
+            release_approval_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .map_err(|error| invalid(format!("test did not release approval: {error}")))?;
+            Ok(approvals::Verdict::Choose("1".into()))
+        }))
+        .unwrap();
+
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let worker_core = core.clone();
+    let worker_session = session.clone();
+    std::thread::spawn(move || {
+        let _ = result_tx.send(worker_session.run(
+            &worker_core.native,
+            "approval-readiness-turn",
+            "hello",
+            &AtomicBool::new(false),
+        ));
+    });
+
+    let (kind, visible) = approval_seen_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("session should detect the fixture's visible approval dialog");
+    assert_eq!(kind, approvals::Kind::Command);
+    assert!(
+        visible,
+        "approver must be called while the actual dialog is shown"
+    );
+    std::thread::sleep(Duration::from_millis(350));
+    assert!(
+        !binary.with_extension("reminders").exists(),
+        "no readiness reminder while an approval dialog is awaiting an answer"
+    );
+
+    release_approval_tx.send(()).unwrap();
+    let outcome = result_rx
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or_else(|error| {
+            panic!(
+                "answering approval should allow the ready CLI to continue: {error}; keys={:?}; reminders={:?}; screen=\n{}",
+                std::fs::read(&keys).ok(),
+                std::fs::read_to_string(binary.with_extension("reminders")).ok(),
+                terminal::tail(&session.screen, 40),
+            )
+        })
+        .unwrap();
+    assert_eq!(outcome.text, "opencode answer");
+    assert_eq!(std::fs::read(keys).unwrap(), b"1");
+    let reminders = std::fs::read_to_string(binary.with_extension("reminders")).unwrap();
+    assert_eq!(reminders.lines().count(), 1);
+    assert!(reminders.contains("MCP turn is still open"));
 }
 
 #[test]

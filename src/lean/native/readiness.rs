@@ -257,4 +257,13 @@ mod tests {
         assert!(!tracker.observe(ProviderKind::Claude, "❯", false, true));
         assert!(tracker.observe(ProviderKind::Claude, "❯", false, false));
     }
+
+    #[test]
+    fn approval_dialog_suppresses_a_ready_reminder_without_consuming_it() {
+        let mut tracker = Tracker::default();
+        assert!(!tracker.observe(ProviderKind::Claude, "✻ Thinking", false, false));
+        assert!(!tracker.observe(ProviderKind::Claude, "❯", true, false));
+        assert!(tracker.observe(ProviderKind::Claude, "❯", false, false));
+        assert!(!tracker.observe(ProviderKind::Claude, "❯", false, false));
+    }
 }
