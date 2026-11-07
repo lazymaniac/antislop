@@ -39,9 +39,9 @@ impl Form {
 
     fn scroll_page(&mut self, down: bool) {
         self.scroll = if down {
-            self.scroll.saturating_add(5)
+            self.scroll.saturating_add(self.scroll_step)
         } else {
-            self.scroll.saturating_sub(5)
+            self.scroll.saturating_sub(self.scroll_step)
         };
         self.manual_scroll = true;
     }

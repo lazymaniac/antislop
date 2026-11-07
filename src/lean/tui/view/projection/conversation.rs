@@ -43,22 +43,29 @@ pub(super) fn on_user_decision_requested(
 ) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);
-    if let Ok(mut question) =
+    if let Ok(question) =
         serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
     {
+        view.scope_confirmation_summary = None;
         view.user_decision = true;
-        if question.id.starts_with("scope-confirmation-") && !view.requirements_summary.is_empty() {
-            question.context = format!(
-                "Collected requirements:\n{}\n\n{}",
-                view.requirements_summary, question.context
-            );
-        }
         view.system_card(
             "Decision required",
             question.transcript(),
             crate::lean::tui::theme::Tone::Waiting,
         );
         view.interview_question = Some((view.after, question));
+    }
+}
+
+pub(super) fn on_scope_confirmation_requested(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    if let Some(summary) = payload["summary"].as_str() {
+        view.scope_confirmation_summary = Some(summary.to_owned());
     }
 }
 
@@ -202,6 +209,7 @@ fn update_user_message_state(view: &mut View, payload: &Value, text: &str) {
     {
         view.interview_question = None;
         view.user_decision = false;
+        view.scope_confirmation_summary = None;
     }
 }
 

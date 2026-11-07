@@ -4,11 +4,11 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.phase_action_area = None;
         self.phase_action_command = None;
+        self.now_click_targets.clear();
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
         self.now_area = None;
-        self.now_click_targets.clear();
         self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
             self.text_selection = Default::default();
@@ -48,10 +48,13 @@ mod tests {
         );
         assert_eq!(app.terminal_area, Rect::new(0, 0, 80, 24));
 
+        app.now_click_targets
+            .push(Some(("stale-agent".into(), true)));
         let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
         tiny.draw(|frame| app.draw(frame)).unwrap();
         assert!(app.graph_area.is_none());
         assert!(app.text_area.is_none());
+        assert!(app.now_click_targets.is_empty());
         let rendered = (0..4)
             .map(|row| {
                 (0..11)
@@ -62,6 +65,38 @@ mod tests {
             .join(" ");
         let rendered = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(rendered.contains("Terminal too small"));
+    }
+
+    #[test]
+    fn scope_decision_waits_for_resize_below_minimum_terminal_size() {
+        let mut app = App::test_app();
+        app.view.workflow_phase = Some("interview".into());
+        app.view.user_decision = true;
+        app.view.scope_confirmation_summary = Some("FULL-SCOPE-CONTENT".into());
+        let question = serde_json::from_value(serde_json::json!({
+            "id":"scope-confirmation",
+            "context":"Confirm scope.",
+            "question":"Proceed?",
+            "options":["Confirm scope", "Request changes"]
+        }))
+        .unwrap();
+        app.view.interview_question = Some((42, question));
+
+        let mut terminal = Terminal::new(TestBackend::new(11, 4)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Terminal too small"));
+        assert!(!text.contains("FULL-SCOPE-CONTENT"));
+        assert!(!text.contains("Confirm scope"));
     }
 
     #[test]

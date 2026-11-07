@@ -157,6 +157,8 @@ pub struct View {
     pub workflow_phase: Option<String>,
     pub session_branch: Option<String>,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
+    /// Full proposed scope attached to the pending transition decision.
+    pub scope_confirmation_summary: Option<String>,
     pub user_decision: bool,
     pub requirements_summary: String,
     pub requirements_approval_run: Option<String>,
@@ -250,6 +252,32 @@ mod tests {
             json!({"role":"orchestrator"}),
         ));
         assert_eq!(view.agents[ORCHESTRATOR].branch, None);
+    }
+
+    #[test]
+    fn scope_confirmation_projection_keeps_full_summary_separate_from_question() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "user_decision_requested",
+            serde_json::json!({"id":"scope","context":"Confirm scope.","question":"Proceed?","options":["Confirm","Change"]}),
+        ));
+        let summary = "Entire scope with an unbounded-length summary".repeat(1000);
+        view.apply(&event(
+            2,
+            None,
+            "scope_confirmation_requested",
+            serde_json::json!({"summary":summary}),
+        ));
+        assert_eq!(
+            view.scope_confirmation_summary.as_deref(),
+            Some(summary.as_str())
+        );
+        assert_eq!(
+            view.interview_question.as_ref().unwrap().1.context,
+            "Confirm scope."
+        );
     }
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {

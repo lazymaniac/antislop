@@ -23,13 +23,25 @@ pub(super) struct Sanitizer {
 }
 
 impl Sanitizer {
+    pub(super) fn at_text_boundary(&self) -> bool {
+        self.state == State::Text
+    }
+
+    pub(super) fn can_borrow_visible(&self, text: &str) -> bool {
+        self.at_text_boundary() && text.chars().all(|c| !c.is_control() && !is_bidi_control(c))
+    }
+
     pub(super) fn push(&mut self, input: &str) -> String {
         let mut output = String::with_capacity(input.len());
+        self.append_chunk(input, &mut output);
+        output
+    }
+
+    pub(super) fn append_chunk(&mut self, input: &str, output: &mut String) {
         for c in input.chars() {
-            append_visible(self.state, c, &mut output);
+            append_visible(self.state, c, output);
             self.state = self.state.transition(c);
         }
-        output
     }
 }
 

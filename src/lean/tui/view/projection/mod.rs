@@ -52,6 +52,10 @@ const HANDLERS: &[(&str, Handler)] = &[
         "user_decision_requested",
         conversation::on_user_decision_requested,
     ),
+    (
+        "scope_confirmation_requested",
+        conversation::on_scope_confirmation_requested,
+    ),
     ("interview_question", conversation::on_interview_question),
     ("session_started", conversation::on_session_started),
     ("agent_final", agents::on_agent_final),

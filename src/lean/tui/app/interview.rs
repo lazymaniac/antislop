@@ -13,6 +13,9 @@ impl App {
                     interview::Form::new(*event, question.clone()),
                 );
             }
+            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                form.set_scope_summary(self.view.scope_confirmation_summary.as_deref());
+            }
         }
     }
 
