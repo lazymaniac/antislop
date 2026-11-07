@@ -97,6 +97,27 @@ impl App {
         } else if self.focus == Focus::Chat {
             self.chat_area = body;
             self.draw_chat(frame, body, &theme);
+        } else if self.approval.is_some() && body.height > 1 {
+            let desired = self.approval.as_ref().map_or(6, |approval| {
+                let text_width = usize::from(body.width.saturating_sub(2)).max(1);
+                let summary_lines = super::super::approval::card_summary_rows(
+                    &approval.approval.summary,
+                    text_width,
+                    usize::from(body.height),
+                );
+                summary_lines
+                    .saturating_add(approval.approval.options.len())
+                    .saturating_add(7)
+                    .min(usize::from(u16::MAX)) as u16
+            });
+            let chat_height = desired
+                .min((body.height / 2).max(5))
+                .min(body.height.saturating_sub(1));
+            let [team, chat] =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(chat_height)]).areas(body);
+            self.chat_area = chat;
+            self.draw_graph(frame, team);
+            self.draw_chat(frame, chat, &theme);
         } else {
             self.chat_area = body;
             self.draw_graph(frame, body);

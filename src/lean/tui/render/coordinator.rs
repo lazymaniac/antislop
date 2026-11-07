@@ -13,6 +13,7 @@ impl App {
             return;
         }
         self.sync_native_views();
+        self.sync_approval();
         if super::ledger::draw_history_or_ledger(self, frame) {
             return;
         }

@@ -1720,12 +1720,13 @@ src
     requests/fetch
      - {Task,Run}Fetch,mark_run_fetch,task_fetch_update
    approval
-    Modal(C{approval,selected})
+    card_summary_rows(text,width,max_lines):usize > len,bounded_summary
+    ApprovalCard(C{approval})
      new(approval):Self
-     key(key):Outcome > len
-     draw(frame) ~70 > Theme.from_env,len,truncate,title,borders
-    Outcome(E{None,Later,Choose})
-    super::App: sync_approval() > Modal.new; route_approval(key):Option<bool>; set_approval_mode(mode); show_pending_approvals()
+     key(key):Option<Outcome>
+     draw(frame,area) ~92 > Theme.from_env,bounded_clean,truncate,style,len,bounded_summary,title,borders
+    Outcome(E{Later,Choose})
+    super::App: sync_approval() > ApprovalCard.new; route_approval(key):Option<bool>; set_approval_mode(mode); show_pending_approvals()
    buffer
     InputBuffer(C{text,cursor,preferred_col})
      edit_key(key) > insert_char,delete_{word_back,to_start,to_end},move_{home,end},backspace,delete,move_{word_left,word_right,left,right,buffer_start,buffer_end}
@@ -2369,11 +2370,10 @@ src
       draw_editor(app,frame):bool ~42 > visual_text_lines,comments_on,visual_cursor,editor_box,draw_editor_cursor
       - editor_title
      modal
-      draw_approval(app,frame)
       draw_graph_filters(app,frame)
       draw_unblock(app,frame)
     overlays.rs
-     draw_remaining(app,frame) > draw_{selection,editor,interview,picker,help,unblock,approval,graph_filters}
+     draw_remaining(app,frame) > draw_{selection,editor,interview,picker,help,unblock,graph_filters}
     specialized_dashboard
      - DashboardRows,dashboard_order,append_dashboard_section
     specialized_dashboard_cards
@@ -2434,6 +2434,7 @@ src
      finish_with(format,sink):crate::Result<()>
    sanitize
     sanitize(input):String
+    sanitize_bounded(input,byte_limit):String > append_visible
     sanitize_line(input):String > sanitize
     Sanitizer(C{state})
      push(input):String > append_visible,transition
@@ -2548,10 +2549,10 @@ src
      run(command):bool > run_command
      load_plan_history(offset)
      draw_chat(frame,area,theme) > chat_layout,draw_{phase_action,sending,transcript,chat_input}
-     draw(frame) > sync_interview,draw_min_term_guard,sync_native_views,draw_{history_or_ledger,secondary_or_main,remaining}
+     draw(frame) > sync_interview,draw_min_term_guard,sync_{native_views,approval},draw_{history_or_ledger,secondary_or_main,remaining}
      draw_graph(frame,area) ~43 > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame) > draw_{chat,graph,footer}
+     draw_main(frame) ~48 > draw_{chat,graph},card_summary_rows,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
@@ -2986,6 +2987,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 126,214 LOC · input 1,118,175 · output 43,425 tokens · state b7fab47fcfb6 · targets AGENTS.md
+· 126,473 LOC · input 1,120,968 · output 43,469 tokens · state 906459d61758 · targets AGENTS.md
 ```
 <!-- hologram:end -->

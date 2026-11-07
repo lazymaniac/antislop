@@ -12,10 +12,3 @@ pub(super) fn draw_graph_filters(app: &mut App, frame: &mut Frame) {
         menu.draw(frame, &providers, app.relations, &app.graph_scope);
     }
 }
-
-pub(super) fn draw_approval(app: &mut App, frame: &mut Frame) {
-    app.sync_approval();
-    if let Some(modal) = &app.approval {
-        modal.draw(frame);
-    }
-}

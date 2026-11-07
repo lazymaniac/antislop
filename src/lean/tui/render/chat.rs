@@ -10,10 +10,13 @@ impl App {
         self.draw_phase_action(frame, areas[2], theme);
         self.draw_sending(frame, areas[1], theme);
         self.draw_transcript(frame, areas[0], theme);
-        self.draw_chat_input(frame, areas[3], input_lines, cursor, theme);
+        if let Some(approval) = &self.approval {
+            approval.draw(frame, areas[3]);
+        }
+        self.draw_chat_input(frame, areas[4], input_lines, cursor, theme);
     }
 
-    fn chat_layout(&mut self, area: Rect) -> (Vec<String>, (u16, usize), [Rect; 4]) {
+    fn chat_layout(&mut self, area: Rect) -> (Vec<String>, (u16, usize), [Rect; 5]) {
         let input_width = usize::from(area.width.saturating_sub(3)).max(1);
         self.input_width = input_width;
         let layout = compute_visual_lines(&self.input.text, input_width);
@@ -28,10 +31,26 @@ impl App {
             Some(_) => 1,
             None => 0,
         };
+        let approval_height = self.approval.as_ref().map_or(0, |approval| {
+            let summary_lines = super::super::approval::card_summary_rows(
+                &approval.approval.summary,
+                input_width,
+                usize::from(area.height),
+            );
+            let desired = summary_lines
+                .saturating_add(approval.approval.options.len())
+                .saturating_add(5)
+                .min(usize::from(u16::MAX)) as u16;
+            let fixed = input_height
+                .saturating_add(status_height)
+                .saturating_add(action_height);
+            desired.min(area.height.saturating_sub(fixed))
+        });
         let areas = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(status_height),
             Constraint::Length(action_height),
+            Constraint::Length(approval_height),
             Constraint::Length(input_height),
         ])
         .areas(area);

@@ -106,8 +106,8 @@ pub struct App {
     pub graph_viewport: Option<(u16, u16)>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
-    /// An agent CLI's approval dialog put to the user.
-    pub(super) approval: Option<super::approval::Modal>,
+    /// The visible agent CLI approval card.
+    pub(super) approval: Option<super::approval::ApprovalCard>,
     /// Approvals the user put off; they stay open and the palette lists them.
     pub(super) approval_hidden: std::collections::HashSet<String>,
     /// The graph filter menu, while it is open.

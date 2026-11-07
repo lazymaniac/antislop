@@ -4,7 +4,9 @@ mod header;
 
 impl App {
     pub(in crate::lean::tui) fn bar_height(area: Rect) -> u16 {
-        if area.width >= SIDE_BY_SIDE_BREAKPOINT && area.height >= 30 {
+        if area.height <= 5 {
+            1
+        } else if area.width >= SIDE_BY_SIDE_BREAKPOINT && area.height >= 30 {
             3
         } else {
             2
@@ -216,7 +218,6 @@ impl App {
             .as_ref()
             .is_some_and(|editor| editor.visible)
             || self.unblock.is_some()
-            || self.approval.is_some()
             || self.graph_filters.is_some()
             || self.interview_visible()
     }

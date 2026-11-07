@@ -125,6 +125,34 @@ pub fn sanitize(input: &str) -> String {
     Sanitizer::default().push(input)
 }
 
+/// Sanitizes a bounded prefix without allocating in proportion to `input`.
+/// If the byte limit cuts through a grapheme, that final partial grapheme is
+/// discarded so callers never render a broken glyph.
+pub(super) fn sanitize_bounded(input: &str, byte_limit: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    if byte_limit == 0 {
+        return String::new();
+    }
+    let mut output = String::with_capacity(byte_limit.min(input.len()));
+    let mut state = State::Text;
+    let mut cut_short = false;
+    for c in input.chars() {
+        let before = output.len();
+        append_visible(state, c, &mut output);
+        if output.len() > byte_limit {
+            output.truncate(before);
+            cut_short = true;
+            break;
+        }
+        state = state.transition(c);
+    }
+    if cut_short && let Some((start, _)) = output.grapheme_indices(true).next_back() {
+        output.truncate(start);
+    }
+    output
+}
+
 /// [`sanitize`] collapsed to one printable line for fields a view renders
 /// inside a single row (titles, ids, paths, sections): every whitespace
 /// run, newlines included, becomes one space so no control reaches the
