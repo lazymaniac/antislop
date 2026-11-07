@@ -10,10 +10,11 @@ use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 pub(crate) mod approvals;
+mod readiness;
 /// Makes a headless-style test script answer as an interactive agent CLI too
 /// (see `tests/support/fixture_cli.rs`).
 mod registry;
@@ -48,6 +49,8 @@ pub struct Registry {
 }
 
 pub struct Session {
+    conversation: String,
+    core: Weak<Core>,
     pub(crate) spec: agent::Spec,
     signature: String,
     _settings: Option<tempfile::NamedTempFile>,

@@ -125,6 +125,53 @@ fn continuous_terminal_redraw_does_not_block_connected_first_or_followup_turns()
 }
 
 #[test]
+fn ready_cli_receives_one_reminder_and_finishes_through_its_mcp_tool() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = opencode(dir.path());
+    std::fs::write(binary.with_extension("wait_for_reminder"), "hold").unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.clone(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "ready", "orchestrator", &spec, "")
+        .unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = session.clone();
+    let registry = core.clone();
+    std::thread::spawn(move || {
+        let result = worker.run(
+            &registry.native,
+            "ready-turn",
+            "answer this",
+            &AtomicBool::new(false),
+        );
+        let _ = send.send(result);
+    });
+    let outcome = receive
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the reminder should let the CLI continue")
+        .unwrap();
+    assert_eq!(outcome.text, "opencode answer");
+    let reminders = std::fs::read_to_string(binary.with_extension("reminders")).unwrap();
+    assert_eq!(
+        reminders.lines().count(),
+        1,
+        "one reminder for one ready state"
+    );
+    assert!(reminders.contains("MCP turn is still open"));
+}
+
+#[test]
 fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
     // SAFETY: fixture-only override, as in the launch tests.
     unsafe { std::env::set_var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK", "1") };

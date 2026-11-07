@@ -214,6 +214,21 @@ impl Gateway {
         self.shared.state.lock().is_ok_and(|state| state.listed)
     }
 
+    /// Runs a short terminal action while the same MCP turn remains open.
+    /// Serializing against tool dispatch prevents a reminder after acceptance.
+    pub(crate) fn while_pending(
+        &self,
+        turn: &str,
+        action: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        let state = self.shared.state.lock().map_err(invalid)?;
+        if state.expected.as_deref() != Some(turn) || state.finished.is_some() {
+            return Ok(false);
+        }
+        action()?;
+        Ok(true)
+    }
+
     /// The session identifier the CLI announced, if any.
     pub(crate) fn session(&self) -> Option<String> {
         self.shared.state.lock().ok()?.session.clone()
@@ -281,5 +296,39 @@ fn agent_exited(shared: &Shared, turn: &str, error: Error) -> Result<Finish> {
 impl Drop for Gateway {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod reminder_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn reminder_action_is_serialized_with_mcp_turn_completion() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("active").unwrap();
+        let reminders = AtomicUsize::new(0);
+        assert!(
+            gateway
+                .while_pending("active", || {
+                    reminders.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert_eq!(reminders.load(Ordering::SeqCst), 1);
+        gateway.shared.state.lock().unwrap().finished = Some(Finish {
+            text: "done".into(),
+        });
+        assert!(
+            !gateway
+                .while_pending("active", || {
+                    reminders.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert_eq!(reminders.load(Ordering::SeqCst), 1);
     }
 }

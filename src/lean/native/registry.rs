@@ -138,7 +138,13 @@ impl Registry {
             return Ok(session.clone());
         }
         sessions.remove(&key);
-        let session = Arc::new(Session::start(core, spec.clone(), signature, role)?);
+        let session = Arc::new(Session::start(
+            core,
+            conversation.to_owned(),
+            spec.clone(),
+            signature,
+            role,
+        )?);
         sessions.insert(key, session.clone());
         Ok(session)
     }

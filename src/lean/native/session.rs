@@ -3,14 +3,21 @@ use super::*;
 impl Session {
     pub(super) fn start(
         core: &Core,
+        conversation: String,
         spec: agent::Spec,
         signature: String,
         role: &str,
     ) -> Result<Self> {
-        Self::build(core, spec, signature, role)
+        Self::build(core, conversation, spec, signature, role)
     }
 
-    fn build(core: &Core, spec: agent::Spec, signature: String, role: &str) -> Result<Self> {
+    fn build(
+        core: &Core,
+        conversation: String,
+        spec: agent::Spec,
+        signature: String,
+        role: &str,
+    ) -> Result<Self> {
         let gateway = mcp::Gateway::start()?;
         gateway.set_role(role)?;
         if let Some((id, _)) = super::super::task_role(role)
@@ -24,6 +31,8 @@ impl Session {
             terminal::Session::spawn(launch.command, &weak, agent::name(spec.provider), 120, 40)?;
         let screen = terminal.shared();
         Ok(Self {
+            conversation,
+            core: weak,
             spec,
             signature,
             _settings: launch.settings,
@@ -267,10 +276,12 @@ impl Session {
     }
 
     fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
+        let readiness = Mutex::new(readiness::Tracker::default());
         self.gateway
             .wait(turn, cancel, || {
                 self.check_alive()?;
                 self.serve_approval(cancel)
+                    .and_then(|()| self.remind_if_ready(turn, cancel, &readiness))
             })
             .inspect_err(|error| {
                 if error.to_string() == mcp::CANCELLED {
@@ -278,6 +289,40 @@ impl Session {
                 }
             })
             .map_err(|error| self.describe_result_error(error))
+    }
+
+    fn remind_if_ready(
+        &self,
+        turn: &str,
+        cancel: &AtomicBool,
+        readiness: &Mutex<readiness::Tracker>,
+    ) -> Result<()> {
+        if cancel.load(Ordering::SeqCst) || self.approval().is_some() {
+            return Ok(());
+        }
+        let core = self
+            .core
+            .upgrade()
+            .ok_or_else(|| invalid("agent session lost its core"))?;
+        let paused = core.store.paused(&self.conversation)?;
+        let screen = terminal::tail(&self.screen, SCREEN_LINES);
+        let ready =
+            readiness
+                .lock()
+                .map_err(invalid)?
+                .observe(self.spec.provider, &screen, false, paused);
+        if ready && !cancel.load(Ordering::SeqCst) {
+            self.gateway.while_pending(turn, || {
+                if cancel.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                terminal::Session::submit(
+                    &self.screen,
+                    "Your response appears complete, but this MCP turn is still open. Continue any remaining work, then call the required result tool now. Do not finish in terminal prose.",
+                )
+            })?;
+        }
+        Ok(())
     }
 
     fn describe_result_error(&self, error: Error) -> Error {

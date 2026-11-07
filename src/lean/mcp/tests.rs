@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     fn post(gateway: &Gateway, token: &str, body: Value) -> (u16, Value) {
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -143,10 +144,15 @@ mod tests {
         let gateway = Gateway::start().unwrap();
         gateway.begin("t1").unwrap();
         let cancel = AtomicBool::new(true);
+        let reminder_checked = AtomicBool::new(false);
         let error = gateway
-            .wait("t1", &cancel, || Ok(()))
+            .wait("t1", &cancel, || {
+                reminder_checked.store(true, Ordering::SeqCst);
+                Ok(())
+            })
             .unwrap_err();
         assert_eq!(error.to_string(), CANCELLED);
+        assert!(!reminder_checked.load(Ordering::SeqCst));
         gateway.begin("t2").unwrap();
         let cancel = AtomicBool::new(false);
         let error = gateway

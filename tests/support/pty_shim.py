@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import termios
+import time
 import tty
 import urllib.request
 
@@ -437,6 +438,29 @@ def turn_of(prompt):
     return match.group(1) if match else None
 
 
+def wait_for_readiness_reminder(fd):
+    """Hold a finished response at an OpenCode-like prompt until reminded."""
+    sys.stdout.write("\x1b[2J\x1b[H⠋ Running\r\n")
+    sys.stdout.flush()
+    time.sleep(0.25)
+    sys.stdout.write("\x1b[2J\x1b[H❯\r\n")
+    sys.stdout.flush()
+    buffer = b""
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return
+        buffer += chunk
+        end = buffer.find(b"\x1b[201~")
+        if end < 0 or b"\r" not in buffer[end:]:
+            continue
+        start = buffer.find(b"\x1b[200~")
+        reminder = buffer[start + 6 : end].decode(errors="replace").replace("\r", "\n")
+        with open(here + ".reminders", "a") as record:
+            record.write(json.dumps(reminder) + "\n")
+        return
+
+
 def run_fixture(prompt, turn):
     # The earlier fixtures were called like the headless CLIs.
     if name.endswith("codex") or "codex" in name:
@@ -526,6 +550,8 @@ def main():
             termios.tcsetattr(fd, termios.TCSADRAIN, termios.tcgetattr(fd))
             sys.stderr.write((done.stderr or done.stdout or "no answer") + "\n")
             return done.returncode or 1
+        if os.path.exists(here + ".wait_for_reminder"):
+            wait_for_readiness_reminder(fd)
         # Like the real CLIs, the next prompt continues this session.
         global resume
         resume = seen or resume
