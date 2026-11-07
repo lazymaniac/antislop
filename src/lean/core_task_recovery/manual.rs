@@ -80,8 +80,65 @@ fn reviewer_setup<'a>(
     work: &'a RecoveryWork,
     snapshot: &str,
 ) -> Result<(TurnSetup<'a>, String)> {
-    let (reviewer, reviewdir, branch) = manual_review_paths(core, work);
-    git::add_worktree(&work.project, &reviewdir, &branch, snapshot)?;
+    let reviewer = format!("reviewer:{}", work.task.id);
+    let reviewdir = super::super::core_path_helpers::worktree_path(&core.state, &work.task)?;
+    let branch = super::super::core_path_helpers::branch(&work.task)?;
+    if reviewdir.exists() {
+        require(
+            git::worktree_branch(&reviewdir)? == branch,
+            "manual recovery task worktree is attached to a different branch; preserved",
+        )?;
+    } else {
+        let reference = format!("refs/heads/{branch}");
+        let start = if git::git(
+            &work.project,
+            &["show-ref", "--verify", "--quiet", &reference],
+        )?
+        .status
+        .success()
+        {
+            git::ok(&work.project, &["rev-parse", &reference])?
+        } else {
+            snapshot.to_owned()
+        };
+        git::add_worktree(&work.project, &reviewdir, &branch, &start)?;
+    }
+    let base = work
+        .task
+        .base
+        .as_deref()
+        .ok_or_else(|| Error::Invalid("manual recovery has no review base".into()))?;
+    let changed = git::changed_files(&work.project, base, snapshot)?;
+    if !changed.is_empty() {
+        match git::integrate_scoped(&reviewdir, base, snapshot, Some(&changed), false)? {
+            git::Integration::Applied | git::Integration::Committed(_) => {}
+            git::Integration::Conflict(conflicts) => {
+                let mergeable = changed
+                    .iter()
+                    .filter(|file| !conflicts.contains(file))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !mergeable.is_empty() {
+                    match git::integrate_scoped(
+                        &reviewdir,
+                        base,
+                        snapshot,
+                        Some(&mergeable),
+                        false,
+                    )? {
+                        git::Integration::Applied | git::Integration::Committed(_) => {}
+                        git::Integration::Conflict(files) | git::Integration::UserEdits(files) => {
+                            return Err(snapshot_conflict(&files));
+                        }
+                    }
+                }
+                restore_snapshot_conflicts(&reviewdir, snapshot, &conflicts)?;
+            }
+            git::Integration::UserEdits(files) => {
+                return Err(snapshot_conflict(&files));
+            }
+        }
+    }
     let project = reviewdir.to_string_lossy().into_owned();
     let setup = reviewer_setup::build(
         &work.req.conversation,
@@ -94,14 +151,81 @@ fn reviewer_setup<'a>(
     Ok((setup, project))
 }
 
-fn manual_review_paths(core: &Core, work: &RecoveryWork) -> (String, PathBuf, String) {
-    let suffix = format!(
-        "{}-manual-review-g{}-{}",
-        work.task.id, work.task.input_generation, work.task.round
-    );
-    let branch = format!("antislop/{suffix}");
-    let dir = core.state.join("worktrees").join(suffix);
-    (format!("reviewer:{}", work.task.id), dir, branch)
+fn snapshot_conflict(files: &[String]) -> Error {
+    Error::Invalid(format!(
+        "manual recovery snapshot conflicts with uncommitted task edits in {}",
+        files.join(", ")
+    ))
+}
+
+fn restore_snapshot_conflicts(project: &Path, snapshot: &str, files: &[String]) -> Result<()> {
+    for file in files {
+        let relative = Path::new(file);
+        require(
+            !file.is_empty()
+                && relative
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_))),
+            "invalid path in manual recovery snapshot",
+        )?;
+        ensure_safe_parent(project, relative)?;
+        let tree = git::git(
+            project,
+            &[
+                "--literal-pathspecs",
+                "ls-tree",
+                "-r",
+                "-z",
+                snapshot,
+                "--",
+                file,
+            ],
+        )?;
+        require(
+            tree.status.success(),
+            "could not inspect manual recovery snapshot",
+        )?;
+        let destination = project.join(relative);
+        if tree.stdout.is_empty() {
+            match std::fs::remove_file(destination) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into());
+                }
+                _ => {}
+            }
+        } else {
+            let source = format!("--source={snapshot}");
+            git::ok(
+                project,
+                &[
+                    "--literal-pathspecs",
+                    "restore",
+                    &source,
+                    "--worktree",
+                    "--",
+                    file,
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_safe_parent(project: &Path, relative: &Path) -> Result<()> {
+    let mut parent = project.to_path_buf();
+    let parent_count = relative.components().count().saturating_sub(1);
+    for component in relative.components().take(parent_count) {
+        parent.push(component);
+        match std::fs::symlink_metadata(&parent) {
+            Ok(metadata) => require(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "manual recovery snapshot path crosses a non-directory or symlink",
+            )?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn reviewer_prompt(

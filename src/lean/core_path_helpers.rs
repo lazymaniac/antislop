@@ -16,20 +16,15 @@ pub(super) fn task_path_component(id: &str) -> Result<&str> {
     Ok(id)
 }
 
-/// Each input generation owns a distinct checkout and branch.
+/// Every turn for a task shares one checkout; input-specific results remain
+/// recorded on the task rather than being encoded in its filesystem identity.
 pub(super) fn worktree_path(state: &Path, task: &Task) -> Result<PathBuf> {
     let id = task_path_component(&task.id)?;
-    Ok(state
-        .join("worktrees")
-        .join(format!("{id}-g{}", task.input_generation)))
+    Ok(state.join("worktrees").join(id))
 }
 
 pub(super) fn branch(task: &Task) -> Result<String> {
-    Ok(format!(
-        "antislop/{}-g{}",
-        task_path_component(&task.id)?,
-        task.input_generation
-    ))
+    Ok(format!("antislop/{}", task_path_component(&task.id)?))
 }
 
 pub(super) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
@@ -199,14 +194,29 @@ fn release_writer_checkout(store: &Store, path: PathBuf) -> Result<()> {
         return Ok(());
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let Some((id, generation)) = writer_checkout_id(&name) else {
-        return Ok(());
+    let (task, generation) = match store.task_by_id(&name)? {
+        Some(task) => (task, None),
+        None => {
+            let Some((id, generation)) = writer_checkout_id(&name) else {
+                return Ok(());
+            };
+            let Some(task) = store.task_by_id(id)? else {
+                return Ok(());
+            };
+            (task, Some(generation))
+        }
     };
-    let Some(task) = store.task_by_id(id)? else {
-        return Ok(());
+    let settled = matches!(
+        task.status.as_str(),
+        status::APPROVED | status::STALE | "superseded"
+    );
+    let left = match generation {
+        Some(generation) => {
+            generation < task.input_generation
+                || matches!(task.status.as_str(), status::STALE | "superseded")
+        }
+        None => settled,
     };
-    let left = generation < task.input_generation
-        || matches!(task.status.as_str(), status::STALE | "superseded");
     if !left || !writer_checkout_is_clean(&path, &name) {
         return Ok(());
     }

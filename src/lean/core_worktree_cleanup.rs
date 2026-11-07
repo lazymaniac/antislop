@@ -80,7 +80,7 @@ impl Core {
         }
     }
 
-    /// During a running task, only older views of the same kind are replaced.
+    /// Retire obsolete legacy read-only views before a task uses its stable path.
     pub(in crate::lean) fn release_task_views(&self, id: &str, keep: Option<&Path>) {
         let _graph = self.graph_updates.lock().expect("graph update mutex");
         let result = task_view_paths(&self.state, id, keep).and_then(|paths| {
@@ -161,7 +161,7 @@ impl Core {
                 if !self.native.retire_directory(&path)? {
                     return Ok(false);
                 }
-                if kind.0 {
+                if matches!(kind, CheckoutKind::ReadOnlyView { .. }) {
                     release_view(&path)?;
                 } else {
                     let project = git::worktree_project(&path)?;
@@ -214,31 +214,54 @@ impl Core {
     }
 }
 
-/// (read-only view, generation, review round). Only exact runtime names qualify.
-fn checkout_kind(name: &str, id: &str) -> Option<(bool, i64, Option<u32>)> {
-    let suffix = name.strip_prefix(id)?.strip_prefix('-')?;
+#[derive(Clone, Copy)]
+enum CheckoutKind {
+    StableWriter,
+    LegacyWriter { generation: i64 },
+    ReadOnlyView { generation: i64, round: Option<u32> },
+}
+
+/// Only exact runtime names qualify; generation suffixes are legacy checkouts.
+fn checkout_kind(name: &str, id: &str) -> Option<CheckoutKind> {
+    let suffix = name.strip_prefix(id)?;
+    if suffix.is_empty() {
+        return Some(CheckoutKind::StableWriter);
+    }
+    let suffix = suffix.strip_prefix('-')?;
     if let Some(generation) = suffix.strip_prefix("observation-g") {
-        return Some((true, generation.parse().ok()?, None));
+        return Some(CheckoutKind::ReadOnlyView {
+            generation: generation.parse().ok()?,
+            round: None,
+        });
     }
     if let Some(review) = suffix.strip_prefix("review-g") {
         let (generation, round) = review.split_once('-')?;
-        return Some((true, generation.parse().ok()?, Some(round.parse().ok()?)));
+        return Some(CheckoutKind::ReadOnlyView {
+            generation: generation.parse().ok()?,
+            round: Some(round.parse().ok()?),
+        });
     }
-    Some((false, suffix.strip_prefix('g')?.parse().ok()?, None))
+    Some(CheckoutKind::LegacyWriter {
+        generation: suffix.strip_prefix('g')?.parse().ok()?,
+    })
 }
 
-fn eligible(task: &Task, (view, generation, round): (bool, i64, Option<u32>)) -> bool {
-    if view && generation == task.input_generation && round.is_some_and(|round| round < task.round)
-    {
-        return true;
-    }
-    if generation < task.input_generation {
-        return true;
-    }
-    matches!(
+fn eligible(task: &Task, checkout: CheckoutKind) -> bool {
+    let settled = matches!(
         task.status.as_str(),
         status::APPROVED | status::STALE | "superseded"
-    ) || view && matches!(task.status.as_str(), status::CANCELLED | status::SKIPPED)
+    );
+    match checkout {
+        CheckoutKind::StableWriter => settled,
+        CheckoutKind::LegacyWriter { generation } => generation < task.input_generation || settled,
+        CheckoutKind::ReadOnlyView { generation, round } => {
+            generation < task.input_generation
+                || generation == task.input_generation
+                    && round.is_some_and(|round| round < task.round)
+                || settled
+                || matches!(task.status.as_str(), status::CANCELLED | status::SKIPPED)
+        }
+    }
 }
 
 #[cfg(test)]

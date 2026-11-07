@@ -122,6 +122,15 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
     let result = git::commit_all(&old, git::CommitPurpose::TestFixture).unwrap();
     let dirty = checkout(&core, task, "g1", &commit);
     std::fs::write(dirty.join("unsaved"), "unsaved").unwrap();
+    let stable = core.state.join("worktrees").join(&task.id);
+    git::add_worktree(
+        &PathBuf::from(core.store.conversation(&conversation).unwrap().project),
+        &stable,
+        &format!("antislop/{}", task.id),
+        &commit,
+    )
+    .unwrap();
+    std::fs::write(stable.join("user-edit"), "preserve across inputs").unwrap();
     let current = checkout(&core, task, "g2", &commit);
     let old_view = checkout(&core, task, "review-g0-1", &commit);
     let current_view = checkout(&core, task, "observation-g2", &commit);
@@ -150,7 +159,11 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
     core.task_cancels.lock().unwrap().remove(&task.id);
     drain_until(&core, || !old.exists() && !old_view.exists());
     assert!(!old.exists() && !old_view.exists());
-    assert!(dirty.exists() && current.exists() && current_view.exists());
+    assert!(dirty.exists() && current.exists() && current_view.exists() && stable.exists());
+    assert_eq!(
+        std::fs::read_to_string(stable.join("user-edit")).unwrap(),
+        "preserve across inputs"
+    );
     let root = PathBuf::from(core.store.conversation(&conversation).unwrap().project);
     let branch = format!("antislop/{}-g0", task.id);
     let restored = core.state.join("restored-writer");

@@ -43,14 +43,22 @@ fn task_branches_validate_ids_and_distinguish_shared_prefixes() {
     task.id = format!("combine-base-{}", "a".repeat(64));
     assert!(branch(&task).is_err());
     task.id = "12345678-1234-4234-8234-123456789abc".to_owned();
-    assert_eq!(branch(&task).unwrap(), format!("antislop/{}-g0", task.id));
+    assert_eq!(branch(&task).unwrap(), format!("antislop/{}", task.id));
     let first = branch(&task).unwrap();
+    let state = Path::new("state");
+    let first_path = super::core_path_helpers::worktree_path(state, &task).unwrap();
+    task.input_generation += 1;
+    assert_eq!(first, branch(&task).unwrap());
+    assert_eq!(
+        first_path,
+        super::core_path_helpers::worktree_path(state, &task).unwrap()
+    );
     task.id = "12345678-2222-4222-8222-222222222222".into();
     assert_ne!(first, branch(&task).unwrap());
 }
 
 #[test]
-fn worktrees_bind_exact_task_generation_and_reject_foreign_branches() {
+fn worktrees_bind_stable_task_identity_and_reject_foreign_branches() {
     let project = tempfile::tempdir().unwrap();
     let root = project.path();
     assert!(
@@ -71,12 +79,12 @@ fn worktrees_bind_exact_task_generation_and_reject_foreign_branches() {
     .unwrap();
     let state = root.join(".antislop");
     let path = super::core_path_helpers::worktree_path(&state, &task).unwrap();
-    let legacy = branch(&task).unwrap();
-    git::add_worktree(root, &path, &legacy, &base).unwrap();
+    let owner_branch = branch(&task).unwrap();
+    git::add_worktree(root, &path, &owner_branch, &base).unwrap();
     let actual = worktree_branch(&state, &task).unwrap();
-    assert_eq!(actual, legacy);
+    assert_eq!(actual, owner_branch);
     git::add_worktree(root, &path, &actual, &base).unwrap();
-    assert_eq!(git::worktree_branch(&path).unwrap(), legacy);
+    assert_eq!(git::worktree_branch(&path).unwrap(), owner_branch);
     // A second task sharing the prefix gets its own branch and worktree.
     task.id = "12345678-2222-4222-8222-222222222222".into();
     let other = super::core_path_helpers::worktree_path(&state, &task).unwrap();

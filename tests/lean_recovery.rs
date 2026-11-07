@@ -72,6 +72,12 @@ print(json.dumps({"event": "init", "conversation_id": "s"}), flush=True)
 here = os.path.dirname(sys.argv[0])
 with open(os.path.join(here, "agy.log"), "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\n")
+allocation_marker = "Current runtime allocation (for this turn only): "
+allocation = (json.loads(prompt.split(allocation_marker, 1)[1].splitlines()[0])
+              if allocation_marker in prompt else {})
+with open(os.path.join(here, "cwd.log"), "a") as log:
+    log.write(json.dumps({"cwd": os.getcwd(), "role": allocation.get("role", ""),
+                          "review": "End with review: your report" in prompt}) + "\n")
 worker = "Task: Fail" in prompt or "was interrupted" in prompt
 if worker and "You review" not in prompt and "You audit" not in prompt \
         and not os.path.exists(os.path.join(here, "logged-in")):
@@ -759,7 +765,7 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
         .id;
-    let branch = format!("antislop/{}-g0", w1_id);
+    let branch = format!("antislop/{}", w1_id);
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
@@ -847,6 +853,39 @@ fn test_recover_task_review_manual_snapshot() {
         git(&project, &["show", &format!("{snap_commit}:hello.txt")]),
         "manual user fix"
     );
+    let calls: Vec<serde_json::Value> = std::fs::read_to_string(dir.path().join("cwd.log"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let worker = calls
+        .iter()
+        .find(|call| call["role"].as_str().unwrap().starts_with("worker:"))
+        .expect("task worker call");
+    let reviewers: Vec<_> = calls
+        .iter()
+        .filter(|call| call["role"].as_str().unwrap().starts_with("reviewer:"))
+        .collect();
+    assert!(!reviewers.is_empty(), "task reviewer call: {calls:?}");
+    let logged_calls = std::fs::read_to_string(dir.path().join("agy.log")).unwrap();
+    let args: Vec<Vec<String>> = logged_calls
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for reviewer in reviewers {
+        assert_eq!(
+            worker["cwd"], reviewer["cwd"],
+            "manual recovery reviewer shares the worker task checkout: {calls:?}"
+        );
+        let review_index = calls.iter().position(|call| call == reviewer).unwrap();
+        assert!(
+            args[review_index]
+                .last()
+                .unwrap()
+                .contains("do not modify project files"),
+            "reviewer remains read-only"
+        );
+    }
 }
 
 #[test]

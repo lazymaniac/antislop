@@ -899,7 +899,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
     );
     assert_eq!(
         feedback["integration"]["branch"],
-        format!("antislop/{}-g{}", task.id, task.input_generation)
+        format!("antislop/{}", task.id)
     );
     assert!(
         feedback["integration"]["detail"]
@@ -1067,7 +1067,7 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = original_tasks(&core, &conversation)[0].clone();
-    let branch = format!("antislop/{}-g{}", task.id, task.input_generation);
+    let branch = format!("antislop/{}", task.id);
 
     core.recover_task(antislop::lean::TaskRecoveryRequest {
         conversation: conversation.clone(),

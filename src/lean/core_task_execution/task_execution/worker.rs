@@ -1,4 +1,6 @@
-use super::super::super::core_path_helpers::{task_path_component, worktree_branch, worktree_path};
+use super::super::super::core_path_helpers::{
+    branch, task_path_component, worktree_branch, worktree_path,
+};
 use super::super::super::*;
 use super::RoundState;
 mod completion;
@@ -127,26 +129,8 @@ fn task_worktree(
         }
         _ => onto,
     };
-    let path = core.state.join("worktrees").join(format!(
-        "{}-observation-g{}",
-        task_path_component(&task.id)?,
-        task.input_generation
-    ));
-    let branch = format!(
-        "antislop/{}-observation-g{}",
-        task.id, task.input_generation
-    );
-    if path.exists()
-        && git::tree_identity(project, &git::head(&path)?)? != git::tree_identity(project, &base)?
-    {
-        // Recreate clean read-only views through the existing pin/session-aware
-        // cleanup. Never reset a writer or remove an attached/edited checkout.
-        core.release_task_views(&task.id, None);
-        require(
-            !path.exists(),
-            "the old observation checkout is still in use or has edits; detach its native terminal and retry",
-        )?;
-    }
+    let path = worktree_path(&core.state, task)?;
+    let branch = branch(task)?;
     core.release_task_views(&task.id, Some(&path));
     git::add_worktree(project, &path, &branch, &base)?;
     Ok(Some(path))
@@ -553,6 +537,24 @@ mod tests {
             std::fs::read_to_string(workdir.join("input.txt")).unwrap(),
             "current input"
         );
+        let mut owner_for_path = owner.clone();
+        let writer = writer_worktree(&core, &mut owner_for_path, &owner_spec, &project)
+            .unwrap()
+            .unwrap();
+        assert_eq!(workdir, writer);
+        std::fs::write(writer.join("local-edit.txt"), "keep this edit").unwrap();
+        let mut resumed = owner.clone();
+        resumed.input_generation += 1;
+        resumed.round += 1;
+        let resumed_writer = writer_worktree(&core, &mut resumed, &owner_spec, &project)
+            .unwrap()
+            .unwrap();
+        assert_eq!(writer, resumed_writer);
+        assert_eq!(
+            std::fs::read_to_string(resumed_writer.join("local-edit.txt")).unwrap(),
+            "keep this edit"
+        );
+        assert_ne!(resumed_writer, worktree_path(&core.state, options).unwrap());
     }
 
     #[test]
