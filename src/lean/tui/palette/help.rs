@@ -127,7 +127,7 @@ fn compact_help_line(line: &str) -> String {
 
 fn help_line(line: &str, inner: usize) -> Vec<String> {
     if inner >= 60 {
-        return vec![truncate(line, inner)];
+        return aligned_help_line(line, inner);
     }
     let compact = compact_help_line(line);
     if compact.chars().count() <= inner {
@@ -137,6 +137,37 @@ fn help_line(line: &str, inner: usize) -> Vec<String> {
         return wrap_help_description(key, desc, inner);
     }
     vec![truncate(&compact, inner)]
+}
+
+/// A wide box keeps keys in their column and wraps a long description
+/// under its own start.
+fn aligned_help_line(line: &str, inner: usize) -> Vec<String> {
+    let column = line.find("  ").and_then(|gap| {
+        line[gap..]
+            .find(|ch: char| ch != ' ')
+            .map(|desc| gap + desc)
+    });
+    let Some(column) = column.filter(|_| line.chars().count() > inner) else {
+        return vec![truncate(line, inner)];
+    };
+    let indent = line[..column].chars().count();
+    if indent + 12 > inner {
+        return vec![truncate(line, inner)];
+    }
+    let mut out = Vec::new();
+    let mut current = line[..column].to_string();
+    for word in line[column..].split_whitespace() {
+        let used = current.chars().count();
+        let words = used > indent;
+        if words && used + 1 + word.chars().count() > inner {
+            out.push(std::mem::replace(&mut current, " ".repeat(indent)));
+        } else if words {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    out.push(current);
+    out.into_iter().map(|row| truncate(&row, inner)).collect()
 }
 
 fn wrap_help_description(key: &str, desc: &str, width: usize) -> Vec<String> {
@@ -182,7 +213,7 @@ fn help_chat() -> &'static [&'static str] {
         "F6               pause new steps / continue",
         "Ctrl+N / O / G    new / switch conversation / project",
         "Ctrl+F / Ctrl+L  search conversation / open plan",
-        "Ctrl+I           conversation details",
+        "Ctrl+T           conversation details",
         "Ctrl+P           command palette",
         "F1 / [?]         help",
         "F2 / F3          requirements / current interview question",
@@ -212,7 +243,7 @@ fn help_graph() -> &'static [&'static str] {
         SELECTION_HELP,
         "Ctrl+D / Ctrl+U  half page down / up",
         "Ctrl+P           command palette",
-        "Ctrl+I           conversation details",
+        "Ctrl+T           conversation details",
         "Ctrl+R           resume plan when available",
         "F1 / ? / [?]     help",
         "Tab, Esc         chat",

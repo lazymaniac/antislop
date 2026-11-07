@@ -250,7 +250,8 @@ impl App {
             KeyCode::Char('f') if control => self.picker = Some(Picker::new(Kind::History)),
             KeyCode::Char('n') if control => self.new_conversation(),
             KeyCode::Char('o') if control => self.open_conversation_picker(),
-            KeyCode::Char('i') if control => self.open_details("conversation".into()),
+            // Ctrl+I reaches here only where the terminal tells it from Tab.
+            KeyCode::Char('t' | 'i') if control => self.open_details("conversation".into()),
             KeyCode::Char('l') if control => self.run_workflow(Command::Plan),
             KeyCode::F(2) => self.run_workflow(Command::Requirements),
             KeyCode::F(3) => self.run_workflow(Command::InterviewQuestion),

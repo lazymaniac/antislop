@@ -409,3 +409,36 @@ fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
         }
     }
 }
+
+#[test]
+fn a_phone_screen_stacks_the_panes_and_keeps_every_label_whole() {
+    let view = proposed("# Plan\nbody");
+    let theme = Theme::new(true, false);
+    let mut plan = PlanView::new("p1".into());
+    let mut term = Terminal::new(TestBackend::new(72, 44)).unwrap();
+    term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+        .unwrap();
+    let rows = screen(&term);
+    assert!(
+        rows[1].trim_end_matches([' ', '│']).ends_with("Esc close"),
+        "{}",
+        rows[1]
+    );
+    let buttons = &rows[rows.len() - 3];
+    for label in ["Accept (a)", "Reject (x)", "Comment (C)", "No drafts"] {
+        assert!(buttons.contains(label), "{buttons}");
+    }
+    assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
+    let description = rows
+        .iter()
+        .position(|row| row.contains("Description"))
+        .unwrap();
+    let tasks = rows
+        .iter()
+        .position(|row| row.contains("Tasks (v)"))
+        .unwrap();
+    assert!(
+        tasks > description && tasks - description <= 5,
+        "stacked and fitted"
+    );
+}

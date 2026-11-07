@@ -87,8 +87,8 @@ impl Size {
         };
         // Three cards of a unit side by side, in their frame.
         let unit = MARGIN + 2 * GAP_X + 2 * FRAME_X;
-        // The layout keeps `MARGIN` on the left and `GAP_X` on the right.
-        let full_w = vp_w.saturating_sub(MARGIN + GAP_X).max(MIN_WIDTH);
+        // An expanded card keeps `MARGIN` on either side.
+        let full_w = vp_w.saturating_sub(2 * MARGIN).max(MIN_WIDTH);
         let full_h = vp_h.saturating_sub(2).max(MIN_HEIGHT);
         Self {
             w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),

@@ -33,13 +33,13 @@ fn command_palette_keeps_only_actions_without_a_direct_route() {
         Help::Chat
             .lines_for_width(100)
             .iter()
-            .any(|line| line.contains("Ctrl+I") && line.contains("conversation details"))
+            .any(|line| line.contains("Ctrl+T") && line.contains("conversation details"))
     );
     assert!(
         Help::Graph
             .lines_for_width(100)
             .iter()
-            .any(|line| line.contains("Ctrl+I") && line.contains("conversation details"))
+            .any(|line| line.contains("Ctrl+T") && line.contains("conversation details"))
     );
 }
 
@@ -311,4 +311,18 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     assert!(rendered_graph.contains("review"));
     assert!(rendered_graph.contains("messages"));
     assert!(rendered_graph.contains("supervision"));
+}
+
+#[test]
+fn a_wide_help_box_wraps_a_long_description_under_its_column() {
+    let lines = Help::Graph.lines_for_width(68);
+    assert!(lines.iter().all(|line| line.chars().count() <= 68));
+    assert!(!lines.iter().any(|line| line.contains('…')));
+    let at = lines
+        .iter()
+        .position(|line| line.starts_with("u "))
+        .unwrap();
+    let column = lines[at].find("agent").unwrap();
+    let next = &lines[at + 1];
+    assert!(next[..column].trim().is_empty() && !next[column..].starts_with(' '));
 }

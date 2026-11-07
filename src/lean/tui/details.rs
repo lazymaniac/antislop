@@ -103,9 +103,14 @@ impl Details {
                 rounds
                     .iter()
                     .filter_map(|round| round["round"].as_u64())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // Round 0 records the task before its first round started; no agent
+        // worked in it, so once a round has run it is not one to look at.
+        if self.available_rounds.iter().any(|round| *round > 0) {
+            self.available_rounds.retain(|round| *round > 0);
+        }
         self.documents.clear();
         self.task = Some(task);
     }

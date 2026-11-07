@@ -46,13 +46,13 @@ fn expanded_pty_content_grows_with_the_viewport() {
         usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
         260
     );
-    // The layout keeps MARGIN left and GAP_X right of the card.
-    assert_eq!((size.expanded_w, size.expanded_h), (67, 10));
+    // The expanded card keeps MARGIN on either side.
+    assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
     let expanded = content_area(size.expanded_w, size.expanded_h);
     let baseline = content_area(56, 10);
     assert_eq!(
         usize::from(expanded.width) * usize::from(expanded.height),
-        315
+        330
     );
     assert!(
         usize::from(expanded.width) * usize::from(expanded.height)
@@ -1226,6 +1226,48 @@ fn edges_join_boxes_without_crossing_them() {
 }
 
 #[test]
+fn a_dependency_arrow_enters_beside_the_title_in_every_frame_of_a_growing_card() {
+    let mut child = task("t2", &["t1"]);
+    child.title = "Add farewell".into();
+    child.status = "approved".into();
+    child.round = 1;
+    let view = view(vec![task("t1", &[]), child]);
+    // A narrow graph panel starts the expanded card barely wider than its
+    // title, leaving two border columns before the corner.
+    for (width, step) in [64, 70, 120]
+        .into_iter()
+        .flat_map(|width| (1..=super::model::FULL_STEP).map(move |step| (width, step)))
+    {
+        let graph = Graph::new_animated(
+            &view,
+            &Scope::default(),
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((width, 30)),
+            (Some("worker:t2".into()), 0),
+            step,
+        );
+        let mut canvas = Canvas::new(graph.width, graph.height);
+        graph.render(&view, &mut canvas, Relations::all(), "worker:t2");
+        let frame = graph
+            .frames
+            .iter()
+            .find(|frame| frame.task == "t2")
+            .unwrap();
+        let row = canvas.lines()[usize::from(frame.y)]
+            .chars()
+            .collect::<Vec<char>>();
+        let arrow = row.iter().position(|ch| *ch == '▼');
+        let title_end = usize::from(frame.x) + 2 + " ✓ Add farewell ".chars().count();
+        assert!(
+            arrow.is_some_and(|x| x >= title_end && x + 1 < usize::from(frame.x + frame.width)),
+            "{width} step {step}: {}",
+            row.iter().collect::<String>()
+        );
+    }
+}
+
+#[test]
 fn all_includes_every_supervision_edge() {
     let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
     view.agents
@@ -1540,4 +1582,123 @@ fn requirements_card_names_the_activity_without_a_fixed_round_count() {
             "{status}"
         );
     }
+}
+
+#[test]
+fn an_expanded_card_spans_a_narrow_viewport_past_the_lanes_that_end_above_it() {
+    let mut rows = vec![
+        task("t1", &[]),
+        task("t2", &["t1"]),
+        task("t3", &["t1"]),
+        task("t4", &["t2", "t3"]),
+    ];
+    rows[3].title = "Handle auditor reports before workflow".into();
+    let view = view(rows);
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((70, 40)),
+        Some("reviewer:t4".into()),
+        0,
+    );
+    // t1 → t3 skips t2's row in a lane left of the rows; it ends above t4,
+    // so t4's card keeps the viewport's width, `MARGIN` either side.
+    assert!(graph.edge_routes(Relations::all()).len() > 1);
+    let frame = graph
+        .frames
+        .iter()
+        .find(|frame| frame.task == "t4")
+        .unwrap();
+    assert_eq!((frame.x, frame.x + frame.width), (MARGIN, 70 - MARGIN));
+    assert_eq!(graph.width, 70, "no horizontal scroll");
+}
+
+#[test]
+fn a_route_stopping_under_its_target_points_up_into_it() {
+    let mut graph = Graph::new(&View::default());
+    let card = |key: &str, y: u16| super::Node {
+        key: key.into(),
+        x: 6,
+        y,
+        width: 20,
+        height: 4,
+        visible: true,
+        ..Default::default()
+    };
+    graph.nodes = vec![card("orchestrator", 0), card("auditor", 26)];
+    // The auditor's detour: up the left margin, along under the card, and a
+    // repeated last point, as the layout lays it.
+    graph.edges = vec![super::Edge {
+        from: "auditor".into(),
+        to: "orchestrator".into(),
+        kind: super::Kind::Reviews,
+        label: None,
+        path: Some(vec![(16, 30), (2, 30), (2, 4), (12, 4), (12, 4)]),
+    }];
+    let mut canvas = Canvas::new(30, 32);
+    graph.render(&View::default(), &mut canvas, Relations::all(), "");
+    let row = canvas.lines()[4].chars().collect::<Vec<char>>();
+    assert_eq!(row[12], '▲', "{}", canvas.lines()[4]);
+}
+
+#[test]
+fn a_narrow_folded_card_gives_its_title_the_room_its_marker_does_not_need() {
+    let mut row = task("t1", &[]);
+    row.status = "approved".into();
+    row.kind = "implementation".into();
+    let view = view(vec![row]);
+    let graph = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((70, 40)),
+    );
+    let node = graph.node("worker:t1").unwrap();
+    assert!(node.collapsed && node.width < 18, "a phone-width card");
+    let mut canvas = Canvas::new(graph.width, graph.height);
+    graph.render(&view, &mut canvas, Relations::all(), "");
+    let title = canvas.lines()[usize::from(node.y)]
+        .chars()
+        .skip(usize::from(node.x + 4))
+        .take(usize::from(node.width - 5))
+        .collect::<String>();
+    assert!(title.trim_end().ends_with(" +"), "{title:?}");
+    assert_eq!(title.trim_end(), "worker +", "too little of the kind fits");
+}
+
+#[test]
+fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
+    let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+    for key in [REQUIREMENTS_ROUNDS[0], "planner", PLAN_REVIEWER, AUDITOR] {
+        view.agents.insert(key.into(), Default::default());
+    }
+    let graph = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((70, 60)),
+    );
+    let auditor = graph.node(AUDITOR).unwrap();
+    let edge = graph
+        .edges
+        .iter()
+        .find(|edge| edge.from == AUDITOR && edge.to == ORCHESTRATOR)
+        .unwrap();
+    let path = edge.path.as_ref().unwrap();
+    let mut canvas = Canvas::new(graph.width, graph.height + 2);
+    graph.render(&view, &mut canvas, Relations::all(), "");
+    let lines = canvas.lines();
+    // The route leaves the card downwards: a corner under the card, and the
+    // label beside it rather than under the card.
+    let under = &lines[usize::from(auditor.y + auditor.height)];
+    assert!(path[0].1 < auditor.y + auditor.height, "{path:?}");
+    assert!(
+        under.contains("┘R") || under.contains("└R") || under.contains("R└"),
+        "{}",
+        lines.join("\n")
+    );
 }

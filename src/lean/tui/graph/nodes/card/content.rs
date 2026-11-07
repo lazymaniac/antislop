@@ -13,13 +13,14 @@ pub(super) fn status_style(theme: &Theme, health: Health) -> (String, Style) {
     (icon.to_owned(), tone)
 }
 
+/// The title is drawn in `inner - 2` columns; a folded card marks itself
+/// with ` [+]`, or ` +` when that would leave its name under 8 columns.
 pub(super) fn card_title(name: &str, inner: usize, collapsed: bool) -> String {
-    if collapsed {
-        format!(
-            "{} [+]",
-            super::super::super::super::view::truncate(name, inner.saturating_sub(7))
-        )
-    } else {
-        super::super::super::super::view::truncate(name, inner.saturating_sub(2))
+    let room = inner.saturating_sub(2);
+    if !collapsed {
+        return super::super::super::super::view::truncate(name, room);
     }
+    let mark = if room >= 12 { " [+]" } else { " +" };
+    let name = super::super::super::super::view::truncate(name, room.saturating_sub(mark.len()));
+    format!("{name}{mark}")
 }

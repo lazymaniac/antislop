@@ -24,13 +24,23 @@ impl Card<'_> {
             Some(Role::Pair) => "options".to_owned(),
             None => node_name(&self.node.key),
         };
-        let name = match (self.role, self.task) {
+        // The work kind goes after the role while at least a few of its
+        // letters fit.
+        let title = match (self.role, self.task) {
             (Some(Role::Worker), Some(task)) if !task.kind.is_empty() && task.kind != name => {
-                format!("{name} - {}", task.kind)
+                let full = format!("{name} - {}", task.kind);
+                let title = card_title(&full, inner, self.node.collapsed);
+                let shown = title.split_once(" - ").map_or(0, |(_, kind)| {
+                    kind.split('…').next().unwrap_or("").chars().count()
+                });
+                if title.contains('…') && shown < 4 {
+                    card_title(&name, inner, self.node.collapsed)
+                } else {
+                    title
+                }
             }
-            _ => name,
+            _ => card_title(&name, inner, self.node.collapsed),
         };
-        let title = card_title(&name, inner, self.node.collapsed);
         let (x, y) = (self.node.x, self.node.y);
         self.canvas.text(
             x + 2,

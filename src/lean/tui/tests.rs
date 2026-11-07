@@ -2085,3 +2085,72 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
     );
     assert_eq!(app.focus, Focus::Chat, "scrolling moves no focus");
 }
+
+#[test]
+fn the_bar_drops_whole_parts_to_fit_rather_than_cutting_a_button() {
+    let mut app = test_app();
+    app.project = "project · a long project name".into();
+    app.conversation = "bebe421c-3365-477b-9bfc-3d5e7d84ef04".into();
+    for width in 25..140u16 {
+        let line = app.header_line(width);
+        let text = header_text(&app, width);
+        assert!(line.width() <= usize::from(width), "{width}: {text:?}");
+        // Every bracket that opens closes: no button is cut in half.
+        assert_eq!(
+            text.matches('[').count(),
+            text.matches(']').count(),
+            "{width}: {text:?}"
+        );
+    }
+    // A phone-wide bar keeps the panel switch and the plan's actions.
+    let phone = header_text(&app, 68);
+    assert!(
+        phone.contains("[Chat]") && phone.contains("[Team]"),
+        "{phone:?}"
+    );
+}
+
+#[test]
+fn a_wrapped_list_item_continues_under_its_text() {
+    use super::theme::wrap;
+    assert_eq!(
+        wrap("  - [high] audit and review are missing or stale", 24),
+        [
+            "  - [high] audit and ",
+            "    review are missing ",
+            "    or stale"
+        ]
+    );
+    assert_eq!(
+        wrap("12. first step done", 12),
+        ["12. first ", "    step ", "    done"]
+    );
+    assert_eq!(wrap("-dash not a list", 8), ["-dash ", "not a ", "list"]);
+}
+
+#[test]
+fn the_inspector_has_a_shortcut_a_terminal_does_not_send_as_tab() {
+    let mut app = App::test_app();
+    app.key(event::KeyEvent::new(
+        KeyCode::Char('t'),
+        event::KeyModifiers::CONTROL,
+    ));
+    let details = app.details.as_ref().expect("Ctrl+T opens the inspector");
+    assert_eq!(details.key, "conversation");
+}
+
+#[test]
+fn a_hint_drops_its_least_needed_parts_and_keeps_its_way_out() {
+    use super::view::fit_hint;
+    let parts = ["↑/↓ card", "Enter fold", "e all", "Esc back"];
+    assert_eq!(
+        fit_hint(&parts, 80, true),
+        "↑/↓ card · Enter fold · e all · Esc back"
+    );
+    assert_eq!(
+        fit_hint(&parts, 33, true),
+        "↑/↓ card · Enter fold · Esc back"
+    );
+    assert_eq!(fit_hint(&parts, 5, true), "↑/↓ card · Esc back");
+    assert_eq!(fit_hint(&parts[..3], 22, false), "↑/↓ card · Enter fold");
+}

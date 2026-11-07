@@ -133,7 +133,14 @@ impl App {
         let Some(details) = &mut self.details else {
             return false;
         };
-        if key.code != KeyCode::Char('m') || !details.overview() || !plain || details.split {
+        // The conversation has no session to swap its information for.
+        let session = details.key != "conversation";
+        if key.code != KeyCode::Char('m')
+            || !details.overview()
+            || !plain
+            || details.split
+            || !session
+        {
             return false;
         }
         details.show_info = !details.show_info;

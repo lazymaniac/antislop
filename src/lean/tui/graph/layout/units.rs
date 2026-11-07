@@ -24,22 +24,36 @@ pub(super) fn place(builder: &mut Builder<'_>) {
     let units = units(builder);
     fit_expanded_card(builder, &units, 0);
     let (mut rows, mut placed, mut links, mut lanes) = arrange(builder, &units);
-    if lanes > 0 && builder.size.expanded_key.is_some() {
-        // The lanes left of the rows take room the expanded card had.
-        fit_expanded_card(builder, &units, LANE_STEP * lanes);
+    let crossing = expanded_row(builder, &units, &placed)
+        .map_or(0, |row| crossing_lanes(&links, &placed, row));
+    if crossing > 0 {
+        // The lanes passing the expanded card take room it had.
+        fit_expanded_card(builder, &units, LANE_STEP * crossing);
         (rows, placed, links, lanes) = arrange(builder, &units);
     }
+    // A lane runs beside the rows between its ends only, so the expanded
+    // card's row, when none passes it, keeps the viewport's whole width.
+    let free_row = expanded_row(builder, &units, &placed)
+        .filter(|row| crossing_lanes(&links, &placed, *row) == 0);
     let admin_rows = admin_rows(builder);
     let measured = placed.clone();
     let room = room(builder, &placed, &admin_rows, MARGIN);
     center_rows(&mut placed, MARGIN, room);
-    let shift = lane_shift(&placed, &admin_rows, builder, room, lanes);
+    let lane_rows = placed
+        .iter()
+        .filter(|spot| Some(spot.row) != free_row)
+        .cloned()
+        .collect::<Vec<_>>();
+    let shift = lane_shift(&lane_rows, &admin_rows, builder, room, lanes);
     let left = MARGIN + shift;
     // Center again right of the lanes, so the rows keep within the viewport.
     let room = if shift > 0 {
-        placed = measured;
+        placed = measured.clone();
         let room = self::room(builder, &placed, &admin_rows, left);
         center_rows(&mut placed, left, room);
+        if let Some(row) = free_row {
+            center_free_row(builder, &mut placed, &measured, row);
+        }
         room
     } else {
         room
@@ -76,7 +90,7 @@ fn fit_expanded_card(builder: &mut Builder<'_>, units: &[Unit], reserve: u16) {
     else {
         return;
     };
-    let available = width.saturating_sub(MARGIN + GAP_X + reserve);
+    let available = width.saturating_sub(2 * MARGIN + reserve);
     let in_unit = units
         .iter()
         .any(|unit| member_keys(builder.view, unit).contains(&expanded));
@@ -84,6 +98,59 @@ fn fit_expanded_card(builder: &mut Builder<'_>, units: &[Unit], reserve: u16) {
     builder
         .size
         .limit_expanded_width(available.saturating_sub(frame));
+}
+
+/// The row of the unit holding the expanded card.
+fn expanded_row(builder: &Builder<'_>, units: &[Unit], placed: &[Placed]) -> Option<usize> {
+    let expanded = builder.size.expanded_key.as_deref()?;
+    placed
+        .iter()
+        .find(|spot| {
+            member_keys(builder.view, &units[spot.unit])
+                .iter()
+                .any(|key| key == expanded)
+        })
+        .map(|spot| spot.row)
+}
+
+/// Lanes beside `row`: a lane runs from the gap below its parent's row to
+/// the gap above its child's, so it passes only the rows strictly between.
+fn crossing_lanes(links: &[Link], placed: &[Placed], row: usize) -> u16 {
+    let row_of = |unit: usize| {
+        placed
+            .iter()
+            .find(|spot| spot.unit == unit)
+            .map(|spot| spot.row)
+    };
+    links
+        .iter()
+        .filter_map(|link| {
+            let lane = link.lane?;
+            let (from, to) = (row_of(link.from)?, row_of(link.to)?);
+            (from.min(to) < row && row < from.max(to)).then_some(lane + 1)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Center `row` across the viewport from the left margin, ignoring the lanes
+/// the other rows step aside for.
+fn center_free_row(builder: &Builder<'_>, placed: &mut [Placed], measured: &[Placed], row: usize) {
+    let Some((width, _)) = builder.viewport else {
+        return;
+    };
+    let right = measured
+        .iter()
+        .filter(|spot| spot.row == row)
+        .map(|spot| spot.x + spot.width)
+        .max()
+        .unwrap_or(0);
+    let room = width.saturating_sub(2 * MARGIN).max(right);
+    for (spot, original) in placed.iter_mut().zip(measured) {
+        if spot.row == row {
+            spot.x = MARGIN + (room - right) / 2 + original.x;
+        }
+    }
 }
 
 fn lane_shift(

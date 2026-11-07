@@ -93,13 +93,69 @@ pub fn render_header_with(
         return compact_header(project, label_style);
     }
     let short = conversation.get(..8).unwrap_or(conversation);
-    let mut spans = vec![Span::styled(
-        format!(" {} ", clean_line(project)),
-        label_style,
-    )];
-    append_panels(&mut spans, width, focus, &theme, secondary);
-    append_identity(&mut spans, short, width, secondary, active);
-    append_status_and_actions(&mut spans, status, controls, width, &theme, secondary);
+    // Each part with the rank it is dropped in when the bar is too narrow:
+    // the highest goes first, the project label never.
+    let mut parts: Vec<(u8, Vec<Span<'static>>)> = Vec::new();
+    parts.push((
+        0,
+        vec![Span::styled(
+            format!(" {} ", clean_line(project)),
+            label_style,
+        )],
+    ));
+    let mut panels = Vec::new();
+    append_panels(&mut panels, width, focus, &theme, secondary);
+    parts.push((0, panels));
+    if (65..SIDE_BY_SIDE_BREAKPOINT).contains(&width) {
+        parts.push((4, vec![Span::styled("(Tab: switch) ", secondary)]));
+    }
+    let (identity, plan) = identity_parts(short, width, secondary, active);
+    parts.push((5, identity));
+    parts.push((2, plan));
+    let mut status_part = Vec::new();
+    let mut actions = Vec::new();
+    append_status_and_actions(
+        &mut status_part,
+        &mut actions,
+        status,
+        controls,
+        width,
+        &theme,
+        secondary,
+    );
+    parts.push((3, status_part));
+    parts.push((1, actions));
+    let fits = |parts: &[(u8, Vec<Span<'static>>)]| {
+        parts
+            .iter()
+            .flat_map(|(_, spans)| spans)
+            .map(Span::width)
+            .sum::<usize>()
+            <= usize::from(width)
+    };
+    while !fits(&parts) {
+        let Some(drop) = parts
+            .iter()
+            .enumerate()
+            .filter(|(_, (rank, spans))| *rank > 0 && !spans.is_empty())
+            .max_by_key(|(index, (rank, _))| (*rank, *index))
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        parts[drop].1.clear();
+    }
+    let mut spans: Vec<Span<'static>> = parts.into_iter().flat_map(|(_, spans)| spans).collect();
+    let overflow = spans
+        .iter()
+        .map(Span::width)
+        .sum::<usize>()
+        .saturating_sub(usize::from(width));
+    if overflow > 0 {
+        let label = &mut spans[0];
+        let room = label.width().saturating_sub(overflow + 2);
+        label.content = format!(" {} ", truncate(&clean_line(project), room)).into();
+    }
     Line::from(spans)
 }
 
@@ -138,24 +194,25 @@ fn append_panels(
     };
     spans.push(Span::styled(" [Chat] ", chat));
     spans.push(Span::styled("[Team] ", graph));
-    if width >= 65 {
-        spans.push(Span::styled("(Tab: switch) ", secondary));
-    }
 }
 
-fn append_identity(
-    spans: &mut Vec<Span<'static>>,
+/// The conversation's id and, below the full action row, its `[Plan]`.
+fn identity_parts(
     short: &str,
     width: u16,
     secondary: Style,
     active: Style,
-) {
-    if width >= 50 {
-        spans.push(Span::styled(format!(" · {short} "), secondary));
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    if width < 50 {
+        return (Vec::new(), Vec::new());
     }
-    if (50..95).contains(&width) {
-        spans.push(Span::styled(format!("{PLAN} "), active));
-    }
+    let identity = vec![Span::styled(format!(" · {short} "), secondary)];
+    let plan = if width < 95 {
+        vec![Span::styled(format!("{PLAN} "), active)]
+    } else {
+        Vec::new()
+    };
+    (identity, plan)
 }
 
 fn button(
@@ -173,6 +230,7 @@ fn button(
 }
 
 fn append_status_and_actions(
+    status_spans: &mut Vec<Span<'static>>,
     spans: &mut Vec<Span<'static>>,
     status: &str,
     controls: Controls,
@@ -181,7 +239,7 @@ fn append_status_and_actions(
     secondary: Style,
 ) {
     if width >= 40 && !status.trim().is_empty() {
-        spans.push(Span::styled(
+        status_spans.push(Span::styled(
             format!(" · {} ", clean_line(status)),
             Style::default().fg(crate::lean::tui::theme::ayu::YELLOW),
         ));

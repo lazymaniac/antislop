@@ -140,6 +140,21 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     crate::lean::tui::theme::wrap(text, width)
 }
 
+/// Join hint parts with ` · `, leaving out the later ones that do not fit
+/// in `width`; with `keep_last` the closing key (Esc) stays and the parts
+/// before it go first. List the parts from the most needed.
+pub fn fit_hint(parts: &[&str], width: usize, keep_last: bool) -> String {
+    let mut shown = parts.to_vec();
+    let joined = |shown: &[&str]| shown.join(" · ");
+    let floor = 1 + usize::from(keep_last);
+    while unicode_width::UnicodeWidthStr::width(joined(&shown).as_str()) > width
+        && shown.len() > floor
+    {
+        shown.remove(shown.len() - floor);
+    }
+    joined(&shown)
+}
+
 /// One line of at most `width` columns.
 pub fn truncate(text: &str, width: usize) -> String {
     let t = crate::lean::tui::theme::Theme::new(true, false);

@@ -1,13 +1,33 @@
 pub use super::checks::{CheckRow, check_rows};
 use super::*;
+use unicode_width::UnicodeWidthStr;
 
+/// The widest hint that fits beside the tab numbers; a view without rounds
+/// does not offer to switch them, nor the conversation a session to show.
 pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
-    let controls = details_footer_hint(tab, width);
-    if width >= 45 {
-        format!("1–{} / {controls}", tabs_for(key).len())
+    let prefix = if width >= 45 {
+        format!("1–{} / ", tabs_for(key).len())
     } else {
-        controls.to_owned()
-    }
+        String::new()
+    };
+    let room = width.saturating_sub(UnicodeWidthStr::width(prefix.as_str()));
+    let rounds = key.contains(':');
+    let shown = |width: usize| {
+        let mut hint = details_footer_hint(tab, width).to_owned();
+        if !rounds {
+            hint = hint.replace("←/→ rounds · ", "");
+        }
+        if key == "conversation" {
+            hint = hint.replace("m dashboard · ", "").replace("m info · ", "");
+        }
+        hint
+    };
+    let controls = [usize::MAX, 94, 89, 79, 64, 44]
+        .into_iter()
+        .map(shown)
+        .find(|hint| UnicodeWidthStr::width(hint.as_str()) <= room)
+        .unwrap_or_else(|| shown(0));
+    format!("{prefix}{controls}")
 }
 
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {

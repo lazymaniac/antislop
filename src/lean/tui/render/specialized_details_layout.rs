@@ -1,4 +1,5 @@
 use super::super::details::{RESULT, REVIEW, details_footer_hint_for, is_overview};
+use super::super::view::fit_hint;
 use super::super::*;
 use ratatui::widgets::{BorderType, Padding, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
@@ -217,31 +218,60 @@ pub(super) fn overview_split(body: Rect) -> Option<[Rect; 2]> {
 
 pub(super) fn overview_split_hint(searching: bool, query: &str, width: u16) -> String {
     if searching {
-        format!("Search: {query}_ · Enter confirm · Esc cancel")
-    } else if width >= 100 {
-        "↑/↓ card · Enter fold · e all · i terminal · a message · ←/→ rounds · Ctrl+W worker/reviewer · [] tabs · Esc back".into()
-    } else {
-        "↑/↓ card · Enter fold · i terminal · a message · Esc".into()
+        return format!("Search: {query}_ · Enter confirm · Esc cancel");
     }
+    fit_hint(
+        &[
+            "↑/↓ card",
+            "Enter fold",
+            "i terminal",
+            "a message",
+            "e all",
+            "[] tabs",
+            "←/→ rounds",
+            "Ctrl+W worker/reviewer",
+            "Esc back",
+        ],
+        usize::from(width),
+        true,
+    )
 }
 
-pub(super) fn overview_hint(searching: bool, query: &str) -> String {
+pub(super) fn overview_hint(searching: bool, query: &str, width: u16) -> String {
     if searching {
-        format!("Search: {query}_ · Enter confirm · Esc cancel")
-    } else {
-        "i terminal · a message · m task info · o resume earlier round · Ctrl+] release · Esc back"
-            .into()
+        return format!("Search: {query}_ · Enter confirm · Esc cancel");
     }
+    fit_hint(
+        &[
+            "i terminal",
+            "a message",
+            "m task info",
+            "o resume earlier round",
+            "Ctrl+] release",
+            "Esc back",
+        ],
+        usize::from(width),
+        true,
+    )
 }
 
 pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16) -> String {
     if searching {
-        format!("Search: {query}_ · Enter confirm · Esc cancel")
-    } else if width >= 90 {
-        "↑/↓ card · Enter fold/expand · e all · PgUp/PgDn scroll · ←/→ rounds · c comment · / search · m terminals · Esc back".into()
-    } else if width >= 50 {
-        "↑/↓ card · Enter fold · e all · m terminals · Esc".into()
-    } else {
-        "↑/↓ · Enter · m · Esc".into()
+        return format!("Search: {query}_ · Enter confirm · Esc cancel");
     }
+    fit_hint(
+        &[
+            "↑/↓ card",
+            "Enter fold/expand",
+            "m terminals",
+            "e all",
+            "c comment",
+            "/ search",
+            "←/→ rounds",
+            "PgUp/PgDn scroll",
+            "Esc back",
+        ],
+        usize::from(width),
+        true,
+    )
 }

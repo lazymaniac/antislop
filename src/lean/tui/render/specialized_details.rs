@@ -135,7 +135,7 @@ impl Details {
             self.draw_footer_hint(
                 frame,
                 footer,
-                overview_hint(self.searching, &self.query),
+                overview_hint(self.searching, &self.query, footer.width),
                 theme,
             );
             return true;

@@ -443,3 +443,44 @@ fn result_tab_names_describe_the_roles_deliverable() {
         assert!(!tabs_for(key).contains(&PLAN) && !tabs_for(key).contains(&REVIEW));
     }
 }
+
+#[test]
+fn the_record_of_a_task_before_its_first_round_is_not_a_round() {
+    let mut details = Details::new("worker:t1".into());
+    details.load_task(serde_json::json!({
+        "round": 1,
+        "_rounds": [{"round": 0, "status": "continued"}, {"round": 1, "status": "approved"}],
+    }));
+    assert_eq!(details.available_rounds, vec![1]);
+    // A task not started yet still has its round 0.
+    details.load_task(serde_json::json!({
+        "round": 0,
+        "_rounds": [{"round": 0, "status": "queued"}],
+    }));
+    assert_eq!(details.available_rounds, vec![0]);
+}
+
+#[test]
+fn the_footer_hint_fits_beside_the_tab_numbers_and_offers_rounds_only_to_tasks() {
+    for key in ["worker:t1", "orchestrator", "conversation"] {
+        for tab in tabs_for(key) {
+            for width in 30..140 {
+                let hint = details_footer_hint_for(key, tab, width);
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(hint.as_str()) <= width,
+                    "{key} {tab} {width}: {hint}"
+                );
+                assert!(
+                    hint.ends_with("Esc") || hint.ends_with("Esc back"),
+                    "{hint}"
+                );
+                assert!(!hint.contains("rounds") || key.contains(':'), "{hint}");
+                assert!(key != "conversation" || !hint.contains(" m "), "{hint}");
+                assert!(
+                    hint.contains("rounds") || !key.contains(':') || width < 72,
+                    "{hint}"
+                );
+            }
+        }
+    }
+}

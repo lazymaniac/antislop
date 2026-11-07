@@ -97,3 +97,33 @@ fn replacing_a_view_cancels_background_layouts_and_releases_the_cache() {
     }
     assert!(!path.exists());
 }
+
+#[test]
+fn rows_break_between_words_and_split_only_a_word_wider_than_a_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut builder = Builder::new(dir.path()).unwrap();
+    builder
+        .append("", |sink| {
+            sink("  applied to the working tree, not committed ")?;
+            sink("abcdefghijklmnopqrstuvwxyz")
+        })
+        .unwrap();
+    let document = builder.finish().unwrap();
+    let rows = page(&document, 12, 20, 0)
+        .lines
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "  applied to",
+            "the working ",
+            "tree, not ",
+            "committed ",
+            "abcdefghijkl",
+            "mnopqrstuvwx",
+            "yz",
+        ]
+    );
+}

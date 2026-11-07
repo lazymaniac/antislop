@@ -48,7 +48,7 @@ pub(super) const COMMANDS: [(Command, &str); 4] = [
     ),
     (
         Command::ConversationDetails,
-        "Conversation details (inspector) · Ctrl+I",
+        "Conversation details (inspector) · Ctrl+T",
     ),
 ];
 

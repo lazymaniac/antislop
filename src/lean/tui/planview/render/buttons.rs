@@ -64,7 +64,7 @@ impl PlanView {
         theme: &Theme,
         state: ButtonState,
     ) {
-        let (label, tone) = self.button_label_tone(button, state);
+        let (label, short, tone) = self.button_label_tone(button, state);
         let active = self.button == button;
         let style = self.button_style(theme, tone, active);
         let block = Block::default()
@@ -77,32 +77,44 @@ impl PlanView {
         let inner = block.inner(rect);
         frame.render_widget(block, rect);
         if inner.height > 0 && inner.width > 0 {
-            let text = theme.fit(label, inner.width as usize);
-            frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), inner);
+            // A narrow button keeps its key and drops the words around it.
+            let room = usize::from(inner.width);
+            let label = if unicode_width::UnicodeWidthStr::width(label) <= room {
+                label
+            } else {
+                short
+            };
+            let text = theme.fit(label, room);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(text, style)))
+                    .alignment(ratatui::layout::Alignment::Center),
+                inner,
+            );
         }
     }
 
-    fn button_label_tone(&self, button: BottomButton, state: ButtonState) -> (&'static str, Tone) {
+    /// The full label and the short one for a narrow button.
+    fn button_label_tone(
+        &self,
+        button: BottomButton,
+        state: ButtonState,
+    ) -> (&'static str, &'static str, Tone) {
         match button {
-            BottomButton::Accept if state.acceptable => (" [ Accept (a) ] ", Tone::Done),
-            BottomButton::Accept => (" [ Accept: n/a ] ", Tone::Queued),
-            BottomButton::Reject => self.reject_label_tone(state.decidable),
-            BottomButton::CommentWholePlan => (" [ Comment plan (C) ] ", Tone::Active),
-            BottomButton::Review => {
-                if state.drafts > 0 {
-                    (" [ Review: send (R) ] ", Tone::Done)
-                } else {
-                    (" [ Review: no drafts ] ", Tone::Queued)
-                }
+            BottomButton::Accept if state.acceptable => {
+                (" [ Accept (a) ] ", "Accept (a)", Tone::Done)
             }
-        }
-    }
-
-    fn reject_label_tone(&self, decidable: bool) -> (&'static str, Tone) {
-        if decidable {
-            (" [ Reject (x) ] ", Tone::Failed)
-        } else {
-            (" [ Reject: decided ] ", Tone::Queued)
+            BottomButton::Accept => (" [ Accept: n/a ] ", "Accept n/a", Tone::Queued),
+            BottomButton::Reject if state.decidable => {
+                (" [ Reject (x) ] ", "Reject (x)", Tone::Failed)
+            }
+            BottomButton::Reject => (" [ Reject: decided ] ", "Decided", Tone::Queued),
+            BottomButton::CommentWholePlan => {
+                (" [ Comment plan (C) ] ", "Comment (C)", Tone::Active)
+            }
+            BottomButton::Review if state.drafts > 0 => {
+                (" [ Review: send (R) ] ", "Send (R)", Tone::Done)
+            }
+            BottomButton::Review => (" [ Review: no drafts ] ", "No drafts", Tone::Queued),
         }
     }
 

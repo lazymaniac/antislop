@@ -20,12 +20,18 @@ impl PlanView {
             self.graph_focused = false;
             self.draw_document(frame, chunks[1], view, theme);
         } else {
-            let [description, tasks] = if chunks[1].width >= 60 {
+            // A tall narrow screen, as a phone's, stacks the panes rather
+            // than squeezing the description beside the graph.
+            let side_by_side =
+                chunks[1].width >= 100 || (chunks[1].width >= 60 && chunks[1].height < 30);
+            let [description, tasks] = if side_by_side {
                 Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
                     .areas(chunks[1])
             } else {
-                Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
-                    .areas(chunks[1])
+                // A short description leaves the rest to the graph.
+                let lines = self.description_lines(view).len() as u16 + 2;
+                let height = lines.clamp(3, (chunks[1].height * 2 / 5).max(3));
+                Layout::vertical([Constraint::Length(height), Constraint::Min(1)]).areas(chunks[1])
             };
             let block = graph::panel(" Description (v) ", !self.graph_focused, theme);
             let inner = block.inner(description);
@@ -87,11 +93,14 @@ impl PlanView {
     ) {
         if !open_comments.is_empty() || view.comment_activity().is_some() {
             frame.render_widget(
-                Paragraph::new(self.comment_banner(view, theme, open_comments)),
+                Paragraph::new(self.comment_banner(view, theme, open_comments, area.width)),
                 area,
             );
         } else {
-            frame.render_widget(Paragraph::new(self.task_banner(view, theme)), area);
+            frame.render_widget(
+                Paragraph::new(self.task_banner(view, theme, area.width)),
+                area,
+            );
         }
     }
 
@@ -100,6 +109,7 @@ impl PlanView {
         view: &View,
         theme: &Theme,
         open_comments: &[&super::super::view::Comment],
+        width: u16,
     ) -> Vec<Line<'static>> {
         let status = view.comment_activity().unwrap_or_else(|| {
             open_comments.first().map_or_else(String::new, |comment| {
@@ -120,7 +130,20 @@ impl PlanView {
             ),
             Line::from(notes),
             Line::styled(
-                " ↑/↓ move · c comment line · R send drafts for review · D delete draft · Esc close",
+                format!(
+                    " {}",
+                    fit_hint(
+                        &[
+                            "↑/↓ move",
+                            "c comment line",
+                            "R send drafts for review",
+                            "D delete draft",
+                            "Esc close",
+                        ],
+                        usize::from(width.saturating_sub(1)),
+                        true,
+                    )
+                ),
                 theme.dim(),
             ),
         ]
@@ -149,21 +172,35 @@ impl PlanView {
         notes
     }
 
-    fn task_banner(&self, view: &View, theme: &Theme) -> Line<'static> {
+    fn task_banner(&self, view: &View, theme: &Theme, width: u16) -> Line<'static> {
         let completed = view
             .tasks
             .iter()
             .filter(|task| task.status == "approved")
             .count();
+        let tasks = format!(" Tasks: {completed}/{} completed ", view.tasks.len());
         Line::from(vec![
             Span::styled(
-                format!(" Tasks: {completed}/{} completed ", view.tasks.len()),
+                tasks.clone(),
                 Style::default()
                     .fg(crate::lean::tui::theme::ayu::BLUE)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "· v switch pane · arrows navigate · Shift+arrows pan graph · c comment · Esc close",
+                format!(
+                    "· {}",
+                    fit_hint(
+                        &[
+                            "v switch pane",
+                            "arrows navigate",
+                            "Shift+arrows pan graph",
+                            "c comment",
+                            "Esc close",
+                        ],
+                        usize::from(width).saturating_sub(tasks.len() + 2),
+                        true,
+                    )
+                ),
                 theme.dim(),
             ),
         ])

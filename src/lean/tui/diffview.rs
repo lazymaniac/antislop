@@ -200,6 +200,13 @@ mod tests {
         assert!(diff_footer_hint(100).contains("code review"));
         assert!(!diff_footer_hint(40).contains("code review"));
         assert!(diff_footer_hint(40).contains("Esc"));
+        for width in 13..140 {
+            let hint = diff_footer_hint(width);
+            assert!(
+                unicode_width::UnicodeWidthStr::width(hint) <= width,
+                "{width}: {hint}"
+            );
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ mod render;
 mod wrap_tests;
 
 use super::theme::{Theme, Tone};
-use super::view::{Comment, TaskRow, View, clean, status_label};
+use super::view::{Comment, TaskRow, View, clean, fit_hint, status_label};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};

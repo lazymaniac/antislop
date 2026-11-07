@@ -40,7 +40,7 @@ impl<'a> Builder<'a> {
     pub(super) fn build(mut self) -> Graph {
         units::place(&mut self);
         edges::add_edges(self.view, &mut self.graph, &self.extra_agents);
-        set_graph_bounds(&mut self.graph);
+        set_graph_bounds(&mut self.graph, self.viewport);
         self.graph
     }
 
@@ -193,8 +193,9 @@ fn query_matches(view: &View, query: Option<&str>, key: &str) -> bool {
 }
 
 /// The layout already set the height, which counts the lines of edges
-/// below the last row.
-fn set_graph_bounds(graph: &mut Graph) {
+/// below the last row. Content reaching within `MARGIN` of the viewport's
+/// right edge (an expanded card) keeps the graph as wide as the viewport.
+fn set_graph_bounds(graph: &mut Graph, viewport: Option<(u16, u16)>) {
     let nodes = graph
         .nodes
         .iter()
@@ -208,7 +209,10 @@ fn set_graph_bounds(graph: &mut Graph) {
     let (right, bottom) = nodes.chain(frames).fold((0, 0), |(right, bottom), (r, b)| {
         (right.max(r), bottom.max(b))
     });
-    graph.width = right + GAP_X;
+    graph.width = match viewport {
+        Some((width, _)) if right + MARGIN <= width => (right + GAP_X).min(width),
+        _ => right + GAP_X,
+    };
     // Keep the row below the final cards available for report links.
     graph.height = graph.height.max(bottom.saturating_add(1));
 }

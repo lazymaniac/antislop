@@ -88,12 +88,18 @@ fn spread_ends(
     columns
 }
 
+/// The first border column after the frame's title, which is drawn from
+/// column 2 as ` mark title ` truncated to the width less 4.
 fn title_end(builder: &Builder<'_>, units: &[Unit], unit: usize, frame: &Placed) -> u16 {
     let task = &builder.view.tasks[units[unit].task];
     let title = UnicodeWidthStr::width(clean(&task.title).as_str()) as u16 + 4;
-    title.min(frame.width.saturating_sub(4)) + 3
+    title.min(frame.width.saturating_sub(4)) + 2
 }
 
+/// Entries go on the border between the title and the right corner while
+/// each has a column there, so an arrow never lands on the title, also when
+/// a growing card is still narrow; only a border too short for all of them
+/// spreads them along its whole width.
 fn spread_frame_ends(
     columns: &mut HashMap<usize, u16>,
     frame: &Placed,
@@ -101,8 +107,9 @@ fn spread_frame_ends(
     skip: u16,
 ) {
     let count = ends.len() as u16;
-    let (start, width) = if frame.width.saturating_sub(skip + 2) > count {
-        (frame.x + skip, frame.width - skip - 1)
+    let room = frame.width.saturating_sub(skip + 1);
+    let (start, width) = if room >= count {
+        (frame.x + skip, room)
     } else {
         (frame.x, frame.width)
     };

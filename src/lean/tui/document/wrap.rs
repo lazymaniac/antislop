@@ -27,8 +27,8 @@ pub(super) fn wrap_range(
         count: 0,
     };
     consume_file(&mut file, width, alive, &mut state, &mut index)?;
-    if state.line < end {
-        index.emit(state.line, end)?;
+    if state.cursor.line < end {
+        index.emit(state.cursor.line, end)?;
     }
     Ok(index.count)
 }
@@ -37,8 +37,26 @@ struct WrapState {
     remaining: u64,
     pending: String,
     base: u64,
+    cursor: Cursor,
+}
+
+/// The row being filled: where it starts, its width so far, and the end of
+/// its last space after some text, where the row breaks before a word that
+/// does not fit.
+struct Cursor {
     line: u64,
     columns: usize,
+    space: Option<(u64, usize)>,
+    ink: bool,
+}
+
+impl Cursor {
+    fn start(&mut self, line: u64) {
+        self.line = line;
+        self.columns = 0;
+        self.space = None;
+        self.ink = false;
+    }
 }
 
 impl WrapState {
@@ -47,20 +65,18 @@ impl WrapState {
             remaining: end - start,
             pending: String::new(),
             base: start,
-            line: start,
-            columns: 0,
+            cursor: Cursor {
+                line: start,
+                columns: 0,
+                space: None,
+                ink: false,
+            },
         }
     }
 
     fn consume_ready(&mut self, width: usize, index: &mut LineIndex<'_>) -> Result<()> {
         let keep = ready_length(&self.pending, self.remaining == 0);
-        index.consume(
-            &self.pending[..keep],
-            self.base,
-            &mut self.line,
-            &mut self.columns,
-            width,
-        )?;
+        index.consume(&self.pending[..keep], self.base, &mut self.cursor, width)?;
         self.pending.drain(..keep);
         self.base += keep as u64;
         Ok(())
@@ -114,42 +130,53 @@ impl LineIndex<'_> {
         Ok(())
     }
 
-    fn consume(
-        &mut self,
-        text: &str,
-        base: u64,
-        line: &mut u64,
-        columns: &mut usize,
-        width: usize,
-    ) -> Result<()> {
+    fn consume(&mut self, text: &str, base: u64, cursor: &mut Cursor, width: usize) -> Result<()> {
         for (offset, grapheme) in text.grapheme_indices(true) {
             let position = base + offset as u64;
             if grapheme == "\n" || grapheme == "\r\n" {
-                self.emit(*line, position)?;
-                *line = position + grapheme.len() as u64;
-                *columns = 0;
+                self.emit(cursor.line, position)?;
+                cursor.start(position + grapheme.len() as u64);
             } else {
-                self.wrap_grapheme(grapheme, position, line, columns, width)?;
+                self.wrap_grapheme(grapheme, position, cursor, width)?;
             }
         }
         Ok(())
     }
 
+    /// Rows break at the last space before a word that overflows them, and
+    /// inside a word only when it is wider than a row; a space at the break
+    /// is not drawn on either row.
     fn wrap_grapheme(
         &mut self,
         grapheme: &str,
         position: u64,
-        line: &mut u64,
-        columns: &mut usize,
+        cursor: &mut Cursor,
         width: usize,
     ) -> Result<()> {
         let cells = UnicodeWidthStr::width(grapheme);
-        if *columns > 0 && *columns + cells > width {
-            self.emit(*line, position)?;
-            *line = position;
-            *columns = 0;
+        let blank = grapheme.chars().all(char::is_whitespace);
+        let end = position + grapheme.len() as u64;
+        if cursor.columns > 0 && cursor.columns + cells > width {
+            if blank {
+                self.emit(cursor.line, position)?;
+                cursor.start(end);
+                return Ok(());
+            }
+            if let Some((space, columns)) = cursor.space.take() {
+                self.emit(cursor.line, space)?;
+                cursor.line = space;
+                cursor.columns -= columns;
+            }
+            if cursor.columns > 0 && cursor.columns + cells > width {
+                self.emit(cursor.line, position)?;
+                cursor.start(position);
+            }
         }
-        *columns += cells;
+        cursor.columns += cells;
+        if blank && cursor.ink {
+            cursor.space = Some((end, cursor.columns));
+        }
+        cursor.ink |= !blank;
         Ok(())
     }
 }

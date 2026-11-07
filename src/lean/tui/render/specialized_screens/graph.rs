@@ -91,8 +91,9 @@ impl App {
         // Measured from the target, so the last steps settle onto it instead
         // of stopping a cell short when `from` is above or left of the view.
         let lerp = |from: i32, to: i32| to + (from - to) * (full - progress) / full;
-        // The fully opened card is shown at (3, 0), see reveal_selected_node.
-        let left = lerp(anchor_x - node_w / 2, 3);
+        // The fully opened card lands where reveal_selected_node puts it.
+        let settled = node_x - i32::from(expanded_offset_x(graph, (node.x, node.width), width));
+        let left = lerp(anchor_x - node_w / 2, settled);
         let top = lerp(anchor_y - node_h / 2, 0);
         let max_x = i32::from(graph.width.saturating_sub(width));
         let max_y = i32::from(graph.height.saturating_sub(height));
@@ -313,6 +314,7 @@ impl App {
             &self.relations.name(),
             self.graph_scope.is_filtered(),
             self.graph_grouping.name(),
+            area.width.saturating_sub(2),
         );
         let block = Block::default()
             .borders(Borders::ALL)
@@ -376,7 +378,11 @@ impl App {
         let (left, top) = &mut self.offset;
         if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
             // An opened card fills the view: put all of it on screen.
-            *left = node.x.saturating_sub(3);
+            *left = expanded_offset_x(
+                graph,
+                (node.x, node.width),
+                self.graph_viewport.map_or(0, |v| v.0),
+            );
             *top = node.y;
             return;
         }
@@ -450,13 +456,13 @@ fn render_card_round_selector(
         .position(|round| *round == selected)
         .unwrap_or(0)
         + 1;
+    let previous = if position > 1 { " · , previous" } else { "" };
     let round_text = if details.is_none_or(|details| details.selected_round.is_none()) {
         format!(
-            "Round {selected} ({position}/{}) · , previous · following current work",
+            "Round {selected} ({position}/{}){previous} · following current work",
             rounds.len()
         )
     } else {
-        let previous = if position > 1 { " · , previous" } else { "" };
         let next = if position < rounds.len() {
             " · . next"
         } else {
@@ -593,6 +599,15 @@ fn graph_vertical_markers(graph: &Graph, offset_y: u16, viewport_height: u16) ->
         })
 }
 
+/// The horizontal offset centring an opened card in a view `width` wide,
+/// within the graph: a graph wider than a phone's panel, its other rows
+/// scrolling, still shows the card with even margins.
+fn expanded_offset_x(graph: &Graph, (x, card): (u16, u16), width: u16) -> u16 {
+    (x + card / 2)
+        .saturating_sub(width / 2)
+        .min(graph.width.saturating_sub(width))
+}
+
 fn graph_position_marker_glyph(above: bool, ascii: bool) -> &'static str {
     match (above, ascii) {
         (true, true) => "^",
@@ -602,9 +617,21 @@ fn graph_position_marker_glyph(above: bool, ascii: bool) -> &'static str {
     }
 }
 
-fn graph_title(relations: &str, filtered: bool, grouping: &str) -> String {
+/// The longest title that fits `width` between the corners: the keys go
+/// first, then the labels, rather than cutting a word in half.
+fn graph_title(relations: &str, filtered: bool, grouping: &str, width: u16) -> String {
     let cards = if filtered { "some" } else { "all" };
-    format!(" team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) ")
+    [
+        format!(
+            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) "
+        ),
+        format!(" team · relations: {relations} · cards: {cards} · groups: {grouping} "),
+        format!(" team · {relations} · {cards} · {grouping} "),
+        format!(" team · {relations} "),
+    ]
+    .into_iter()
+    .find(|title| unicode_width::UnicodeWidthStr::width(title.as_str()) <= usize::from(width))
+    .unwrap_or_else(|| " team ".into())
 }
 
 fn graph_progress_areas(area: Rect, progress_lines: usize) -> (Rect, Option<Rect>) {
@@ -643,7 +670,7 @@ fn reveal_tall_axis(offset: &mut u16, start: u16, size: u16, viewport: u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{graph_position_marker_glyph, graph_vertical_markers};
+    use super::{graph_position_marker_glyph, graph_title, graph_vertical_markers};
     use crate::lean::tui::{graph::Graph, view::View};
     use ratatui::style::{Modifier, Style};
 
@@ -674,5 +701,22 @@ mod tests {
         assert_eq!(graph_vertical_markers(&graph, 0, 7), (false, true));
         assert_eq!(graph_vertical_markers(&graph, 8, 1), (true, false));
         assert_eq!(graph_vertical_markers(&graph, 0, 0), (false, true));
+    }
+
+    #[test]
+    fn graph_title_drops_its_keys_before_cutting_a_word() {
+        let full = graph_title("DRM", false, "dependencies", 200);
+        assert!(full.contains("groups: dependencies (g)"));
+        // A phone-wide panel: the keys go, every word stays whole.
+        let narrow = graph_title("DRM", false, "dependencies", 68);
+        assert_eq!(
+            narrow,
+            " team · relations: DRM · cards: all · groups: dependencies "
+        );
+        assert_eq!(
+            graph_title("DRM", true, "status", 30),
+            " team · DRM · some · status "
+        );
+        assert_eq!(graph_title("DRM", false, "dependencies", 4), " team ");
     }
 }

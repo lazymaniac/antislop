@@ -21,8 +21,8 @@ mod projection;
 pub use header::*;
 pub use model::*;
 pub use presentation::{
-    agent_name, clean, clean_line, draw_min_term_guard, duration, status_label, target_name,
-    truncate, wrap,
+    agent_name, clean, clean_line, draw_min_term_guard, duration, fit_hint, status_label,
+    target_name, truncate, wrap,
 };
 pub(super) use presentation::{bounded_coverage, bounded_landing};
 

@@ -62,8 +62,11 @@ impl Graph {
                 .saturating_sub(1);
             let fx = from.x + from.width / 2;
             let tx = to.x + to.width / 2;
+            // The route starts in the card's last row, which the card covers,
+            // so it turns down out of the card even when the row bottom is
+            // right under it.
             return Some(vec![
-                (fx, from.y + from.height),
+                (fx, from.y + from.height - 1),
                 (fx, row_bottom(from.y)),
                 (left, row_bottom(from.y)),
                 (left, row_bottom(to.y)),

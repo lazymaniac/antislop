@@ -106,12 +106,15 @@ pub fn diff_header(
     )
 }
 
+/// The widest hint that fits: each threshold is its hint's own width.
 pub fn diff_footer_hint(width: usize) -> &'static str {
-    if width >= 95 {
+    if width >= 99 {
         "↑/↓ select · [/] file · Tab files/lines · c comment · R code review · r refresh · ? help · Esc back"
-    } else if width >= 65 {
-        "↑/↓ select · [/] file · Tab switch · c com. · R review · r refresh · Esc back"
-    } else if width >= 45 {
+    } else if width >= 68 {
+        "↑/↓ select · [/] file · Tab switch · c comment · R review · Esc back"
+    } else if width >= 49 {
+        "↑/↓ · [/] file · Tab · c comment · R review · Esc"
+    } else if width >= 39 {
         "↑/↓ · [/] file · Tab · c com · Esc back"
     } else {
         "Tab · c · Esc"

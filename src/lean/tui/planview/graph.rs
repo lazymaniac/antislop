@@ -10,11 +10,12 @@ impl PlanView {
         view: &View,
         theme: &Theme,
     ) {
-        let block = panel(
-            " Tasks (v) · arrows select · Shift+↑/↓ scroll ",
-            self.graph_focused,
-            theme,
+        let title = fit_hint(
+            &["Tasks (v)", "arrows select", "Shift+↑/↓ scroll"],
+            usize::from(area.width.saturating_sub(4)),
+            false,
         );
+        let block = panel(&format!(" {title} "), self.graph_focused, theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let detail_height = if inner.height >= 12 { 7 } else { 0 };
@@ -128,7 +129,14 @@ impl PlanView {
         let block = Block::default()
             .borders(Borders::TOP)
             .border_style(theme.dim())
-            .title(" Selected task · c comment · Ctrl+u/d scroll ");
+            .title(format!(
+                " {} ",
+                fit_hint(
+                    &["Selected task", "c comment", "Ctrl+u/d scroll"],
+                    usize::from(area.width.saturating_sub(4)),
+                    false,
+                )
+            ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let rows = wrap(&text, usize::from(inner.width).max(1));
