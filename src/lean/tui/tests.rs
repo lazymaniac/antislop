@@ -1252,7 +1252,7 @@ fn ac_resp_app_draw_picker_visible_and_reversed_at_60x12() {
     let mut app = test_app();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&app.view);
-    assert!(items.len() >= 10);
+    assert_eq!(items.len(), 4, "Only four commands remain in the palette");
     picker.selected = items.len() - 1;
     app.picker = Some(picker);
 

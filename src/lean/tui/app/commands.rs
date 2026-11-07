@@ -3,8 +3,8 @@ use super::super::*;
 mod recovery;
 
 impl App {
-    /// Runs a workflow action of the UI; every one has a shortcut, and the
-    /// command palette (Ctrl+P) lists them all. Typed text is always chat.
+    /// Runs a workflow action routed from the keyboard or command palette.
+    /// Typed text is always chat.
     pub fn run_workflow(&mut self, command: Command) {
         match command {
             Command::Requirements => self.open_ledger(),

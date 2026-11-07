@@ -6,11 +6,41 @@ use super::*;
 fn typing_narrows_commands_by_every_word() {
     let view = View::default();
     let mut picker = Picker::new(Kind::Commands);
-    assert_eq!(picker.items(&view).len(), COMMANDS.len());
-    picker.query = "plan res".into();
+    picker.query = "approvals orchestrator".into();
     let items = picker.items(&view);
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].1, Action::Run(Command::Resume));
+    assert_eq!(items[0].1, Action::Run(Command::ApprovalsAutonomous));
+}
+
+#[test]
+fn command_palette_keeps_only_actions_without_a_direct_route() {
+    let view = View::default();
+    let picker = Picker::new(Kind::Commands);
+    let items = picker.items(&view);
+    let actions: Vec<_> = items.into_iter().map(|(_, action)| action).collect();
+
+    assert_eq!(
+        actions,
+        [
+            Action::Run(Command::PendingApprovals),
+            Action::Run(Command::ApprovalsSupervised),
+            Action::Run(Command::ApprovalsAutonomous),
+            Action::Run(Command::ConversationDetails),
+        ]
+    );
+    assert_eq!(COMMANDS.len(), 4);
+    assert!(
+        Help::Chat
+            .lines_for_width(100)
+            .iter()
+            .any(|line| line.contains("Ctrl+I") && line.contains("conversation details"))
+    );
+    assert!(
+        Help::Graph
+            .lines_for_width(100)
+            .iter()
+            .any(|line| line.contains("Ctrl+I") && line.contains("conversation details"))
+    );
 }
 
 #[test]
@@ -172,16 +202,16 @@ fn picker_empty_state_and_narrow_title() {
 }
 
 #[test]
-fn picker_at_60x12_keeps_selected_item_visible_when_items_len_ge_10() {
+fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let view = View::default();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&view);
-    assert!(items.len() >= 10, "Commands should have >= 10 items");
+    assert_eq!(items.len(), 4, "Only four commands remain in the palette");
 
-    // Select the last item (e.g. index 11)
+    // Select the last item.
     picker.selected = items.len() - 1;
 
     let backend = TestBackend::new(60, 12);

@@ -784,7 +784,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         }
         if help == Help::Picker {
             let mut picker = Picker::new(Kind::Commands);
-            picker.query = "plan".into();
+            picker.query = "approvals".into();
             picker.selected = 1;
             app.picker = Some(picker);
         }
@@ -814,7 +814,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
             assert_eq!(editor.input.text, "comment draft?");
         }
         if let Some(picker) = &app.picker {
-            assert_eq!(picker.query, "plan");
+            assert_eq!(picker.query, "approvals");
             assert_eq!(picker.selected, 1);
         }
     }
@@ -1613,10 +1613,10 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             legacy_card.1.saturating_sub(4),
         );
         assert!(content.0 > legacy_content.0);
-        // The left margin, the right gap and its task frame: nothing more,
-        // and nothing past the viewport.
+        // A margin either side and its task frame: nothing more, and
+        // nothing past the viewport.
         assert_eq!(
-            card.width + 13,
+            card.width + 10,
             viewport.0,
             "card keeps only its required margins"
         );
@@ -1784,7 +1784,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     // 3. Picker visibility and reversed selection at 60x12
     let mut picker = Picker::new(Kind::Commands);
     let items_len = picker.items(&app.view).len();
-    assert!(items_len >= 10);
+    assert_eq!(items_len, 4);
     picker.selected = items_len - 1;
     app.picker = Some(picker);
 
@@ -4521,11 +4521,12 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
         1,
     );
     let card = expanded.node("worker:t1").unwrap();
-    // Margin, gap and the task frame keep the card within the viewport.
-    assert_eq!((card.width, card.height), (63, 10));
+    // A margin either side and the task frame keep the card within the
+    // viewport.
+    assert_eq!((card.width, card.height), (66, 10));
     assert!(expanded.width <= 76);
     let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
-    assert_eq!(content_area, 295);
+    assert_eq!(content_area, 310);
     assert_eq!(usize::from(52u16) * usize::from(card.height - 4), 312);
 
     // Capture node coordinates
@@ -5731,14 +5732,14 @@ fn configuration_modal_preserves_chat_and_failed_draft_and_handles_tiny_terminal
 }
 
 #[test]
-fn configuration_palette_and_profile_actions_are_available() {
+fn configuration_shortcut_is_removed_from_palette_and_profile_actions_work() {
     use antislop::lean::tui::config::ConfigEditor;
     let picker = Picker::new(Kind::Commands);
     assert!(
         picker
             .items(&Default::default())
             .iter()
-            .any(|(label, _)| label.contains("configuration live · F8"))
+            .all(|(label, _)| !label.contains("configuration live · F8"))
     );
     let mut editor = ConfigEditor::new(
         include_str!("../examples/antislop.toml"),

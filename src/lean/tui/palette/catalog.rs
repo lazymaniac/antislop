@@ -33,28 +33,7 @@ pub enum Command {
     PendingApprovals,
 }
 
-pub(super) const COMMANDS: [(Command, &str); 28] = [
-    (
-        Command::InterviewQuestion,
-        "Open pending interview question · F3",
-    ),
-    (Command::Requirements, "Browse and edit requirements · F2"),
-    (Command::Config, "Edit configuration live · F8"),
-    (Command::Reject, "Reject proposed plan · F7"),
-    (Command::Plan, "Open plan document viewer · Ctrl+L"),
-    (
-        Command::Plans,
-        "Browse historical plan graphs and reports · F4",
-    ),
-    (Command::Resume, "Resume plan · Ctrl+R"),
-    (Command::Cancel, "Cancel running work · Ctrl+X"),
-    (Command::Pause, "Pause new steps (current ones finish) · F6"),
-    (Command::Continue, "Continue paused work · F6"),
-    (Command::PauseOrContinue, "Pause or continue work · F6"),
-    (Command::NewConversation, "New conversation · Ctrl+N"),
-    (Command::SwitchConversation, "Switch conversation · Ctrl+O"),
-    (Command::Projects, "Open or switch project · Ctrl+G"),
-    (Command::TaskActions, "Actions for a stopped task · F5"),
+pub(super) const COMMANDS: [(Command, &str); 4] = [
     (
         Command::PendingApprovals,
         "Answer agents' pending approval requests",
@@ -67,22 +46,10 @@ pub(super) const COMMANDS: [(Command, &str); 28] = [
         Command::ApprovalsAutonomous,
         "Approvals: the orchestrator decides, you can overrule",
     ),
-    (Command::Find, "Find agent · /"),
-    (Command::Search, "Search conversation · Ctrl+F"),
-    (Command::Details, "Selected agent details · Enter"),
     (
         Command::ConversationDetails,
         "Conversation details (inspector) · Ctrl+I",
     ),
-    (Command::AddressMessage, "Address message · @"),
-    (Command::Diff, "Selected agent task diff · d"),
-    (Command::Comment, "Comment on selected element · c"),
-    (
-        Command::Filter,
-        "Graph filters: relations, states, providers · f",
-    ),
-    (Command::Help, "Help · ?"),
-    (Command::Quit, "Detach (work continues) · q"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
