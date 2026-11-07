@@ -1,5 +1,7 @@
 use crate::config::ProviderKind;
 
+const BRAILLE_SPINNERS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 #[derive(Default)]
 pub(super) struct Tracker {
     saw_work: bool,
@@ -85,19 +87,21 @@ fn is_work_signal(provider: ProviderKind, line: &str) -> bool {
         ProviderKind::Agy => ["✻", "✶", "✢", "⏺", "⎿", "◐", "◓", "◑", "◒", "● "]
             .iter()
             .any(|mark| line.contains(mark)),
-        ProviderKind::Codex => ["• ", "◦", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            .iter()
-            .any(|mark| line.contains(mark)),
-        ProviderKind::Gemini => ["✦", "✧", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            .iter()
-            .any(|mark| line.contains(mark)),
-        ProviderKind::Opencode => [
-            "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "◐", "◓", "◑", "◒",
-        ]
-        .iter()
-        .any(|mark| line.contains(mark)),
+        ProviderKind::Codex => {
+            ["• ", "◦"].iter().any(|mark| line.contains(mark)) || has_braille_spinner(line)
+        }
+        ProviderKind::Gemini => {
+            ["✦", "✧"].iter().any(|mark| line.contains(mark)) || has_braille_spinner(line)
+        }
+        ProviderKind::Opencode => {
+            has_braille_spinner(line) || ["◐", "◓", "◑", "◒"].iter().any(|mark| line.contains(mark))
+        }
     };
     text_signal || animation
+}
+
+fn has_braille_spinner(line: &str) -> bool {
+    BRAILLE_SPINNERS.iter().any(|mark| line.contains(mark))
 }
 
 fn is_status_label(provider: ProviderKind, line: &str) -> bool {
@@ -170,6 +174,19 @@ mod tests {
                 tracker.observe(provider(name), screen.lines().last().unwrap(), false, false),
                 "{name} ready"
             );
+        }
+    }
+
+    #[test]
+    fn braille_spinner_signals_work_for_codex_gemini_and_opencode() {
+        for (provider, prompt) in [
+            (ProviderKind::Codex, "›"),
+            (ProviderKind::Gemini, ">"),
+            (ProviderKind::Opencode, "❯"),
+        ] {
+            let mut tracker = Tracker::default();
+            assert!(!tracker.observe(provider, "⠋", false, false));
+            assert!(tracker.observe(provider, prompt, false, false));
         }
     }
 
