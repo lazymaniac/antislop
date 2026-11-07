@@ -377,3 +377,41 @@ fn durable_runtime_survives_checkout_cleanup_and_is_discovered_by_successor() {
         assert_eq!(std::fs::read_to_string(runtime.join(file)).unwrap(), file);
     }
 }
+
+#[test]
+fn approval_keeps_only_the_runtime_generation_that_produced_the_result() {
+    let (directory, core, conversation, tasks, _commit) = fixture();
+    let mut task = tasks[0].clone();
+    let run = core.store.create_run(&conversation, "inputs").unwrap();
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
+            [&task.id, &run.id],
+        )
+        .unwrap();
+    let owner = core.state.join("task-state").join(&task.id);
+    let other = super::super::core_task_runtime::directory(&core.state, &tasks[1]).unwrap();
+    let outside = directory.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    for name in ["g0/run-1", "g1/run-2", "notes"] {
+        std::fs::create_dir_all(owner.join(name)).unwrap();
+    }
+    std::os::unix::fs::symlink(&outside, owner.join("g2")).unwrap();
+    task.input_generation = 1;
+
+    core.set_status(&conversation, &mut task, status::WORKING)
+        .unwrap();
+    core.drain_worktree_cleanup();
+    assert!(
+        owner.join("g0/run-1").is_dir(),
+        "a running task keeps every generation"
+    );
+
+    core.set_status(&conversation, &mut task, status::APPROVED)
+        .unwrap();
+    drain_until(&core, || !owner.join("g0").exists());
+    assert!(owner.join("g1/run-2").is_dir());
+    assert!(owner.join("notes").is_dir() && owner.join("g2").is_symlink());
+    assert!(outside.is_dir() && other.is_dir());
+}

@@ -124,6 +124,7 @@ impl Core {
         let Some(task) = self.store.task_by_id(id)? else {
             return Ok(true);
         };
+        super::core_task_runtime::prune_settled_generations(&self.state, &task)?;
         let directory = super::core_path_helpers::worktree_directory(&self.state)?;
         if !directory.exists() {
             return Ok(true);

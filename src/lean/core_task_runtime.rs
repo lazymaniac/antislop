@@ -12,6 +12,32 @@ pub(super) fn directory(state: &Path, task: &Task) -> Result<PathBuf> {
     Ok(generation)
 }
 
+/// An approved task keeps only the generation that produced its result. A
+/// generation directory is removed only when the approved one exists, and a
+/// symlink or a name the runtime does not allocate is never touched.
+pub(super) fn prune_settled_generations(state: &Path, task: &Task) -> Result<()> {
+    if task.status != tasks::status::APPROVED {
+        return Ok(());
+    }
+    let id = super::core_path_helpers::task_path_component(&task.id)?;
+    let owner = state.join("task-state").join(id);
+    let keep = format!("g{}", task.input_generation);
+    if !owner.join(&keep).is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&owner)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let generation = name
+            .strip_prefix('g')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if generation && name != keep && entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn sources(core: &Core, task: &Task) -> Result<Vec<serde_json::Value>> {
     let mut pending = vec![task.clone()];
     let contract: tasks::TaskContract = serde_json::from_value(task.spec.clone())?;
