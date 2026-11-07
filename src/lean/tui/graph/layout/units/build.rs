@@ -216,9 +216,14 @@ fn append_layer_rows(
     rows: &mut Vec<Vec<usize>>,
 ) {
     sort_by_parent_position(units, &mut layer, position);
-    let limit = builder
-        .viewport
-        .map_or(u16::MAX, |(width, _)| width.saturating_sub(MARGIN + GAP_X));
+    let limit = builder.viewport.map_or(u16::MAX, |(width, _)| {
+        let limit = width.saturating_sub(MARGIN + GAP_X);
+        if builder.lanes == 0 {
+            limit
+        } else {
+            limit.min(width.saturating_sub(2 * builder.lanes))
+        }
+    });
     wrap_layer(builder, units, layer, limit, position, rows);
 }
 
@@ -298,7 +303,7 @@ pub(super) fn shown_members(builder: &Builder<'_>, unit: &Unit) -> Vec<(String, 
 pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
     let shown = shown_members(builder, unit);
     let widths = shown.iter().map(|(key, _)| builder.size.width(key, false));
-    2 * FRAME_X + widths.sum::<u16>() + (shown.len() as u16).saturating_sub(1) * GAP_X
+    2 * FRAME_X + widths.sum::<u16>() + (shown.len() as u16).saturating_sub(1) * CARD_GAP
 }
 
 pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {

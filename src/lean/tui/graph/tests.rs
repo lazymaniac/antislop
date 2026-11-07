@@ -1024,7 +1024,7 @@ fn a_task_is_a_framed_unit_and_units_stand_in_rows_by_dependency_depth() {
     // Worker and reviewer stand side by side in their task's frame.
     let (worker, reviewer) = (node("worker:t1"), node("reviewer:t1"));
     assert_eq!(worker.y, reviewer.y);
-    assert_eq!(worker.right() + GAP_X, reviewer.x);
+    assert_eq!(worker.right() + CARD_GAP, reviewer.x);
     assert_eq!(worker.group.as_deref(), Some("task:t1"));
     let t1 = frame("t1");
     assert!(t1.x < worker.x && reviewer.right() < t1.x + t1.width);
@@ -1035,7 +1035,7 @@ fn a_task_is_a_framed_unit_and_units_stand_in_rows_by_dependency_depth() {
     assert!(t2.y >= t1.y + t1.height + GAP_Y);
     assert_eq!(node("worker:t2-options").group.as_deref(), Some("task:t2"));
     assert_eq!(
-        node("worker:t2-options").right() + GAP_X,
+        node("worker:t2-options").right() + CARD_GAP,
         node("worker:t2").x
     );
     assert!(graph.frames.iter().all(|frame| frame.task != "t2-options"));
@@ -1201,10 +1201,10 @@ fn edges_join_boxes_without_crossing_them() {
     let worker = graph.node("worker:t1").unwrap();
     let reviewer = graph.node("reviewer:t1").unwrap();
     let next = graph.node("worker:t2").unwrap();
-    // Worker → reviewer straight across the gap in their frame.
+    // Worker ↔ reviewer straight across the gap in their frame.
     let row = chars(worker.y + 1);
     assert_eq!(row[usize::from(reviewer.x - 1)], '▶', "{row:?}");
-    assert_eq!(row[usize::from(worker.right())], '─', "{row:?}");
+    assert_eq!(row[usize::from(worker.right())], '◀', "{row:?}");
     assert_eq!(
         chars(next.y)[usize::from(next.x)],
         '█',
@@ -1654,7 +1654,7 @@ fn a_narrow_folded_card_gives_its_title_the_room_its_marker_does_not_need() {
         &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
-        Some((70, 40)),
+        Some((62, 40)),
     );
     let node = graph.node("worker:t1").unwrap();
     assert!(node.collapsed && node.width < 18, "a phone-width card");
@@ -1701,4 +1701,81 @@ fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
         "{}",
         lines.join("\n")
     );
+}
+
+#[test]
+fn rows_stay_centred_and_lanes_on_either_side_stay_within_the_viewport() {
+    // t1 → t2 → t3 → t4 is a chain; t5 starts a second one, and t6 waits
+    // for both chains' ends, t7 for a root and the chain's middle.
+    let view = view(vec![
+        task("t1", &[]),
+        task("t2", &["t1"]),
+        task("t3", &["t2"]),
+        task("t4", &["t3"]),
+        task("t5", &[]),
+        task("t6", &["t4", "t5"]),
+        task("t7", &["t5", "t2"]),
+        task("t8", &["t1", "t5"]),
+    ]);
+    for width in [70u16, 100, 160, 240] {
+        let graph = Graph::new_with_viewport(
+            &view,
+            &Scope::default(),
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((width, 40)),
+        );
+        let mut canvas = Canvas::new(graph.width, graph.height);
+        graph.render(&view, &mut canvas, Relations::all(), "");
+        let lines = canvas.lines();
+        let shown = lines.join("\n");
+        assert_eq!(graph.width, width, "no horizontal scroll:\n{shown}");
+        // Each row of frames is centred: even margins, give or take one.
+        let mut rows = std::collections::BTreeMap::<u16, (u16, u16)>::new();
+        for frame in graph.frames.iter().filter(|frame| frame.visible) {
+            let row = rows.entry(frame.y).or_insert((u16::MAX, 0));
+            *row = (row.0.min(frame.x), row.1.max(frame.x + frame.width));
+        }
+        for (left, right) in rows.values() {
+            assert!(left.abs_diff(width - right) <= 1, "{width}:\n{shown}");
+        }
+        // Every link stays on screen, outside the cards, and the links into
+        // one task end in a single arrow on its frame.
+        let cards: Vec<_> = graph.nodes.iter().filter(|node| node.visible).collect();
+        let routes = graph.edge_routes(Relations::only(0));
+        for (from, to, path) in &routes {
+            assert!(path.iter().all(|(x, _)| *x < width), "{from}→{to} {path:?}");
+            for card in &cards {
+                assert!(!Graph::route_intersects_card(path, card), "{from}→{to}");
+            }
+        }
+        for frame in graph.frames.iter().filter(|frame| frame.visible) {
+            let into = format!("task:{}", frame.task);
+            let ends: std::collections::HashSet<_> = routes
+                .iter()
+                .filter(|(_, to, _)| *to == into)
+                .map(|(_, _, path)| *path.last().unwrap())
+                .collect();
+            assert!(ends.len() <= 1, "{into} has arrows {ends:?}:\n{shown}");
+            let arrows = lines[usize::from(frame.y)]
+                .chars()
+                .skip(usize::from(frame.x))
+                .take(usize::from(frame.width))
+                .filter(|ch| *ch == '▼')
+                .count();
+            assert_eq!(arrows, ends.len(), "{into}:\n{shown}");
+        }
+        // The links skipping rows run in lanes on both sides of a single
+        // column of tasks; beside two columns, on the side their ends stand.
+        let lanes: std::collections::HashSet<_> = routes
+            .iter()
+            .filter(|(_, _, path)| path.len() > 4)
+            .map(|(_, _, path)| path[2].0 < width / 2)
+            .collect();
+        let single = graph
+            .frames
+            .iter()
+            .all(|frame| frame.x == graph.frames[0].x);
+        assert_eq!(lanes.len(), if single { 2 } else { 1 }, "{width}:\n{shown}");
+    }
 }

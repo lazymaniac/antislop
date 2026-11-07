@@ -165,6 +165,15 @@ impl Graph {
                 .unwrap_or_else(|| Self::arrow(&path));
             canvas.put(x, y, arrow, edge.kind.style());
         }
+        // A worker and its reviewer answer each other: their arrow points
+        // both ways.
+        if edge.from.starts_with("worker:")
+            && edge.to.starts_with("reviewer:")
+            && let [(x, y), (next_x, _), ..] = path.as_slice()
+            && next_x > x
+        {
+            canvas.put(*x, *y, '◀', edge.kind.style());
+        }
         self.render_edge_label(canvas, edge, &path);
     }
 
@@ -180,21 +189,50 @@ impl Graph {
             x + 1
         };
         let ly = if next_x == x { *y } else { y.saturating_sub(1) };
-        // A label that a card would cover goes on the other side of the line.
         let width = unicode_width::UnicodeWidthStr::width(label.as_str()) as u16;
-        let covered = |ly: u16| {
+        // A label goes where no card covers it and over no other edge, such
+        // as the arrow between two cards of a task: beside its start, on the
+        // other side of the line, else beside the first free cell further on.
+        let covered = |lx: u16, ly: u16| {
             self.nodes.iter().any(|node| {
                 node.visible
                     && (node.y..node.y + node.height).contains(&ly)
                     && lx < node.x + node.width
                     && node.x < lx + width
+            }) || self.frames.iter().any(|frame| {
+                let bottom = frame.y + frame.height.saturating_sub(1);
+                let right = frame.x + frame.width.saturating_sub(1);
+                let across = lx <= right && frame.x < lx + width;
+                let down = (frame.y..=bottom).contains(&ly);
+                frame.visible
+                    && ((across && (ly == frame.y || ly == bottom))
+                        || (down && (lx..lx + width).any(|x| x == frame.x || x == right)))
+            }) || self.edges.iter().any(|other| {
+                other != edge
+                    && other.path.as_ref().is_some_and(|path| {
+                        path.windows(2).any(|pair| {
+                            let (x0, x1) = (pair[0].0.min(pair[1].0), pair[0].0.max(pair[1].0));
+                            let (y0, y1) = (pair[0].1.min(pair[1].1), pair[0].1.max(pair[1].1));
+                            (y0..=y1).contains(&ly) && lx <= x1 && x0 < lx + width
+                        })
+                    })
             })
         };
-        let ly = match (covered(ly), next_x == x) {
-            (false, _) => ly,
-            (true, true) => *next_y,
-            (true, false) => y + 1,
+        let other_side = if next_x == x {
+            (lx, *next_y)
+        } else {
+            (lx, y + 1)
         };
+        let further = path.windows(2).flat_map(|pair| {
+            let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+            let xs = x0.min(x1)..=x0.max(x1);
+            xs.flat_map(move |x| (y0.min(y1)..=y0.max(y1)).map(move |y| (x + 1, y)))
+        });
+        let (lx, ly) = [(lx, ly), other_side]
+            .into_iter()
+            .chain(further)
+            .find(|&(lx, ly)| !covered(lx, ly))
+            .unwrap_or(other_side);
         canvas.text(lx, ly, label, edge.kind.style());
     }
 

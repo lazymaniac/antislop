@@ -153,6 +153,8 @@ pub const HEIGHT: u16 = 14;
 const MIN_HEIGHT: u16 = 8;
 const ADMIN_SUMMARY_LINES: usize = 2;
 const GAP_X: u16 = 6;
+/// Columns between the cards of one task: its options, worker and reviewer.
+const CARD_GAP: u16 = 2;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
 const MARGIN: u16 = 3;

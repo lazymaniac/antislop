@@ -3,18 +3,14 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 
 mod link_render;
-pub(in crate::lean::tui::graph::layout::units) use link_render::push_links;
+pub(in crate::lean::tui::graph::layout::units) use link_render::{
+    Wiring, entry_columns, push_links,
+};
 
-pub(super) fn push_admin(
-    builder: &mut Builder<'_>,
-    rows: &[Vec<&str>],
-    tops: &[u16],
-    left: u16,
-    room: u16,
-) {
+pub(super) fn push_admin(builder: &mut Builder<'_>, rows: &[Vec<&str>], tops: &[u16], width: u16) {
     let mut shown = HashMap::<&str, (u16, u16)>::new();
     for (row, &y) in rows.iter().zip(tops) {
-        let x = left + (room - admin_width(&builder.size, row)) / 2;
+        let x = width.saturating_sub(admin_width(&builder.size, row)) / 2;
         let mut offset = 0;
         for key in row {
             shown.insert(*key, (x + offset, y));
@@ -73,7 +69,7 @@ fn push_cards(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16, g
     for (key, folded) in &shown {
         let x = spot.x + FRAME_X + offset;
         push_card(builder, key, *folded, x, y, group, &mut previous);
-        offset += builder.size.width(key, false) + GAP_X;
+        offset += builder.size.width(key, false) + CARD_GAP;
     }
     // The expanded card's partners step aside until it closes.
     for (key, folded) in member_keys(builder.view, unit)

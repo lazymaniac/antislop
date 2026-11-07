@@ -86,7 +86,7 @@ impl Size {
             };
         };
         // Three cards of a unit side by side, in their frame.
-        let unit = MARGIN + 2 * GAP_X + 2 * FRAME_X;
+        let unit = MARGIN + 2 * CARD_GAP + 2 * FRAME_X;
         // An expanded card keeps `MARGIN` on either side.
         let full_w = vp_w.saturating_sub(2 * MARGIN).max(MIN_WIDTH);
         let full_h = vp_h.saturating_sub(2).max(MIN_HEIGHT);
@@ -108,6 +108,15 @@ impl Size {
         self.step = step.min(FULL_STEP);
         self.grow();
         self
+    }
+
+    /// Narrow the task cards so that a unit of three fits across the
+    /// viewport with `columns` kept clear beside it.
+    pub(super) fn reserve_columns(&mut self, viewport: u16, columns: u16) {
+        let unit = 2 * CARD_GAP + 2 * FRAME_X + columns;
+        let fit = (viewport.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH);
+        self.w = self.w.min(fit);
+        self.grow();
     }
 
     /// Narrow the fully grown expanded card to `width` at most, so that it

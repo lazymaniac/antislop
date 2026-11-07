@@ -37,32 +37,15 @@ pub(super) fn admin_width(size: &Size, row: &[&str]) -> u16 {
         + (row.len() as u16).saturating_sub(1) * GAP_X
 }
 
-/// The width every row is centered in, right of the lanes: the viewport's,
-/// or the widest row's when that is wider.
-pub(super) fn room(
-    builder: &Builder<'_>,
-    placed: &[Placed],
-    admin: &[Vec<&str>],
-    left: u16,
-) -> u16 {
-    let widest = placed
-        .iter()
-        .map(|spot| spot.x + spot.width)
-        .chain(admin.iter().map(|row| admin_width(&builder.size, row)))
-        .max()
-        .unwrap_or(0);
-    builder.viewport.map_or(widest, |(width, _)| {
-        width.saturating_sub(left + GAP_X).max(widest)
-    })
-}
-
-pub(super) fn center_rows(placed: &mut [Placed], left: u16, room: u16) {
+/// Centre every row across `width`.
+pub(super) fn center_rows(placed: &mut [Placed], width: u16) {
     let mut widths = BTreeMap::<usize, u16>::new();
     for spot in placed.iter() {
-        widths.insert(spot.row, spot.x + spot.width);
+        let right = widths.entry(spot.row).or_default();
+        *right = (*right).max(spot.x + spot.width);
     }
     for spot in placed.iter_mut() {
-        spot.x += left + (room - widths[&spot.row]) / 2;
+        spot.x += width.saturating_sub(widths[&spot.row]) / 2;
     }
 }
 

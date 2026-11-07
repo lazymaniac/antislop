@@ -1,4 +1,6 @@
-//! Lay task cards out in dependency rows with routed links.
+//! Lay task cards out in dependency rows centred across the viewport, with
+//! the links into each unit gathered on one bus and the links that skip
+//! rows routed in lanes on either side of the rows.
 
 use super::super::*;
 use super::builder::Builder;
@@ -10,77 +12,106 @@ mod placement;
 mod render;
 
 use build::{card_height, layers, measure, member_keys, rows, units};
-use links::{gap_lanes, links};
-use model::{Link, Placed, Tops, Unit};
-use placement::{admin_rows, admin_width, center_rows, room, row_tops};
-use render::{push_admin, push_hidden, push_links, push_unit};
+use links::{buses, crossed, gap_lines, lane_reserve, links, place_lanes};
+use model::{Bus, Lane, Link, Placed, Side, Tops, Unit};
+use placement::{admin_rows, admin_width, center_rows, row_tops};
+use render::{Wiring, entry_columns, push_admin, push_hidden, push_links, push_unit};
 
 /// Rows between a frame's border and its cards.
 const FRAME_Y: u16 = 1;
-/// Columns between two lanes left of the rows.
+/// Columns between two lanes beside the rows.
 const LANE_STEP: u16 = 2;
+/// Layouts tried while making room for the lanes, which may need more.
+const ATTEMPTS: usize = 4;
 
 pub(super) fn place(builder: &mut Builder<'_>) {
     let units = units(builder);
-    fit_expanded_card(builder, &units, 0);
-    let (mut rows, mut placed, mut links, mut lanes) = arrange(builder, &units);
-    let crossing = expanded_row(builder, &units, &placed)
-        .map_or(0, |row| crossing_lanes(&links, &placed, row));
-    if crossing > 0 {
-        // The lanes passing the expanded card take room it had.
-        fit_expanded_card(builder, &units, LANE_STEP * crossing);
-        (rows, placed, links, lanes) = arrange(builder, &units);
-    }
-    // A lane runs beside the rows between its ends only, so the expanded
-    // card's row, when none passes it, keeps the viewport's whole width.
-    let free_row = expanded_row(builder, &units, &placed)
-        .filter(|row| crossing_lanes(&links, &placed, *row) == 0);
+    let Arrangement {
+        rows,
+        mut placed,
+        links,
+        mut buses,
+    } = settle(builder, &units);
     let admin_rows = admin_rows(builder);
-    let measured = placed.clone();
-    let room = room(builder, &placed, &admin_rows, MARGIN);
-    center_rows(&mut placed, MARGIN, room);
-    let lane_rows = placed
-        .iter()
-        .filter(|spot| Some(spot.row) != free_row)
-        .cloned()
-        .collect::<Vec<_>>();
-    let shift = lane_shift(&lane_rows, &admin_rows, builder, room, lanes);
-    let left = MARGIN + shift;
-    // Center again right of the lanes, so the rows keep within the viewport.
-    let room = if shift > 0 {
-        placed = measured.clone();
-        let room = self::room(builder, &placed, &admin_rows, left);
-        center_rows(&mut placed, left, room);
-        if let Some(row) = free_row {
-            center_free_row(builder, &mut placed, &measured, row);
-        }
-        room
-    } else {
-        room
-    };
-    let gaps = gap_lanes(&links, &placed, rows.len());
+    let width = layout_width(builder, &placed, &buses, &admin_rows);
+    center_rows(&mut placed, width);
+    place_lanes(&mut buses, &placed);
+    let entries = entry_columns(builder, &units, &placed, &buses);
+    let gaps = gap_lines(&links, &buses, &placed, rows.len(), &entries);
     let tops = row_tops(builder, &admin_rows, &placed, &gaps, rows.len());
-    push_admin(builder, &admin_rows, &tops.admin, left, room);
+    push_admin(builder, &admin_rows, &tops.admin, width);
     for spot in &placed {
         push_unit(builder, &units[spot.unit], spot, tops.units[spot.row]);
     }
     push_hidden(builder, &units, &placed);
-    push_links(builder, &units, &placed, &links, &gaps, &tops);
+    let wiring = Wiring {
+        links: &links,
+        buses: &buses,
+        gaps: &gaps,
+        tops: &tops,
+        entries: &entries,
+    };
+    push_links(builder, &units, &placed, &wiring);
+    builder.graph.width = width;
     builder.graph.height = tops.bottom;
 }
 
-type Arrangement = (Vec<Vec<usize>>, Vec<Placed>, Vec<Link>, u16);
+struct Arrangement {
+    rows: Vec<Vec<usize>>,
+    placed: Vec<Placed>,
+    links: Vec<Link>,
+    buses: Vec<Bus>,
+}
+
+/// Arrange the units, then again with room kept for the lanes on both
+/// sides of the rows, until the lanes fit the room they have.
+fn settle(builder: &mut Builder<'_>, units: &[Unit]) -> Arrangement {
+    let (mut reserve, mut narrowed) = (0, false);
+    let mut attempt = 0;
+    loop {
+        resize(builder, units, reserve, narrowed);
+        let arrangement = arrange(builder, units);
+        let need = lane_reserve(&arrangement.buses);
+        // The lanes passing the expanded card take room it had.
+        let crossing = expanded_row(builder, units, &arrangement.placed)
+            .is_some_and(|row| crossed(&arrangement.buses, row));
+        attempt += 1;
+        if attempt == ATTEMPTS || (need <= reserve && (narrowed || !crossing)) {
+            return arrangement;
+        }
+        reserve = reserve.max(need);
+        narrowed |= crossing;
+    }
+}
 
 fn arrange(builder: &Builder<'_>, units: &[Unit]) -> Arrangement {
     let rows = rows(builder, units, &layers(builder, units));
     let placed = measure(builder, units, &rows);
     let links = links(units, &placed);
-    let lanes = links
-        .iter()
-        .filter_map(|link| link.lane)
-        .max()
-        .map_or(0, |lane| lane + 1);
-    (rows, placed, links, lanes)
+    let buses = buses(&links, &placed);
+    Arrangement {
+        rows,
+        placed,
+        links,
+        buses,
+    }
+}
+
+/// Size the cards for `reserve` columns kept clear on either side of the
+/// rows; the expanded card narrows too when a lane passes its row.
+fn resize(builder: &mut Builder<'_>, units: &[Unit], reserve: u16, narrowed: bool) {
+    builder.size =
+        Size::fit(builder.viewport, builder.size.expanded_key.clone()).animated(builder.step);
+    builder.lanes = reserve;
+    if let (Some((width, _)), true) = (builder.viewport, reserve > 0) {
+        builder.size.reserve_columns(width, 2 * reserve);
+    }
+    let extra = if narrowed {
+        2 * reserve.saturating_sub(MARGIN)
+    } else {
+        0
+    };
+    fit_expanded_card(builder, units, extra);
 }
 
 /// Narrow the expanded card so that it and its unit's frame fit across the
@@ -113,63 +144,44 @@ fn expanded_row(builder: &Builder<'_>, units: &[Unit], placed: &[Placed]) -> Opt
         .map(|spot| spot.row)
 }
 
-/// Lanes beside `row`: a lane runs from the gap below its parent's row to
-/// the gap above its child's, so it passes only the rows strictly between.
-fn crossing_lanes(links: &[Link], placed: &[Placed], row: usize) -> u16 {
-    let row_of = |unit: usize| {
-        placed
-            .iter()
-            .find(|spot| spot.unit == unit)
-            .map(|spot| spot.row)
+/// The width the rows are centred in: the viewport's, so the graph never
+/// scrolls sideways, unless a row and the lanes beside it cannot fit.
+/// Without a viewport, the widest row with its margins.
+fn layout_width(
+    builder: &Builder<'_>,
+    placed: &[Placed],
+    buses: &[Bus],
+    admin: &[Vec<&str>],
+) -> u16 {
+    let reserve = lane_reserve(buses);
+    let mut rows = std::collections::BTreeMap::<usize, u16>::new();
+    for spot in placed {
+        let right = rows.entry(spot.row).or_default();
+        *right = (*right).max(spot.x + spot.width);
+    }
+    let margin = |row: usize| {
+        if crossed(buses, row) {
+            reserve
+        } else if builder.viewport.is_some() {
+            0
+        } else {
+            MARGIN
+        }
     };
-    links
+    let needed = rows
         .iter()
-        .filter_map(|link| {
-            let lane = link.lane?;
-            let (from, to) = (row_of(link.from)?, row_of(link.to)?);
-            (from.min(to) < row && row < from.max(to)).then_some(lane + 1)
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// Center `row` across the viewport from the left margin, ignoring the lanes
-/// the other rows step aside for.
-fn center_free_row(builder: &Builder<'_>, placed: &mut [Placed], measured: &[Placed], row: usize) {
-    let Some((width, _)) = builder.viewport else {
-        return;
-    };
-    let right = measured
-        .iter()
-        .filter(|spot| spot.row == row)
-        .map(|spot| spot.x + spot.width)
+        .map(|(&row, &width)| width + 2 * margin(row))
+        .chain(admin.iter().map(|row| {
+            admin_width(&builder.size, row)
+                + if builder.viewport.is_some() {
+                    0
+                } else {
+                    2 * MARGIN
+                }
+        }))
         .max()
         .unwrap_or(0);
-    let room = width.saturating_sub(2 * MARGIN).max(right);
-    for (spot, original) in placed.iter_mut().zip(measured) {
-        if spot.row == row {
-            spot.x = MARGIN + (room - right) / 2 + original.x;
-        }
-    }
-}
-
-fn lane_shift(
-    placed: &[Placed],
-    admin_rows: &[Vec<&str>],
-    builder: &Builder<'_>,
-    room: u16,
-    lanes: u16,
-) -> u16 {
-    let lanes_end = MARGIN + LANE_STEP * lanes;
-    let leftmost = placed
-        .iter()
-        .map(|spot| spot.x)
-        .chain(
-            admin_rows
-                .iter()
-                .map(|row| MARGIN + (room - admin_width(&builder.size, row)) / 2),
-        )
-        .min()
-        .unwrap_or(lanes_end);
-    lanes_end.saturating_sub(leftmost)
+    builder
+        .viewport
+        .map_or(needed, |(width, _)| width.max(needed))
 }

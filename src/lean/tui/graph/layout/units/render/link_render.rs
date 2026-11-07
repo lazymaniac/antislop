@@ -1,91 +1,34 @@
 use super::super::super::*;
+use super::super::links::{is_short, spots};
 use super::*;
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 
-/// Each dependency leaves its parent's frame at the bottom and enters its
-/// child's at the top, the points spread along the border in the order of
-/// the other ends, so edges leaving or entering one frame do not cross.
-pub(in crate::lean::tui::graph::layout::units) fn push_links(
-    builder: &mut Builder<'_>,
-    units: &[Unit],
-    placed: &[Placed],
-    links: &[Link],
-    gaps: &[Vec<usize>],
-    tops: &Tops,
-) {
-    let spots = placed
-        .iter()
-        .map(|spot| (spot.unit, spot))
-        .collect::<HashMap<_, _>>();
-    let (exits, entries) = link_columns(builder, units, links, &spots);
-    let mut drawing = LinkDrawing {
-        builder,
-        units,
-        gaps,
-        tops,
-        spots: &spots,
-        exits: &exits,
-        entries: &entries,
-    };
-    for (number, link) in links.iter().enumerate() {
-        drawing.push(link, number);
-    }
-}
-
-fn link_columns(
+/// The column where a unit's bus enters its frame: the middle of the top
+/// border between the title and the right corner, so the arrow never lands
+/// on the title, also when a growing card is still narrow; a border too
+/// short for that takes the arrow in its middle.
+pub(in crate::lean::tui::graph::layout::units) fn entry_columns(
     builder: &Builder<'_>,
     units: &[Unit],
-    links: &[Link],
-    spots: &HashMap<usize, &Placed>,
-) -> (HashMap<usize, u16>, HashMap<usize, u16>) {
-    let outgoing = link_ends(links, spots, true);
-    let incoming = link_ends(links, spots, false);
-    let exits = spread_ends(outgoing, spots, None);
-    let entries = spread_ends(incoming, spots, Some((builder, units)));
-    (exits, entries)
-}
-
-fn link_ends(
-    links: &[Link],
-    spots: &HashMap<usize, &Placed>,
-    outgoing: bool,
-) -> HashMap<usize, Vec<(u16, usize)>> {
-    let mut ends = HashMap::new();
-    for (number, link) in links.iter().enumerate() {
-        let (unit, other) = if outgoing {
-            (link.from, link.to)
-        } else {
-            (link.to, link.from)
-        };
-        ends.entry(unit)
-            .or_insert_with(Vec::new)
-            .push((far(link, other, spots), number));
-    }
-    ends
-}
-
-fn far(link: &Link, end: usize, spots: &HashMap<usize, &Placed>) -> u16 {
-    if link.lane.is_some() {
-        0
-    } else {
-        spots[&end].x
-    }
-}
-
-fn spread_ends(
-    ends: HashMap<usize, Vec<(u16, usize)>>,
-    spots: &HashMap<usize, &Placed>,
-    titled: Option<(&Builder<'_>, &[Unit])>,
+    placed: &[Placed],
+    buses: &[Bus],
 ) -> HashMap<usize, u16> {
-    let mut columns = HashMap::new();
-    for (unit, mut ends) in ends {
-        ends.sort_unstable();
-        let frame = spots[&unit];
-        let skip = titled.map_or(0, |(builder, units)| title_end(builder, units, unit, frame));
-        spread_frame_ends(&mut columns, frame, ends, skip);
-    }
-    columns
+    let spot = spots(placed);
+    buses
+        .iter()
+        .map(|bus| {
+            let frame = spot[&bus.to];
+            let skip = title_end(builder, units, bus.to, frame);
+            let room = frame.width.saturating_sub(skip + 1);
+            let x = if room > 0 {
+                frame.x + skip + room / 2
+            } else {
+                frame.x + frame.width / 2
+            };
+            (bus.to, x)
+        })
+        .collect()
 }
 
 /// The first border column after the frame's title, which is drawn from
@@ -96,59 +39,59 @@ fn title_end(builder: &Builder<'_>, units: &[Unit], unit: usize, frame: &Placed)
     title.min(frame.width.saturating_sub(4)) + 2
 }
 
-/// Entries go on the border between the title and the right corner while
-/// each has a column there, so an arrow never lands on the title, also when
-/// a growing card is still narrow; only a border too short for all of them
-/// spreads them along its whole width.
-fn spread_frame_ends(
-    columns: &mut HashMap<usize, u16>,
-    frame: &Placed,
-    ends: Vec<(u16, usize)>,
-    skip: u16,
+/// The routed dependencies of one layout: the links, their buses, the
+/// buses' lines in each gap with the gaps' tops, and where each bus enters.
+pub(in crate::lean::tui::graph::layout::units) struct Wiring<'a> {
+    pub(in crate::lean::tui::graph::layout::units) links: &'a [Link],
+    pub(in crate::lean::tui::graph::layout::units) buses: &'a [Bus],
+    pub(in crate::lean::tui::graph::layout::units) gaps: &'a [Vec<usize>],
+    pub(in crate::lean::tui::graph::layout::units) tops: &'a Tops,
+    pub(in crate::lean::tui::graph::layout::units) entries: &'a HashMap<usize, u16>,
+}
+
+/// Each dependency leaves its parent's frame at the bottom and joins its
+/// child's bus: straight down to the bus's line in the gap above the
+/// child, or along the gap below the parent to the bus's lane, which takes
+/// it to that line. All links into one unit share the line and its arrow.
+pub(in crate::lean::tui::graph::layout::units) fn push_links(
+    builder: &mut Builder<'_>,
+    units: &[Unit],
+    placed: &[Placed],
+    wiring: &Wiring<'_>,
 ) {
-    let count = ends.len() as u16;
-    let room = frame.width.saturating_sub(skip + 1);
-    let (start, width) = if room >= count {
-        (frame.x + skip, room)
-    } else {
-        (frame.x, frame.width)
-    };
-    for (slot, (_, link)) in ends.into_iter().enumerate() {
-        columns.insert(link, start + (slot as u16 + 1) * width / (count + 1));
-    }
-}
-
-struct LinkDrawing<'a, 'b, 'c> {
-    builder: &'a mut Builder<'b>,
-    units: &'c [Unit],
-    gaps: &'c [Vec<usize>],
-    tops: &'c Tops,
-    spots: &'c HashMap<usize, &'c Placed>,
-    exits: &'c HashMap<usize, u16>,
-    entries: &'c HashMap<usize, u16>,
-}
-
-impl LinkDrawing<'_, '_, '_> {
-    fn push(&mut self, link: &Link, number: usize) {
-        let from = self.spots[&link.from];
-        let to = self.spots[&link.to];
-        let route = LinkRoute {
-            number,
-            bottom: self.tops.units[from.row] + from.height - 1,
-            top: self.tops.units[to.row],
-            columns: (self.exits[&number], self.entries[&number]),
-            rows: (from.row, to.row),
-        };
-        let path = link_path(link, self.gaps, self.tops, &route);
-        self.builder.graph.edges.push(Edge {
-            from: format!(
-                "task:{}",
-                self.builder.view.tasks[self.units[link.from].task].id
-            ),
-            to: format!(
-                "task:{}",
-                self.builder.view.tasks[self.units[link.to].task].id
-            ),
+    let Wiring {
+        links,
+        buses,
+        gaps,
+        tops,
+        entries,
+    } = *wiring;
+    let spot = spots(placed);
+    let lanes: HashMap<usize, &Lane> = buses
+        .iter()
+        .filter_map(|bus| Some((bus.to, bus.lane.as_ref()?)))
+        .collect();
+    let exits = exit_columns(links, &spot, &lanes, entries);
+    for (number, link) in links.iter().enumerate() {
+        let (from, to) = (spot[&link.from], spot[&link.to]);
+        let (px, cx) = (exits[&number], entries[&link.to]);
+        let bottom = tops.units[from.row] + from.height - 1;
+        let top = tops.units[to.row];
+        let entry = gap_line(gaps, tops, to.row, link.to);
+        let mut path = vec![(px, bottom)];
+        if is_short(link, &spot) {
+            path.push((px, entry));
+        } else {
+            let lane = lanes[&link.to].x;
+            let exit = gap_line(gaps, tops, from.row + 1, link.to);
+            path.extend([(px, exit), (lane, exit), (lane, entry)]);
+        }
+        path.extend([(cx, entry), (cx, top)]);
+        let task = |unit: usize| format!("task:{}", builder.view.tasks[units[unit].task].id);
+        let (from, to) = (task(link.from), task(link.to));
+        builder.graph.edges.push(Edge {
+            from,
+            to,
             kind: Kind::Depends,
             label: None,
             path: Some(path),
@@ -156,44 +99,44 @@ impl LinkDrawing<'_, '_, '_> {
     }
 }
 
-struct LinkRoute {
-    number: usize,
-    bottom: u16,
-    top: u16,
-    columns: (u16, u16),
-    rows: (usize, usize),
-}
-
-fn gap_line(gaps: &[Vec<usize>], tops: &Tops, gap: usize, link: usize) -> u16 {
-    let index = gaps[gap]
-        .iter()
-        .position(|other| *other == link)
-        .unwrap_or(0);
-    tops.gaps[gap] + 1 + index as u16
-}
-
-fn link_path(link: &Link, gaps: &[Vec<usize>], tops: &Tops, route: &LinkRoute) -> Vec<(u16, u16)> {
-    let (px, cx) = route.columns;
-    let (from_row, to_row) = route.rows;
-    let entry = gap_line(gaps, tops, to_row, route.number);
-    match link.lane {
-        None => vec![
-            (px, route.bottom),
-            (px, entry),
-            (cx, entry),
-            (cx, route.top),
-        ],
-        Some(lane) => {
-            let exit = gap_line(gaps, tops, from_row + 1, route.number);
-            let x = MARGIN - 1 + LANE_STEP * lane;
-            vec![
-                (px, route.bottom),
-                (px, exit),
-                (x, exit),
-                (x, entry),
-                (cx, entry),
-                (cx, route.top),
-            ]
+/// Where each link leaves its parent: the links out of one frame spread
+/// along its bottom border in the order of the columns they head for, so
+/// they do not cross on the way.
+fn exit_columns(
+    links: &[Link],
+    spot: &HashMap<usize, &Placed>,
+    lanes: &HashMap<usize, &Lane>,
+    entries: &HashMap<usize, u16>,
+) -> HashMap<usize, u16> {
+    let mut outgoing = HashMap::<usize, Vec<(u16, usize)>>::new();
+    for (number, link) in links.iter().enumerate() {
+        let toward = if is_short(link, spot) {
+            entries[&link.to]
+        } else {
+            lanes[&link.to].x
+        };
+        outgoing
+            .entry(link.from)
+            .or_default()
+            .push((toward, number));
+    }
+    let mut columns = HashMap::new();
+    for (unit, mut ends) in outgoing {
+        ends.sort_unstable();
+        let frame = spot[&unit];
+        let (count, width) = (ends.len() as u16, frame.width.saturating_sub(1));
+        for (slot, (_, link)) in ends.into_iter().enumerate() {
+            columns.insert(link, frame.x + (slot as u16 + 1) * width / (count + 1));
         }
     }
+    columns
+}
+
+/// The row of the bus's line in `gap`.
+fn gap_line(gaps: &[Vec<usize>], tops: &Tops, gap: usize, bus: usize) -> u16 {
+    let index = gaps[gap]
+        .iter()
+        .position(|other| *other == bus)
+        .unwrap_or(0);
+    tops.gaps[gap] + 1 + index as u16
 }

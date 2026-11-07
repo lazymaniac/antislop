@@ -121,7 +121,8 @@ impl Graph {
         if from.x != to.x {
             return None;
         }
-        let half = GAP_X / 2;
+        // Task cards stand closer together than the session's own.
+        let half = if is_admin(&from.key) { GAP_X } else { CARD_GAP } / 2;
         let adjacent = if from.y < to.y {
             from.y.saturating_add(from.height).saturating_add(GAP_Y) == to.y
         } else {
@@ -150,10 +151,13 @@ impl Graph {
         if from.y != to.y {
             return None;
         }
-        if from.right() + GAP_X == to.x {
+        let beside = |left: &Node, right: &Node| {
+            [GAP_X, CARD_GAP].contains(&right.x.saturating_sub(left.right()))
+        };
+        if beside(from, to) {
             return Some(vec![(from.right(), from.mid_y()), (to.x - 1, to.mid_y())]);
         }
-        if to.right() + GAP_X == from.x {
+        if beside(to, from) {
             return Some(vec![(from.x - 1, from.mid_y()), (to.right(), to.mid_y())]);
         }
         None
