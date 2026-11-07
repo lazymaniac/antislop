@@ -32,19 +32,17 @@ impl App {
             None => 0,
         };
         let approval_height = self.approval.as_ref().map_or(0, |approval| {
-            let summary_lines = super::super::approval::card_summary_rows(
-                &approval.approval.summary,
-                input_width,
-                usize::from(area.height),
-            );
-            let desired = summary_lines
-                .saturating_add(approval.approval.options.len())
-                .saturating_add(5)
-                .min(usize::from(u16::MAX)) as u16;
             let fixed = input_height
                 .saturating_add(status_height)
                 .saturating_add(action_height);
-            desired.min(area.height.saturating_sub(fixed))
+            super::super::approval::approval_panel_height(
+                &approval.approval.summary,
+                input_width,
+                approval.approval.options.len(),
+                usize::from(area.height),
+                5,
+                usize::from(area.height.saturating_sub(fixed)),
+            )
         });
         let areas = Layout::vertical([
             Constraint::Min(0),

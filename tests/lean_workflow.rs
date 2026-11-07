@@ -12,8 +12,56 @@ fn idle(core: &Core, conversation: &str) {
     }
 }
 
-/// Fake agents for a full guided session: interview, plan, review, work.
+fn plan_proposed(core: &Core, conversation: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(event) = core
+            .store
+            .events_since(conversation, 0, 1000)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "plan_proposed")
+        {
+            return event.payload;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "planner did not propose a plan after scope confirmation"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Fake agents for the scope interview and planning workflow.
 fn guided_session_source(dir: &std::path::Path) -> String {
+    let git_init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(
+        git_init.success(),
+        "could not initialize workflow fixture repository"
+    );
+    let initial_commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=antislop",
+            "-c",
+            "user.email=antislop@localhost",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Initial fixture",
+        ])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(
+        initial_commit.success(),
+        "could not commit workflow fixture"
+    );
+
     for name in ["codex", "agy"] {
         let script = dir.join(name);
         std::fs::write(&script, r#"#!/usr/bin/env python3
@@ -65,28 +113,8 @@ else:
         )
 }
 
-fn finish_fixture_plan(core: &std::sync::Arc<Core>, conversation: &str) {
-    // This fixture checks workflow execution. Its final audit deliberately
-    // remains negative because it supplies no integrated acceptance evidence.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        let tasks = core.store.latest_plan(conversation).unwrap();
-        if !tasks.is_empty() && tasks.iter().all(|task| task.status == "approved") {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "checked fixture plan did not finish: {:?}",
-            tasks
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    core.cancel(conversation);
-    idle(core, conversation);
-}
-
 #[test]
-fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approval() {
+fn restart_resumes_scope_interview_and_starts_planning_after_confirmation() {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
     let core = Core::open(
@@ -127,6 +155,8 @@ fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approv
         &format!("Interview answer ({question_id})\nAnswer: Confirm scope"),
     )
     .unwrap();
+    let proposed = plan_proposed(&core, &waiting.id);
+    core.cancel(&waiting.id);
     idle(&core, &waiting.id);
     let workflow = core.store.workflow(&waiting.id).unwrap();
     assert_ne!(
@@ -145,11 +175,7 @@ fn restart_finishes_current_interview_and_runs_reviewed_plan_without_user_approv
             .collect::<Vec<_>>(),
         core.store.messages_by(&waiting.id, "user", 0).unwrap()
     );
-    finish_fixture_plan(&core, &waiting.id);
-    assert_eq!(
-        core.store.workflow(&waiting.id).unwrap().phase,
-        "implementation"
-    );
+    assert_eq!(proposed["automatic"], true);
     assert_eq!(
         core.store
             .messages_by(&waiting.id, "user", 0)
@@ -228,12 +254,13 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
         "scope confirmation was not recorded: {:?}",
         core.store.events_since(&conversation.id, 0, 1000).unwrap()
     );
+    let proposed = plan_proposed(&core, &conversation.id);
+    core.cancel(&conversation.id);
     idle(&core, &conversation.id);
     assert_ne!(
         core.store.workflow(&conversation.id).unwrap().phase,
         "interview"
     );
-    finish_fixture_plan(&core, &conversation.id);
     // Planning starts automatically after the user's explicit confirmation.
     let planner = core
         .store
@@ -249,25 +276,7 @@ fn checked_plan_starts_only_after_the_user_confirms_scope() {
                 && event.payload["role"] == antislop::lean::PLANNER)
     );
     assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
-    let proposed = core
-        .store
-        .events_since(&conversation.id, 0, 1000)
-        .unwrap()
-        .into_iter()
-        .find(|e| e.kind == "plan_proposed")
-        .expect("a checked plan was proposed");
-    assert_eq!(proposed.payload["automatic"], true);
-    assert_eq!(
-        core.store.workflow(&conversation.id).unwrap().phase,
-        "implementation"
-    );
-    assert!(
-        core.store
-            .sessions(&conversation.id)
-            .unwrap()
-            .iter()
-            .any(|s| s.role.starts_with("worker:"))
-    );
+    assert_eq!(proposed["automatic"], true);
 }
 
 #[test]

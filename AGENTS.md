@@ -1720,6 +1720,7 @@ src
     requests/fetch
      - {Task,Run}Fetch,mark_run_fetch,task_fetch_update
    approval
+    approval_panel_height(summary,width,options,max_summary_lines,chrome_rows,available):u16 > card_summary_rows
     card_summary_rows(text,width,max_lines):usize > len,bounded_summary
     ApprovalCard(C{approval})
      new(approval):Self
@@ -2552,7 +2553,7 @@ src
      draw(frame) > sync_interview,draw_min_term_guard,sync_{native_views,approval},draw_{history_or_ledger,secondary_or_main,remaining}
      draw_graph(frame,area) ~43 > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame) ~48 > draw_{chat,graph},card_summary_rows,draw_footer
+     draw_main(frame) ~47 > draw_{chat,graph},approval_panel_height,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
@@ -2976,7 +2977,7 @@ src
   lean_recovery:*fake_clis,open,git,wait_idle,statuses
   lean_review:*open,wait_idle,events,ask
   lean_tui:*TestTempDir,Daemon,scoped,open_cards
-  lean_workflow:*idle
+  lean_workflow:*idle,plan_proposed
   lean_writer:*fake_clis,config,git,project,wait_idle,card
   common
    mod:*tempdir,assert_test_socket,runtime_environment,install_probe_cli
@@ -2987,6 +2988,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 126,473 LOC · input 1,120,968 · output 43,469 tokens · state 906459d61758 · targets AGENTS.md
+· 126,493 LOC · input 1,120,920 · output 43,502 tokens · state 295b2b6baa1d · targets AGENTS.md
 ```
 <!-- hologram:end -->

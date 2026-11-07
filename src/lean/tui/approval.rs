@@ -141,6 +141,21 @@ pub(super) fn card_summary_rows(text: &str, width: usize, max_lines: usize) -> u
     bounded_summary(text, width, max_lines).len()
 }
 
+pub(super) fn approval_panel_height(
+    summary: &str,
+    width: usize,
+    options: usize,
+    max_summary_lines: usize,
+    chrome_rows: usize,
+    available: usize,
+) -> u16 {
+    card_summary_rows(summary, width, max_summary_lines)
+        .saturating_add(options)
+        .saturating_add(chrome_rows)
+        .min(available)
+        .min(usize::from(u16::MAX)) as u16
+}
+
 fn bounded_summary(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     let width = width.max(1);
     let max_clusters = width.saturating_mul(max_lines);

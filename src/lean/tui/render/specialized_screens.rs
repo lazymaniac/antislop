@@ -100,15 +100,14 @@ impl App {
         } else if self.approval.is_some() && body.height > 1 {
             let desired = self.approval.as_ref().map_or(6, |approval| {
                 let text_width = usize::from(body.width.saturating_sub(2)).max(1);
-                let summary_lines = super::super::approval::card_summary_rows(
+                super::super::approval::approval_panel_height(
                     &approval.approval.summary,
                     text_width,
+                    approval.approval.options.len(),
                     usize::from(body.height),
-                );
-                summary_lines
-                    .saturating_add(approval.approval.options.len())
-                    .saturating_add(7)
-                    .min(usize::from(u16::MAX)) as u16
+                    7,
+                    usize::from(body.height),
+                )
             });
             let chat_height = desired
                 .min((body.height / 2).max(5))
