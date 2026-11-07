@@ -603,6 +603,7 @@ mod tests {
                     &crate::lean::turn_result::TurnResult::Completed {
                         summary: "Inspected".into(),
                         report: "Actual completed inspection".into(),
+                        commit_message: String::new(),
                         selection: None,
                     },
                 )

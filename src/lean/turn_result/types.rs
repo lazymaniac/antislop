@@ -35,6 +35,8 @@ pub enum TurnResult {
     Completed {
         summary: String,
         report: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        commit_message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         selection: Option<Selection>,
     },

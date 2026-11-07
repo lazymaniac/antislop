@@ -248,11 +248,15 @@ pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
 /// the worker changed nothing).
 pub fn commit_all(worktree: &Path, purpose: CommitPurpose) -> Result<String> {
     super::snapshots::stage_source(worktree, None)?;
-    commit_staged(worktree, purpose)
+    commit_staged(worktree, commit_subject(purpose))
 }
 
-pub(super) fn commit_staged(worktree: &Path, purpose: CommitPurpose) -> Result<String> {
-    let message = commit_subject(purpose);
+pub(crate) fn commit_all_with_message(worktree: &Path, message: &str) -> Result<String> {
+    super::snapshots::stage_source(worktree, None)?;
+    commit_staged(worktree, message)
+}
+
+pub(super) fn commit_staged(worktree: &Path, message: &str) -> Result<String> {
     if !git(worktree, &["diff", "--cached", "--quiet"])?
         .status
         .success()

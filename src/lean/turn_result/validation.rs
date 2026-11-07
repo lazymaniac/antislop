@@ -80,8 +80,11 @@ impl TurnResult {
             Self::Completed {
                 summary,
                 report,
+                commit_message,
                 selection,
-            } if !reviewer => validate_completion(summary, report, selection.as_ref(), spec),
+            } if !reviewer => {
+                validate_completion(summary, report, commit_message, selection.as_ref(), spec)
+            }
             Self::Blocked {
                 report,
                 resume_condition,
@@ -130,6 +133,7 @@ impl TurnResult {
 fn validate_completion(
     summary: &str,
     report: &str,
+    commit_message: &str,
     selection: Option<&Selection>,
     spec: &TaskContract,
 ) -> Result<()> {
@@ -145,8 +149,62 @@ fn validate_completion(
         (false, Some(_)) => Err(crate::Error::Invalid(
             "select is only for options tasks; end this task with complete".into(),
         )),
-        (false, None) => Ok(()),
+        (false, None) => {
+            if spec.change_kind().has_delivery() {
+                validate_worker_commit_subject(commit_message)
+            } else {
+                Ok(())
+            }
+        }
     }
+}
+
+pub(crate) fn validate_worker_commit_subject(message: &str) -> Result<()> {
+    let line = message.trim();
+    let Some((header, summary)) = line.split_once(": ") else {
+        return Err(crate::Error::Invalid(
+            "commit_message: expected one Conventional Commits header line".into(),
+        ));
+    };
+    let (kind, valid_scope) = match header.split_once('(') {
+        Some((kind, scope)) => {
+            let scope = scope.strip_suffix(')');
+            (
+                kind,
+                scope.is_some_and(|scope| {
+                    !scope.is_empty()
+                        && scope
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"._/-".contains(&byte))
+                }),
+            )
+        }
+        None => (header, true),
+    };
+    let valid_kind = matches!(
+        kind,
+        "feat"
+            | "fix"
+            | "docs"
+            | "style"
+            | "refactor"
+            | "perf"
+            | "test"
+            | "build"
+            | "ci"
+            | "chore"
+            | "revert"
+    );
+    crate::require(
+        line == message
+            && !message.is_empty()
+            && !message.contains(['\n', '\r'])
+            && !message.chars().any(char::is_control)
+            && valid_kind
+            && valid_scope
+            && !summary.trim().is_empty(),
+        "commit_message: expected one line in Conventional Commits format (type: summary or type(scope): summary)",
+    )
 }
 
 fn validate_review(report: &str, verdict: &Verdict, spec: &TaskContract) -> Result<()> {

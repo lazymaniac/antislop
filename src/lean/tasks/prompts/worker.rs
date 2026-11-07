@@ -84,9 +84,15 @@ fn dependency_header(marker: &str) -> String {
 
 pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
     let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
+    let commit_instruction = if task.change_kind.has_delivery() {
+        "For complete, include commit_message as one specific Conventional Commits subject on one line (type: summary or type(scope): summary). Choose the type that matches your actual changes and describe the concrete result. Do not reuse generic wording across tasks. Keep summary as the user-facing effect; commit_message is separate.\n\n"
+    } else {
+        "For non-delivery work, commit_message may be empty.\n\n"
+    };
     format!(
-        "{}{}",
+        "{}{}{}",
         worker_prompt_opening(project, task, &checks, binding, change_rules),
+        commit_instruction,
         worker_prompt_closing(blocker, team_note),
     )
 }

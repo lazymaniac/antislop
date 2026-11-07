@@ -53,6 +53,7 @@ fn inserting_a_task_before_completed_work_reassesses_the_retained_result() {
             &crate::lean::turn_result::TurnResult::Completed {
                 summary: "Original".into(),
                 report: "Original report and all evidence".into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )

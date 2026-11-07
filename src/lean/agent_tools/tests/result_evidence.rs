@@ -414,6 +414,7 @@ fn a_new_producers_amendment_does_not_hide_the_carried_original() {
             &TurnResult::Completed {
                 summary: "Original".into(),
                 report: "Original complete report retained across producers.".into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )
@@ -436,6 +437,7 @@ fn a_new_producers_amendment_does_not_hide_the_carried_original() {
             &TurnResult::Completed {
                 summary: "Correction".into(),
                 report: "Amendment from a new producer.".into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )
@@ -528,6 +530,7 @@ fn reference_diagnostics_distinguish_typos_wrong_dependency_and_reference_kind()
                 &TurnResult::Completed {
                     summary: "Done".into(),
                     report: format!("report {index}"),
+                    commit_message: String::new(),
                     selection: None,
                 },
             )

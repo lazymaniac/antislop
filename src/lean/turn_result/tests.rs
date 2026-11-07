@@ -27,15 +27,49 @@ mod tests {
     #[test]
     fn completion_requires_a_summary_and_the_worker_role() {
         let result: TurnResult =
-            serde_json::from_value(json!({"type":"completed","summary":"API","report":"Defined"}))
+            serde_json::from_value(json!({"type":"completed","summary":"API","report":"Defined","commit_message":"feat(api): define the public API"}))
                 .unwrap();
         result.validate_task(&task(), false).unwrap();
         assert!(result.validate_task(&task(), true).is_err());
         let result: TurnResult =
-            serde_json::from_value(json!({"type":"completed","summary":" ","report":"Defined"}))
+            serde_json::from_value(json!({"type":"completed","summary":" ","report":"Defined","commit_message":"feat(api): define the public API"}))
                 .unwrap();
         assert!(result.validate_task(&task(), false).is_err());
         assert!(serde_json::from_value::<TurnResult>(json!({"text":"done"})).is_err());
+    }
+
+    #[test]
+    fn delivery_completion_requires_a_single_line_conventional_subject() {
+        for subject in [
+            "",
+            "record task result",
+            "chore: record task result\nfeat: another line",
+            "unknown: change behavior",
+            "feat:   ",
+            "feat(api: add pagination cursor",
+            "feat(api:): add pagination cursor",
+            "feat(api)): add pagination cursor",
+            "feat(api): add cursor\nsummary",
+        ] {
+            let result = task_tool_result(
+                "complete",
+                &json!({"summary":"Changed API","report":"Added cursor support","commit_message":subject}),
+            )
+            .unwrap();
+            assert!(result.validate_task(&task(), false).is_err(), "accepted {subject:?}");
+        }
+        for subject in [
+            "feat: add pagination cursor",
+            "fix(parser): reject unterminated strings",
+        ] {
+            let result = task_tool_result(
+                "complete",
+                &json!({"summary":"Changed behavior","report":"Implemented the change","commit_message":subject}),
+            )
+            .unwrap();
+            result.validate_task(&task(), false).unwrap();
+            assert_eq!(subject.lines().count(), 1);
+        }
     }
 
     #[test]

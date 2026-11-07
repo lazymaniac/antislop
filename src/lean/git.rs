@@ -13,7 +13,7 @@ mod integration;
 mod snapshots;
 mod untracked;
 mod worktree;
-pub(crate) use artifacts::commit_artifacts;
+pub(crate) use artifacts::{commit_artifacts, commit_artifacts_with_message};
 pub use changes::*;
 pub use integration::*;
 pub use snapshots::*;
@@ -48,8 +48,8 @@ pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
-/// Application-owned commit purposes. User and task text must never become a
-/// generated commit subject.
+/// Application-owned commit purposes with stable runtime subjects. Task result
+/// commits use their separately validated worker-generated subject.
 #[derive(Clone, Copy, Debug)]
 pub enum CommitPurpose {
     TaskResult,

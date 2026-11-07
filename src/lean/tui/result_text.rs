@@ -12,6 +12,7 @@ pub(super) fn worker_report(raw: &str) -> String {
         summary,
         report,
         selection,
+        ..
     }) = serde_json::from_str(raw)
     {
         let mut text = String::new();

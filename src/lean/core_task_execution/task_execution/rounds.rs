@@ -28,7 +28,7 @@ impl Execution<'_> {
     }
 
     fn finish_worker_report(&mut self, round: u32, raw: String) -> Result<Option<FinishedWorker>> {
-        let Some((report, summary)) = worker::complete_report(
+        let Some(completed) = worker::complete_report(
             self.core,
             self.conversation,
             self.task,
@@ -44,8 +44,9 @@ impl Execution<'_> {
             &self.spec,
             self.worktree.as_deref(),
             round,
-            &report,
-            &summary.0,
+            &completed.report,
+            &completed.effect.0,
+            &completed.commit_message,
         )?;
         if let Some(path) = self.worktree.as_deref() {
             self.core
@@ -55,8 +56,8 @@ impl Execution<'_> {
             self.core.store.db().execute("INSERT INTO task_source_revisions(task_id,generation,revision) VALUES(?1,?2,?3) ON CONFLICT(task_id,generation) DO UPDATE SET revision=excluded.revision",rusqlite::params![self.task.id,self.task.input_generation,result])?;
         }
         Ok(Some(FinishedWorker {
-            report,
-            summary,
+            report: completed.report,
+            summary: completed.effect,
             changes,
         }))
     }

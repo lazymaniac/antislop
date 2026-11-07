@@ -144,6 +144,7 @@ fn approved_dependency_exposes_complete_earlier_rounds_after_a_carried_amendment
                 &TurnResult::Completed {
                     summary: "Summary".into(),
                     report: report.clone(),
+                    commit_message: String::new(),
                     selection: None,
                 },
             )
@@ -409,7 +410,7 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
             )
             .unwrap();
         core.store.save_turn_result(&turn.id, &TurnResult::Completed {
-            summary:"Chose A".into(), report:"Full rationale".into(),
+            summary:"Chose A".into(), report:"Full rationale".into(), commit_message:String::new(),
             selection:Some(serde_json::from_value(json!({"selected":"A","rationale":"All details retained","alternatives":[{"id":"A","approach":"Use A","tradeoffs":"Cost A"},{"id":"B","approach":"Use B","tradeoffs":"Cost B"}]})).unwrap())
         }).unwrap();
         core.store

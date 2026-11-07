@@ -178,6 +178,7 @@ fn a_submission_is_recorded_once_before_acknowledgement() {
     let result = TurnResult::Completed {
         summary: "API defined".into(),
         report: "Result".into(),
+        commit_message: String::new(),
         selection: None,
     };
     store.save_turn_result(&turn.id, &result).unwrap();
@@ -213,6 +214,7 @@ fn a_dependent_receives_the_summary_of_its_dependency_not_its_report() {
             &TurnResult::Completed {
                 summary: "Defined Result<T, Error> in src/api.rs".into(),
                 report: "PRIVATE REPORT".into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )
@@ -316,6 +318,7 @@ fn acknowledged_worker_result_is_reused_after_interruption() {
             &TurnResult::Completed {
                 summary: "Done".into(),
                 report: "API defined".into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )

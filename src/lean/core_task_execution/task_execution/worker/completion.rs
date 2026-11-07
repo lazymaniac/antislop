@@ -1,5 +1,11 @@
 use super::super::super::*;
 
+pub(in crate::lean) struct WorkerCompletion {
+    pub report: String,
+    pub effect: (String, bool),
+    pub commit_message: String,
+}
+
 pub(in crate::lean) fn complete_report(
     core: &Core,
     conversation: &str,
@@ -7,7 +13,7 @@ pub(in crate::lean) fn complete_report(
     spec: &TaskContract,
     worktree: Option<&Path>,
     raw: String,
-) -> Result<Option<(String, (String, bool))>> {
+) -> Result<Option<WorkerCompletion>> {
     task.report = Some(raw.clone());
     core.store.update_task(task)?;
     let result: turn_result::TurnResult = serde_json::from_str(&raw)?;
@@ -21,16 +27,18 @@ fn finish_report(
     spec: &TaskContract,
     worktree: Option<&Path>,
     result: turn_result::TurnResult,
-) -> Result<Option<(String, (String, bool))>> {
+) -> Result<Option<WorkerCompletion>> {
     match result {
         turn_result::TurnResult::Completed {
             report,
             summary,
+            commit_message,
             selection,
-        } => Ok(Some((
-            turn_result::report_with_deliverables(&report, selection.as_ref()),
-            tasks::bound_cut(&summary, tasks::EFFECT_LIMIT),
-        ))),
+        } => Ok(Some(WorkerCompletion {
+            report: turn_result::report_with_deliverables(&report, selection.as_ref()),
+            effect: tasks::bound_cut(&summary, tasks::EFFECT_LIMIT),
+            commit_message,
+        })),
         turn_result::TurnResult::Blocked {
             report,
             resume_condition,
@@ -81,12 +89,18 @@ pub(in crate::lean) fn commit_round(
     _round: u32,
     report: &str,
     summary: &str,
+    commit_message: &str,
 ) -> Result<Option<String>> {
     task.report = Some(report.to_owned());
     let (Some(path), Some(base)) = (worktree, task.base.as_ref()) else {
         return Ok(None);
     };
-    let result = commit_worker_files(path, spec, git::CommitPurpose::TaskResult, true)?;
+    turn_result::validate_worker_commit_subject(commit_message)?;
+    let result = if spec.change_kind() == tasks::ChangeKind::Artifact {
+        git::commit_artifacts_with_message(path, &spec.outputs, commit_message, true)?
+    } else {
+        git::commit_all_with_message(path, commit_message)?
+    };
     task.result = Some(result.clone());
     let stat = git::diff_stat(path, base, &result)?;
     let files = git::changed_files(path, base, &result)?;
@@ -111,6 +125,106 @@ fn commit_worker_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_completion_subjects_reach_distinct_task_result_commits() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/antislop.toml"
+        )))
+        .unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let cases = [
+            (
+                "feature",
+                "feat(api): add pagination cursor",
+                "Add cursor pagination",
+                "pub struct Cursor;",
+            ),
+            (
+                "repair",
+                "fix(parser): reject unterminated strings",
+                "Reject unterminated strings",
+                "pub fn parse(input: &str) -> Result<(), Error> { validate(input) }",
+            ),
+        ];
+        let mut subjects = Vec::new();
+        for (id, subject, summary, source) in cases {
+            let project = directory.path().join(id);
+            std::fs::create_dir(&project).unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "-q"])
+                    .current_dir(&project)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::fs::write(project.join("lib.rs"), "// base\n").unwrap();
+            let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
+            let conversation = core
+                .store
+                .create_conversation(project.to_str().unwrap())
+                .unwrap();
+            let spec: TaskContract = serde_json::from_value(json!({"id":id,"title":summary,"goal":summary,"change_kind":"code","kind":"implementation"})).unwrap();
+            let mut task = core
+                .store
+                .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
+                .unwrap()
+                .remove(0);
+            task.base = Some(base.clone());
+            core.store.update_task(&task).unwrap();
+            let worktree = directory.path().join(format!("{id}-worker"));
+            git::add_worktree(&project, &worktree, &format!("antislop/{id}"), &base).unwrap();
+            std::fs::write(worktree.join("lib.rs"), source).unwrap();
+
+            let result = turn_result::task_tool_result(
+                "complete",
+                &json!({
+                    "summary":summary,
+                    "report":format!("Implemented: {summary}"),
+                    "commit_message":subject,
+                }),
+            )
+            .unwrap();
+            result.validate_task(&spec, false).unwrap();
+            let raw = result.encode().unwrap();
+            let completed = complete_report(
+                &core,
+                &conversation.id,
+                &mut task,
+                &spec,
+                Some(&worktree),
+                raw,
+            )
+            .unwrap()
+            .unwrap();
+            commit_round(
+                &mut task,
+                &spec,
+                Some(&worktree),
+                1,
+                &completed.report,
+                &completed.effect.0,
+                &completed.commit_message,
+            )
+            .unwrap();
+            let actual = git::ok(
+                &worktree,
+                &["show", "-s", "--format=%B", task.result.as_ref().unwrap()],
+            )
+            .unwrap();
+            assert_eq!(actual, subject);
+            assert_eq!(actual.lines().count(), 1);
+            subjects.push(actual);
+        }
+        assert_ne!(
+            subjects[0], subjects[1],
+            "different task changes must not reuse a fixed subject"
+        );
+    }
+
     #[test]
     fn ignored_outputs_survive_checkpoint_review_delivery_and_snapshot() {
         let directory = tempfile::tempdir().unwrap();
@@ -162,6 +276,7 @@ mod tests {
             1,
             "Raport z rozmowy: napraw załączniki",
             "Podsumowanie ustaleń",
+            "docs: napraw załączniki i podsumuj ustalenia",
         )
         .unwrap_err()
         .to_string();
@@ -177,12 +292,13 @@ mod tests {
             1,
             "Raport z rozmowy: napraw załączniki",
             "Podsumowanie ustaleń",
+            "docs: napraw załączniki i podsumuj ustalenia",
         )
         .unwrap();
         let result = task.result.as_ref().unwrap();
         assert_eq!(
             git::ok(&worktree, &["show", "-s", "--format=%B", result]).unwrap(),
-            "chore: record task result"
+            "docs: napraw załączniki i podsumuj ustalenia"
         );
         let mut files = git::changed_files(&worktree, &base, result).unwrap();
         files.sort();

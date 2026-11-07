@@ -33,6 +33,7 @@ impl Store {
                     .unwrap_or("Fixture result")
                     .into(),
                 report: report.into(),
+                commit_message: String::new(),
                 selection: None,
             },
         )

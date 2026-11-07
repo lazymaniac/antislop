@@ -23,6 +23,7 @@ pub fn task_tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResu
         "complete" => Ok(TurnResult::Completed {
             summary: optional_text(args, "summary"),
             report: optional_text(args, "report"),
+            commit_message: optional_text(args, "commit_message"),
             selection: None,
         }),
         "select" => selection_tool(args),
@@ -62,6 +63,7 @@ fn selection_tool(args: &serde_json::Value) -> Result<TurnResult> {
     Ok(TurnResult::Completed {
         summary: format!("Selected {}: {chosen}", selection.selected),
         report: selection.rationale.clone(),
+        commit_message: String::new(),
         selection: Some(selection),
     })
 }
