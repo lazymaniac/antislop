@@ -121,6 +121,14 @@ impl App {
     }
 
     fn handle_content_mouse(&mut self, mouse: event::MouseEvent) {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self
+                .now_area
+                .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+        {
+            self.mouse_click(mouse.column, mouse.row);
+            return;
+        }
         self.update_selection_context();
         if !self.selection_blocked() {
             self.text_selection.mouse(mouse);
@@ -230,6 +238,7 @@ impl App {
         let Some(menu) = self.graph_filters.as_mut() else {
             return;
         };
+        let previous_scope = self.graph_scope.clone();
         let outcome = menu.click(
             mouse.column,
             mouse.row,
@@ -237,6 +246,9 @@ impl App {
             &mut self.relations,
             &mut self.graph_scope,
         );
+        if self.graph_scope != previous_scope {
+            self.graph_visibility_exception = None;
+        }
         if outcome == graph_filters::Outcome::Close {
             self.graph_filters = None;
         }

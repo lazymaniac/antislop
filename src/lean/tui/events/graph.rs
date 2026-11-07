@@ -194,7 +194,7 @@ impl App {
         if !graph.node(&self.selected).is_some_and(|node| node.visible) {
             self.select_visible_graph_node(graph);
         } else if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
-            self.selected = next;
+            self.select_node(next);
         }
     }
 
@@ -203,7 +203,7 @@ impl App {
             .selected
             .split_once(':')
             .map(|(_, id)| format!("worker:{id}"));
-        self.selected = worker
+        let selected = worker
             .and_then(|key| visible_graph_key(graph, &key))
             .or_else(|| visible_graph_key(graph, ORCHESTRATOR))
             .or_else(|| {
@@ -214,6 +214,7 @@ impl App {
                     .map(|node| node.key.clone())
             })
             .unwrap_or_else(|| ORCHESTRATOR.into());
+        self.select_node(selected);
     }
 
     fn graph_action_key(&mut self, key: KeyEvent) -> bool {

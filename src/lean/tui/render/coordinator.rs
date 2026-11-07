@@ -7,6 +7,7 @@ impl App {
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
+        self.now_area = None;
         self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
             self.text_selection = Default::default();

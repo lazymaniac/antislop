@@ -1,6 +1,16 @@
 use super::super::*;
 
 impl App {
+    pub(in crate::lean::tui) fn graph_scope_with_exception(&self) -> graph::Scope {
+        let mut scope = self.graph_scope.clone();
+        scope.visibility_exception = self
+            .graph_visibility_exception
+            .as_ref()
+            .filter(|key| **key == self.selected)
+            .cloned();
+        scope
+    }
+
     pub(in crate::lean::tui) fn open_graph_filters(&mut self) {
         self.graph_filters = Some(Default::default());
     }
@@ -30,6 +40,7 @@ impl App {
 
     pub fn select_node(&mut self, key: String) {
         self.selected = graph::card_key(&self.view, &key);
+        self.graph_visibility_exception = None;
     }
 
     pub fn toggle_selected_collapse(&mut self) {
@@ -47,6 +58,7 @@ impl App {
 
     pub fn set_graph_filter(&mut self, query: Option<String>) {
         self.graph_scope.query = query;
+        self.graph_visibility_exception = None;
         let graph = self.current_graph();
         if !graph
             .nodes

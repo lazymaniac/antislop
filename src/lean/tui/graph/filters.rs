@@ -105,6 +105,10 @@ pub struct Scope {
     pub query: Option<String>,
     pub states: std::collections::BTreeSet<Health>,
     pub providers: std::collections::BTreeSet<String>,
+    /// Optional card key temporarily shown for direct user navigation.
+    /// `None` keeps normal filtering; `Some(key)` exposes only that card in
+    /// addition to cards matching the query, state and provider filters.
+    pub visibility_exception: Option<String>,
 }
 
 impl Scope {

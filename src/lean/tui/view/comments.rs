@@ -56,13 +56,23 @@ impl View {
     /// What is happening now, one line per active step, for the progress
     /// overlay. Waiting and idle states are named, never shown as activity.
     pub fn progress(&self) -> Vec<String> {
-        let mut lines = initial_progress(self);
-        lines.extend(task_progress(&self.tasks));
-        lines.extend(agent_progress(self));
-        if lines.is_empty() {
-            lines.push(self.waiting_progress());
+        self.now_click_rows()
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect()
+    }
+
+    pub(in crate::lean::tui) fn now_click_rows(&self) -> Vec<ProgressEntry> {
+        let mut entries = initial_progress(self);
+        entries.extend(task_progress(&self.tasks));
+        entries.extend(agent_progress(self));
+        if entries.is_empty() {
+            entries.push(ProgressEntry {
+                text: self.waiting_progress(),
+                agent: None,
+            });
         }
-        lines
+        entries
     }
 
     fn waiting_progress(&self) -> String {
@@ -85,18 +95,24 @@ impl View {
     }
 }
 
-fn initial_progress(view: &View) -> Vec<String> {
+fn initial_progress(view: &View) -> Vec<ProgressEntry> {
     let mut lines = Vec::new();
     if view.paused {
-        lines.push("⏸ paused: new steps wait".into());
+        lines.push(ProgressEntry {
+            text: "⏸ paused: new steps wait".into(),
+            agent: None,
+        });
     }
     if let Some(activity) = view.orchestrator_activity() {
-        lines.push(clean(&activity));
+        lines.push(ProgressEntry {
+            text: clean(&activity),
+            agent: Some(ORCHESTRATOR.into()),
+        });
     }
     lines
 }
 
-fn task_progress(tasks: &[TaskRow]) -> Vec<String> {
+fn task_progress(tasks: &[TaskRow]) -> Vec<ProgressEntry> {
     tasks
         .iter()
         .filter_map(|task| match task.status.as_str() {
@@ -106,26 +122,36 @@ fn task_progress(tasks: &[TaskRow]) -> Vec<String> {
                 } else {
                     clean(&task.activity)
                 };
-                Some(format!(
-                    "{} {}: {activity}",
-                    task.id,
-                    status_label(&task.status)
-                ))
+                let role = if task.status == "reviewing" {
+                    "reviewer"
+                } else {
+                    "worker"
+                };
+                Some(ProgressEntry {
+                    text: format!("{} {}: {activity}", task.id, status_label(&task.status)),
+                    agent: Some(format!("{role}:{}", task.id)),
+                })
             }
-            "waiting" => Some(format!("{} waiting", task.id)),
+            "waiting" => Some(ProgressEntry {
+                text: format!("{} waiting", task.id),
+                agent: None,
+            }),
             _ => None,
         })
         .collect()
 }
 
-fn agent_progress(view: &View) -> Vec<String> {
+fn agent_progress(view: &View) -> Vec<ProgressEntry> {
     [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR]
         .into_iter()
         .filter_map(|key| {
             view.agents.get(key).filter(|agent| agent.running).map(|_| {
                 let doing =
                     crate::lean::tui::taskinfo::doing(view, key).unwrap_or_else(|| "…".to_owned());
-                format!("{}: {doing}", agent_name(key))
+                ProgressEntry {
+                    text: format!("{}: {doing}", agent_name(key)),
+                    agent: Some((*key).into()),
+                }
             })
         })
         .collect()

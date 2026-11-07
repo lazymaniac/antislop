@@ -330,9 +330,10 @@ src
     rounds
      - FinishedWorker
     worker/completion
-     commit_round(task,spec,worktree,_round,report,summary):Result<Option<String>> > commit_worker_files,validate_change_paths
-     complete_report(core,conversation,task,spec,worktree,raw):Result<Option<(String,(String,bool))>> > update_task,finish_report
-     - save_checkpoint
+     commit_round(task,spec,worktree,_round,report,summary,commit_message):Result<Option<String>> > validate_change_paths
+     complete_report(core,conversation,task,spec,worktree,raw):Result<Option<WorkerCompletion>> > update_task,finish_report
+     WorkerCompletion(C{report,effect,commit_message})
+     - save_checkpoint,commit_worker_files
     worker.rs
      is_recheck(core,conversation,task,worker,reviewer):Result<bool> > completed_task_output,pending_mail
      run(input):Result<Option<String>> > completed_task_output,run_worker_round
@@ -376,6 +377,7 @@ src
    RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
   core_task_runtime
    directory(state,task):Result<PathBuf> > task_path_component,private_directory
+   prune_settled_generations(state,task):Result<()> > task_path_component
    sources(core,task):Result<Vec<serde_json::Value>> ~51 > task_in_plan_by_id,plan_conversation,task_path_component,private_directory
   core_task_state
    - stop_records_progress
@@ -607,7 +609,8 @@ src
     - recover
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
-    commit_artifacts(worktree,outputs,purpose,require_all):Result<String> > artifact_files,stage_source
+    commit_artifacts(worktree,outputs,purpose,require_all):Result<String> > commit_{artifact_files,subject}
+    commit_artifacts_with_message(worktree,outputs,message,require_all):Result<String> > commit_artifact_files
    changes
     changed_files(dir,base,result):Result<Vec<String>> > changed_paths
     diff_stat(dir,base,result):Result<String>
@@ -647,16 +650,17 @@ src
     branches(project,prefix):Result<Vec<String>>
     combine(project,scratch,onto,changes):Result<String> > combine_or_conflict
     combine_or_conflict(project,scratch,onto,changes):Result<CombineResult> > {remove,add}_worktree,apply_changes
-    commit_all(worktree,purpose):Result<String> > stage_source,commit_staged
-    commit_staged(worktree,purpose):Result<String> > commit_subject,git,head
+    commit_all(worktree,purpose):Result<String> > stage_source,commit_{staged,subject}
+    commit_all_with_message(worktree,message):Result<String> > stage_source,commit_staged
+    commit_staged(worktree,message):Result<String> > git,head
     common_base(dir,left,right):Result<String>
     delete_branch(project,branch):Result<()>
     head(dir):Result<String>
     is_clean(path):bool
     is_repository(dir):bool > git
     prune_worktrees(project):Result<()>
-    remove_clean_view(project,path,branch):Result<()> > require_worktree_branch,is_clean,require_no_ignored_files,view_snapshot_ref,head,delete_branch
-    remove_clean_writer(project,path,branch,outputs):Result<()> > require_{worktree_branch,no_ignored_files},all
+    remove_clean_view(project,path,branch):Result<()> > require_worktree_branch,is_clean,view_snapshot_ref,head,delete_branch
+    remove_clean_writer(project,path,branch,outputs):Result<()> > require_worktree_branch,all
     remove_worktree(project,path,branch):Result<()> > require_worktree_branch,git
     remove_worktree_keep_branch(project,path):Result<()> > git
     rename_branch(project,from,to):Result<()>
@@ -666,7 +670,7 @@ src
     worktree_branch(path):Result<String>
     worktree_project(path):Result<PathBuf>
     CombineResult(E{Applied,Conflicted})
-    - is_cache_directory,apply_{change,patch}
+    - apply_{change,patch}
   git.rs
    commit_subject(purpose):&'static str > subject
    git(dir,args):Result<std::process::Output>
@@ -869,6 +873,7 @@ src
      set_handler(handler):Result<()>
      set_protocol_observer(observer):Result<()>
      connected():bool
+     while_pending(turn,action):Result<bool>
      session():Option<String>
      wait(turn,cancel,alive):Result<Finish> > wait_loop
      - drop
@@ -1111,14 +1116,18 @@ src
     Verdict(E{Choose,AnsweredInTerminal})
     - mcp_heading,numbered_choices,number,{marked,navigation}_choices,navigate,split_shortcut,choice,decision,finish,
       {is,is_solid}_rule
+   readiness
+    Tracker(C{saw_work,reminded})
+     observe(provider,screen,approval_open,paused):bool > classify
+    - ScreenState,is_{ready_prompt,work_signal,status_label}
    registry/history_view
     restore_view_directory(core,context):Result<()> > turn_scope,task_by_id,plan_conversation,task_path_component,worktree_directory,queue_worktree_cleanup
    registry.rs
     - recorded_round,validate_profile,restored_agent_spec
    session
-    Session: start(core,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
+    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
-               describe_result_error,learn_identity,opencode_session
+               remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
     screen_stop(provider,screen):Option<StopCause> ~51
     StopCause(E{ProviderLimit,LoginRequired,UnexpectedDialog,ProcessExit,Cancelled})
@@ -1135,7 +1144,7 @@ src
     prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > task_by_id,session_signature
     get(conversation,role):Result<Option<Arc<Session>>>
     claimed():Vec<String>
-   Session(C{spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
+   Session(C{conversation,core,spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
    = EXECUTION_FAILED
    - turn_text
   paths
@@ -1627,7 +1636,7 @@ src
      needs_user_action(error):bool
      upstream_note(done):String > dependency_{marker,header}
      worker_followup(findings):String
-     worker_prompt(project,task):String > worker_prompt_parts
+     worker_prompt(project,task):String > worker_prompt_parts,has_delivery
      worker_resume(findings):String
      worker_turn_prompt(project,task,continuation,upstream):String > worker_prompt,change_kind
      DependencyReport(C{id,title,report})
@@ -1798,7 +1807,7 @@ src
      - KindNameError,Reply,strings,field_text
      - KindNameError: custom,unknown_variant×0
    contracts
-    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport})
+    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport})
      capture(app):Self
      restore(app) > restore_{composer,navigation,overlays,requests}
      - capture_{composer,navigation,overlays,requests}
@@ -1884,7 +1893,7 @@ src
       update(records,query,width):&[Line<'static>] > len,all,render_records
     presentation
      details_footer_hint(tab,width):&'static str > is_overview,{overview,checks,comments,content}_hint
-     details_footer_hint_for(key,tab,width):String > details_footer_hint
+     details_footer_hint_for(key,tab,width):String > details_footer_hint,shown
      format_tabs(agent_key,active_tab,max_width):Line<'a> > TabStrip.new
      - TabStrip
      - TabStrip: name,full_width,agent_span,full,narrow,window,extend_{right,left},tab_span
@@ -1966,7 +1975,8 @@ src
      range_matches(path,start,end,query,alive):Result<bool> > prefix_table,{read_utf8,scan}_chunk
     wrap
      wrap_range(path,output,start,end,width,dim,alive):Result<usize> > WrapState.new,LineIndex,consume_file,emit
-     - WrapState,ready_length
+     - WrapState,Cursor,ready_length
+     - Cursor: start
      - LineIndex: consume,wrap_grapheme
      - WrapState: consume_ready
    document.rs
@@ -2014,7 +2024,7 @@ src
       name():String > shown
       shows(edge,selected):bool
       - default
-     Scope(C{query,states,providers})
+     Scope(C{query,states,providers,visibility_exception})
       is_filtered():bool
      = RELATIONS
     health/cards
@@ -2036,7 +2046,7 @@ src
      - agent_flags,task_{problem,running},{activity,requirements}_label
     layout
      builder
-      Builder(C{view,graph,size,index,admin,extra_agents,viewport})
+      Builder(C{view,graph,size,index,admin,extra_agents,viewport,step,lanes})
        new(view,scope,collapsed,grouping,viewport,expanded,step):Self > animated,Size.fit,empty_graph,task_index,{extra,admin}_agents
        build():Graph > place,add_edges,set_graph_bounds
        matches_query(key):bool > scope_matches
@@ -2056,31 +2066,44 @@ src
        units(builder):Vec<Unit> > options_of,unit_skeleton,populate_units
        - member_tasks,folded,append_layer_rows,sort_by_parent_position,wrap_layer,push_wrapped_unit
       links
+       buses(links,placed):Vec<Bus> ~56 > spots,Bus,Lean.new,is_short,pack,Lane
+       crossed(buses,row):bool
        gap_height(lines,tight):u16
-       gap_lanes(links,placed,rows):Vec<Vec<usize>>
-       links(units,placed):Vec<Link> > implied,model.rs:Link,assign_lanes
-       - long_links
+       gap_lines(links,buses,placed,rows,entries):Vec<Vec<usize>> > spots,is_short
+       is_short(link,spot):bool
+       lane_counts(buses):(u16,u16)
+       lane_reserve(buses):u16 > lane_counts
+       links(units,placed):Vec<Link> > spots,implied,model.rs:Link
+       place_lanes(buses,placed) > lane_counts,crossed
+       spots(placed):HashMap<usize,&Placed>
+       - Lean
+       - Lean: offset
       model
-       Link(C{from,to,lane})
+       Bus(C{to,lane})
+       Lane(C{side,index,span,x})
+        crosses(row):bool
+       Link(C{from,to})
        Placed(C{unit,row,x,width,height})
+       Side(E{Left,Right})
        Tops(C{admin,units,gaps,bottom})
        Unit(C{task,options,parents,visible,folded})
       placement
        admin_rows(builder):Vec<Vec<&'a str>> > width,is_final_review
        admin_width(size,row):u16 > width
-       center_rows(placed,left,room)
-       room(builder,placed,admin,left):u16 > admin_width
+       center_rows(placed,width)
        row_tops(builder,admin,placed,gaps,rows):Tops > is_final_review,admin_row_tops,row_heights,content_tops,Tops
       render/link_render
-       push_links(builder,units,placed,links,gaps,tops) > link_columns,LinkDrawing,LinkDrawing.push
-       - LinkRoute,link_ends,far,spread_ends,title_end,spread_frame_ends,gap_line,link_path
+       entry_columns(builder,units,placed,buses):HashMap<usize,u16> > spots,title_end
+       push_links(builder,units,placed,wiring) ~40 > spots,exit_columns,gap_line,is_short,Edge
+       Wiring(C{links,buses,gaps,tops,entries})
       render.rs
-       push_admin(builder,rows,tops,left,room) > admin_width,Node,height,layout_height
+       push_admin(builder,rows,tops,width) > admin_width,Node,height,layout_height
        push_hidden(builder,units,placed) > member_keys,Node,width
        push_unit(builder,unit,spot,top) > Frame,push_cards
        - push_{card,internal_edge}
      units.rs
-      place(builder) ~48 > units,fit_expanded_card,arrange,expanded_row,crossing_lanes,admin_rows,room,center_rows,lane_shift,center_free_row,gap_lanes,row_tops,push_{admin,unit,hidden,links}
+      place(builder) > units,settle,admin_rows,layout_width,center_rows,place_lanes,entry_columns,gap_lines,row_tops,push_{admin,unit,hidden},Wiring,push_links
+      - Arrangement,arrange,resize,fit_expanded_card,expanded_row
     model
      Node(C{key,x,y,width,height,visible,group,collapsed}) : Default
       new(key,x,y):Self
@@ -2090,6 +2113,7 @@ src
      Size(C{w,h,admin_w,expanded_{w,h,key},full_{w,h},step})
       fit(viewport,expanded_key):Self
       animated(step):Self > grow
+      reserve_columns(viewport,columns) > grow
       limit_expanded_width(width) > grow
       width(key,admin):u16
       layout_height(key,_admin):u16
@@ -2126,17 +2150,18 @@ src
      render_with(view,canvas,relations,selected,theme,tick) > as_str,card_key,render_{frames,edges,nodes}
      node(key):Option<&Node>
      frame(group):Option<&Frame>
-     edge_path(edge,nodes):Option<Vec<(u16,u16)>> ~51 > frame,shown,as_str
+     edge_path(edge,nodes):Option<Vec<(u16,u16)>> ~54 > frame,shown,as_str
      neighbour(key,dx,dy):Option<String> > node
      route(from,to):Vec<(u16,u16)>
      edge_routes(relations):Vec<EdgeRoute<'_>> > shows,edge_path
      route_intersects_card(path,node):bool
-     - arrow,draw_frame,draw_frame_{border,title},render_{edge,edge_label},route_{same_column,same_row,between_rows}
+     - arrow,entry_arrow,draw_frame,draw_frame_{border,title},render_{edge,edge_label},
+       route_{same_column,same_row,between_rows}
     GroupingMode(E{Dependency,Status})
      next():Self
      name():&'static str
     = WIDTH=32,HEIGHT=14
-    - Kind,Edge,Role,workflow_stage
+    - Kind,Role,workflow_stage
    graph_filters
     FilterMenu(C{cursor,rows})
      key(key,providers,relations,scope):Outcome > rows,apply_key
@@ -2304,7 +2329,7 @@ src
       max_scroll(area):usize > lines_for_width
       draw(frame) > draw_scroll
       draw_scroll(frame,scroll) > {help,lines_for}_width,draw_help_box
-     - help_{box_area,title},compact_help_line,wrap_help_description,append_help_word,
+     - help_{box_area,title},{compact,aligned}_help_line,wrap_help_description,append_help_word,
        help_{chat,graph,details,diff,comment,picker}
     picker
      - {command,agent,history,conversation,project,recipient}_items,append_task_recipients,empty_message,append_visible_items
@@ -2337,17 +2362,17 @@ src
      - append_task_{heading,facts},{dependency,parallel}_label
     graph
      panel(title,focused,theme):Block<'static> > title,borders,accent,Theme.dim
-     PlanView: draw_task_graph(frame,area,view,theme) ~65 > panel,len,PlanGraph.new,reveal,new_window,draw_task_details; selected_task_line(view):Option<usize> > build_lines; graph_key(key,view):bool ~52 > len
+     PlanView: draw_task_graph(frame,area,view,theme) ~66 > fit_hint,panel,len,PlanGraph.new,reveal,new_window,draw_task_details; selected_task_line(view):Option<usize> > build_lines; graph_key(key,view):bool ~52 > len
     render
      buttons
       PlanView: draw_buttons(frame,bar_area,view,theme) > button_areas,len,ButtonState,draw_button_group
-      - PlanView: draw_button,{button,reject}_label_tone,button_style
+      - PlanView: draw_button,button_{label_tone,style}
      rows
       PlanView: layout_rows(view,doc_lines,width,theme):(Vec<VisualRow>,(usize,usize)) > {whole_plan,append_document}_rows
       - Piece,append_text_pieces,text_piece_row,piece_spans,{gutter,document}_style,gutter,{append_heading,heading}_badge,
         append_line_comments,comment_{lines,style}
     render.rs
-     PlanView: draw(frame,area,view,theme) > frame_layout,draw_{banner,document,task_graph,buttons}
+     PlanView: draw(frame,area,view,theme) ~45 > frame_layout,draw_{banner,document},description_lines,draw_{task_graph,buttons}
      - PlanView: comment_{banner,notes},task_banner,keep_cursor_visible
    planview.rs
     BottomButton(E{Accept,Reject,CommentWholePlan,Review})
@@ -2382,7 +2407,7 @@ src
      - dashboard_card_header,card_marker,{hidden,folded}_card_line
     specialized_details_layout
      clean_header_spans(spans,theme) > Theme.clean
-     dashboard_hint(searching,query,width):String
+     dashboard_hint(searching,query,width):String > fit_hint
      detail_areas(area,overview,summary_len):DetailAreas > DetailAreas
      detail_block(details,body,theme):Block<'static> > Details.overview,borders,title,style,faint
      document_key(key,tab):Option<&'static str>
@@ -2390,9 +2415,9 @@ src
      draw_record_scrollbar(frame,area,total,scroll,theme) > draw_scrollbar
      draw_scrollbar(frame,area,total,scroll,theme) > glyphs,faint,Theme.dim
      latest_round(details,view):u64 > task_id
-     overview_hint(searching,query):String
+     overview_hint(searching,query,width):String > fit_hint
      overview_split(body):Option<[Rect; 2]>
-     overview_split_hint(searching,query,width):String
+     overview_split_hint(searching,query,width):String > fit_hint
      position_record_scroll(lines,tab,show_info,follow,scroll,reveal,height) > reveal_check_scroll,is_overview
      records_hint(details,width):String > details_footer_hint_for
      reveal_check_scroll(lines,scroll,height)
@@ -2402,8 +2427,8 @@ src
      - composer_status_area,session_{block,title},ascii_border_set,session_round_label,
        {native,draw_session,composer,primary_composer}_status,place_session_cursor
     specialized_screens/graph
-     - render_card_round_{selector,data},agent_line,render_card_history_message,
-       graph_{vertical_markers,position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
+     - render_card_round_{selector,data},agent_line,render_card_history_message,graph_vertical_markers,expanded_offset_x,
+       graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
     specialized_screens.rs
      draw_secondary_or_main(app,frame) > draw_{plan,diff,details}
      - button_rows
@@ -2461,7 +2486,7 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},graph_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},graph_area,now_area,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,new_conversation,{open_conversation,open_projects}_picker
@@ -2478,6 +2503,7 @@ src
      open_diff(key) > DiffView.new,fetch_diff
      fetch_diff()
      diff_key(key) ~42 > show_help,get_comment_draft,Editor,fetch_diff,request
+     graph_scope_with_exception():graph::Scope
      open_graph_filters()
      pan_graph(graph,forward,amount,sideways)
      select_node(key) > card_key
@@ -2490,7 +2516,7 @@ src
      set_comment(id,status) > request
      selection_context():String > hash
      selection_blocked():bool > interview_visible
-     mouse_click(col,row) > click_plan_view,dialog_open,click_{phase_action,help,graph},{on,click}_header,click_panel
+     mouse_click(col,row) > click_plan_view,dialog_open,click_{phase_action,help,now,graph},{on,click}_header,click_panel
      click_panel(col,area)
      activate_header_token(token,controls) > run_workflow
      bar_height(area):u16
@@ -2551,7 +2577,7 @@ src
      load_plan_history(offset)
      draw_chat(frame,area,theme) > chat_layout,draw_{phase_action,sending,transcript,chat_input}
      draw(frame) > sync_interview,draw_min_term_guard,sync_{native_views,approval},draw_{history_or_ledger,secondary_or_main,remaining}
-     draw_graph(frame,area) ~43 > card_key,graph_{areas,expansion},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
+     draw_graph(frame,area) ~45 > card_key,graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
      graph_expansion():(Option<String>,u8)
      draw_main(frame) ~47 > draw_{chat,graph},approval_panel_height,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
@@ -2678,7 +2704,7 @@ src
      Tone(E{Active,Queued,Done,Failed,Waiting})
      = UNICODE,ASCII,BG,PANEL,LINE,RAISED,SELECTION,FG,TITLE,DIM,FAINT,BLUE,GREEN,YELLOW,ORANGE,RED,PURPLE,CYAN,GOLD,PINK
    theme.rs
-    wrap(text,width):Vec<String> > sanitize
+    wrap(text,width):Vec<String> > sanitize,hanging_indent
    unblock
     choices_for(task):Vec<Choice> > has_delivery,written_recovery_choices,restart_choice
     is_blocked(status):bool
@@ -2701,7 +2727,7 @@ src
      - drop
    view
     comments
-     View: check_comments(task,check):Vec<&Comment>; comments_on(key):Vec<&Comment>; stale(comment):bool; review(key,review) > review_word,agent_name; progress():Vec<String> > {initial,task,agent,waiting}_progress
+     View: check_comments(task,check):Vec<&Comment>; comments_on(key):Vec<&Comment>; stale(comment):bool; review(key,review) > review_word,agent_name; progress():Vec<String> > now_click_rows; now_click_rows():Vec<ProgressEntry> > {initial,task,agent}_progress,ProgressEntry,waiting_progress
     conversation/progress
      is_running(status):bool
      progress_line(view,id,title,was,now,reason):Option<(String,crate::lean::tui::theme::Tone)> > progress_status,len
@@ -2713,7 +2739,7 @@ src
      transcript_empty_state(width):Vec<Line<'static>>
     header.rs
      render_header(project,conversation,status,focus,width):Line<'static> > render_header_with,Controls.default
-     render_header_with(project,conversation,status,focus,width,controls):Line<'static> > Theme.from_env,active_style,compact_header,append_{panels,identity,status_and_actions}
+     render_header_with(project,conversation,status,focus,width,controls):Line<'static> ~74 > Theme.from_env,active_style,compact_header,append_panels,identity_parts,append_status_and_actions
      Controls(C{pause,resume_{paused,plan},cancel}) : Default
      View: controls():Controls > Controls,plan_resumable
      = PAUSE="[ ‖ Pause ]",CONTINUE="[ ▶ Continue ]",RESUME="[ ↻ Resume ]",CANCEL="[ ✕ Cancel ]",PLAN="[Plan]",
@@ -2736,6 +2762,7 @@ src
      clean_line(text):String > sanitize_line
      draw_min_term_guard(frame,area):bool > style,wrap,fg
      duration(ms):String
+     fit_hint(parts,width,keep_last):String > as_str
      status_label(status):&str
      target_name(target):String > {structured_target,agent}_name
      truncate(text,width):String > Theme.new
@@ -2801,6 +2828,7 @@ src
     ModalKind(E{None,Help,Picker,CommentEditor,Diff,Details})
     PanelFocus(E{Chat,Graph})
     PendingApproval(C{request,role,provider,summary,orchestrator,options})
+    ProgressEntry(C{text,agent})
     TaskRow(C{id,uuid,title,summary,reviewer_summary,section,kind,goal,depends_on,parallel_with,change_kind,focus,risks,status,round,activity,reason,revision_token,effect,effect_cut,obligations,integration})
     TranscriptCard(E{Message,Plan,System,Comment})
     View(C{workflow_phase,session_branch,interview_question,user_decision,requirements_{summary,approval_run,approval_event,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,agents,links,mailbox,comments,comment_progress,reviews,paused,autonomous,approvals,messages,cards,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
@@ -2840,6 +2868,7 @@ src
      validate_task(spec,reviewer):Result<()> > require,len,validate_task_shape
      text():String
    validation
+    validate_worker_commit_subject(message):Result<()> ~47 > all
     - validate_{completion,review,coverage,findings,finding},required_finding_id,validate_{finding_fields,waiting},
       invalid_task_result,validate_{complete_coverage,verdict_consistency}
   workflow/repair
@@ -2950,7 +2979,7 @@ src
      app_tests
      tests
     planview
-     tests:*screen,proposed,comment
+     tests:*screen,proposed,states,comment
     selection
      tests
     taskinfo
@@ -2988,6 +3017,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 126,590 LOC · input 1,122,018 · output 43,511 tokens · state 1261938a57a3 · targets AGENTS.md
+· 128,588 LOC · input 1,140,892 · output 43,921 tokens · state 622898491616 · targets AGENTS.md
 ```
 <!-- hologram:end -->

@@ -78,6 +78,8 @@ pub struct App {
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
     /// Which cards the graph shows.
     pub graph_scope: graph::Scope,
+    /// One card exposed by clicking its active row in the Now panel.
+    pub graph_visibility_exception: Option<String>,
     /// The card last scrolled into view; the graph follows the selection
     /// only when it changes, so the user can scroll away from it.
     pub graph_revealed: Option<String>,
@@ -100,6 +102,8 @@ pub struct App {
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
+    /// The last rendered Now panel, for row-to-agent click mapping.
+    pub(super) now_area: Option<Rect>,
     pub phase_action_area: Option<Rect>,
     pub phase_action_command: Option<Command>,
     pub chat_area: Rect,
@@ -184,6 +188,7 @@ macro_rules! initial_app {
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
             graph_scope: graph::Scope::default(),
+            graph_visibility_exception: None,
             graph_revealed: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
@@ -198,6 +203,7 @@ macro_rules! initial_app {
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
             graph_area: None,
+            now_area: None,
             phase_action_area: None,
             phase_action_command: None,
             chat_area: Rect::default(),

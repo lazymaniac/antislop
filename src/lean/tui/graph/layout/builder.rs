@@ -180,12 +180,13 @@ fn task_fields_match(task: &super::super::super::view::TaskRow, query: &str) -> 
 
 /// Whether a card passes every part of the scope.
 fn scope_matches(view: &View, scope: &Scope, key: &str) -> bool {
-    query_matches(view, scope.query.as_deref(), key)
-        && (scope.states.is_empty() || scope.states.contains(&health(view, key)))
-        && (scope.providers.is_empty()
-            || super::super::health::providers_of(view, key)
-                .iter()
-                .any(|provider| scope.providers.contains(*provider)))
+    scope.visibility_exception.as_deref() == Some(key)
+        || (query_matches(view, scope.query.as_deref(), key)
+            && (scope.states.is_empty() || scope.states.contains(&health(view, key)))
+            && (scope.providers.is_empty()
+                || super::super::health::providers_of(view, key)
+                    .iter()
+                    .any(|provider| scope.providers.contains(*provider))))
 }
 
 fn query_matches(view: &View, query: Option<&str>, key: &str) -> bool {

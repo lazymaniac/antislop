@@ -210,6 +210,197 @@ fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn clicking_now_focuses_and_scrolls_to_active_agent() {
+    let mut app = test_app();
+    app.focus = Focus::Chat;
+    app.view.tasks = (0..12)
+        .map(|index| view::TaskRow {
+            id: format!("t{index}"),
+            title: format!("Task {index}"),
+            status: if index == 11 { "working" } else { "proposed" }.into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let now = app.now_area.expect("Now panel rendered");
+    let initial_offset = app.offset;
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: now.x + 1,
+        row: now.y + 1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected, "worker:t11");
+    assert_eq!(app.focus, Focus::Graph);
+
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let scope = app.graph_scope_with_exception();
+    let graph = Graph::new_with_viewport(
+        &app.view,
+        &scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let target = graph.node("worker:t11").expect("target card exists");
+    assert!(
+        target.visible,
+        "the clicked target overrides the active filter"
+    );
+    let (width, height) = app.graph_viewport.unwrap();
+    assert_ne!(
+        app.offset, initial_offset,
+        "the distant target pans into view"
+    );
+    assert!(target.x >= app.offset.0 && target.x < app.offset.0 + width);
+    assert!(target.y >= app.offset.1 && target.y < app.offset.1 + height);
+    assert!(!app.sending);
+}
+
+#[test]
+fn clicking_now_keeps_an_already_visible_agent_in_view() {
+    let mut app = test_app();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        status: "working".into(),
+        ..Default::default()
+    }];
+    app.selected = "worker:t1".into();
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let initial_offset = app.offset;
+    let now = app.now_area.expect("Now panel rendered");
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: now.x + 1,
+        row: now.y + 1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected, "worker:t1");
+    assert_eq!(app.focus, Focus::Graph);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(app.offset, initial_offset);
+}
+
+#[test]
+fn clicking_now_temporarily_exposes_a_filtered_agent() {
+    let mut app = test_app();
+    app.view.tasks = (0..12)
+        .map(|index| view::TaskRow {
+            id: format!("t{index}"),
+            status: if index == 0 { "working" } else { "proposed" }.into(),
+            ..Default::default()
+        })
+        .collect();
+    app.selected = "worker:t0".into();
+    app.graph_scope.query = Some("does-not-match".into());
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let now = app.now_area.expect("Now panel rendered");
+    let initial_offset = app.offset;
+    app.graph_revealed = Some("worker:t1".into());
+    app.focus = Focus::Chat;
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: now.x + 1,
+        row: now.y + 1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected, "worker:t0");
+    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(
+        app.offset, initial_offset,
+        "an already visible target stays put"
+    );
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        app.offset.1, 0,
+        "the selected target is brought back into view"
+    );
+    let scope = app.graph_scope_with_exception();
+    let graph = Graph::new_with_viewport(
+        &app.view,
+        &scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    assert!(graph.node("worker:t0").is_some_and(|node| node.visible));
+    assert_eq!(app.graph_scope.query.as_deref(), Some("does-not-match"));
+}
+
+#[test]
+fn clicking_now_without_an_active_agent_leaves_graph_state_unchanged() {
+    let mut app = test_app();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        status: "waiting".into(),
+        ..Default::default()
+    }];
+    app.selected = "worker:t1".into();
+    app.offset = (3, 4);
+    app.focus = Focus::Chat;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let now = app.now_area.expect("Now panel rendered");
+    let graph_state = (app.selected.clone(), app.offset, app.focus);
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: now.x + 1,
+        row: now.y + 1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!((app.selected.clone(), app.offset, app.focus), graph_state);
+    assert!(app.graph_visibility_exception.is_none());
+}
+
+#[test]
+fn keyboard_graph_filter_change_clears_now_visibility_exception() {
+    let mut app = test_app();
+    app.graph_visibility_exception = Some("worker:t1".into());
+    app.selected = "worker:t1".into();
+    app.graph_scope.query = Some("does-not-match".into());
+    app.graph_filters = Some(Default::default());
+
+    for _ in 0..4 {
+        app.key(key_press(KeyCode::Down));
+    }
+    app.key(key_press(KeyCode::Enter));
+
+    assert!(app.graph_visibility_exception.is_none());
+    assert_eq!(app.graph_scope.query.as_deref(), Some("does-not-match"));
+    assert!(app.graph_scope.states.contains(&graph::Health::ALL[0]));
+}
+
+#[test]
+fn pointer_graph_filter_change_clears_now_visibility_exception() {
+    let mut app = test_app();
+    app.graph_visibility_exception = Some("worker:t1".into());
+    app.selected = "worker:t1".into();
+    app.graph_scope.query = Some("does-not-match".into());
+    app.graph_filters = Some(Default::default());
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+
+    let provider_count = graph::providers(&app.view).len() as u16;
+    let row_count = 4 + graph::Health::ALL.len() as u16 + provider_count;
+    let wanted = row_count + 9;
+    let boxed_y = (24_u16.saturating_sub(wanted.min(24))) / 2;
+    let state_row_y = boxed_y + 8;
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 30,
+        row: state_row_y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(app.graph_visibility_exception.is_none());
+    assert_eq!(app.graph_scope.query.as_deref(), Some("does-not-match"));
+    assert!(app.graph_scope.states.contains(&graph::Health::ALL[0]));
+}
+
+#[test]
 fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     let mut app = test_app();
     app.focus = Focus::Graph;

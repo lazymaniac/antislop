@@ -14,7 +14,8 @@ impl App {
         }
         let area = self.terminal_area;
         let [body, _, bar] = Self::main_areas(area);
-        if self.click_help(col, row, bar) || self.click_graph(col, row) {
+        if self.click_help(col, row, bar) || self.click_now(col, row) || self.click_graph(col, row)
+        {
             return;
         }
         if self.on_header(col, row, bar) {
@@ -73,9 +74,10 @@ impl App {
         else {
             return false;
         };
+        let scope = self.graph_scope_with_exception();
         let graph = Graph::new_with_viewport(
             &self.view,
-            &self.graph_scope,
+            &scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
@@ -91,6 +93,33 @@ impl App {
         }) {
             self.select_node(node.key.clone());
         }
+        self.focus = Focus::Graph;
+        true
+    }
+
+    fn click_now(&mut self, col: u16, row: u16) -> bool {
+        let Some(area) = self
+            .now_area
+            .filter(|area| area.contains((col, row).into()))
+        else {
+            return false;
+        };
+        if row <= area.y || row >= area.bottom().saturating_sub(1) {
+            return true;
+        }
+        let line = row.saturating_sub(area.y).saturating_sub(1) as usize;
+        let Some(agent) = self
+            .view
+            .now_click_rows()
+            .get(line)
+            .and_then(|entry| entry.agent.clone())
+        else {
+            return true;
+        };
+        let selected = graph::card_key(&self.view, &agent);
+        self.selected = selected.clone();
+        self.graph_visibility_exception = Some(selected);
+        self.graph_revealed = None;
         self.focus = Focus::Graph;
         true
     }

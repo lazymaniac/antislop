@@ -151,7 +151,11 @@ impl App {
     fn route_graph_filters(&mut self, key: KeyEvent) -> Option<bool> {
         let menu = self.graph_filters.as_mut()?;
         let providers = graph::providers(&self.view);
+        let previous_scope = self.graph_scope.clone();
         let outcome = menu.key(key, &providers, &mut self.relations, &mut self.graph_scope);
+        if self.graph_scope != previous_scope {
+            self.graph_visibility_exception = None;
+        }
         if outcome == graph_filters::Outcome::Close {
             self.graph_filters = None;
         }

@@ -130,6 +130,12 @@ pub struct TaskRow {
     pub integration: Option<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::lean::tui) struct ProgressEntry {
+    pub(in crate::lean::tui) text: String,
+    pub(in crate::lean::tui) agent: Option<String>,
+}
+
 /// An approval dialog of an agent CLI that waits for a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingApproval {

@@ -144,6 +144,7 @@ pub struct ConversationState {
     pub diff_request_id: u64,
     pub focus: Focus,
     pub graph_scope: Scope,
+    pub graph_visibility_exception: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
@@ -183,6 +184,7 @@ impl ConversationState {
         self.scroll = app.scroll;
         self.focus = app.focus;
         self.graph_scope = app.graph_scope.clone();
+        self.graph_visibility_exception = app.graph_visibility_exception.clone();
         self.graph_collapsed = app.graph_collapsed.clone();
         self.graph_grouping = app.graph_grouping;
         self.graph_viewport = app.graph_viewport;
@@ -231,6 +233,7 @@ impl ConversationState {
         app.scroll = self.scroll;
         app.focus = self.focus;
         app.graph_scope = self.graph_scope.clone();
+        app.graph_visibility_exception = self.graph_visibility_exception.clone();
         app.graph_collapsed = self.graph_collapsed.clone();
         app.graph_grouping = self.graph_grouping;
         app.graph_viewport = self.graph_viewport;

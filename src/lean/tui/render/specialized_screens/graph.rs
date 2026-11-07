@@ -4,14 +4,16 @@ impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
         self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
+        self.now_area = now_area;
         if self.graph_anim.is_some() {
             // The card moves while it grows: keep it in view each frame.
             self.graph_revealed = None;
         }
         let (expanded, step) = self.graph_expansion();
+        let scope = self.graph_scope_with_exception();
         let graph = self.graph_layout_cache.get_with_expanded(
             &self.view,
-            &self.graph_scope,
+            &scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
@@ -296,12 +298,16 @@ impl App {
 
     fn graph_areas(&mut self, frame: &mut Frame, area: Rect) -> (Rect, Option<Rect>, Vec<String>) {
         let frame_inner = self.draw_graph_frame(frame, area);
-        let progress = self.view.progress();
+        let progress = self.view.now_click_rows();
         let (graph_area, now_area) = graph_progress_areas(frame_inner, progress.len());
         let inner = padded(graph_area);
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
-        (inner, now_area, progress)
+        (
+            inner,
+            now_area,
+            progress.into_iter().map(|entry| entry.text).collect(),
+        )
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect) -> Rect {
@@ -344,6 +350,7 @@ impl App {
             .selected
             .split_once(':')
             .map(|(_, id)| format!("worker:{id}"));
+        self.graph_visibility_exception = None;
         self.selected = worker
             .filter(|key| graph.node(key).is_some_and(|node| node.visible))
             .or_else(|| {

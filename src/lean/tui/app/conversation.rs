@@ -77,6 +77,7 @@ impl App {
         self.scroll = 0;
         self.focus = Focus::Chat;
         self.graph_scope = Scope::default();
+        self.graph_visibility_exception = None;
         self.graph_revealed = None;
         self.graph_collapsed.clear();
         self.graph_grouping = graph::GroupingMode::default();
