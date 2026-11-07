@@ -56,6 +56,26 @@ fn run_scenario(
     required_format: &str,
     scenario: &str,
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
+    run_scenario_with_options(
+        plan,
+        (gates, true),
+        report,
+        implementation,
+        claim,
+        required_format,
+        scenario,
+    )
+}
+
+fn run_scenario_with_options(
+    plan: Value,
+    (gates, local_options): (bool, bool),
+    report: &str,
+    implementation: &str,
+    claim: &str,
+    required_format: &str,
+    scenario: &str,
+) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -101,6 +121,10 @@ fn run_scenario(
         .replace(
             "required_gates = true",
             &format!("required_gates = {gates}"),
+        )
+        .replace(
+            "local_options = true",
+            &format!("local_options = {local_options}"),
         )
         .replace("local_commits = true", "local_commits = false");
     let core = Core::open(
@@ -542,6 +566,39 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
                 .any(|event| event["task"] == stored[0].id && event["status"] == "approved")
         );
     }
+}
+
+#[test]
+fn explicitly_disabled_local_options_do_not_require_a_selection() {
+    let (stored, calls, _) = run_scenario_with_options(
+        json!({"tasks":[writer("w")]}),
+        (false, false),
+        REPORT,
+        "A",
+        "",
+        "A",
+        "",
+    );
+
+    assert_eq!(stored.len(), 1);
+    let writer_task = stored.iter().find(|task| task.spec["id"] == "w").unwrap();
+    assert_eq!(writer_task.status, "approved");
+    assert!(
+        writer_task.spec["depends_on"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(stored.iter().all(|task| task.spec["options_for"].is_null()));
+
+    let worker = calls
+        .iter()
+        .find(|call| call["worker"] == true && call["task"] == "w")
+        .unwrap()["prompt"]
+        .as_str()
+        .unwrap();
+    assert!(!worker.contains("selected_approach"));
+    assert!(!worker.contains("Never silently switch variants"));
 }
 
 fn assert_core_delivery(scenario: &str) {
