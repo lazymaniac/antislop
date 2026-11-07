@@ -1931,12 +1931,14 @@ fn transcript_workflow_fallback_replaces_empty_message() {
 fn scope_confirmation_card_shows_the_complete_requirements_summary() {
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = test_app();
+    let summary =
+        "Build the import flow. Acceptance: preserve duplicate rows and report rejected records.";
     app.view.apply(&serde_json::json!({
         "seq": 1,
         "kind": "workflow",
         "payload": {
             "phase": "interview",
-            "summary": "Build the import flow. Acceptance: preserve duplicate rows and report rejected records."
+            "summary": summary
         }
     }));
     app.view.apply(&serde_json::json!({
@@ -1952,9 +1954,18 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
             ]
         }
     }));
+    app.view.apply(&serde_json::json!({
+        "seq": 3,
+        "kind": "scope_confirmation_requested",
+        "payload": {"summary": summary}
+    }));
+    assert_eq!(
+        app.view.scope_confirmation_summary.as_deref(),
+        Some(summary)
+    );
     assert_eq!(
         app.view.interview_question.as_ref().unwrap().1.context,
-        "Collected requirements:\nBuild the import flow. Acceptance: preserve duplicate rows and report rejected records.\n\nPlanning must use this scope."
+        "Planning must use this scope."
     );
 
     let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();

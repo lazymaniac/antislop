@@ -10,6 +10,7 @@ use antislop::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::HashSet,
     process::Command,
     time::{Duration, Instant},
 };
@@ -133,9 +134,27 @@ fn run_scenario_with_options(
     )
     .unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
-    let idle = || {
+    let mut accepted_plans = HashSet::new();
+    let mut idle = || {
         let deadline = Instant::now() + Duration::from_secs(120);
-        while !core.is_idle(&conversation.id) {
+        loop {
+            for plan in core
+                .store
+                .events_since(&conversation.id, 0, 10_000)
+                .unwrap()
+                .into_iter()
+                .filter(|event| {
+                    event.kind == "plan_proposed" && event.payload["review"]["approved"] == true
+                })
+                .filter_map(|event| event.payload["plan"].as_str().map(str::to_owned))
+            {
+                if accepted_plans.insert(plan.clone()) {
+                    core.resume_plan(&conversation.id, &plan).unwrap();
+                }
+            }
+            if core.is_idle(&conversation.id) {
+                break;
+            }
             if implementation == "B" && scenario.is_empty() {
                 // This oracle always rejects B. Verify repeated independent
                 // rejection, then exercise explicit cancellation instead of
