@@ -8,17 +8,19 @@ pub(crate) fn commit_artifacts(
     purpose: CommitPurpose,
     require_all: bool,
 ) -> Result<String> {
-    let files = artifact_files(worktree, outputs, require_all)?;
-    super::snapshots::stage_source(worktree, None)?;
-    if !files.is_empty() {
-        let mut args = vec!["--literal-pathspecs", "add", "--force", "--"];
-        args.extend(files.iter().map(String::as_str));
-        ok(worktree, &args)?;
-    }
-    super::worktree::commit_staged(worktree, commit_subject(purpose))
+    commit_artifact_files(worktree, outputs, commit_subject(purpose), require_all)
 }
 
 pub(crate) fn commit_artifacts_with_message(
+    worktree: &Path,
+    outputs: &[String],
+    message: &str,
+    require_all: bool,
+) -> Result<String> {
+    commit_artifact_files(worktree, outputs, message, require_all)
+}
+
+fn commit_artifact_files(
     worktree: &Path,
     outputs: &[String],
     message: &str,

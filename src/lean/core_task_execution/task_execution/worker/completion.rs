@@ -140,13 +140,69 @@ mod tests {
                 "feature",
                 "feat(api): add pagination cursor",
                 "Add cursor pagination",
-                "pub struct Cursor;",
+                r#"
+pub fn page_after<'a>(items: &'a [String], cursor: Option<&str>, limit: usize) -> Vec<&'a str> {
+    let start = match cursor {
+        Some(value) => match items.iter().position(|item| item == value) {
+            Some(index) => index + 1,
+            None => return Vec::new(),
+        },
+        None => 0,
+    };
+    items.iter().skip(start).take(limit).map(String::as_str).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_after;
+
+    #[test]
+    fn returns_the_page_after_its_cursor() {
+        let items = ["a", "b", "c", "d"].map(str::to_owned);
+        assert_eq!(page_after(&items, Some("b"), 2), ["c", "d"]);
+    }
+
+    #[test]
+    fn starts_at_the_beginning_without_a_cursor() {
+        let items = ["a", "b", "c"].map(str::to_owned);
+        assert_eq!(page_after(&items, None, 2), ["a", "b"]);
+    }
+}
+"#,
             ),
             (
                 "repair",
                 "fix(parser): reject unterminated strings",
                 "Reject unterminated strings",
-                "pub fn parse(input: &str) -> Result<(), Error> { validate(input) }",
+                r#"
+#[derive(Debug, PartialEq)]
+pub enum ParseError { ExpectedQuotedString, UnterminatedString }
+
+pub fn parse_quoted(input: &str) -> Result<&str, ParseError> {
+    if !input.starts_with('"') {
+        return Err(ParseError::ExpectedQuotedString);
+    }
+    if input.len() < 2 || !input.ends_with('"') {
+        return Err(ParseError::UnterminatedString);
+    }
+    Ok(&input[1..input.len() - 1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_quoted, ParseError};
+
+    #[test]
+    fn accepts_a_terminated_string() {
+        assert_eq!(parse_quoted("\"hello\""), Ok("hello"));
+    }
+
+    #[test]
+    fn rejects_an_unterminated_string() {
+        assert_eq!(parse_quoted("\"hello"), Err(ParseError::UnterminatedString));
+    }
+}
+"#,
             ),
         ];
         let mut subjects = Vec::new();
@@ -178,6 +234,7 @@ mod tests {
             let worktree = directory.path().join(format!("{id}-worker"));
             git::add_worktree(&project, &worktree, &format!("antislop/{id}"), &base).unwrap();
             std::fs::write(worktree.join("lib.rs"), source).unwrap();
+            run_behavior_tests(&worktree);
 
             let result = turn_result::task_tool_result(
                 "complete",
@@ -217,11 +274,40 @@ mod tests {
             .unwrap();
             assert_eq!(actual, subject);
             assert_eq!(actual.lines().count(), 1);
+            assert!(actual.starts_with(if id == "feature" { "feat(" } else { "fix(" }));
             subjects.push(actual);
         }
         assert_ne!(
             subjects[0], subjects[1],
             "different task changes must not reuse a fixed subject"
+        );
+    }
+
+    fn run_behavior_tests(worktree: &Path) {
+        let output = tempfile::tempdir().unwrap();
+        let test_binary = output.path().join("behavior-tests");
+        let compile = std::process::Command::new("rustc")
+            .args(["--edition=2024", "--test", "lib.rs", "-o"])
+            .arg(&test_binary)
+            .current_dir(worktree)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "rustc failed: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let tests = std::process::Command::new(&test_binary).output().unwrap();
+        assert!(
+            tests.status.success(),
+            "behavior tests failed: {}{}",
+            String::from_utf8_lossy(&tests.stdout),
+            String::from_utf8_lossy(&tests.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&tests.stdout).contains("2 passed; 0 failed"),
+            "expected both behavior tests to run: {}",
+            String::from_utf8_lossy(&tests.stdout)
         );
     }
 
