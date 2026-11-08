@@ -2,8 +2,11 @@ mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Orchestrator proposes one writing task; the worker writes hello.txt in its
@@ -286,6 +289,209 @@ fn wait_idle(core: &Core, conversation: &str) {
     }
 }
 
+static FAILURE_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(0);
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+// The harness sets ANTISLOP_TEST_RUNTIME_DIR to retain snapshots outside the
+// checkout and ANTISLOP_TEST_COMMAND to record the exact invocation. Without
+// the runtime variable, failed assertions still resume normally but are not persisted.
+/// Persist the useful state of a failed writer assertion before its TempDir is
+/// dropped, then resume the original panic even if collecting diagnostics fails.
+fn with_failure_diagnostics<T>(
+    core: &Core,
+    conversation: &str,
+    project: &Path,
+    fixture: &Path,
+    assertion: impl FnOnce() -> T,
+) -> T {
+    let runtime = std::env::var_os("ANTISLOP_TEST_RUNTIME_DIR").map(std::path::PathBuf::from);
+    with_failure_diagnostics_at(
+        core,
+        conversation,
+        project,
+        fixture,
+        runtime.as_deref(),
+        assertion,
+    )
+}
+
+fn with_failure_diagnostics_at<T>(
+    core: &Core,
+    conversation: &str,
+    project: &Path,
+    fixture: &Path,
+    runtime: Option<&Path>,
+    assertion: impl FnOnce() -> T,
+) -> T {
+    match catch_unwind(AssertUnwindSafe(assertion)) {
+        Ok(value) => value,
+        Err(original) => {
+            if let Some(runtime) = runtime {
+                let _ = write_failure_diagnostics(
+                    core,
+                    conversation,
+                    project,
+                    fixture,
+                    runtime,
+                    &original,
+                );
+            }
+            resume_unwind(original)
+        }
+    }
+}
+
+fn write_failure_diagnostics(
+    core: &Core,
+    conversation: &str,
+    project: &Path,
+    fixture: &Path,
+    runtime: &Path,
+    original: &Box<dyn std::any::Any + Send>,
+) -> std::io::Result<()> {
+    let id = FAILURE_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed);
+    let run = runtime.join(format!(
+        "lean-writer-failure-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        id
+    ));
+    std::fs::create_dir_all(&run)?;
+
+    let (tasks, task_read_error) = match core.store.latest_plan(conversation) {
+        Ok(tasks) => (tasks, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let task_statuses: Vec<_> = tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "id": task.spec["id"], "status": task.status, "round": task.round,
+                "result_present": task.result.is_some(), "base_present": task.base.is_some(),
+                "report": task.report.as_deref().map(|text| text.chars().take(500).collect::<String>()),
+                "feedback": task.feedback,
+            })
+        })
+        .collect();
+    let (events, event_read_error) = match core.store.events_since(conversation, 0, 10_000) {
+        Ok(events) => (events, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let chronology: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "task" || event.kind.contains("scheduler"))
+        .rev()
+        .take(200)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|event| {
+            serde_json::json!({
+                "seq": event.seq, "kind": event.kind, "payload": event.payload,
+            })
+        })
+        .collect();
+    let calls_path = fixture.join("calls.jsonl");
+    let calls_log = std::fs::read_to_string(&calls_path);
+    let calls_read_error = calls_log.as_ref().err().map(ToString::to_string);
+    let checkouts: Vec<_> = calls_log
+        .as_deref()
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|call| call["cwd"].as_str().map(str::to_owned))
+        .filter(|cwd| cwd.contains("worktree"))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|cwd| serde_json::json!({"path": cwd, "exists": Path::new(&cwd).exists()}))
+        .collect();
+    let panic_text = original
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| original.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic payload");
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lean_writer.rs");
+    let (source_file_sha256, source_file_read_error) = match std::fs::read(&source_path) {
+        Ok(source) => (Some(sha256_hex(&source)), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let source_diff = Command::new("git")
+        .args(["-C"])
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(["diff", "--binary", "HEAD", "--", "tests/lean_writer.rs"])
+        .output();
+    let (source_diff_sha256, source_diff_error) = match source_diff {
+        Ok(output) if output.status.success() => (Some(sha256_hex(&output.stdout)), None),
+        Ok(output) => (
+            None,
+            Some(format!("git diff exited with {}", output.status)),
+        ),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let source_head = Command::new("git")
+        .args(["-C"])
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    let source_changes = Command::new("git")
+        .args(["-C"])
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(["status", "--short", "--", "tests/lean_writer.rs"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    let fixture_head = Command::new("git")
+        .args(["-C"])
+        .arg(project)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    let metadata = serde_json::json!({
+        "command": std::env::var("ANTISLOP_TEST_COMMAND").ok(),
+        "test_args": std::env::args().collect::<Vec<_>>(),
+        "source_head": source_head,
+        "source_changes": source_changes,
+        "source_file": source_path,
+        "source_file_sha256": source_file_sha256,
+        "source_file_read_error": source_file_read_error,
+        "source_diff_sha256": source_diff_sha256,
+        "source_diff_error": source_diff_error,
+        "fixture_head": fixture_head,
+        "conversation": conversation,
+        "failure": panic_text,
+        "task_statuses": task_statuses,
+        "task_read_error": task_read_error,
+        "event_chronology": chronology,
+        "event_read_error": event_read_error,
+        "checkouts": checkouts,
+        "calls_read_error": calls_read_error,
+        "scheduler_idle": core.is_idle(conversation),
+    });
+    std::fs::write(
+        run.join("diagnostics.json"),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
+    if let Ok(log) = std::fs::read(&calls_path) {
+        std::fs::write(run.join("calls.jsonl"), log)?;
+    }
+    Ok(())
+}
+
 #[test]
 fn required_gates_join_plans_that_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -386,15 +592,257 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
             )
         })
         .collect();
-    assert!(
-        unfinished.is_empty(),
-        "tasks left unfinished: {unfinished:?}"
-    );
+    with_failure_diagnostics(&core, &conversation, &project, dir.path(), || {
+        assert!(
+            unfinished.is_empty(),
+            "tasks left unfinished: {unfinished:?}"
+        );
+    });
     assert!(core.is_idle(&conversation));
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "from worker\n"
     );
+}
+
+#[test]
+fn writer_failure_diagnostics_survive_fixture_cleanup_and_preserve_panics() {
+    let runtime = std::env::var_os("ANTISLOP_TEST_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("antislop-lean-writer-test-evidence"));
+    std::fs::create_dir_all(&runtime).unwrap();
+    let run_prefix = format!("lean-writer-failure-{}-", std::process::id());
+    let before: std::collections::BTreeSet<_> = std::fs::read_dir(&runtime)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let project = project(dir.path());
+        let (codex, agy) = fake_clis(dir.path());
+        let started = dir.path().join("writer-started");
+        let release = dir.path().join("release-writer");
+        let agy_script = std::fs::read_to_string(&agy).unwrap();
+        let worker_gate = format!(
+            "session = \"worker\"\n    if \"Task id: t1\" in prompt:\n        import time\n        open({started:?}, \"w\").close()\n        deadline = time.monotonic() + 30\n        while not os.path.exists({release:?}):\n            if time.monotonic() > deadline:\n                raise RuntimeError(\"test did not release writer barrier\")\n            time.sleep(0.01)",
+            started = started,
+            release = release,
+        );
+        std::fs::write(
+            &agy,
+            agy_script
+                .replace("\"git diff\" in prompt", "True")
+                .replace("session = \"worker\"", &worker_gate),
+        )
+        .unwrap();
+        let codex_script = std::fs::read_to_string(&codex).unwrap();
+        let start = codex_script.find("plan = {\"tasks\": [").unwrap();
+        let end = start + codex_script[start..].find("\nanswer = ").unwrap();
+        let two_task_plan = r#"plan = {"tasks": [
+    {"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+     "change_kind": "code", "kind": "implementation"},
+    {"id": "t2", "title": "Check greeting", "goal": "Check the greeting",
+     "change_kind": "none", "kind": "analysis", "depends_on": ["t1"]}] }"#;
+        std::fs::write(
+            &codex,
+            format!(
+                "{}{}{}",
+                &codex_script[..start],
+                two_task_plan,
+                &codex_script[end..]
+            ),
+        )
+        .unwrap();
+        let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+        let conversation = support::fixture_conversation(&core, &project).unwrap();
+        core.send(&conversation.id, "add a greeting").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let plan_id = loop {
+            if let Some(task) = core.store.latest_plan(&conversation.id).unwrap().first()
+                && task.status == "proposed"
+                && core
+                    .store
+                    .plan_review_approved(&conversation.id, &task.plan_id)
+                    .unwrap()
+            {
+                break task.plan_id.clone();
+            }
+            assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        core.resume_plan(&conversation.id, &plan_id).unwrap();
+        while !started.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "writer did not reach its barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let plan = core.store.plan(&plan_id).unwrap();
+        let writer = plan.iter().find(|task| task.spec["id"] == "t1").unwrap();
+        let dependent = plan.iter().find(|task| task.spec["id"] == "t2").unwrap();
+        let checkout = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|call| call["args"].to_string().contains("Task id: t1"))
+            .unwrap()["cwd"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(writer.status, "working");
+        assert_eq!(dependent.status, "queued");
+        assert!(writer.result.is_none());
+        assert!(Path::new(&checkout).exists());
+        let unfinished = catch_unwind(AssertUnwindSafe(|| {
+            with_failure_diagnostics_at(
+                &core,
+                &conversation.id,
+                &project,
+                dir.path(),
+                Some(&runtime),
+                || {
+                    assert!(
+                        plan.iter().all(|task| task.status == "approved"),
+                        "tasks left unfinished"
+                    )
+                },
+            )
+        }))
+        .expect_err("unfinished tasks must retain their assertion failure");
+        assert_eq!(
+            unfinished.downcast_ref::<&str>().copied(),
+            Some("tasks left unfinished")
+        );
+
+        let missing_result = catch_unwind(AssertUnwindSafe(|| {
+            with_failure_diagnostics_at(
+                &core,
+                &conversation.id,
+                &project,
+                dir.path(),
+                Some(&runtime),
+                || {
+                    core.task(&plan_id, "t1")
+                        .unwrap()
+                        .result
+                        .unwrap_or_else(|| {
+                            panic!("writer has no result commit: status={}", writer.status)
+                        })
+                },
+            )
+        }))
+        .expect_err("missing result must retain its panic");
+        assert!(
+            missing_result
+                .downcast_ref::<String>()
+                .is_some_and(|text| text.starts_with("writer has no result commit: status="))
+        );
+
+        let unwritable = dir.path().join("not-a-directory");
+        std::fs::write(&unwritable, "file").unwrap();
+        let original = catch_unwind(AssertUnwindSafe(|| {
+            with_failure_diagnostics_at(
+                &core,
+                &conversation.id,
+                &project,
+                dir.path(),
+                Some(&unwritable),
+                || panic!("original assertion marker"),
+            )
+        }))
+        .expect_err("the original assertion must still panic when evidence cannot be written");
+        assert_eq!(
+            original.downcast_ref::<&str>().copied(),
+            Some("original assertion marker")
+        );
+        std::fs::write(&release, "release").unwrap();
+        wait_idle(&core, &conversation.id);
+    }
+
+    let runs: Vec<_> = std::fs::read_dir(&runtime)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with(&run_prefix) && !before.contains(&name)
+        })
+        .collect();
+    assert_eq!(
+        runs.len(),
+        2,
+        "expected both failure snapshots to survive cleanup"
+    );
+    let snapshots: Vec<Value> = runs
+        .iter()
+        .map(|entry| {
+            let snapshot: Value = serde_json::from_slice(
+                &std::fs::read(entry.path().join("diagnostics.json")).unwrap(),
+            )
+            .unwrap();
+            assert!(entry.path().join("calls.jsonl").is_file());
+            assert!(snapshot["source_head"].is_string());
+            assert_eq!(snapshot["source_file_sha256"].as_str().unwrap().len(), 64);
+            assert_eq!(snapshot["source_diff_sha256"].as_str().unwrap().len(), 64);
+            assert!(!snapshot["task_statuses"].as_array().unwrap().is_empty());
+            snapshot
+        })
+        .collect();
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lean_writer.rs");
+    let expected_source_hash = sha256_hex(&std::fs::read(&source_path).unwrap());
+    let expected_source_diff = Command::new("git")
+        .args(["-C"])
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(["diff", "--binary", "HEAD", "--", "tests/lean_writer.rs"])
+        .output()
+        .unwrap();
+    assert!(expected_source_diff.status.success());
+    let expected_diff_hash = sha256_hex(&expected_source_diff.stdout);
+    for snapshot in &snapshots {
+        assert_eq!(snapshot["source_file_sha256"], expected_source_hash);
+        assert_eq!(snapshot["source_diff_sha256"], expected_diff_hash);
+        assert_eq!(
+            snapshot["source_file"],
+            source_path.to_string_lossy().as_ref()
+        );
+    }
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot["failure"] == "tasks left unfinished"
+            && snapshot["task_statuses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task["status"] == "working")
+            && snapshot["task_statuses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task["status"] == "queued")
+            && snapshot["checkouts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|checkout| checkout["exists"] == true)
+            && snapshot["scheduler_idle"] == false
+            && snapshot["event_chronology"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event["payload"]["id"] == "t2" && event["payload"]["status"] == "queued"
+                })
+    }));
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot["failure"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("writer has no result commit"))
+            && snapshot["task_statuses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task["result_present"] == false && task["status"] == "working")
+    }));
 }
 
 #[test]
@@ -873,16 +1321,18 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
     let prompt = review["args"].to_string();
     assert!(prompt.contains("add a name") && prompt.contains("line 1 of hello.txt"));
     let task = core.task(&plan, "t1").unwrap();
-    assert!(prompt.contains(&format!(
-        "git diff {} {}",
-        task.base.unwrap(),
-        task.result.unwrap_or_else(|| {
-            panic!(
-                "writer has no result commit: status={}, report={:?}, feedback={:?}",
-                task.status, task.report, task.feedback
-            )
-        })
-    )));
+    with_failure_diagnostics(&core, &conversation, &project, dir.path(), || {
+        assert!(prompt.contains(&format!(
+            "git diff {} {}",
+            task.base.unwrap(),
+            task.result.clone().unwrap_or_else(|| {
+                panic!(
+                    "writer has no result commit: status={}, report={:?}, feedback={:?}",
+                    task.status, task.report, task.feedback
+                )
+            })
+        )));
+    });
     assert_eq!(
         review["cwd"],
         project.to_str().unwrap(),
