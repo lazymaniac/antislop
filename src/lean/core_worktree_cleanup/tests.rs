@@ -77,7 +77,8 @@ fn approved_tasks_release_clean_views_and_keep_dirty_and_other_task_views() {
     std::fs::write(dirty.join("unsaved"), "preserve this work").unwrap();
     let head = git::head(&root).unwrap();
     let index = std::fs::read(root.join(".git/index")).unwrap();
-    let pin = core.pin_worktree(&clean);
+    let pin = core.try_pin_worktree(&clean).unwrap();
+    let second_pin = core.try_pin_worktree(&clean).unwrap();
     core.set_status(&conversation, &mut task, status::APPROVED)
         .unwrap();
     core.drain_worktree_cleanup();
@@ -86,6 +87,9 @@ fn approved_tasks_release_clean_views_and_keep_dirty_and_other_task_views() {
         "a restoring native session pins its checkout"
     );
     drop(pin);
+    core.drain_worktree_cleanup();
+    assert!(clean.exists(), "all native pins must be released first");
+    drop(second_pin);
     drain_until(&core, || !clean.exists());
     assert!(!clean.exists());
     assert!(dirty.exists() && other.exists());
@@ -265,7 +269,7 @@ fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
     let old = checkout(&core, &task, "review-g0-1", &commit);
     let current = checkout(&core, &task, "review-g0-2", &commit);
     let observation = checkout(&core, &task, "observation-g0", &commit);
-    let pin = core.pin_worktree(&old);
+    let pin = core.try_pin_worktree(&old).unwrap();
     core.set_status(&conversation, &mut task, status::COORDINATING)
         .unwrap();
     core.drain_worktree_cleanup();
@@ -276,6 +280,90 @@ fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
         current.exists() && observation.exists(),
         "a stalled task retains its current views"
     );
+}
+
+#[test]
+fn view_cleanup_holds_only_its_checkout_lease_during_external_work() {
+    let (_directory, core, _conversation, tasks, commit) = fixture();
+    let task = &tasks[0];
+    let path = checkout(&core, task, "observation-g0", &commit);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let cleanup_core = core.clone();
+    let cleanup_id = task.id.clone();
+    let cleanup = std::thread::spawn(move || {
+        cleanup_core.release_task_views_with_hook(&cleanup_id, None, || {
+            entered_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+        });
+    });
+
+    entered_rx.recv().unwrap();
+    let _graph = core.graph_updates.try_lock().unwrap();
+    let mut unrelated = tasks[1].clone();
+    unrelated.report = Some("independent graph update".into());
+    core.store.update_task(&unrelated).unwrap();
+    drop(_graph);
+    assert!(core.try_lease_worktree(&path).is_none());
+    continue_tx.send(()).unwrap();
+    cleanup.join().unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
+fn deferred_cleanup_reservation_serializes_checkout_reuse_without_graph_locking() {
+    let (_directory, core, _conversation, tasks, commit) = fixture();
+    let task = &tasks[0];
+    let path = checkout(&core, task, "g0", &commit);
+    let run = core
+        .store
+        .create_run(
+            &core.store.plan_conversation(&task.plan_id).unwrap(),
+            "new inputs",
+        )
+        .unwrap();
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
+            rusqlite::params![task.id, run.id],
+        )
+        .unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let cleanup_core = core.clone();
+    let cleanup_id = task.id.clone();
+    let cleanup = std::thread::spawn(move || {
+        cleanup_core
+            .cleanup_task_worktrees_with_hook(&cleanup_id, || {
+                entered_tx.send(()).unwrap();
+                continue_rx.recv().unwrap();
+            })
+            .unwrap()
+    });
+
+    entered_rx.recv().unwrap();
+    assert!(core.graph_updates.try_lock().is_ok());
+    assert!(core.try_lease_worktree(&path).is_none());
+    continue_tx.send(()).unwrap();
+    assert!(cleanup.join().unwrap());
+    assert!(!path.exists());
+
+    let reuse = core.lease_worktree(&path);
+    git::add_worktree(
+        &PathBuf::from(
+            core.store
+                .conversation(&core.store.plan_conversation(&task.plan_id).unwrap())
+                .unwrap()
+                .project,
+        ),
+        &path,
+        &format!("antislop/{}-g0", task.id),
+        &commit,
+    )
+    .unwrap();
+    assert!(path.exists());
+    drop(reuse);
 }
 
 #[test]

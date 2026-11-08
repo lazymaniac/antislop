@@ -232,7 +232,8 @@ pub struct Core {
     task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
     worktree_cleanup: Mutex<std::collections::BTreeSet<String>>,
     worktree_cleanup_notes: Mutex<HashMap<String, String>>,
-    worktree_pins: Mutex<HashMap<PathBuf, usize>>,
+    worktree_leases: Mutex<HashMap<PathBuf, core_worktree_cleanup::WorktreeLeaseState>>,
+    worktree_lease_changed: std::sync::Condvar,
     orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
     turn_locks: Mutex<mail::TurnLocks>,
     /// Serializes starting an orchestrator with permanent session deletion.

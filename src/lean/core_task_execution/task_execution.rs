@@ -1,3 +1,4 @@
+use super::super::core_worktree_cleanup::WorktreeLease;
 use super::super::*;
 
 mod review;
@@ -13,6 +14,7 @@ pub(super) struct Execution<'a> {
     config: Arc<Config>,
     project: PathBuf,
     worktree: Option<PathBuf>,
+    _worktree_lease: Option<WorktreeLease<'a>>,
     workdir: PathBuf,
     project_text: String,
     add_dirs: Vec<PathBuf>,
@@ -96,6 +98,7 @@ impl<'a> Execution<'a> {
         conversation: &'a str,
         task: &'a mut Task,
         cancel: &'a AtomicBool,
+        worktree_lease: Option<WorktreeLease<'a>>,
     ) -> Result<Self> {
         let prepared = Prepared::load(core, conversation, task)?;
         Ok(Self {
@@ -107,6 +110,7 @@ impl<'a> Execution<'a> {
             config: prepared.config,
             project: prepared.project,
             worktree: prepared.worktree,
+            _worktree_lease: worktree_lease,
             project_text: prepared.workdir.to_string_lossy().into_owned(),
             workdir: prepared.workdir,
             add_dirs: prepared.add_dirs,

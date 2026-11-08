@@ -17,6 +17,7 @@ struct Scheduler<'a> {
     done_tx: std::sync::mpsc::Sender<String>,
     done_rx: std::sync::mpsc::Receiver<String>,
     reservations: Reservations,
+    blocked_worktrees: std::collections::HashSet<PathBuf>,
 }
 
 #[derive(Default)]
@@ -58,6 +59,7 @@ impl<'a> Scheduler<'a> {
             done_tx,
             done_rx,
             reservations: Default::default(),
+            blocked_worktrees: Default::default(),
         }
     }
 
@@ -71,6 +73,13 @@ impl<'a> Scheduler<'a> {
                 continue;
             }
             if self.reservations.is_empty() {
+                if !self.blocked_worktrees.is_empty() {
+                    let blocked = std::mem::take(&mut self.blocked_worktrees);
+                    if self.core.wait_for_worktree_available(&blocked, self.cancel) {
+                        continue;
+                    }
+                    break;
+                }
                 break;
             }
             if !self.cancel.load(Ordering::SeqCst) {
@@ -156,8 +165,24 @@ impl<'a> Scheduler<'a> {
     ) where
         'a: 'scope,
     {
+        let (needs_lease, lease) = match self.core.try_task_worktree_lease(task) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                self.core.notice(
+                    self.conversation,
+                    &format!("could not reserve task checkout for {id}: {error}"),
+                );
+                return;
+            }
+        };
+        if needs_lease && lease.is_none() {
+            if let Ok(Some(path)) = self.core.task_worktree_path(task) {
+                self.blocked_worktrees.insert(path);
+            }
+            return;
+        }
         self.reservations.reserve(&id);
-        self.spawn_task(scope, task.clone(), id);
+        self.spawn_task(scope, task.clone(), id, lease);
     }
 
     fn spawn_task<'scope, 'env>(
@@ -165,6 +190,7 @@ impl<'a> Scheduler<'a> {
         scope: &'scope std::thread::Scope<'scope, 'env>,
         task: Task,
         id: String,
+        lease: Option<super::super::core_worktree_cleanup::WorktreeLease<'a>>,
     ) where
         'a: 'scope,
     {
@@ -182,7 +208,7 @@ impl<'a> Scheduler<'a> {
         let conversation = self.conversation;
         let plan_cancel = self.cancel;
         scope.spawn(move || {
-            execute_task(core, conversation, task, task_cancel, plan_cancel);
+            execute_task(core, conversation, task, task_cancel, plan_cancel, lease);
             let _ = tx.send(id);
         });
     }
@@ -235,14 +261,21 @@ fn execute_task(
     mut task: Task,
     cancel: Arc<AtomicBool>,
     _plan_cancel: &AtomicBool,
+    lease: Option<super::super::core_worktree_cleanup::WorktreeLease<'_>>,
 ) {
-    fail_task(core, conversation, &mut task, &cancel);
+    fail_task(core, conversation, &mut task, &cancel, lease);
     restart_agent(core, conversation, &task);
     core.queue_worktree_cleanup(&task.id);
 }
 
-fn fail_task(core: &Arc<Core>, conversation: &str, task: &mut Task, cancel: &AtomicBool) {
-    if let Err(error) = core.run_task(conversation, task, cancel) {
+fn fail_task(
+    core: &Arc<Core>,
+    conversation: &str,
+    task: &mut Task,
+    cancel: &AtomicBool,
+    lease: Option<super::super::core_worktree_cleanup::WorktreeLease<'_>>,
+) {
+    if let Err(error) = core.run_task_with_lease(conversation, task, cancel, lease) {
         core.fail_scheduled_task(conversation, task, &error);
     }
 }

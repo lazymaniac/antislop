@@ -57,7 +57,9 @@ impl Registry {
                 )
             })
             .unwrap_or_default();
-        let _pin = core.pin_worktree(&context.cwd);
+        let _pin = core.try_pin_worktree(&context.cwd).ok_or_else(|| {
+            Error::Invalid("worktree cleanup is in progress; retry native restore".into())
+        })?;
         drop(_graph);
         self.prepare_scoped(core, conversation, role_key, &spec, &scope)
     }

@@ -2,43 +2,144 @@
 use super::core_path_helpers::{release_view, task_path_component, task_view_paths};
 use super::*;
 
+/// A checkout lease excludes cleanup from every in-flight checkout user.
+pub(in crate::lean) struct WorktreeLease<'a> {
+    core: &'a Core,
+    path: PathBuf,
+}
+impl Drop for WorktreeLease<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut leases) = self.core.worktree_leases.lock() {
+            if let Some(state) = leases.get_mut(&self.path) {
+                state.leased = false;
+                if state.pins == 0 {
+                    leases.remove(&self.path);
+                }
+            }
+            self.core.worktree_lease_changed.notify_all();
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct WorktreeLeaseState {
+    leased: bool,
+    pins: usize,
+}
+
 /// A cold native-session launch pins its checkout without holding scheduler locks.
 pub(in crate::lean) struct WorktreePin<'a> {
     core: &'a Core,
     path: PathBuf,
 }
+
 impl Drop for WorktreePin<'_> {
     fn drop(&mut self) {
-        if let Ok(mut pins) = self.core.worktree_pins.lock()
-            && let Some(count) = pins.get_mut(&self.path)
+        if let Ok(mut leases) = self.core.worktree_leases.lock()
+            && let Some(state) = leases.get_mut(&self.path)
         {
-            *count -= 1;
-            if *count == 0 {
-                pins.remove(&self.path);
+            state.pins -= 1;
+            if !state.leased && state.pins == 0 {
+                leases.remove(&self.path);
             }
+            self.core.worktree_lease_changed.notify_all();
         }
     }
 }
 
 impl Core {
-    pub(in crate::lean) fn pin_worktree(&self, path: &Path) -> WorktreePin<'_> {
-        *self
-            .worktree_pins
-            .lock()
-            .expect("worktree pins mutex")
-            .entry(path.to_path_buf())
-            .or_default() += 1;
-        WorktreePin {
+    #[cfg(test)]
+    pub(in crate::lean) fn lease_worktree(&self, path: &Path) -> WorktreeLease<'_> {
+        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        while leases.contains_key(path) {
+            leases = self
+                .worktree_lease_changed
+                .wait(leases)
+                .expect("worktree leases mutex");
+        }
+        leases.entry(path.to_path_buf()).or_default().leased = true;
+        WorktreeLease {
             core: self,
             path: path.to_path_buf(),
         }
     }
 
-    fn worktree_is_pinned(&self, path: &Path) -> bool {
-        self.worktree_pins
-            .lock()
-            .expect("worktree pins mutex")
-            .contains_key(path)
+    pub(in crate::lean) fn wait_for_worktree_available(
+        &self,
+        paths: &std::collections::HashSet<PathBuf>,
+        cancel: &AtomicBool,
+    ) -> bool {
+        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        while paths.iter().all(|path| leases.contains_key(path)) && !cancel.load(Ordering::SeqCst) {
+            leases = self
+                .worktree_lease_changed
+                .wait_timeout(leases, std::time::Duration::from_millis(100))
+                .expect("worktree leases mutex")
+                .0;
+        }
+        !cancel.load(Ordering::SeqCst)
+    }
+
+    pub(in crate::lean) fn try_lease_worktree(&self, path: &Path) -> Option<WorktreeLease<'_>> {
+        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        if leases.contains_key(path) {
+            return None;
+        }
+        leases.entry(path.to_path_buf()).or_default().leased = true;
+        Some(WorktreeLease {
+            core: self,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub(in crate::lean) fn try_pin_worktree(&self, path: &Path) -> Option<WorktreePin<'_>> {
+        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        let state = leases.entry(path.to_path_buf()).or_default();
+        if state.leased {
+            return None;
+        }
+        state.pins += 1;
+        Some(WorktreePin {
+            core: self,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub(in crate::lean) fn try_task_worktree_lease(
+        &self,
+        task: &Task,
+    ) -> Result<(bool, Option<WorktreeLease<'_>>)> {
+        let path = self.task_worktree_path(task)?;
+        match path.as_deref() {
+            None => Ok((false, None)),
+            Some(path) => Ok((true, self.try_lease_worktree(path))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::lean) fn task_worktree_lease(
+        &self,
+        task: &Task,
+    ) -> Result<Option<WorktreeLease<'_>>> {
+        Ok(self
+            .task_worktree_path(task)?
+            .as_deref()
+            .map(|path| self.lease_worktree(path)))
+    }
+
+    pub(in crate::lean) fn task_worktree_path(&self, task: &Task) -> Result<Option<PathBuf>> {
+        let contract: tasks::TaskContract = serde_json::from_value(task.spec.clone())?;
+        let path = if let Some(owner_id) = contract.options_for.as_deref() {
+            self.store
+                .task_in_plan_by_id(&task.plan_id, owner_id)?
+                .map(|owner| super::core_path_helpers::worktree_path(&self.state, &owner))
+                .transpose()?
+        } else if contract.change_kind.has_delivery() {
+            Some(super::core_path_helpers::worktree_path(&self.state, task)?)
+        } else {
+            None
+        };
+        Ok(path)
     }
 
     pub(in crate::lean) fn queue_worktree_cleanup(&self, task: &str) {
@@ -56,19 +157,6 @@ impl Core {
                 .expect("worktree cleanup mutex"),
         );
         for id in pending {
-            let Ok(_graph) = self.graph_updates.try_lock() else {
-                self.queue_worktree_cleanup(&id);
-                continue;
-            };
-            if self
-                .task_cancels
-                .lock()
-                .expect("task cancel mutex")
-                .contains_key(&id)
-            {
-                self.queue_worktree_cleanup(&id);
-                continue;
-            }
             match self.cleanup_task_worktrees(&id) {
                 Ok(false) => self.queue_worktree_cleanup(&id),
                 Ok(true) => {}
@@ -82,10 +170,23 @@ impl Core {
 
     /// Retire obsolete legacy read-only views before a task uses its stable path.
     pub(in crate::lean) fn release_task_views(&self, id: &str, keep: Option<&Path>) {
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let result = task_view_paths(&self.state, id, keep).and_then(|paths| {
+        self.release_task_views_with_hook(id, keep, || {});
+    }
+
+    fn release_task_views_with_hook(
+        &self,
+        id: &str,
+        keep: Option<&Path>,
+        mut before_external_cleanup: impl FnMut(),
+    ) {
+        let result = task_view_paths(&self.state, id, keep).map(|paths| {
             let mut first_error = None;
             for path in paths {
+                let Some(_lease) = self.try_lease_worktree(&path) else {
+                    self.queue_worktree_cleanup(id);
+                    continue;
+                };
+                before_external_cleanup();
                 match self.cleanup_view_path(&path) {
                     Ok(false) => self.queue_worktree_cleanup(id),
                     Ok(true) => {}
@@ -94,17 +195,16 @@ impl Core {
                     }
                 }
             }
-            first_error.map_or(Ok(()), Err)
+            first_error
         });
-        if let Err(error) = result {
+        if let Ok(Some(error)) = result {
+            self.cleanup_notice(id, &error);
+        } else if let Err(error) = result {
             self.cleanup_notice(id, &error);
         }
     }
 
     fn cleanup_view_path(&self, path: &Path) -> Result<bool> {
-        if self.worktree_is_pinned(path) {
-            return Ok(false);
-        }
         require(
             git::is_clean(path),
             &format!(
@@ -120,37 +220,89 @@ impl Core {
     }
 
     fn cleanup_task_worktrees(&self, id: &str) -> Result<bool> {
+        self.cleanup_task_worktrees_with_hook(id, || {})
+    }
+
+    fn cleanup_task_worktrees_with_hook(
+        &self,
+        id: &str,
+        mut before_external_cleanup: impl FnMut(),
+    ) -> Result<bool> {
         task_path_component(id)?;
-        let Some(task) = self.store.task_by_id(id)? else {
-            return Ok(true);
+        let directory = super::core_path_helpers::worktree_directory(&self.state)?;
+        // Filesystem enumeration and generation pruning can block independently
+        // of graph edits, so collect names before briefly reserving candidates.
+        let entries = if directory.exists() {
+            std::fs::read_dir(&directory)?
+                .map(|entry| {
+                    entry.map(|entry| {
+                        (
+                            entry.file_name().to_string_lossy().into_owned(),
+                            entry.path(),
+                        )
+                    })
+                })
+                .collect::<std::io::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        let (task, candidates, reservation_blocked) = {
+            let _graph = self.graph_updates.lock().expect("graph update mutex");
+            if self
+                .task_cancels
+                .lock()
+                .expect("task cancel mutex")
+                .contains_key(id)
+            {
+                return Ok(false);
+            }
+            let Some(task) = self.store.task_by_id(id)? else {
+                return Ok(true);
+            };
+            let mut candidates = Vec::new();
+            let mut reservation_blocked = false;
+            for (name, path) in entries {
+                let Some(kind) = checkout_kind(&name, id) else {
+                    continue;
+                };
+                if !eligible(&task, kind) {
+                    continue;
+                }
+                let Some(lease) = self.try_lease_worktree(&path) else {
+                    reservation_blocked = true;
+                    continue;
+                };
+                candidates.push((name, path, kind, lease));
+            }
+            (task, candidates, reservation_blocked)
         };
         super::core_task_runtime::prune_settled_generations(&self.state, &task)?;
-        let directory = super::core_path_helpers::worktree_directory(&self.state)?;
-        if !directory.exists() {
-            return Ok(true);
-        }
-        let mut complete = true;
+        let mut complete = !reservation_blocked;
         let mut first_error = None;
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(kind) = checkout_kind(&name, id) else {
-                continue;
-            };
-            if !eligible(&task, kind) {
-                continue;
-            }
-            let path = entry.path();
-            if self.worktree_is_pinned(&path) {
-                complete = false;
-                continue;
-            }
+        for (name, path, kind, _lease) in candidates {
+            before_external_cleanup();
             // A replacement path or symlink is never followed or removed.
             let result = (|| {
                 require(
-                    !entry.file_type()?.is_symlink(),
+                    !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
                     "task worktree path is a symlink; preserved",
                 )?;
+                // Recheck eligibility under the graph lock while the path lease
+                // prevents a new writer or pin from reaching this checkout.
+                let still_eligible = {
+                    let _graph = self.graph_updates.lock().expect("graph update mutex");
+                    self.store
+                        .task_by_id(id)?
+                        .is_some_and(|current| eligible(&current, kind))
+                        && !self
+                            .task_cancels
+                            .lock()
+                            .expect("task cancel mutex")
+                            .contains_key(id)
+                };
+                if !still_eligible {
+                    return Ok(false);
+                }
                 require(
                     git::is_clean(&path),
                     &format!(
