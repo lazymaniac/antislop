@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::{
     path::Path,
     process::Command,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -36,6 +37,30 @@ fn idle(core: &Core, conversation: &str) {
             Instant::now() < deadline,
             "probe did not become idle: {:?}",
             core.store.events_since(conversation, 0, 10_000).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn accept_reviewed_plan(core: &Arc<Core>, conversation: &str) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(plan) = core
+            .store
+            .events_since(conversation, 0, 10_000)
+            .unwrap()
+            .into_iter()
+            .find(|event| {
+                event.kind == "plan_proposed" && event.payload["review"]["approved"] == true
+            })
+            .and_then(|event| event.payload["plan"].as_str().map(str::to_owned))
+        {
+            core.resume_plan(conversation, &plan).unwrap();
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "probe did not receive an independently reviewed plan"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -140,6 +165,7 @@ else:
         }
         core.send(&conversation.id, "Probe dependent mode choices")
             .unwrap();
+        accept_reviewed_plan(&core, &conversation.id);
         if unmerged {
             let deadline = Instant::now() + Duration::from_secs(120);
             while !dir.path().join("W1-entered").exists() {
