@@ -377,7 +377,14 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
     let unfinished: Vec<_> = plan
         .iter()
         .filter(|task| task.status != "approved")
-        .map(|task| (task.spec["id"].clone(), task.status.clone()))
+        .map(|task| {
+            (
+                task.spec["id"].clone(),
+                task.status.clone(),
+                task.report.clone(),
+                task.feedback.clone(),
+            )
+        })
         .collect();
     assert!(
         unfinished.is_empty(),
@@ -388,6 +395,177 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "from worker\n"
     );
+}
+
+#[test]
+fn writer_completion_updates_dependents_before_releasing_its_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let started = dir.path().join("writer-started");
+    let release = dir.path().join("release-writer");
+    let script = std::fs::read_to_string(&agy).unwrap();
+    let worker_gate = format!(
+        "session = \"worker\"\n    if \"Task id: t1\" in prompt:\n        import time\n        open({started:?}, \"w\").close()\n        deadline = time.monotonic() + 30\n        while not os.path.exists({release:?}):\n            if time.monotonic() > deadline:\n                raise RuntimeError(\"test did not release writer barrier\")\n            time.sleep(0.01)",
+        started = started,
+        release = release,
+    );
+    std::fs::write(&agy, script.replace("session = \"worker\"", &worker_gate)).unwrap();
+    let codex_script = std::fs::read_to_string(&codex).unwrap();
+    let start = codex_script.find("plan = {\"tasks\": [").unwrap();
+    let end = start + codex_script[start..].find("\nanswer = ").unwrap();
+    let plan = r#"plan = {"tasks": [
+    {"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+     "change_kind": "code", "kind": "implementation"},
+    {"id": "t2", "title": "Check greeting", "goal": "Check the greeting",
+     "change_kind": "none", "kind": "analysis", "depends_on": ["t1"]}] }"#;
+    std::fs::write(
+        &codex,
+        format!("{}{}{}", &codex_script[..start], plan, &codex_script[end..]),
+    )
+    .unwrap();
+    let mut config = config(&codex, &agy);
+    config.policy.local_options = false;
+    let core = Core::open(&project.join(".antislop"), config).unwrap();
+    let conversation = support::fixture_conversation(&core, &project).unwrap();
+    core.send(&conversation.id, "add a greeting").unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let plan_id = loop {
+        if let Some(task) = core.store.latest_plan(&conversation.id).unwrap().first()
+            && task.status == "proposed"
+            && core
+                .store
+                .plan_review_approved(&conversation.id, &task.plan_id)
+                .unwrap()
+        {
+            break task.plan_id.clone();
+        }
+        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    core.resume_plan(&conversation.id, &plan_id).unwrap();
+    while !started.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "writer did not reach its barrier"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let held = core.store.plan(&plan_id).unwrap();
+    let writer = held.iter().find(|task| task.spec["id"] == "t1").unwrap();
+    let dependents: Vec<_> = held
+        .iter()
+        .filter(|task| {
+            task.spec["depends_on"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == "t1"))
+        })
+        .collect();
+    let checkout = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|call| call["args"].to_string().contains("You are a worker"))
+        .unwrap()["cwd"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let held_trace = format!(
+        "writer={} report={:?}; dependents={:?}; checkout={} exists={}",
+        writer.status,
+        writer.report,
+        dependents
+            .iter()
+            .map(|task| (task.spec["id"].clone(), task.status.as_str()))
+            .collect::<Vec<_>>(),
+        checkout,
+        Path::new(&checkout).exists(),
+    );
+    assert_eq!(writer.status, "working", "{held_trace}");
+    assert!(
+        !writer
+            .report
+            .as_deref()
+            .is_some_and(|report| report.contains("wrote hello.txt")),
+        "{held_trace}"
+    );
+    assert!(!dependents.is_empty(), "{held_trace}");
+    assert_eq!(dependents.len(), 1, "{held_trace}");
+    assert!(
+        dependents.iter().all(|task| task.status == "queued"),
+        "{held_trace}"
+    );
+    assert!(
+        Path::new(&checkout).exists(),
+        "writer checkout disappeared while the CLI held its barrier: {held_trace}"
+    );
+
+    eprintln!("controlled writer lifecycle: held {held_trace}");
+    std::fs::write(&release, "release").unwrap();
+    let handoff_deadline = Instant::now() + Duration::from_secs(20);
+    let (writer_events, writer_approved_seq, dependent_working_seq) = loop {
+        let events = core
+            .store
+            .events_since(&conversation.id, 0, 10_000)
+            .unwrap();
+        let writer_events: Vec<_> = events
+            .iter()
+            .filter(|event| event.kind == "task" && event.payload["id"] == "t1")
+            .map(|event| (event.seq, event.payload["status"].clone()))
+            .collect();
+        let writer_approved_seq = writer_events
+            .iter()
+            .find_map(|(seq, status)| (status == "approved").then_some(*seq));
+        let dependent_working_seq = events.iter().find_map(|event| {
+            (event.kind == "task"
+                && event.payload["id"] == "t2"
+                && event.payload["status"] == "working")
+                .then_some(event.seq)
+        });
+        if let (Some(approved_seq), Some(working_seq)) =
+            (writer_approved_seq, dependent_working_seq)
+        {
+            break (writer_events, approved_seq, working_seq);
+        }
+        assert!(
+            Instant::now() < handoff_deadline,
+            "writer/dependency transition did not complete: {writer_events:?}; events={:?}",
+            events
+                .iter()
+                .rev()
+                .take(8)
+                .map(|event| (&event.kind, &event.payload))
+                .collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let released_deadline = Instant::now() + Duration::from_secs(10);
+    while Path::new(&checkout).exists() && Instant::now() < released_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let writer = core.task(&plan_id, "t1").unwrap();
+    let dependent = core.task(&plan_id, "t2").unwrap();
+    eprintln!(
+        "controlled writer lifecycle: writer={} result={:?} writer_events={writer_events:?} approval_seq={writer_approved_seq} dependent={} working_seq={dependent_working_seq} checkout_exists={}",
+        writer.status,
+        writer.result,
+        dependent.status,
+        Path::new(&checkout).exists(),
+    );
+    assert_eq!(writer.status, "approved", "{writer_events:?}");
+    assert!(writer.result.is_some(), "{writer_events:?}");
+    assert!(
+        writer_approved_seq < dependent_working_seq,
+        "dependent activated before writer approval: approval seq={writer_approved_seq}, dependent working seq={dependent_working_seq}, writer events={writer_events:?}"
+    );
+    assert!(
+        !Path::new(&checkout).exists(),
+        "writer checkout remained after scheduler completion"
+    );
+    core.cancel(&conversation.id);
+    wait_idle(&core, &conversation.id);
 }
 
 #[test]
@@ -698,7 +876,12 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
     assert!(prompt.contains(&format!(
         "git diff {} {}",
         task.base.unwrap(),
-        task.result.unwrap()
+        task.result.unwrap_or_else(|| {
+            panic!(
+                "writer has no result commit: status={}, report={:?}, feedback={:?}",
+                task.status, task.report, task.feedback
+            )
+        })
     )));
     assert_eq!(
         review["cwd"],
