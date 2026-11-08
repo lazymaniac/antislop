@@ -171,6 +171,16 @@ fn restore_snapshot_conflicts_counted(
     snapshot: &str,
     files: &[String],
 ) -> Result<usize> {
+    restore_snapshot_conflicts_with_budget(project, snapshot, files, SNAPSHOT_LOOKUP_ARG_BUDGET)
+        .map(|(launches, _)| launches)
+}
+
+fn restore_snapshot_conflicts_with_budget(
+    project: &Path,
+    snapshot: &str,
+    files: &[String],
+    lookup_arg_budget: usize,
+) -> Result<(usize, usize)> {
     // Validate every path before querying or changing the working tree. In
     // particular, a later unsafe path must not follow earlier restores.
     for file in files {
@@ -186,47 +196,49 @@ fn restore_snapshot_conflicts_counted(
 
     let mut present = std::collections::HashSet::new();
     let mut process_count = 0;
-    let lookup_batches = snapshot_lookup_batches(project, files, snapshot);
     let oversized_path = files.iter().any(|file| {
-        file.len() + 1 + snapshot_lookup_fixed_arg_bytes(project, snapshot)
-            > SNAPSHOT_LOOKUP_ARG_BUDGET
+        file.len() + 1 + snapshot_lookup_fixed_arg_bytes(project, snapshot) > lookup_arg_budget
     });
-    let requested_paths: std::collections::HashSet<&str> =
-        files.iter().map(String::as_str).collect();
-    let batches: Vec<Vec<&str>> = if oversized_path {
-        // A single very deep path can exceed the conservative argv budget.
-        // In that rare case list the tree once and filter by exact path bytes.
-        vec![Vec::new()]
-    } else {
-        lookup_batches
-            .iter()
-            .map(|batch| batch.iter().map(String::as_str).collect())
-            .collect()
-    };
-    for batch in batches {
-        let mut args = vec!["--literal-pathspecs", "ls-tree", "-r", "-z", snapshot];
-        if !oversized_path {
-            args.push("--");
-            args.extend(batch);
+    let mut max_lookup_output_bytes = 0;
+    if oversized_path {
+        // Query each exact component in its parent tree. This avoids a
+        // recursive scan and retains only a single ls-tree result at a time.
+        let mut entries = std::collections::HashMap::new();
+        for file in files {
+            if snapshot_contains_path(
+                project,
+                snapshot,
+                file,
+                &mut entries,
+                &mut process_count,
+                &mut max_lookup_output_bytes,
+            )? {
+                present.insert(file.clone());
+            }
         }
-        let tree = git::git(project, &args)?;
-        process_count += 1;
-        require(
-            tree.status.success(),
-            "could not inspect manual recovery snapshot",
-        )?;
-        for record in tree
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|row| !row.is_empty())
-        {
-            let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
-                continue;
-            };
-            if let Ok(path) = std::str::from_utf8(&record[tab + 1..])
-                && (!oversized_path || requested_paths.contains(path))
+    } else {
+        let lookup_batches = snapshot_lookup_batches(project, files, snapshot, lookup_arg_budget);
+        for batch in lookup_batches {
+            let mut args = vec!["--literal-pathspecs", "ls-tree", "-r", "-z", snapshot];
+            args.push("--");
+            args.extend(batch.iter().map(String::as_str));
+            let tree = git::git(project, &args)?;
+            process_count += 1;
+            require(
+                tree.status.success(),
+                "could not inspect manual recovery snapshot",
+            )?;
+            for record in tree
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|row| !row.is_empty())
             {
-                present.insert(path.to_owned());
+                let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+                    continue;
+                };
+                if let Ok(path) = std::str::from_utf8(&record[tab + 1..]) {
+                    present.insert(path.to_owned());
+                }
             }
         }
     }
@@ -249,7 +261,48 @@ fn restore_snapshot_conflicts_counted(
         || {},
         || {},
     )?;
-    Ok(process_count)
+    Ok((process_count, max_lookup_output_bytes))
+}
+
+fn snapshot_contains_path(
+    project: &Path,
+    snapshot: &str,
+    path: &str,
+    entries: &mut std::collections::HashMap<(String, String), Option<git::TreeEntry>>,
+    process_count: &mut usize,
+    max_output_bytes: &mut usize,
+) -> Result<bool> {
+    let mut tree = snapshot.to_owned();
+    let mut components = Path::new(path).components().peekable();
+    while let Some(std::path::Component::Normal(component)) = components.next() {
+        let component = component.to_str().ok_or_else(|| {
+            Error::Invalid("manual recovery snapshot path is not valid UTF-8".into())
+        })?;
+        let key = (tree.clone(), component.to_owned());
+        let entry = if let Some(entry) = entries.get(&key) {
+            entry.clone()
+        } else {
+            let entry = git::tree_entry(project, &tree, component)?;
+            *process_count += 1;
+            if let Some(entry) = &entry {
+                *max_output_bytes = (*max_output_bytes).max(entry.stdout_bytes);
+            }
+            entries.insert(key, entry.clone());
+            entry
+        };
+        let Some(entry) = entry else {
+            return Ok(false);
+        };
+        if components.peek().is_some() {
+            if !entry.is_tree {
+                return Ok(false);
+            }
+            tree = entry.object;
+        } else {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn apply_snapshot_paths(
@@ -444,6 +497,7 @@ fn snapshot_lookup_batches<'a>(
     project: &Path,
     files: &'a [String],
     snapshot: &str,
+    lookup_arg_budget: usize,
 ) -> Vec<&'a [String]> {
     let fixed_args_bytes = snapshot_lookup_fixed_arg_bytes(project, snapshot);
     let mut batches = Vec::new();
@@ -451,7 +505,7 @@ fn snapshot_lookup_batches<'a>(
     let mut bytes = fixed_args_bytes;
     for (index, file) in files.iter().enumerate() {
         let cost = file.len() + 1;
-        if index > start && bytes + cost > SNAPSHOT_LOOKUP_ARG_BUDGET {
+        if index > start && bytes + cost > lookup_arg_budget {
             batches.push(&files[start..index]);
             start = index;
             bytes = fixed_args_bytes;
@@ -649,7 +703,12 @@ mod tests {
             std::fs::read_to_string(dir.path().join("many/conflict-2299-long-name.txt")).unwrap(),
             "snapshot: many/conflict-2299-long-name.txt\n"
         );
-        let lookup_batches = snapshot_lookup_batches(dir.path(), &conflicts, &snapshot);
+        let lookup_batches = snapshot_lookup_batches(
+            dir.path(),
+            &conflicts,
+            &snapshot,
+            SNAPSHOT_LOOKUP_ARG_BUDGET,
+        );
         assert!(
             lookup_batches.len() > 1,
             "test must exercise bounded lookup chunks"
@@ -673,6 +732,78 @@ mod tests {
             conflicts.len(),
             files.len(),
             old_per_path_launches
+        );
+    }
+
+    #[test]
+    fn oversized_snapshot_lookup_walks_exact_tree_entries_with_bounded_output() {
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+
+        for index in 0..1500 {
+            std::fs::write(
+                dir.path().join(format!("root-entry-{index:04}.txt")),
+                "unrelated snapshot entry\n",
+            )
+            .unwrap();
+        }
+        let exact_paths = [
+            "deep/nested/with\ttab.txt",
+            "deep/nested/with\nnewline.txt",
+            "literal[*]?name.txt",
+        ];
+        for path in exact_paths {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "snapshot value\n").unwrap();
+        }
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+        for path in exact_paths {
+            std::fs::write(dir.path().join(path), "user edit\n").unwrap();
+        }
+        let deleted = "deep/nested/deleted\tfile.txt";
+        std::fs::write(dir.path().join(deleted), "user only\n").unwrap();
+        let requests = [
+            exact_paths[0].to_owned(),
+            exact_paths[1].to_owned(),
+            exact_paths[2].to_owned(),
+            deleted.to_owned(),
+        ];
+        let (launches, max_entry_output) =
+            restore_snapshot_conflicts_with_budget(dir.path(), &snapshot, &requests, 1).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(exact_paths[0])).unwrap(),
+            "snapshot value\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(exact_paths[1])).unwrap(),
+            "snapshot value\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(exact_paths[2])).unwrap(),
+            "snapshot value\n"
+        );
+        assert!(!dir.path().join(deleted).exists());
+        assert!(max_entry_output > 0);
+        assert!(
+            max_entry_output < 128,
+            "one exact entry only: {max_entry_output}"
+        );
+        assert_eq!(
+            launches, 8,
+            "shared prefixes should be queried once before the two staging commands"
+        );
+        println!(
+            "oversized recovery: {launches} git launches, max exact-entry output {max_entry_output} bytes, 1,503 tree entries"
         );
     }
 

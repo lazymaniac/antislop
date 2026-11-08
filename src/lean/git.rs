@@ -36,6 +36,61 @@ pub(super) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .output()?)
 }
 
+/// Look up one literal entry in a tree object without listing its descendants.
+/// The caller can follow `object` when `is_tree` is true. NUL framing keeps
+/// tabs and newlines in entry names unambiguous.
+pub(super) fn tree_entry(dir: &Path, tree: &str, name: &str) -> Result<Option<TreeEntry>> {
+    let output = git(
+        dir,
+        &["--literal-pathspecs", "ls-tree", "-z", tree, "--", name],
+    )?;
+    crate::require(
+        output.status.success(),
+        &format!(
+            "git ls-tree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    )?;
+    let wanted = name.as_bytes();
+    for record in output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+            continue;
+        };
+        if &record[tab + 1..] != wanted {
+            continue;
+        }
+        let header = std::str::from_utf8(&record[..tab])
+            .map_err(|_| Error::Invalid("invalid git tree entry header".into()))?;
+        let mut fields = header.split_ascii_whitespace();
+        let _mode = fields.next();
+        let kind = fields.next();
+        let object = fields.next();
+        if fields.next().is_some() {
+            return Err(Error::Invalid("invalid git tree entry header".into()));
+        }
+        let (Some(kind), Some(object)) = (kind, object) else {
+            return Err(Error::Invalid("invalid git tree entry header".into()));
+        };
+        return Ok(Some(TreeEntry {
+            object: object.to_owned(),
+            is_tree: kind == "tree",
+            stdout_bytes: output.stdout.len(),
+        }));
+    }
+    Ok(None)
+}
+
+#[derive(Clone)]
+pub(super) struct TreeEntry {
+    pub(super) object: String,
+    pub(super) is_tree: bool,
+    pub(super) stdout_bytes: usize,
+}
+
 pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     let output = git(dir, args)?;
     if output.status.success() {
