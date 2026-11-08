@@ -166,6 +166,7 @@ impl Session {
     }
 
     /// Presses keys one after another, as a person at the keyboard would.
+    #[cfg(test)]
     pub(crate) fn press(state: &Arc<Mutex<State>>, keys: &[approvals::Key]) -> Result<()> {
         use approvals::Key;
         use wezterm_term::{KeyCode as K, KeyModifiers as M};
@@ -190,6 +191,45 @@ impl Session {
             std::thread::sleep(std::time::Duration::from_millis(80));
         }
         Ok(())
+    }
+
+    /// Sends one key only while the parsed screen still identifies the dialog
+    /// that received the decision. Parser updates use this same mutex. PTY
+    /// bytes not yet read, and CLI changes after input is written, are outside
+    /// this guarantee.
+    pub(crate) fn press_for_approval(
+        state: &Arc<Mutex<State>>,
+        provider: crate::config::ProviderKind,
+        fingerprint: &str,
+        key: approvals::Key,
+    ) -> Result<bool> {
+        use approvals::Key;
+        use wezterm_term::{KeyCode as K, KeyModifiers as M};
+        with_matching_fingerprint(
+            state,
+            fingerprint,
+            |state| {
+                let screen = screen_text(state, native::APPROVAL_LINES);
+                approvals::detect(provider, &screen).map(|approval| approval.fingerprint)
+            },
+            |state| {
+                require(
+                    state.error.is_none(),
+                    state.error.as_deref().unwrap_or("terminal failed"),
+                )?;
+                let code = match key {
+                    Key::Char(c) => K::Char(c),
+                    Key::Enter => K::Enter,
+                    Key::Escape => K::Escape,
+                    Key::Up => K::UpArrow,
+                    Key::Down => K::DownArrow,
+                    Key::Right => K::RightArrow,
+                };
+                state.term.key_down(code, M::NONE).map_err(invalid)?;
+                state.term.key_up(code, M::NONE).map_err(invalid)?;
+                Ok(())
+            },
+        )
     }
 
     pub(crate) fn shared(&self) -> Arc<Mutex<State>> {
@@ -219,6 +259,10 @@ pub(crate) fn tail(state: &Arc<Mutex<State>>, count: usize) -> String {
     let Ok(state) = state.lock() else {
         return String::new();
     };
+    screen_text(&state, count)
+}
+
+fn screen_text(state: &State, count: usize) -> String {
     let dimensions = state.term.get_size();
     let top = state.term.screen().scrollback_or_visible_row(0);
     let mut lines = state
@@ -238,4 +282,63 @@ pub(crate) fn tail(state: &Arc<Mutex<State>>, count: usize) -> String {
     let keep = lines.len().saturating_sub(count);
     lines.drain(..keep);
     lines.join("\n")
+}
+
+fn with_matching_fingerprint<T>(
+    state: &Mutex<T>,
+    expected: &str,
+    fingerprint: impl FnOnce(&T) -> Option<String>,
+    send: impl FnOnce(&mut T) -> Result<()>,
+) -> Result<bool> {
+    let mut state = state.lock().map_err(invalid)?;
+    if fingerprint(&state).as_deref() != Some(expected) {
+        return Ok(false);
+    }
+    send(&mut state)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod approval_input_tests {
+    use super::with_matching_fingerprint;
+    use std::sync::Mutex;
+
+    #[test]
+    fn replacement_dialog_does_not_receive_old_decision() {
+        let observed = Mutex::new("dialog-a".to_owned());
+        let decided_fingerprint = observed.lock().unwrap().clone();
+        // A redraw replaces A after the approver has decided, before input.
+        *observed.lock().unwrap() = "dialog-b".to_owned();
+        let sent = Mutex::new(Vec::new());
+        let pressed = with_matching_fingerprint(
+            &observed,
+            &decided_fingerprint,
+            |current| Some(current.clone()),
+            |_| {
+                sent.lock().unwrap().push("allow");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!pressed);
+        assert!(sent.into_inner().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unchanged_dialog_receives_decision() {
+        let observed = Mutex::new("dialog-a".to_owned());
+        let sent = Mutex::new(Vec::new());
+        let pressed = with_matching_fingerprint(
+            &observed,
+            "dialog-a",
+            |current| Some(current.clone()),
+            |_| {
+                sent.lock().unwrap().push("allow");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(pressed);
+        assert_eq!(sent.into_inner().unwrap(), ["allow"]);
+    }
 }

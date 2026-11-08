@@ -37,7 +37,7 @@ const SETTLE: Duration = Duration::from_millis(400);
 const SETTLE_LIMIT: Duration = Duration::from_secs(2);
 const SCREEN_LINES: usize = 12;
 /// A dialog can be taller than the lines shown in a failure.
-const APPROVAL_LINES: usize = 40;
+pub(crate) const APPROVAL_LINES: usize = 40;
 
 pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
     Error::Invalid(error.to_string())

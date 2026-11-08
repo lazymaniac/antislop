@@ -342,9 +342,9 @@ src
      WorkerRound(C{core,conversation,task,cancel,spec,workdir,project_text,add_dirs,upstream,worker,round,state,recheck})
      - run_worker_turn,worker_{setup,dirs},continuation
    task_execution.rs
-    Execution(C{core,conversation,task,cancel,spec,config,project,worktree,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
+    Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
      run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,{review,settle}_round
-     new(core,conversation,task,cancel):Result<Self> > Prepared.load
+     new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
      run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
      - worker_report,save_round_verdict,incomplete,approve_round,update_progress,load_spec,dependents_invalidated,
        resumed_progress
@@ -364,8 +364,9 @@ src
     - manual_event
    manual.rs
     apply(core,work):Result<()> > prepare_review,update_review_state,feedback,approve,reject
-    - ManualReview,run_reviewer,reviewer_setup,snapshot_conflict,restore_snapshot_{conflicts,conflicts_counted},
-      snapshot_lookup_{fixed_arg_bytes,batches},ensure_safe_parent,reviewer_prompt,decode_answer,failed_reviewer,
+    - ManualReview,Group,run_reviewer,reviewer_setup,snapshot_conflict,
+      restore_snapshot_{conflicts,conflicts_counted,conflicts_with_budget},snapshot_contains_path,apply_snapshot_paths,
+      materialize_snapshot,snapshot_lookup_{fixed_arg_bytes,batches},reviewer_prompt,decode_answer,failed_reviewer,
       awaiting_answer
    prepare
     interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,queue_restart,interrupted
@@ -387,8 +388,10 @@ src
   core_unblock_dependents
    - skipped_task_ready,dependency_approved
   core_worktree_cleanup
-   WorktreePin(C{core,path}) : Drop
-    - drop
+   WorktreeLease,WorktreePin(C{core,path}) : Drop
+    WorktreeLease - drop
+    WorktreePin - drop
+   WorktreeLeaseState(C{leased,pins})
    - CheckoutKind,checkout_kind,eligible
   core_writer_base
    - PlanBase
@@ -597,6 +600,7 @@ src
      Parent(C{directory})
       open(path):Result<Self> > read
       at(root,path,create):Result<(Self,String)> ~49 > cstring
+      recovery_at(root,path,create):Result<(Self,String)> ~61 > cstring
       read(name):Result<File> > cstring
       matches(name,expected):Result<bool> > read,len
       rename(from,to,name):Result<()> > cstring,syscall
@@ -676,10 +680,11 @@ src
    commit_subject(purpose):&'static str > subject
    git(dir,args):Result<std::process::Output>
    ok(dir,args):Result<String> > git
-   ok_with_input(dir,args,input):Result<String> > git_with_input
+   tree_entry(dir,tree,name):Result<Option<TreeEntry>> ~44 > git,TreeEntry,len
    CommitPurpose(E{TaskResult,Checkpoint,ArtifactCheckpoint,Integration,Repair,ManualRecovery,{Workspace,Conflict,Dependency,ArtifactInput,SourceInput,Requirements}Snapshot,TestFixture})
     subject():&'static str
    Integration(E{Committed,Applied,Conflict,UserEdits})
+   TreeEntry(C{object,is_tree,stdout_bytes})
   history
    mail/agent
     agent_message_signature(request):Result<String>
@@ -912,7 +917,7 @@ src
    task_role(key):Option<(&str,bool)>
    task_state_digest(tasks):String
    ConversationSummary(C{id,goal,project,created_ms,status,active_plan,tasks_{total,done},revision_token})
-   Core(C{store,native,weak,_lock,opened_ms,config,config_{update,modified},state,integrating,graph_updates,revising,revision_{jobs,views},agent_reviews,task_{cancels,restarts},worktree_{cleanup,cleanup_notes,pins},orchestrator_restarts,turn_locks,session_lifecycle,running,plans,reviews,blocked_seen}) : Drop
+   Core(C{store,native,weak,_lock,opened_ms,config,config_{update,modified},state,integrating,graph_updates,revising,revision_{jobs,views},agent_reviews,task_{cancels,restarts},worktree_{cleanup,cleanup_notes,leases,lease_changed},orchestrator_restarts,turn_locks,session_lifecycle,running,plans,reviews,blocked_seen}) : Drop
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
     defer_question_tool(conversation,args):Result<Value> > required_text,agent_question,defer_question_to_user,notice
@@ -1024,7 +1029,8 @@ src
     start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,require,validate_plan_inputs,db,remove,announce_plan_tasks,drop,spawn_plan_runner
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
-    run_task(&Arc<Self>,conversation,task,cancel):Result<()> > Execution.new
+    run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
+    run_task_with_lease(&Arc<Self>,conversation,task,cancel,lease):Result<()> > Execution.new
     freshness_for_task(conversation,plan_id,task):Result<String> > freshness_seed,append_run_revision
     task_unscoped(plan,id):Result<Task> > task_in_plan_by_id
     task(plan,id):Result<Task> > task_unscoped,plan_conversation,freshness_for_task
@@ -1048,10 +1054,16 @@ src
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
     start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > start_plan_with_scope_lock
-    pin_worktree(path):WorktreePin<'_> > WorktreePin
+    lease_worktree(path):WorktreeLease<'_> > wait,WorktreeLease
+    wait_for_worktree_available(paths,cancel):bool > all
+    try_lease_worktree(path):Option<WorktreeLease<'_>> > WorktreeLease
+    try_pin_worktree(path):Option<WorktreePin<'_>> > WorktreePin
+    try_task_worktree_lease(task):Result<(bool,Option<WorktreeLease<'_>>)> > task_worktree_path,try_lease_worktree
+    task_worktree_lease(task):Result<Option<WorktreeLease<'_>>> > task_worktree_path,lease_worktree
+    task_worktree_path(task):Result<Option<PathBuf>> > task_in_plan_by_id,worktree_path,has_delivery
     queue_worktree_cleanup(task)
-    drain_worktree_cleanup() > try_lock,queue_worktree_cleanup,cleanup_{task_worktrees,notice}
-    release_task_views(id,keep) > task_view_paths,cleanup_view_path,queue_worktree_cleanup,cleanup_notice
+    drain_worktree_cleanup() > cleanup_task_worktrees,queue_worktree_cleanup,cleanup_notice
+    release_task_views(id,keep) > release_task_views_with_hook
     writer_base(plan_id,spec,project):Result<String> > plan_{base,base_record},writer_{dependency_changes,base_scratch}
     record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     compliance_audit(&Arc<Self>,conversation,plan,cancel):Result<Vec<String>> > audit_scope,{produce,review}_audit,AuditTurns,finish_audit
@@ -1096,9 +1108,9 @@ src
       {cancel,wait_for}_affected_tasks,{spawn,finish}_revision_worker,prepare_{revision,revision_contents},revised_specs,
       ensure_revision_accepted,prepared_revision,replaced_graph,planner_submitted_plan,wait_for_revision_jobs,
       finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,unchanged_recovery_request,
-      worktree_is_pinned,plan_base_path,check_audit_scope,save_audit_{evidence,review},complete_audit,
-      requirements_{failure,feedback},{analyze,apply_extracted,propose_extracted}_requirements,require_extracted_entries,
-      append_interview_question,primary_project,session_matches_context,execution_signature
+      cleanup_{view_path,task_worktrees_with_hook},plan_base_path,check_audit_scope,save_audit_{evidence,review},
+      complete_audit,requirements_{failure,feedback},{analyze,apply_extracted,propose_extracted}_requirements,
+      require_extracted_entries,append_interview_question,primary_project,session_matches_context,execution_signature
    RecoveryAction(E{IntegrateWithConsent,KeepOnBranch,ReviewManualSnapshot,RetryWithGuidance,RestartAgent,CancelTask})
    TaskRecoveryRequest(C{conversation,plan,task,action,consent_files,freshness_token,message})
    TaskRecoveryResponse(C{task,status,round,integrated_files,preserved_branch,new_freshness_token,notice})
@@ -1140,14 +1152,14 @@ src
    recover(store,state):Result<()> > reap,kill_leftovers
    Registry(C{sessions})
     reap_idle():Result<()>
-    restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,pin_worktree,prepare_scoped
+    restore(core,conversation,role_key):Result<Arc<Session>> > parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,try_pin_worktree,prepare_scoped
     retire_directory(path):Result<bool> > try_lock
     shutdown():Result<()> > store
     prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > task_by_id,session_signature
     get(conversation,role):Result<Option<Arc<Session>>>
     claimed():Vec<String>
    Session(C{conversation,core,spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
-   = EXECUTION_FAILED
+   = EXECUTION_FAILED,APPROVAL_LINES=40
    - turn_text
   paths
    config_dir():Result<PathBuf> > environment_path
@@ -1686,8 +1698,8 @@ src
    session
     handles
      quiet_for(state):std::time::Duration
-     tail(state,count):String
-     Session: attached():bool; submit(state,text):Result<()> > require; interrupt(state):Result<()>; press(state,keys):Result<()> > require; shared():Arc<Mutex<State>>; exited():Option<String> > flatten
+     tail(state,count):String > screen_text
+     Session: attached():bool; submit(state,text):Result<()> > require; interrupt(state):Result<()>; press(state,keys):Result<()> > require; press_for_approval(state,provider,fingerprint,key):Result<bool> > with_matching_fingerprint,screen_text,detect,require; shared():Arc<Mutex<State>>; exited():Option<String> > flatten
      - Session: attach,resize
     lifecycle
      Session: snapshot(handle,after):Result<Option<Screen>> > render_screen; input(handle,sequence,input):Result<()> ~42 > require,apply_input
@@ -2194,10 +2206,11 @@ src
      Form: key(key):Option<String> > key_global,len,navigate_choice,submit_or_insert_newline,edit_key,insert_character
      - Form: scroll_page
     render
+     ScopeCheckpoint(C{offset,sanitizer,wrapper})
      Form: draw(frame,screen,theme) ~50 > interview_box,rows,row_count,content_box,visual_cursor,visible_{scroll,rows},ScopeRows,render_interview_rows,place_cursor
-     - ScopeWrapper,question_rows,wrapped_scope,append_{answer_rows,interview_footer,wrapped},option_rows,
-       append_{option,option_label,input_rows}
-     - ScopeWrapper: new,emit_{row,borrowed},consume,finish
+     - ScopeWrapState,ScopePass,ScopeWrapper,question_rows,wrapped_{scope,scope_from},record_checkpoint,
+       append_{answer_rows,interview_footer,wrapped},option_rows,append_{option,option_label,input_rows}
+     - ScopeWrapper: new,from_state,emit_{row,borrowed},consume,finish
    interview.rs
     Form(C{event,question,scope_{summary,revision,source_revision,cache},selected,input,visible,sending,sent,error,scroll,scroll_step,manual_scroll})
      new(event,question):Self
@@ -3030,6 +3043,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 130,417 LOC · input 1,156,948 · output 44,150 tokens · state 0db0ee244bff · targets AGENTS.md
+· 131,723 LOC · input 1,169,296 · output 44,459 tokens · state 7cc599e5600f · targets AGENTS.md
 ```
 <!-- hologram:end -->

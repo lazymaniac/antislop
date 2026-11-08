@@ -121,7 +121,22 @@ impl Session {
                 // there they are pressed once more, then the failure is
                 // reported with the screen as it is.
                 for attempt in 0..2 {
-                    terminal::Session::press(&self.screen, &choice.keys)?;
+                    for key in &choice.keys {
+                        if cancel.load(Ordering::SeqCst) {
+                            return Err(invalid(mcp::CANCELLED));
+                        }
+                        if !terminal::Session::press_for_approval(
+                            &self.screen,
+                            self.spec.provider,
+                            &approval.fingerprint,
+                            *key,
+                        )? {
+                            // The old decision is stale. The caller's polling
+                            // loop will recognize and route the replacement.
+                            return Ok(());
+                        }
+                        std::thread::sleep(Duration::from_millis(80));
+                    }
                     if self.dialog_gone(&approval, cancel)? {
                         return Ok(());
                     }
