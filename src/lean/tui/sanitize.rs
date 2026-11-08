@@ -5,7 +5,7 @@
 //! Preserve readable newlines and tabs (expanded to spaces).
 //! An unfinished escape or control string consumes the remainder of the input.
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum State {
     #[default]
     Text,
@@ -17,7 +17,7 @@ enum State {
 
 /// Carries escape parsing across transport chunks so an OSC or CSI sequence
 /// cannot leak into the display when it crosses a chunk boundary.
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct Sanitizer {
     state: State,
 }

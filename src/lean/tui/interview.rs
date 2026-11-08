@@ -7,8 +7,11 @@ struct ScopeCache {
     key: Option<ScopeCacheKey>,
     row_count: Option<usize>,
     window: Option<ScopeWindow>,
+    checkpoints: Vec<render::ScopeCheckpoint>,
     #[cfg(test)]
     scans: usize,
+    #[cfg(test)]
+    processed_graphemes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +33,7 @@ impl ScopeCache {
         self.key = None;
         self.row_count = None;
         self.window = None;
+        self.checkpoints.clear();
     }
 }
 

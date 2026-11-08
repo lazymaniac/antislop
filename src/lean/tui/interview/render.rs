@@ -172,6 +172,7 @@ fn question_rows(
 /// Sanitizes and wraps the scope incrementally. Only requested rows and the
 /// current chunk are retained; an oversized cluster is kept whole while it is
 /// sanitized so wrapping never separates its graphemes.
+#[cfg(test)]
 fn wrapped_scope<'a>(
     text: &'a str,
     width: usize,
@@ -179,28 +180,96 @@ fn wrapped_scope<'a>(
     count: usize,
     theme: &Theme,
 ) -> (usize, Vec<Line<'a>>) {
+    let (total, rows, _) = wrapped_scope_from(
+        text,
+        width,
+        theme,
+        ScopePass {
+            start,
+            count,
+            checkpoint: None,
+            index: None,
+        },
+    );
+    (total, rows)
+}
+
+// Sparse checkpoints keep only resumable state, roughly one entry per 4 KiB
+// of source. Replays in either direction are bounded by that spacing plus the
+// requested viewport, while rendered rows stay viewport-sized.
+const SCOPE_CHECKPOINT_BYTES: usize = 4096;
+const MAX_CHECKPOINT_ROW_BYTES: usize = 1024;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ScopeCheckpoint {
+    offset: usize,
+    sanitizer: super::super::sanitize::Sanitizer,
+    wrapper: ScopeWrapState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScopeWrapState {
+    row: String,
+    columns: usize,
+    last_space: Option<(usize, usize)>,
+    total: usize,
+}
+
+struct ScopePass<'a> {
+    start: usize,
+    count: usize,
+    checkpoint: Option<&'a ScopeCheckpoint>,
+    index: Option<&'a mut Vec<ScopeCheckpoint>>,
+}
+
+fn wrapped_scope_from<'a>(
+    text: &'a str,
+    width: usize,
+    theme: &Theme,
+    pass: ScopePass<'_>,
+) -> (usize, Vec<Line<'a>>, usize) {
+    let ScopePass {
+        start,
+        count,
+        checkpoint,
+        index,
+    } = pass;
+    let mut index = index;
+    let resume_offset = checkpoint.map_or(0, |checkpoint| checkpoint.offset);
     let width = width.max(1);
-    let mut sanitizer = super::super::sanitize::Sanitizer::default();
+    let mut sanitizer = checkpoint
+        .map(|checkpoint| checkpoint.sanitizer.clone())
+        .unwrap_or_default();
     let mut chunk = String::with_capacity(1024);
     let mut output = String::with_capacity(1024);
-    let mut wrapped = ScopeWrapper::new(width, start, count, theme);
-    let mut graphemes = text.grapheme_indices(true).peekable();
+    let mut wrapped = ScopeWrapper::from_state(width, start, count, theme, checkpoint);
+    let mut graphemes = text[resume_offset..].grapheme_indices(true).peekable();
+    let mut indexed_offset = resume_offset;
+    let mut processed = 0;
     while let Some((offset, grapheme)) = graphemes.next() {
+        if checkpoint.is_some() && count > 0 && wrapped.selected.len() >= count {
+            break;
+        }
+        processed += 1;
+        let source_offset = resume_offset + offset;
         if grapheme.len() > 1024 {
-            let mut end = offset + grapheme.len();
+            let mut end = source_offset + grapheme.len();
             while let Some((next_offset, next)) = graphemes.peek().copied() {
-                if next_offset != end || next.len() <= 1024 {
+                let next_source_offset = resume_offset + next_offset;
+                if next_source_offset != end || next.len() <= 1024 {
                     break;
                 }
+                processed += 1;
                 end += next.len();
                 graphemes.next();
             }
-            let oversized = &text[offset..end];
+            let oversized = &text[source_offset..end];
             if !chunk.is_empty() {
                 sanitizer.append_chunk(&chunk, &mut output);
                 wrapped.consume(&output);
                 chunk.clear();
                 output.clear();
+                record_checkpoint(&mut index, end, &sanitizer, &wrapped, &mut indexed_offset);
             }
             if sanitizer.can_borrow_visible(oversized) {
                 if !wrapped.row.is_empty() {
@@ -218,6 +287,7 @@ fn wrapped_scope<'a>(
                 wrapped.consume(&output);
                 output.clear();
             }
+            record_checkpoint(&mut index, end, &sanitizer, &wrapped, &mut indexed_offset);
             continue;
         }
         if chunk.len() + grapheme.len() > 1024 && !chunk.is_empty() {
@@ -225,12 +295,27 @@ fn wrapped_scope<'a>(
             wrapped.consume(&output);
             chunk.clear();
             output.clear();
+            record_checkpoint(
+                &mut index,
+                source_offset,
+                &sanitizer,
+                &wrapped,
+                &mut indexed_offset,
+            );
         }
         chunk.push_str(grapheme);
     }
     sanitizer.append_chunk(&chunk, &mut output);
     wrapped.consume(&output);
-    wrapped.finish()
+    record_checkpoint(
+        &mut index,
+        text.len(),
+        &sanitizer,
+        &wrapped,
+        &mut indexed_offset,
+    );
+    let (total, rows) = wrapped.finish();
+    (total, rows, processed)
 }
 
 struct ScopeWrapper<'a, 'theme> {
@@ -245,6 +330,37 @@ struct ScopeWrapper<'a, 'theme> {
     selected: Vec<Line<'a>>,
 }
 
+fn record_checkpoint(
+    index: &mut Option<&mut Vec<ScopeCheckpoint>>,
+    offset: usize,
+    sanitizer: &super::super::sanitize::Sanitizer,
+    wrapper: &ScopeWrapper<'_, '_>,
+    indexed_offset: &mut usize,
+) {
+    let Some(index) = index.as_deref_mut() else {
+        return;
+    };
+    // Keep continuation rows small so a pathological grapheme cannot be
+    // duplicated by every index entry. Sanitizer state resumes escape parsing.
+    if !sanitizer.at_text_boundary()
+        || wrapper.row.len() > MAX_CHECKPOINT_ROW_BYTES
+        || offset.saturating_sub(*indexed_offset) < SCOPE_CHECKPOINT_BYTES
+    {
+        return;
+    }
+    index.push(ScopeCheckpoint {
+        offset,
+        sanitizer: sanitizer.clone(),
+        wrapper: ScopeWrapState {
+            row: wrapper.row.clone(),
+            columns: wrapper.columns,
+            last_space: wrapper.last_space,
+            total: wrapper.total,
+        },
+    });
+    *indexed_offset = offset;
+}
+
 impl ScopeCache {
     fn prepare(&mut self, revision: u64, width: usize, ascii: bool) {
         let key = ScopeCacheKey {
@@ -256,6 +372,7 @@ impl ScopeCache {
             self.key = Some(key);
             self.row_count = None;
             self.window = None;
+            self.checkpoints.clear();
         }
     }
 
@@ -277,7 +394,29 @@ impl ScopeCache {
         {
             self.scans += 1;
         }
-        let row_count = wrapped_scope(scope, width, 0, 0, theme).0;
+        self.checkpoints.clear();
+        self.checkpoints.push(ScopeCheckpoint {
+            offset: 0,
+            sanitizer: super::super::sanitize::Sanitizer::default(),
+            wrapper: ScopeWrapState {
+                row: String::new(),
+                columns: 0,
+                last_space: None,
+                total: 0,
+            },
+        });
+        let row_count = wrapped_scope_from(
+            scope,
+            width,
+            theme,
+            ScopePass {
+                start: 0,
+                count: 0,
+                checkpoint: None,
+                index: Some(&mut self.checkpoints),
+            },
+        )
+        .0;
         self.row_count = Some(row_count);
         row_count
     }
@@ -306,8 +445,28 @@ impl ScopeCache {
         {
             self.scans += 1;
         }
-        let (row_count, rows) = wrapped_scope(scope, width, start, count, theme);
-        self.row_count = Some(row_count);
+        if self.checkpoints.is_empty() {
+            let _ = self.row_count(revision, Some(scope), width, theme);
+        }
+        let after = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.wrapper.total <= start);
+        let checkpoint = &self.checkpoints[after.saturating_sub(1)];
+        let (_partial_row_count, rows, _processed) = wrapped_scope_from(
+            scope,
+            width,
+            theme,
+            ScopePass {
+                start,
+                count,
+                checkpoint: Some(checkpoint),
+                index: None,
+            },
+        );
+        #[cfg(test)]
+        {
+            self.processed_graphemes += _processed;
+        }
         let rows = rows.iter().map(ToString::to_string).collect::<Vec<_>>();
         self.window = Some(ScopeWindow {
             start,
@@ -333,6 +492,23 @@ impl<'a, 'theme> ScopeWrapper<'a, 'theme> {
             total: 0,
             selected: Vec::with_capacity(count),
         }
+    }
+
+    fn from_state(
+        width: usize,
+        start: usize,
+        count: usize,
+        theme: &'theme Theme,
+        checkpoint: Option<&ScopeCheckpoint>,
+    ) -> Self {
+        let mut wrapper = Self::new(width, start, count, theme);
+        if let Some(state) = checkpoint.map(|checkpoint| &checkpoint.wrapper) {
+            wrapper.row.clone_from(&state.row);
+            wrapper.columns = state.columns;
+            wrapper.last_space = state.last_space;
+            wrapper.total = state.total;
+        }
+        wrapper
     }
 
     fn emit_row(&mut self) {
@@ -601,6 +777,88 @@ fn append_input_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_scope_checkpoints_bound_forward_and_backward_page_scans() {
+        let theme = Theme::new(false, true);
+        let scope = "word 日本語 🙂 ".repeat(30_000);
+        let mut cache = ScopeCache::default();
+        let total = cache.row_count(4, Some(&scope), 24, &theme);
+        let source_fragments = scope.graphemes(true).count();
+        let checkpoint_count = cache.checkpoints.len();
+        assert!(total > 10_000);
+        assert!(checkpoint_count > 1);
+        assert!(cache.checkpoints.last().unwrap().wrapper.total > 10);
+        assert!(checkpoint_count * 100 < source_fragments);
+        assert!(cache.checkpoints.windows(2).all(|pair| {
+            pair[0].offset <= pair[1].offset && pair[0].wrapper.total <= pair[1].wrapper.total
+        }));
+
+        let initial_work = cache.processed_graphemes;
+        let mut requests = (0..80).map(|page| page * 10).collect::<Vec<_>>();
+        requests.extend((0..80).rev().map(|page| page * 10));
+        for (request, start) in requests.into_iter().enumerate() {
+            let rows = cache.window(4, &scope, start, 10, 24, &theme);
+            if request == 0 || request == 79 || request == 80 || request == 159 {
+                let (direct_total, direct_rows) = wrapped_scope(&scope, 24, start, 10, &theme);
+                assert_eq!(direct_total, total);
+                assert_eq!(
+                    rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    direct_rows
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        let indexed_work = cache.processed_graphemes - initial_work;
+        assert_eq!(cache.row_count, Some(total));
+        eprintln!(
+            "scope fragments: source={source_fragments}, forward+backward indexed={indexed_work}, full-scan baseline={}, checkpoints={checkpoint_count}",
+            source_fragments * 80 * 2
+        );
+        assert!(
+            indexed_work < 80 * 2 * source_fragments / 10,
+            "indexed page scans processed {indexed_work} of {source_fragments} fragments per full scan"
+        );
+        assert!(
+            indexed_work < 80 * 2 * (SCOPE_CHECKPOINT_BYTES / 2 + 100),
+            "checkpoint replay unexpectedly exceeded spacing bounds: {indexed_work}"
+        );
+    }
+
+    #[test]
+    fn sparse_scope_checkpoints_invalidate_with_content_width_and_ascii() {
+        let theme = Theme::new(false, true);
+        let mut cache = ScopeCache::default();
+        let first = "alpha beta gamma ".repeat(2_000);
+        let second = "changed scope ".repeat(2_000);
+        cache.row_count(1, Some(&first), 20, &theme);
+        let first_checkpoints = cache.checkpoints.len();
+        assert!(first_checkpoints > 1);
+        cache.window(1, &first, 400, 8, 20, &theme);
+        cache.row_count(2, Some(&second), 20, &theme);
+        assert!(
+            cache.window.is_none(),
+            "content revision invalidates the cached viewport"
+        );
+        assert!(cache.checkpoints.len() > 1);
+        assert_ne!(cache.checkpoints.len(), 0);
+        let content_count = cache.row_count.unwrap();
+        let width_count = cache.row_count(2, Some(&second), 12, &theme);
+        assert_ne!(content_count, width_count);
+        assert!(
+            cache.window.is_none(),
+            "width changes invalidate the cached viewport"
+        );
+        let ascii_theme = Theme::new(false, false);
+        cache.window(2, &second, 20, 8, 12, &theme);
+        cache.row_count(2, Some(&second), 12, &ascii_theme);
+        assert!(
+            cache.window.is_none(),
+            "ASCII mode invalidates the viewport cache"
+        );
+    }
 
     #[test]
     fn large_scope_wrap_keeps_only_requested_rows() {
