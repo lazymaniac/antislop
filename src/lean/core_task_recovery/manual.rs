@@ -158,7 +158,21 @@ fn snapshot_conflict(files: &[String]) -> Error {
     ))
 }
 
+// Keep each ls-tree invocation comfortably below common ARG_MAX limits. The
+// restore pathspecs travel on stdin, so their total size does not consume argv.
+const SNAPSHOT_LOOKUP_ARG_BUDGET: usize = 64 * 1024;
+
 fn restore_snapshot_conflicts(project: &Path, snapshot: &str, files: &[String]) -> Result<()> {
+    restore_snapshot_conflicts_counted(project, snapshot, files).map(|_| ())
+}
+
+fn restore_snapshot_conflicts_counted(
+    project: &Path,
+    snapshot: &str,
+    files: &[String],
+) -> Result<usize> {
+    // Validate every path before querying or changing the working tree. In
+    // particular, a later unsafe path must not follow earlier restores.
     for file in files {
         let relative = Path::new(file);
         require(
@@ -169,46 +183,132 @@ fn restore_snapshot_conflicts(project: &Path, snapshot: &str, files: &[String]) 
             "invalid path in manual recovery snapshot",
         )?;
         ensure_safe_parent(project, relative)?;
-        let tree = git::git(
-            project,
-            &[
-                "--literal-pathspecs",
-                "ls-tree",
-                "-r",
-                "-z",
-                snapshot,
-                "--",
-                file,
-            ],
-        )?;
+    }
+
+    let mut present = std::collections::HashSet::new();
+    let mut process_count = 0;
+    let lookup_batches = snapshot_lookup_batches(project, files, snapshot);
+    let oversized_path = files.iter().any(|file| {
+        file.len() + 1 + snapshot_lookup_fixed_arg_bytes(project, snapshot)
+            > SNAPSHOT_LOOKUP_ARG_BUDGET
+    });
+    let requested_paths: std::collections::HashSet<&str> =
+        files.iter().map(String::as_str).collect();
+    let batches: Vec<Vec<&str>> = if oversized_path {
+        // A single very deep path can exceed the conservative argv budget.
+        // In that rare case list the tree once and filter by exact path bytes.
+        vec![Vec::new()]
+    } else {
+        lookup_batches
+            .iter()
+            .map(|batch| batch.iter().map(String::as_str).collect())
+            .collect()
+    };
+    for batch in batches {
+        let mut args = vec!["--literal-pathspecs", "ls-tree", "-r", "-z", snapshot];
+        if !oversized_path {
+            args.push("--");
+            args.extend(batch);
+        }
+        let tree = git::git(project, &args)?;
+        process_count += 1;
         require(
             tree.status.success(),
             "could not inspect manual recovery snapshot",
         )?;
-        let destination = project.join(relative);
-        if tree.stdout.is_empty() {
+        for record in tree
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|row| !row.is_empty())
+        {
+            let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+                continue;
+            };
+            if let Ok(path) = std::str::from_utf8(&record[tab + 1..])
+                && (!oversized_path || requested_paths.contains(path))
+            {
+                present.insert(path.to_owned());
+            }
+        }
+    }
+
+    let mut restore_paths = Vec::new();
+    for file in files {
+        if present.contains(file) {
+            restore_paths.push(file);
+        } else {
+            let destination = project.join(file);
             match std::fs::remove_file(destination) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                     return Err(error.into());
                 }
                 _ => {}
             }
-        } else {
-            let source = format!("--source={snapshot}");
-            git::ok(
-                project,
-                &[
-                    "--literal-pathspecs",
-                    "restore",
-                    &source,
-                    "--worktree",
-                    "--",
-                    file,
-                ],
-            )?;
         }
     }
-    Ok(())
+
+    if !restore_paths.is_empty() {
+        let source = format!("--source={snapshot}");
+        let mut pathspecs = Vec::new();
+        for path in restore_paths {
+            pathspecs.extend_from_slice(path.as_bytes());
+            pathspecs.push(0);
+        }
+        git::ok_with_input(
+            project,
+            &[
+                "--literal-pathspecs",
+                "restore",
+                &source,
+                "--worktree",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            &pathspecs,
+        )?;
+        process_count += 1;
+    }
+    Ok(process_count)
+}
+
+fn snapshot_lookup_fixed_arg_bytes(project: &Path, snapshot: &str) -> usize {
+    [
+        "git".len() + 1,
+        "-C".len() + 1,
+        project.as_os_str().as_encoded_bytes().len() + 1,
+        "--literal-pathspecs".len() + 1,
+        "ls-tree".len() + 1,
+        "-r".len() + 1,
+        "-z".len() + 1,
+        snapshot.len() + 1,
+        "--".len() + 1,
+    ]
+    .into_iter()
+    .sum()
+}
+
+fn snapshot_lookup_batches<'a>(
+    project: &Path,
+    files: &'a [String],
+    snapshot: &str,
+) -> Vec<&'a [String]> {
+    let fixed_args_bytes = snapshot_lookup_fixed_arg_bytes(project, snapshot);
+    let mut batches = Vec::new();
+    let mut start = 0;
+    let mut bytes = fixed_args_bytes;
+    for (index, file) in files.iter().enumerate() {
+        let cost = file.len() + 1;
+        if index > start && bytes + cost > SNAPSHOT_LOOKUP_ARG_BUDGET {
+            batches.push(&files[start..index]);
+            start = index;
+            bytes = fixed_args_bytes;
+        }
+        bytes += cost;
+    }
+    if start < files.len() {
+        batches.push(&files[start..]);
+    }
+    batches
 }
 
 fn ensure_safe_parent(project: &Path, relative: &Path) -> Result<()> {
@@ -301,4 +401,151 @@ fn feedback(
     let obligations = tasks::obligations(spec);
     json!({ "round": round, "effect": effect, "effect_cut": effect_cut,
         "coverage": tasks::coverage(&review.verdict, &obligations) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn run_git(project: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn grouped_snapshot_restore_handles_many_conflicts_deletions_and_literal_names() {
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+
+        let mut files = vec![
+            "with\ttab.txt".to_owned(),
+            "with\nnewline.txt".to_owned(),
+            "literal[*]?name.txt".to_owned(),
+            "directory/deep.txt".to_owned(),
+        ];
+        // Push the lookup beyond one argv budget so the test covers bounded
+        // query chunks while still exercising a single streamed restore.
+        for index in 0..2300 {
+            files.push(format!("many/conflict-{index:04}-long-name.txt"));
+        }
+        for file in &files {
+            let path = dir.path().join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("snapshot: {file}\n")).unwrap();
+        }
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+
+        for file in &files {
+            std::fs::write(dir.path().join(file), "conflicting edit\n").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
+            let error = restore_snapshot_conflicts(
+                dir.path(),
+                &snapshot,
+                &[files[0].clone(), "linked/file".into()],
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("symlink"));
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join(&files[0])).unwrap(),
+                "conflicting edit\n"
+            );
+            std::fs::remove_file(dir.path().join("linked")).unwrap();
+        }
+        std::fs::write(dir.path().join("unrelated-user-edit.txt"), "keep me\n").unwrap();
+        let deleted = "removed\tby-snapshot.txt";
+        std::fs::write(dir.path().join(deleted), "remove me\n").unwrap();
+        let mut conflicts = files.clone();
+        conflicts.push(deleted.to_owned());
+
+        let launches =
+            restore_snapshot_conflicts_counted(dir.path(), &snapshot, &conflicts).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("with\ttab.txt")).unwrap(),
+            "snapshot: with\ttab.txt\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("with\nnewline.txt")).unwrap(),
+            "snapshot: with\nnewline.txt\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("literal[*]?name.txt")).unwrap(),
+            "snapshot: literal[*]?name.txt\n"
+        );
+        assert!(!dir.path().join(deleted).exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("unrelated-user-edit.txt")).unwrap(),
+            "keep me\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("many/conflict-2299-long-name.txt")).unwrap(),
+            "snapshot: many/conflict-2299-long-name.txt\n"
+        );
+        let lookup_batches = snapshot_lookup_batches(dir.path(), &conflicts, &snapshot);
+        assert!(
+            lookup_batches.len() > 1,
+            "test must exercise bounded lookup chunks"
+        );
+        assert_eq!(launches, lookup_batches.len() + 1);
+        assert_eq!(launches, 3, "two ls-tree batches and one restore process");
+        // The former loop launched one ls-tree for each requested path, then
+        // one restore for each path present in the snapshot. The absent
+        // deletion therefore contributes only its lookup process.
+        let old_per_path_launches = conflicts.len() + files.len();
+        assert_eq!(files.len(), 2_304);
+        assert_eq!(conflicts.len(), 2_305);
+        assert_eq!(old_per_path_launches, 4_609);
+        assert!(launches < old_per_path_launches);
+        println!(
+            "grouped recovery: {} Git launches for {} paths ({} present); old per-path loop: {}",
+            launches,
+            conflicts.len(),
+            files.len(),
+            old_per_path_launches
+        );
+    }
+
+    #[test]
+    fn grouped_snapshot_restore_keeps_parent_symlink_protection() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
+            let err = restore_snapshot_conflicts(dir.path(), "HEAD", &["linked/file".into()])
+                .unwrap_err();
+            assert!(err.to_string().contains("symlink"));
+        }
+    }
 }

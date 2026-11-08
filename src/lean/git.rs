@@ -35,8 +35,43 @@ pub(super) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .output()?)
 }
 
+fn git_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<std::process::Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("piped git stdin")
+        .write_all(input)?;
+    Ok(child.wait_with_output()?)
+}
+
 pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     let output = git(dir, args)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    } else {
+        Err(Error::Invalid(format!(
+            "git {}: {}",
+            args.join(" "),
+            crate::lean::agent::clip_tail(String::from_utf8_lossy(&output.stderr).trim(), 8000)
+        )))
+    }
+}
+
+pub(super) fn ok_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<String> {
+    let output = git_with_input(dir, args, input)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {

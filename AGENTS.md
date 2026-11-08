@@ -364,8 +364,9 @@ src
     - manual_event
    manual.rs
     apply(core,work):Result<()> > prepare_review,update_review_state,feedback,approve,reject
-    - ManualReview,run_reviewer,reviewer_setup,snapshot_conflict,restore_snapshot_conflicts,ensure_safe_parent,
-      reviewer_prompt,decode_answer,failed_reviewer,awaiting_answer
+    - ManualReview,run_reviewer,reviewer_setup,snapshot_conflict,restore_snapshot_{conflicts,conflicts_counted},
+      snapshot_lookup_{fixed_arg_bytes,batches},ensure_safe_parent,reviewer_prompt,decode_answer,failed_reviewer,
+      awaiting_answer
    prepare
     interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,queue_restart,interrupted
     load(core,req,actor):Result<RecoveryWork> > accepted_plan,config_snapshot,Core.task,assert_task_inputs,task_freshness_token,validate_request,RecoveryWork
@@ -675,6 +676,7 @@ src
    commit_subject(purpose):&'static str > subject
    git(dir,args):Result<std::process::Output>
    ok(dir,args):Result<String> > git
+   ok_with_input(dir,args,input):Result<String> > git_with_input
    CommitPurpose(E{TaskResult,Checkpoint,ArtifactCheckpoint,Integration,Repair,ManualRecovery,{Workspace,Conflict,Dependency,ArtifactInput,SourceInput,Requirements}Snapshot,TestFixture})
     subject():&'static str
    Integration(E{Committed,Applied,Conflict,UserEdits})
@@ -2192,15 +2194,18 @@ src
      Form: key(key):Option<String> > key_global,len,navigate_choice,submit_or_insert_newline,edit_key,insert_character
      - Form: scroll_page
     render
-     Form: draw(frame,screen,theme) ~42 > interview_box,rows,wrapped_scope,content_box,visual_cursor,visible_{scroll,rows},render_interview_rows,place_cursor
-     - ScopeWrapper,question_rows,append_{answer_rows,interview_footer,wrapped},option_rows,
+     Form: draw(frame,screen,theme) ~50 > interview_box,rows,row_count,content_box,visual_cursor,visible_{scroll,rows},ScopeRows,render_interview_rows,place_cursor
+     - ScopeWrapper,question_rows,wrapped_scope,append_{answer_rows,interview_footer,wrapped},option_rows,
        append_{option,option_label,input_rows}
      - ScopeWrapper: new,emit_{row,borrowed},consume,finish
    interview.rs
-    Form(C{event,question,scope_summary,selected,input,visible,sending,sent,error,scroll,scroll_step,manual_scroll})
+    Form(C{event,question,scope_{summary,revision,source_revision,cache},selected,input,visible,sending,sent,error,scroll,scroll_step,manual_scroll})
      new(event,question):Self
      paste(text) > insert_str,sanitize_paste
-     set_scope_summary(summary)
+     set_scope_summary(summary) > clear_layout
+     sync_scope_summary(summary,source_revision) > set_scope_summary
+    - ScopeCache,ScopeCacheKey,ScopeWindow
+    - ScopeCache: prepare,window
    layout/lines
     compute_visual_lines(text,width):Vec<VisualLineInfo> > paragraph_end,wrap_paragraph,empty_line
     visual_text_lines(text,width):Vec<String> > compute_visual_lines,visual_text_lines_from_layout
@@ -3025,6 +3030,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 129,910 LOC · input 1,152,699 · output 44,063 tokens · state 0a51d24efd48 · targets AGENTS.md
+· 130,417 LOC · input 1,156,948 · output 44,150 tokens · state 0db0ee244bff · targets AGENTS.md
 ```
 <!-- hologram:end -->
