@@ -101,23 +101,15 @@ fn agent_identity(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'stati
 }
 
 fn agent_usage(agent: &Agent, theme: &Theme, width: usize) -> Vec<Line<'static>> {
-    if agent.turns == 0 {
+    // Rounds are counted in the title; only what the turns cost is shown.
+    if agent.turns == 0 || agent.reported == 0 {
         return Vec::new();
     }
-    let turns = format!(
-        "{} turn{}",
-        agent.turns,
-        if agent.turns == 1 { "" } else { "s" }
+    let text = format!(
+        "tokens: {} in / {} out",
+        compact(agent.tokens_in.unwrap_or(0)),
+        compact(agent.tokens_out.unwrap_or(0))
     );
-    let text = if agent.reported == 0 {
-        turns
-    } else {
-        format!(
-            "{turns} · tokens: {} in / {} out",
-            compact(agent.tokens_in.unwrap_or(0)),
-            compact(agent.tokens_out.unwrap_or(0))
-        )
-    };
     para(theme, &text, width, theme.dim())
 }
 

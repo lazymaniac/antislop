@@ -7719,10 +7719,8 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
         "{stacked}"
     );
     assert!(stacked.contains("Session · worker"), "{stacked}");
-    let folded = dashboard_screen(100, 40, 0, |details| {
-        details.dash_cycle();
-        details.dash_cycle();
-    });
+    // Goal opens whole, so one Enter folds it.
+    let folded = dashboard_screen(100, 40, 0, |details| details.dash_cycle());
     assert!(!folded.contains("Never lose a write"), "{folded}");
     // Neither wide nor tall: `m` swaps terminal and info.
     let small = dashboard_screen(100, 24, 0, |_| {});

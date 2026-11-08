@@ -139,6 +139,9 @@ pub struct Details {
     /// the ids of the last draw (the focus walks them in screen order).
     pub dash_fold: HashMap<&'static str, dashboard::Fold>,
     pub dash_ids: Vec<&'static str>,
+    /// Cards of the last draw whose preview is their whole body: Enter folds
+    /// them straight away.
+    pub dash_whole: Vec<&'static str>,
     pub dash_focus: usize,
     pub dash_reveal: bool,
     pub(in crate::lean::tui) pending_g: bool,

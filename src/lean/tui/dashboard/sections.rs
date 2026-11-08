@@ -59,7 +59,7 @@ fn append_goal_sections(theme: &Theme, width: usize, row: &TaskRow, out: &mut Ve
         "goal",
         "Goal",
         para(theme, &row.goal, width, theme.text()),
-        8,
+        WHOLE,
     ));
     if !row.focus.trim().is_empty() {
         out.push(text_section(

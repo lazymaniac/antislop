@@ -37,6 +37,11 @@ impl Details {
         self.dash_focus = self.dash_focus.min(sections.len().saturating_sub(1));
         let order = dashboard_order(&sections, two);
         self.dash_ids = order.iter().map(|index| sections[*index].id).collect();
+        self.dash_whole = sections
+            .iter()
+            .filter(|section| section.preview == super::super::dashboard::WHOLE)
+            .map(|section| section.id)
+            .collect();
         let focus = self.dash_ids.get(self.dash_focus).copied();
         let mut rows = DashboardRows {
             columns: [Vec::new(), Vec::new()],

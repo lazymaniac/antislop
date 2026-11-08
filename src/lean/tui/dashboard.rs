@@ -32,12 +32,15 @@ pub enum Fold {
     Folded,
 }
 
+/// A preview that is the whole body: the card opens in full.
+pub(super) const WHOLE: usize = usize::MAX;
+
 pub(super) struct Section {
     pub(super) id: &'static str,
     pub(super) title: &'static str,
     pub(super) meta: Vec<Span<'static>>,
     pub(super) body: Vec<Line<'static>>,
-    /// Body lines shown before "+N more".
+    /// Body lines shown before "+N more"; [`WHOLE`] shows all of them.
     pub(super) preview: usize,
     pub(super) right: bool,
 }
@@ -194,10 +197,12 @@ impl Details {
         self.dash_reveal = true;
     }
 
-    /// Enter on a card: preview → full → folded → preview.
+    /// Enter on a card: preview → full → folded → preview; a card whose
+    /// preview is already whole goes straight to folded.
     pub fn dash_cycle(&mut self) {
         if let Some(id) = self.dash_ids.get(self.dash_focus).copied() {
             let next = match self.fold_of(id) {
+                Fold::Preview if self.dash_whole.contains(&id) => Fold::Folded,
                 Fold::Preview => Fold::Full,
                 Fold::Full => Fold::Folded,
                 Fold::Folded => Fold::Preview,

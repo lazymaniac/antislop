@@ -598,7 +598,8 @@ fn render_card_round_data(
     None
 }
 
-/// The CLI behind a card and what its turns cost so far.
+/// The CLI behind a card and what its turns cost so far; the round is in
+/// the card's title.
 fn agent_line(agent: &crate::lean::tui::view::Agent) -> String {
     let mut parts = vec![format!(
         "CLI: {}",
@@ -614,11 +615,9 @@ fn agent_line(agent: &crate::lean::tui::view::Agent) -> String {
             None => format!("model {model}"),
         });
     }
-    parts.push(if agent.running {
-        "running".to_owned()
-    } else {
-        format!("{} turns", agent.turns)
-    });
+    if agent.running {
+        parts.push("running".to_owned());
+    }
     if agent.tokens_in.is_some() {
         parts.push(format!("tokens {}", agent.tokens()));
     }
