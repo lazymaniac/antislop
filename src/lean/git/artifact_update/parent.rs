@@ -5,7 +5,7 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 
-pub(super) struct Parent {
+pub(crate) struct Parent {
     directory: File,
 }
 impl Parent {
@@ -66,6 +66,70 @@ impl Parent {
             relative.file_name().unwrap().to_string_lossy().into_owned(),
         ))
     }
+    /// Open a recovery path's parent without resolving any parent through a
+    /// symlink. Recovery accepts Git's full set of literal filenames, so it
+    /// uses the caller's component validation rather than artifact policy.
+    pub(crate) fn recovery_at(root: &Path, path: &str, create: bool) -> Result<(Self, String)> {
+        let relative = Path::new(path);
+        let mut parent = Self::open(root)?;
+        for component in relative.parent().unwrap().components() {
+            let name = component.as_os_str().to_string_lossy();
+            let c = cstring(&name)?;
+            // SAFETY: live directory fd and NUL-terminated component; O_NOFOLLOW
+            // pins each traversed directory and rejects symlink substitution.
+            let mut fd = unsafe {
+                libc::openat(
+                    parent.directory.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0
+                && create
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+            {
+                // SAFETY: same live parent/component; mkdirat cannot follow a link.
+                let made =
+                    unsafe { libc::mkdirat(parent.directory.as_raw_fd(), c.as_ptr(), 0o755) };
+                if made < 0
+                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
+                {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                // SAFETY: O_NOFOLLOW rejects a symlink raced into the new component.
+                fd = unsafe {
+                    libc::openat(
+                        parent.directory.as_raw_fd(),
+                        c.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    )
+                };
+            }
+            if fd < 0 {
+                let error = std::io::Error::last_os_error();
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::ELOOP) | Some(libc::ENOTDIR)
+                ) {
+                    return Err(Error::Invalid(
+                        "manual recovery snapshot path crosses a non-directory or symlink".into(),
+                    ));
+                }
+                return Err(error.into());
+            }
+            // SAFETY: openat returned a new, valid, owned fd.
+            parent = Self {
+                directory: unsafe { File::from_raw_fd(fd) },
+            };
+        }
+        let name = relative
+            .file_name()
+            .ok_or_else(|| Error::Invalid("recovery path has no filename".into()))?
+            .to_str()
+            .ok_or_else(|| Error::Invalid("recovery path is not UTF-8".into()))?
+            .to_owned();
+        Ok((parent, name))
+    }
     pub(super) fn read(&self, name: &str) -> Result<File> {
         let name = cstring(name)?;
         // SAFETY: live directory fd and NUL-terminated filename. No links are followed.
@@ -100,7 +164,7 @@ impl Parent {
             .read_to_end(&mut bytes)?;
         Ok(bytes == expected)
     }
-    pub(super) fn rename(&self, from: &str, to: &Self, name: &str) -> Result<()> {
+    pub(crate) fn rename(&self, from: &str, to: &Self, name: &str) -> Result<()> {
         let (from, name) = (cstring(from)?, cstring(name)?);
         // SAFETY: both live directory fds and valid component strings.
         let result = unsafe {
@@ -150,7 +214,7 @@ impl Parent {
         };
         syscall(result)
     }
-    pub(super) fn unlink(&self, name: &str) -> Result<()> {
+    pub(crate) fn unlink(&self, name: &str) -> Result<()> {
         let name = cstring(name)?;
         // SAFETY: live private directory fd, valid filename; unlink removes only this link.
         syscall(unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0) })

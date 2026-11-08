@@ -182,7 +182,6 @@ fn restore_snapshot_conflicts_counted(
                     .all(|part| matches!(part, std::path::Component::Normal(_))),
             "invalid path in manual recovery snapshot",
         )?;
-        ensure_safe_parent(project, relative)?;
     }
 
     let mut present = std::collections::HashSet::new();
@@ -233,42 +232,196 @@ fn restore_snapshot_conflicts_counted(
     }
 
     let mut restore_paths = Vec::new();
+    let mut delete_paths = Vec::new();
     for file in files {
         if present.contains(file) {
             restore_paths.push(file);
         } else {
-            let destination = project.join(file);
-            match std::fs::remove_file(destination) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(error.into());
-                }
-                _ => {}
-            }
+            delete_paths.push(file);
         }
     }
 
-    if !restore_paths.is_empty() {
-        let source = format!("--source={snapshot}");
-        let mut pathspecs = Vec::new();
-        for path in restore_paths {
-            pathspecs.extend_from_slice(path.as_bytes());
-            pathspecs.push(0);
-        }
-        git::ok_with_input(
-            project,
-            &[
-                "--literal-pathspecs",
-                "restore",
-                &source,
-                "--worktree",
-                "--pathspec-from-file=-",
-                "--pathspec-file-nul",
-            ],
-            &pathspecs,
-        )?;
-        process_count += 1;
-    }
+    process_count += apply_snapshot_paths(
+        project,
+        snapshot,
+        &restore_paths,
+        &delete_paths,
+        || {},
+        || {},
+    )?;
     Ok(process_count)
+}
+
+fn apply_snapshot_paths(
+    project: &Path,
+    snapshot: &str,
+    restore_paths: &[&String],
+    delete_paths: &[&String],
+    before_open: impl FnOnce(),
+    before_operation: impl FnOnce(),
+) -> Result<usize> {
+    struct Group {
+        parent: git::Parent,
+        relative_parent: PathBuf,
+        restore: Vec<String>,
+        delete: Vec<String>,
+    }
+    let mut paths = std::collections::BTreeMap::<PathBuf, (Vec<String>, Vec<String>)>::new();
+    for (items, restoring) in [(restore_paths, true), (delete_paths, false)] {
+        for file in items {
+            let key = Path::new(file.as_str())
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
+            let group = paths.entry(key).or_default();
+            if restoring {
+                group.0.push(file.as_str().to_owned());
+            } else {
+                group.1.push(file.as_str().to_owned());
+            }
+        }
+    }
+    before_open();
+    let mut groups = Vec::new();
+    for (relative_parent, (restore, delete)) in paths {
+        let needs_directory = !restore.is_empty();
+        let probe = restore.first().or_else(|| delete.first()).unwrap();
+        let parent_path = if relative_parent.as_os_str().is_empty() {
+            "."
+        } else {
+            relative_parent
+                .to_str()
+                .ok_or_else(|| Error::Invalid("recovery parent path is not UTF-8".into()))?
+        };
+        let file_name = Path::new(probe).file_name().unwrap().to_string_lossy();
+        let opened = git::Parent::recovery_at(
+            project,
+            &format!("{parent_path}/{file_name}"),
+            needs_directory,
+        );
+        let parent = match opened {
+            Ok((parent, _)) => parent,
+            Err(Error::Io(error))
+                if !needs_directory && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        groups.push(Group {
+            parent,
+            relative_parent,
+            restore: restore
+                .iter()
+                .map(|p| {
+                    Path::new(p)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect(),
+            delete: delete
+                .iter()
+                .map(|p| {
+                    Path::new(p)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect(),
+        });
+    }
+    // Materialize tracked snapshot entries through Git's checkout-index so
+    // attributes, filters, symlink entries, and executable modes use Git's
+    // checkout rules. Selected entries then replace destination directory
+    // entries with renameat (including symlinks); absent snapshot paths are
+    // removed with unlinkat. A destination directory collision remains an
+    // error. The directory fd pins the opened inode, not its pathname. A same-user
+    // process can move that inode elsewhere while recovery runs; this code
+    // does not claim checkout containment against that concurrent rename.
+    before_operation();
+    let staging = if restore_paths.is_empty() {
+        None
+    } else {
+        Some(materialize_snapshot(project, snapshot, restore_paths)?)
+    };
+    let launches = if staging.is_some() { 2 } else { 0 };
+    for group in groups {
+        for name in &group.delete {
+            match group.parent.unlink(name) {
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+                Ok(()) => {}
+            }
+        }
+        if !group.restore.is_empty() {
+            let staging = staging.as_ref().expect("restore paths have staging");
+            for name in &group.restore {
+                let path = group.relative_parent.join(name);
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| Error::Invalid("recovery path is not UTF-8".into()))?;
+                let (source_parent, source_name) =
+                    git::Parent::recovery_at(&staging.path().join("tree"), path, false)?;
+                source_parent.rename(&source_name, &group.parent, name)?;
+            }
+        }
+    }
+    Ok(launches)
+}
+
+fn materialize_snapshot(
+    project: &Path,
+    snapshot: &str,
+    paths: &[&String],
+) -> Result<tempfile::TempDir> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    // Keep staging on the checkout filesystem: publication uses renameat,
+    // which cannot cross devices. tempdir_in creates a private directory and
+    // does not follow TMPDIR, which may point at another mount.
+    let staging = tempfile::Builder::new()
+        .prefix("antislop-recovery-")
+        .tempdir_in(project)?;
+    let stage_root = staging.path().join("tree");
+    std::fs::create_dir(&stage_root)?;
+    let index = staging.path().join("index");
+    let run = |args: &[&str], input_paths: Option<&[&String]>| -> Result<()> {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        if let Some(paths) = input_paths {
+            let mut stdin = child.stdin.take().expect("piped git stdin");
+            for path in paths {
+                stdin.write_all(path.as_bytes())?;
+                stdin.write_all(&[0])?;
+            }
+        }
+        let output = child.wait_with_output()?;
+        require(
+            output.status.success(),
+            &format!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )
+    };
+    run(&["read-tree", snapshot], None)?;
+    let prefix = format!("--prefix={}/", stage_root.display());
+    run(
+        &["checkout-index", "--force", "--stdin", "-z", &prefix],
+        Some(paths),
+    )?;
+    Ok(staging)
 }
 
 fn snapshot_lookup_fixed_arg_bytes(project: &Path, snapshot: &str) -> usize {
@@ -309,23 +462,6 @@ fn snapshot_lookup_batches<'a>(
         batches.push(&files[start..]);
     }
     batches
-}
-
-fn ensure_safe_parent(project: &Path, relative: &Path) -> Result<()> {
-    let mut parent = project.to_path_buf();
-    let parent_count = relative.components().count().saturating_sub(1);
-    for component in relative.components().take(parent_count) {
-        parent.push(component);
-        match std::fs::symlink_metadata(&parent) {
-            Ok(metadata) => require(
-                metadata.is_dir() && !metadata.file_type().is_symlink(),
-                "manual recovery snapshot path crosses a non-directory or symlink",
-            )?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
 }
 
 fn reviewer_prompt(
@@ -412,6 +548,7 @@ mod tests {
         let output = Command::new("git")
             .arg("-C")
             .arg(project)
+            .args(["-c", "core.hooksPath=/dev/null"])
             .args(args)
             .output()
             .unwrap();
@@ -517,8 +654,11 @@ mod tests {
             lookup_batches.len() > 1,
             "test must exercise bounded lookup chunks"
         );
-        assert_eq!(launches, lookup_batches.len() + 1);
-        assert_eq!(launches, 3, "two ls-tree batches and one restore process");
+        assert_eq!(launches, lookup_batches.len() + 2);
+        assert_eq!(
+            launches, 4,
+            "two ls-tree batches and two temporary-index checkout processes"
+        );
         // The former loop launched one ls-tree for each requested path, then
         // one restore for each path present in the snapshot. The absent
         // deletion therefore contributes only its lookup process.
@@ -536,16 +676,293 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_staging_uses_checkout_filesystem_for_descriptor_publication() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        std::fs::write(dir.path().join("restore.txt"), "snapshot value\n").unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(dir.path().join("restore.txt"), "user edit\n").unwrap();
+
+        let path = "restore.txt".to_owned();
+        let staging = materialize_snapshot(dir.path(), &snapshot, &[&path]).unwrap();
+        assert_eq!(
+            staging.path().parent(),
+            Some(dir.path()),
+            "staging must be created under the checkout, independent of TMPDIR"
+        );
+        assert_eq!(
+            staging.path().metadata().unwrap().dev(),
+            dir.path().metadata().unwrap().dev(),
+            "renameat publication requires staging and checkout on one filesystem"
+        );
+
+        let (source_parent, source_name) =
+            git::Parent::recovery_at(&staging.path().join("tree"), "restore.txt", false).unwrap();
+        let (destination_parent, _) =
+            git::Parent::recovery_at(dir.path(), "restore.txt", false).unwrap();
+        source_parent
+            .rename(&source_name, &destination_parent, "restore.txt")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("restore.txt")).unwrap(),
+            "snapshot value\n"
+        );
+    }
+
     #[test]
     fn grouped_snapshot_restore_keeps_parent_symlink_protection() {
         let dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         {
             let outside = tempfile::tempdir().unwrap();
+            run_git(dir.path(), &["init", "-q"]);
+            run_git(dir.path(), &["config", "user.name", "Test"]);
+            run_git(
+                dir.path(),
+                &["config", "user.email", "test@example.invalid"],
+            );
+            std::fs::write(dir.path().join("tracked.txt"), "snapshot\n").unwrap();
+            run_git(dir.path(), &["add", "--all"]);
+            run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+            let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
             std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
-            let err = restore_snapshot_conflicts(dir.path(), "HEAD", &["linked/file".into()])
+            let err = restore_snapshot_conflicts(dir.path(), &snapshot, &["linked/file".into()])
                 .unwrap_err();
             assert!(err.to_string().contains("symlink"));
+            assert!(!outside.path().join("file").exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_restore_and_delete_stay_on_open_parent_after_symlink_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "snapshot value\n").unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "user edit\n").unwrap();
+        std::fs::write(dir.path().join("sub/delete.txt"), "delete this\n").unwrap();
+        std::fs::write(dir.path().join("sub/unrelated.txt"), "keep edit\n").unwrap();
+        std::fs::write(outside.path().join("restore.txt"), "outside restore\n").unwrap();
+        std::fs::write(outside.path().join("delete.txt"), "outside delete\n").unwrap();
+
+        apply_snapshot_paths(
+            dir.path(),
+            &snapshot,
+            &[&"sub/restore.txt".to_owned()],
+            &[&"sub/delete.txt".to_owned()],
+            || {},
+            || {
+                std::fs::rename(dir.path().join("sub"), dir.path().join("detached")).unwrap();
+                std::os::unix::fs::symlink(outside.path(), dir.path().join("sub")).unwrap();
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("restore.txt")).unwrap(),
+            "outside restore\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("delete.txt")).unwrap(),
+            "outside delete\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("detached/restore.txt")).unwrap(),
+            "snapshot value\n"
+        );
+        assert!(!dir.path().join("detached/delete.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("detached/unrelated.txt")).unwrap(),
+            "keep edit\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_parent_symlink_installed_before_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "snapshot\n").unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "user edit\n").unwrap();
+        std::fs::write(outside.path().join("restore.txt"), "outside edit\n").unwrap();
+
+        let error = apply_snapshot_paths(
+            dir.path(),
+            &snapshot,
+            &[&"sub/restore.txt".to_owned()],
+            &[],
+            || {
+                std::fs::rename(dir.path().join("sub"), dir.path().join("detached")).unwrap();
+                std::os::unix::fs::symlink(outside.path(), dir.path().join("sub")).unwrap();
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("symlink"));
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("restore.txt")).unwrap(),
+            "outside edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("detached/restore.txt")).unwrap(),
+            "user edit\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_fd_tracks_moved_parent_inode_without_claiming_root_containment() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "snapshot value\n").unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(dir.path().join("sub/restore.txt"), "user edit\n").unwrap();
+        std::fs::write(dir.path().join("sub/delete.txt"), "delete me\n").unwrap();
+        let moved = outside.path().join("moved");
+
+        apply_snapshot_paths(
+            dir.path(),
+            &snapshot,
+            &[&"sub/restore.txt".to_owned()],
+            &[&"sub/delete.txt".to_owned()],
+            || {},
+            || std::fs::rename(dir.path().join("sub"), &moved).unwrap(),
+        )
+        .unwrap();
+
+        // This is a boundary test: an open fd pins the directory inode, not its
+        // location. Recovery therefore changes that inode after this rename;
+        // it does not promise that the directory remains beneath the checkout.
+        assert_eq!(
+            std::fs::read_to_string(moved.join("restore.txt")).unwrap(),
+            "snapshot value\n"
+        );
+        assert!(!moved.join("delete.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_checkout_preserves_filters_symlinks_and_executable_modes() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        run_git(dir.path(), &["config", "filter.upper.clean", "tr A-Z a-z"]);
+        run_git(dir.path(), &["config", "filter.upper.smudge", "tr a-z A-Z"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "filtered.txt filter=upper\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("filtered.txt"), "mixed content\n").unwrap();
+        std::fs::write(dir.path().join("replace.txt"), "regular snapshot file\n").unwrap();
+        std::fs::write(dir.path().join("executable.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            dir.path().join("executable.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        symlink("filtered.txt", dir.path().join("link.txt")).unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        let snapshot = git::ok(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        for path in ["filtered.txt", "executable.sh", "link.txt", "replace.txt"] {
+            let path = dir.path().join(path);
+            let _ = std::fs::remove_file(&path);
+            std::fs::write(path, "modified\n").unwrap();
+        }
+        std::fs::remove_file(dir.path().join("replace.txt")).unwrap();
+        symlink("outside-target", dir.path().join("replace.txt")).unwrap();
+
+        let paths = ["filtered.txt", "executable.sh", "link.txt", "replace.txt"].map(str::to_owned);
+        let refs = paths.iter().collect::<Vec<_>>();
+        apply_snapshot_paths(dir.path(), &snapshot, &refs, &[], || {}, || {}).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("filtered.txt")).unwrap(),
+            "MIXED CONTENT\n"
+        );
+        assert_eq!(
+            std::fs::metadata(dir.path().join("executable.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::read_link(dir.path().join("link.txt")).unwrap(),
+            Path::new("filtered.txt")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("replace.txt")).unwrap(),
+            "regular snapshot file\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_fixture_git_commits_ignore_inherited_hooks_per_invocation() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        let hooks = dir.path().join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\ntouch hook-ran\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.path().join("file"), "fixture\n").unwrap();
+        run_git(dir.path(), &["add", "--all"]);
+        run_git(dir.path(), &["commit", "-qm", "snapshot"]);
+        assert!(!dir.path().join("hook-ran").exists());
     }
 }

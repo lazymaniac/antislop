@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 mod index;
-mod parent;
+pub(crate) mod parent;
 use parent::Parent;
 
 pub(crate) fn artifact_bytes(project: &Path, commit: &str, path: &str) -> Result<Vec<u8>> {
