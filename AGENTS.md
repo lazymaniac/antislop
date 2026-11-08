@@ -1850,7 +1850,7 @@ src
    dashboard.rs
     Fold(E{Preview,Full,Folded})
     Section(C{id,title,meta,body,preview,right})
-    = TWO_COLUMNS=118,GAP=3
+    = TWO_COLUMNS=118,GAP=3,WHOLE
     - gauge,compact,para,item,{first,continuation,empty}_item_line,chip,join_chips
    details
     checks
@@ -1860,7 +1860,7 @@ src
     model
      Composer(C{input,sending,operation,error,sent_text,mail,delivery,delivery_{receipts,failure},address})
      DetailRecord(C{lines,search_text})
-     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,focus,reveal},pending_g,layout_cache})
+     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
       hero_key():String > session_keys
       identity_line(view,theme,key):Line<'static> > row,identity_{status,title}
       provider_chip(view,theme,key):Vec<Vec<Span<'static>>>
@@ -1953,11 +1953,11 @@ src
       file_comments(view,target):Vec<&'a Comment>
       scroll_to_cursor(scroll,cursor,row_count,height):usize
       DiffRows(C{file,comments,task,file_{index,count},compact,selected_line,on_files,width})
-      - file_title,append_comments,comment_{line,target},diff_{line,style,text,number}
+      - file_title,append_comments,comment_{line,target},diff_line,wrap_graphemes,diff_{style,text,number}
     render.rs
      - draw_placeholder,render_{diff_error,body_message}
    diffview.rs
-    DiffView(C{task,files,range,truncated,file,line,on_files,scroll,reviewer})
+    DiffView(C{task,files,range,truncated,file,line,on_files,files_hidden,scroll,reviewer})
      draw(frame,view) > paint_at
      paint_at(frame,area,view) > draw_{header_footer,body}
      new(task):Self > DiffView
@@ -3046,6 +3046,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,448 LOC · input 1,177,291 · output 44,523 tokens · state f4e3cb9724e2 · targets AGENTS.md
+· 132,568 LOC · input 1,178,566 · output 44,534 tokens · state f58133d8b84f · targets AGENTS.md
 ```
 <!-- hologram:end -->
