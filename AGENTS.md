@@ -346,8 +346,8 @@ src
      run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,{review,settle}_round
      new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
      run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
-     - worker_report,save_round_verdict,incomplete,approve_round,update_progress,load_spec,dependents_invalidated,
-       resumed_progress
+     - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,
+       dependents_invalidated,resumed_progress
     - RoundState,Prepared
   core_task_recovery
    actions
@@ -378,9 +378,13 @@ src
   core_task_recovery.rs
    RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
   core_task_runtime
+   citations(core,task,report,verdict):Result<String> > flatten,task_evidence_context,evidence_text
    directory(state,task):Result<PathBuf> > task_path_component,private_directory
    prune_settled_generations(state,task):Result<()> > task_path_component
    sources(core,task):Result<Vec<serde_json::Value>> ~51 > task_in_plan_by_id,plan_conversation,task_path_component,private_directory
+   sweep_uncited(state,task,citations,cutoff):Result<Sweep> > task_path_component,sweep_directory
+   Sweep(C{removed,bytes,errors})
+   - Citation,is_path_char,cited,scan,newest_modification
   core_task_state
    - stop_records_progress
   core_unanswered
@@ -3037,12 +3041,12 @@ src
   common
    mod:*tempdir,assert_test_socket,runtime_environment,install_probe_cli
    options_cli.py
-   record_options_checks.py:*inputs,execute,main
+   record_options_checks.py:*digest,inputs,execute,main
   support
    fixture_cli:*interactive
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 131,723 LOC · input 1,169,296 · output 44,459 tokens · state 7cc599e5600f · targets AGENTS.md
+· 132,676 LOC · input 1,178,802 · output 44,537 tokens · state 209af7671358 · targets AGENTS.md
 ```
 <!-- hologram:end -->

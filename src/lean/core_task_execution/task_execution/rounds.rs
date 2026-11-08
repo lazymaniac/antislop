@@ -12,6 +12,7 @@ impl Execution<'_> {
     pub(super) fn run_round(&mut self, round: u32, state: &mut RoundState) -> Result<bool> {
         self.task.round = round;
         self.task.verdict = None;
+        let started = std::time::SystemTime::now();
         let recheck = self.prepare_round(state)?;
         let Some(report) = self.worker_or_stop(round, state, recheck)? else {
             return Ok(false);
@@ -24,7 +25,7 @@ impl Execution<'_> {
         else {
             return Ok(false);
         };
-        self.settle_round(state, verdict, finished)
+        self.settle_round(state, verdict, finished, started)
     }
 
     fn finish_worker_report(&mut self, round: u32, raw: String) -> Result<Option<FinishedWorker>> {
@@ -165,6 +166,7 @@ impl Execution<'_> {
         state: &mut RoundState,
         mut verdict: Verdict,
         finished: FinishedWorker,
+        started: std::time::SystemTime,
     ) -> Result<bool> {
         let obligations = tasks::obligations(&self.spec);
         let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
@@ -173,7 +175,9 @@ impl Execution<'_> {
             &obligations,
             !self.spec.change_kind.has_delivery(),
         );
+        let report = finished.report.clone();
         self.save_round_verdict(&verdict, finished)?;
+        self.sweep_runtime(&report, &verdict, started);
         if incomplete {
             return self.incomplete();
         }
@@ -196,6 +200,37 @@ impl Execution<'_> {
             summary_effect: Some(finished.summary),
             repairs: self.integration_repairs,
         })
+    }
+
+    /// Removes runtime entries the settled round no longer cites. A sweep
+    /// failure is reported and never stops the task.
+    fn sweep_runtime(&self, report: &str, verdict: &Verdict, started: std::time::SystemTime) {
+        use super::super::super::core_task_runtime as runtime;
+        let swept = serde_json::to_string(verdict)
+            .map_err(Error::from)
+            .and_then(|verdict| runtime::citations(self.core, self.task, report, &verdict))
+            .and_then(|text| {
+                runtime::sweep_uncited(&self.core.state, &self.task.id, &text, started)
+            });
+        let text = match swept {
+            Ok(sweep) if sweep.removed.is_empty() && sweep.errors.is_empty() => return,
+            Ok(sweep) => {
+                let mut text = format!(
+                    "Removed {} uncited runtime entr{} ({:.1} GB) for task {} after round {}.",
+                    sweep.removed.len(),
+                    if sweep.removed.len() == 1 { "y" } else { "ies" },
+                    sweep.bytes as f64 / 1e9,
+                    self.spec.id,
+                    self.task.round,
+                );
+                if !sweep.errors.is_empty() {
+                    text.push_str(&format!(" Could not remove: {}", sweep.errors.join("; ")));
+                }
+                text
+            }
+            Err(error) => format!("Runtime cleanup for task {} failed: {error}", self.spec.id),
+        };
+        self.core.notice(self.conversation, &text);
     }
 
     fn incomplete(&mut self) -> Result<bool> {
