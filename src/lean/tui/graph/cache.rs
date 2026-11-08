@@ -117,6 +117,11 @@ impl LayoutCache {
         request: CacheRequest<'_>,
         now: std::time::Instant,
     ) -> std::rc::Rc<Graph> {
+        #[cfg(test)]
+        crate::lean::tui::GRAPH_LAYOUT_REBUILDS.with(|counts| {
+            let cache = self as *const Self as usize;
+            *counts.borrow_mut().entry(cache).or_default() += 1;
+        });
         let view = request.view;
         let graph = std::rc::Rc::new(Graph::new_animated(
             view,

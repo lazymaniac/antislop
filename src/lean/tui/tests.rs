@@ -209,6 +209,12 @@ fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
         .collect()
 }
 
+fn graph_layout_rebuild_count(app: &App) -> usize {
+    let cache = &app.graph_layout_cache as *const _ as usize;
+    super::GRAPH_LAYOUT_REBUILDS
+        .with(|counts| counts.borrow().get(&cache).copied().unwrap_or_default())
+}
+
 #[test]
 fn clicking_now_focuses_and_scrolls_to_active_agent() {
     let mut app = test_app();
@@ -295,6 +301,9 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let initial_offset = app.offset;
+    let initial_revision = app.view.layout_revision;
+    let initial_scope = app.graph_scope_with_exception();
+    let initial_rebuild_count = graph_layout_rebuild_count(&app);
     let now = app.now_area.expect("Now panel rendered");
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -305,6 +314,8 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
     assert_eq!(app.selected, "worker:t1");
     assert_eq!(app.focus, Focus::Graph);
     assert!(app.graph_visibility_exception.is_none());
+    assert_eq!(app.view.layout_revision, initial_revision);
+    assert_eq!(app.graph_scope_with_exception(), initial_scope);
     assert_eq!(
         app.now_click_targets[0],
         Some(("worker:t1".into(), true)),
@@ -312,6 +323,11 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
     );
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_eq!(app.offset, initial_offset);
+    assert_eq!(
+        graph_layout_rebuild_count(&app),
+        initial_rebuild_count,
+        "rendering after the click reuses the layout for the unchanged model and scope"
+    );
 }
 
 #[test]

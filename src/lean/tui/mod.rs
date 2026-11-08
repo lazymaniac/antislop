@@ -20,6 +20,12 @@ mod app {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+std::thread_local! {
+    static GRAPH_LAYOUT_REBUILDS: std::cell::RefCell<std::collections::HashMap<usize, usize>> =
+        std::cell::RefCell::default();
+}
+
 mod approval;
 pub mod clipboard;
 pub mod config;
