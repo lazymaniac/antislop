@@ -154,15 +154,15 @@ impl App {
         // must be clipped with it instead of sliding along with the scroll.
         let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(self.offset.0);
         let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(self.offset.1);
-        let [card, selector, content] =
+        let [card, title, content] =
             graph::expanded_card_areas(viewport, (left, top), (node.width, node.height));
         if card.is_empty() {
             self.graph_card_area = None;
             return;
         }
         self.graph_card_area = Some(content).filter(|area| !area.is_empty());
-        if !selector.is_empty() {
-            render_card_round_selector(frame, selector, self.details.as_ref(), &self.view, &key);
+        if !title.is_empty() {
+            render_card_title(frame, title, self.details.as_ref(), &self.view, &key);
         }
         if content.is_empty() {
             return;
@@ -262,32 +262,7 @@ impl App {
         }
         frame.render_widget(ratatui::widgets::Clear, content);
         frame.render_widget(Block::default().style(theme.raised()), content);
-        // The card names only its role: say which task, as of the round shown.
-        let row = key
-            .split_once(':')
-            .and_then(|(_, id)| self.view.tasks.iter().find(|task| task.id == id));
-        let snapshot = |field: &str| {
-            details
-                .task
-                .as_ref()
-                .and_then(|task| task[field].as_str())
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned)
-        };
-        let title = snapshot("title").or_else(|| row.map(|row| row.title.clone()));
-        let status = snapshot("status").or_else(|| row.map(|row| row.status.clone()));
-        let heading = match (title.filter(|t| !t.is_empty()), status) {
-            (Some(title), Some(status)) if !status.is_empty() => format!("{title} · {status}"),
-            (Some(title), _) => title,
-            _ => String::new(),
-        };
         let mut lines = Vec::new();
-        if !heading.is_empty() {
-            lines.push(Line::styled(
-                truncate(&theme.clean(&heading), usize::from(content.width)),
-                theme.title().add_modifier(Modifier::BOLD),
-            ));
-        }
         if let Some(agent) = self.view.agents.get(key) {
             lines.push(Line::styled(
                 truncate(&theme.clean(&agent_line(agent)), usize::from(content.width)),
@@ -457,7 +432,9 @@ impl App {
     }
 }
 
-fn render_card_round_selector(
+/// An open card's title row: its task and status as of the round shown, then
+/// that round and how to reach the others.
+fn render_card_title(
     frame: &mut Frame,
     row: Rect,
     details: Option<&Details>,
@@ -467,16 +444,77 @@ fn render_card_round_selector(
     if row.width < 4 {
         return;
     }
+    let theme = Theme::from_env();
     let details = details.filter(|details| details.key == key);
+    let task = key
+        .split_once(':')
+        .and_then(|(_, id)| view.tasks.iter().find(|task| task.id == id));
+    let snapshot = |field: &str| {
+        details
+            .and_then(|details| details.task.as_ref())
+            .and_then(|task| task[field].as_str())
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let heading = match task {
+        Some(task) => {
+            let title = snapshot("title").unwrap_or_else(|| task.title.clone());
+            let status = snapshot("status").unwrap_or_else(|| task.status.clone());
+            if status.is_empty() {
+                title
+            } else {
+                format!("{title} · {status}")
+            }
+        }
+        None => graph::agent_heading(view, key),
+    };
+    let mut spans = vec![Span::styled(
+        theme.clean(&heading),
+        theme.title().add_modifier(Modifier::BOLD),
+    )];
+    if let Some(round) = task.map(|task| round_label(details, task.round)) {
+        spans.push(Span::styled(format!(" · {round}"), theme.accent()));
+    }
+    let line = Line::from(spans);
+    let width = usize::from(row.width);
+    let line = if line.width() > width {
+        // Keep the round in view: the heading gives way first.
+        let round = line.spans.get(1).map(|span| span.content.to_string());
+        let room = width.saturating_sub(
+            round
+                .as_deref()
+                .map_or(0, unicode_width::UnicodeWidthStr::width),
+        );
+        let mut spans = vec![Span::styled(
+            truncate(&line.spans[0].content, room.max(8).min(width)),
+            line.spans[0].style,
+        )];
+        if let Some(round) = round.filter(|_| room >= 8) {
+            spans.push(Span::styled(round, theme.accent()));
+        }
+        Line::from(spans)
+    } else {
+        line
+    };
+    frame.render_widget(Paragraph::new(line), row.intersection(frame.area()));
+}
+
+/// The round an open task card shows, its place among the retained rounds,
+/// and the keys that move to the neighbouring ones.
+fn round_label(details: Option<&Details>, latest: u64) -> String {
     let mut rounds = details.map_or_else(Vec::new, |details| details.available_rounds.clone());
-    let latest = view
-        .tasks
-        .iter()
-        .find(|task| key.split_once(':').is_some_and(|(_, id)| task.id == id))
-        .map(|task| task.round)
-        .or_else(|| rounds.last().copied())
-        .or_else(|| details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64()))
-        .unwrap_or(0);
+    let latest = if latest > 0 {
+        latest
+    } else {
+        rounds
+            .last()
+            .copied()
+            .or_else(|| details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64()))
+            .unwrap_or(0)
+    };
+    if latest == 0 && rounds.is_empty() {
+        return "round unavailable".to_owned();
+    }
     if !rounds.contains(&latest) {
         rounds.push(latest);
         rounds.sort_unstable();
@@ -489,32 +527,14 @@ fn render_card_round_selector(
         .position(|round| *round == selected)
         .unwrap_or(0)
         + 1;
-    let previous = if position > 1 { " · , previous" } else { "" };
-    let round_text = if details.is_none_or(|details| details.selected_round.is_none()) {
-        format!(
-            "Round {selected} ({position}/{}){previous} · following current work",
-            rounds.len()
-        )
-    } else {
-        let next = if position < rounds.len() {
-            " · . next"
-        } else {
-            ""
-        };
-        format!(
-            "Round {selected} ({position}/{}){previous}{next} · . newest follows current",
-            rounds.len()
-        )
-    };
-    let text = if rounds.is_empty() {
-        "Round unavailable · ,/. navigate retained rounds".to_owned()
-    } else {
-        round_text
-    };
-    frame.render_widget(
-        Paragraph::new(truncate(&text, usize::from(row.width))).style(Theme::from_env().accent()),
-        row.intersection(frame.area()),
-    );
+    let mut label = format!("Round {selected} ({position}/{})", rounds.len());
+    if position > 1 {
+        label.push_str(" · , previous");
+    }
+    if position < rounds.len() {
+        label.push_str(" · . next");
+    }
+    label
 }
 
 /// Draws the selected round's results from `scroll`; returns the scroll the

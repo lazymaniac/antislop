@@ -11,7 +11,7 @@ mod sections;
 use super::details::{Details, check_rows};
 use super::taskinfo;
 use super::theme::Theme;
-use super::view::{TaskRow, View, agent_name, clean, duration, status_label, wrap};
+use super::view::{TaskRow, View, agent_name, duration, status_label, wrap};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -73,12 +73,6 @@ fn compact(n: u64) -> String {
         1000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
         _ => format!("{:.1}M", n as f64 / 1e6),
     }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// A paragraph wrapped to `width`, blank source lines kept.
@@ -227,18 +221,5 @@ impl Details {
 
     pub fn dash_scroll(&mut self, delta: isize) {
         self.dash_scroll = (self.dash_scroll as isize + delta).max(0) as usize;
-    }
-}
-
-/// The raw reason as one whole line, never cut.
-fn theme_clean_one(theme: &Theme) -> impl Fn(&str) -> String + '_ {
-    move |text| {
-        theme
-            .clean(text)
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
     }
 }

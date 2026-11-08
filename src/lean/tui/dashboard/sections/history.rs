@@ -1,95 +1,19 @@
 use super::*;
 use crate::lean::tui::view::{Agent, Comment};
 
-pub(super) fn outcome_and_history(
+pub(super) fn comments_and_agents(
     this: &Details,
     view: &View,
     theme: &Theme,
     width: usize,
-    row: &TaskRow,
     keys: &[String],
 ) -> Vec<Section> {
-    let mut sections = vec![outcome(this, theme, width, row)];
-    sections.extend(comments(this, view, theme, width));
-    sections.extend(rounds(this, theme, row));
+    let mut sections = comments(this, view, theme, width);
     let agents = agents(view, theme, width, keys);
     if !agents.body.is_empty() {
         sections.push(agents);
     }
     sections
-}
-
-fn outcome(this: &Details, theme: &Theme, width: usize, row: &TaskRow) -> Section {
-    let mut body = Vec::new();
-    if let Some(effect) = taskinfo::effect_line(row) {
-        body.extend(para(theme, &effect, width, theme.text()));
-    }
-    append_revisions(&mut body, this, theme);
-    append_coverage(&mut body, theme, width, row);
-    append_worker_report(&mut body, this, theme, width);
-    Section {
-        id: "outcome",
-        title: "Outcome",
-        meta: vec![],
-        body,
-        preview: 12,
-        right: true,
-    }
-}
-
-fn append_revisions(body: &mut Vec<Line<'static>>, this: &Details, theme: &Theme) {
-    let Some((base, result)) = this
-        .task
-        .as_ref()
-        .and_then(|task| Some((task["base"].as_str()?, task["result"].as_str()?)))
-    else {
-        return;
-    };
-    body.push(Line::styled(
-        format!(
-            "git {}..{}",
-            &base[..base.len().min(10)],
-            &result[..result.len().min(10)]
-        ),
-        theme.dim(),
-    ));
-}
-
-fn append_coverage(body: &mut Vec<Line<'static>>, theme: &Theme, width: usize, row: &TaskRow) {
-    body.extend(para(
-        theme,
-        &format!("Obligations: {}", taskinfo::coverage_full(row)),
-        width,
-        theme.text(),
-    ));
-    body.extend(para(
-        theme,
-        &format!("Integration: {}", taskinfo::integration_line(row)),
-        width,
-        theme.text(),
-    ));
-}
-
-fn append_worker_report(
-    body: &mut Vec<Line<'static>>,
-    this: &Details,
-    theme: &Theme,
-    width: usize,
-) {
-    let Some(report) = this
-        .task
-        .as_ref()
-        .and_then(|task| task["report"].as_str())
-        .filter(|_| this.tab != crate::lean::tui::details::REVIEWER)
-    else {
-        return;
-    };
-    body.push(Line::raw(""));
-    body.push(Line::styled(
-        "Worker report",
-        theme.dim().add_modifier(Modifier::BOLD),
-    ));
-    body.extend(para(theme, report, width, theme.text()));
 }
 
 fn comments(this: &Details, view: &View, theme: &Theme, width: usize) -> Vec<Section> {
@@ -135,50 +59,6 @@ fn comment_lines(
         width,
         if open { theme.text() } else { theme.dim() },
     )
-}
-
-fn rounds(this: &Details, theme: &Theme, row: &TaskRow) -> Vec<Section> {
-    let latest = row
-        .round
-        .max(this.available_rounds.last().copied().unwrap_or(0));
-    if latest == 0 {
-        return Vec::new();
-    }
-    vec![Section {
-        id: "rounds",
-        title: "Rounds",
-        meta: vec![Span::styled(format!("{latest}"), theme.dim())],
-        body: vec![
-            Line::from(round_spans(this, theme, latest)),
-            round_hint(this, theme),
-        ],
-        preview: 4,
-        right: true,
-    }]
-}
-
-fn round_spans(this: &Details, theme: &Theme, latest: u64) -> Vec<Span<'static>> {
-    let selected = this.selected_round.unwrap_or(latest);
-    (1..=latest)
-        .map(|round| {
-            let active = round == selected;
-            let label = format!(
-                "{}r{round}{} ",
-                if active { "[" } else { " " },
-                if active { "]" } else { "" }
-            );
-            Span::styled(label, if active { theme.accent() } else { theme.dim() })
-        })
-        .collect()
-}
-
-fn round_hint(this: &Details, theme: &Theme) -> Line<'static> {
-    let hint = if this.selected_round.is_some() {
-        "History: ←/→ browse, back on the latest round to send."
-    } else {
-        "Current round. ←/→ browse earlier rounds."
-    };
-    Line::styled(hint, theme.dim())
 }
 
 fn agents(view: &View, theme: &Theme, width: usize, keys: &[String]) -> Section {

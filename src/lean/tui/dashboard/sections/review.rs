@@ -9,12 +9,11 @@ impl Details {
         view: &View,
         theme: &Theme,
         width: usize,
-        row: &TaskRow,
         rows: &[CheckRow],
         keys: &[String],
     ) -> Vec<Section> {
         let mut out = self.check_findings(theme, width, rows);
-        out.extend(self.outcome_and_history(view, theme, width, row, keys));
+        out.extend(self.comments_and_agents(view, theme, width, keys));
         out
     }
 
@@ -196,14 +195,13 @@ fn finding_rank(finding: &Value) -> u8 {
 }
 
 impl Details {
-    fn outcome_and_history(
+    fn comments_and_agents(
         &self,
         view: &View,
         theme: &Theme,
         width: usize,
-        row: &TaskRow,
         keys: &[String],
     ) -> Vec<Section> {
-        history::outcome_and_history(self, view, theme, width, row, keys)
+        history::comments_and_agents(self, view, theme, width, keys)
     }
 }

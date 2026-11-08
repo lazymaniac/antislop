@@ -16,8 +16,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// The visible parts of an expanded card whose top-left corner sits at the
-/// signed screen position `(left, top)`: the whole card, its round-selector
-/// row and its content panel, each clipped to `viewport`. A card scrolled
+/// signed screen position `(left, top)`: the whole card, its title row (task,
+/// status and round, after the role icon and before the comment count) and
+/// its content panel below the tab strip, each clipped to `viewport`. A card scrolled
 /// partly out of view keeps its panels inside its own frame.
 /// Keep this geometry shared by panel rendering and its layout measurements.
 pub(in crate::lean::tui) fn expanded_card_areas(
@@ -28,8 +29,8 @@ pub(in crate::lean::tui) fn expanded_card_areas(
     let (width, height) = (i32::from(width), i32::from(height));
     [
         clip(viewport, left, top, width, height),
-        clip(viewport, left + 2, top + 3, width - 4, 1),
-        clip(viewport, left + 2, top + 4, width - 4, height - 5),
+        clip(viewport, left + 4, top, width - 8, 1),
+        clip(viewport, left + 2, top + 2, width - 4, height - 3),
     ]
 }
 
@@ -110,6 +111,12 @@ fn current_round<'a>(view: &View, members: &[&'a str]) -> Option<&'a str> {
             })
         })
         .copied()
+}
+
+/// What an open card's title row names when the card has no task: the
+/// card's name and its current state.
+pub(in crate::lean::tui) fn agent_heading(view: &View, key: &str) -> String {
+    format!("{} · {}", node_name(key), health::describe(view, key))
 }
 
 fn node_name(key: &str) -> String {

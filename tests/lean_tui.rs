@@ -7707,7 +7707,6 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
         "Goal",
         "Make the storage layer atomic",
         "serves requirements Q1",
-        "Wrapped writes in a transaction.",
         "Session · worker",
     ] {
         assert!(worker.contains(needle), "{needle}\n{worker}");
@@ -7721,7 +7720,6 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
     );
     assert!(stacked.contains("Session · worker"), "{stacked}");
     let folded = dashboard_screen(100, 40, 0, |details| {
-        details.dash_move(1);
         details.dash_cycle();
         details.dash_cycle();
     });

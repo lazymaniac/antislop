@@ -129,7 +129,7 @@ impl Card<'_> {
             _ => rows.push("Choose Details, PTY, Results, or Diff".into()),
         }
         for (index, row) in rows.iter().enumerate() {
-            let y = self.node.y.saturating_add(4 + index as u16);
+            let y = self.node.y.saturating_add(2 + index as u16);
             if y + 1 >= self.node.y.saturating_add(self.node.height) {
                 break;
             }
@@ -152,7 +152,7 @@ impl Card<'_> {
             .len()
             .max(tab + 1)
             .min(EXPANDED_TABS.len())];
-        let y = self.node.y + 2;
+        let y = self.node.y + 1;
         let right = self.node.x + self.node.width.saturating_sub(2);
         let mut x = self.node.x + 2;
         for (index, name) in names.iter().enumerate() {

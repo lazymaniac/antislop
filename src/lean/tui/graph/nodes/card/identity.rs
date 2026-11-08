@@ -4,10 +4,26 @@ use super::*;
 
 impl Card<'_> {
     pub(super) fn paint_identity(&mut self) {
+        if self.expanded_tab.is_some() {
+            // An open card's title row (task, status, round) is drawn over
+            // the canvas with the round shown; only the icon belongs here.
+            self.paint_icon();
+            self.paint_open_comments();
+            return;
+        }
         let (icon, tone) = status_style(self.theme, self.health);
         self.paint_title();
         self.paint_open_comments();
         self.paint_status(self.inner_width(), &icon, tone);
+    }
+
+    fn paint_icon(&mut self) {
+        self.canvas.text(
+            self.node.x + 2,
+            self.node.y,
+            self.theme.role_icon(&self.node.key),
+            self.fill.patch(self.accent),
+        );
     }
 
     fn paint_title(&mut self) {
@@ -42,12 +58,7 @@ impl Card<'_> {
             _ => card_title(&name, inner, self.node.collapsed),
         };
         let (x, y) = (self.node.x, self.node.y);
-        self.canvas.text(
-            x + 2,
-            y,
-            self.theme.role_icon(&self.node.key),
-            self.fill.patch(self.accent),
-        );
+        self.paint_icon();
         self.canvas.text(
             x + 4,
             y,
@@ -104,9 +115,6 @@ impl Card<'_> {
         }
         if requirements_round(&self.node.key).is_some() {
             return describe(self.view, &self.node.key);
-        }
-        if self.expanded_tab == Some(0) {
-            return "working".into();
         }
         self.task
             .map(|task| task.round)

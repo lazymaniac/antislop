@@ -13,11 +13,11 @@ fn windowed_canvas_storage_is_exactly_the_viewport_area() {
 #[test]
 fn expanded_card_areas_clip_with_a_card_scrolled_past_the_top() {
     let viewport = Rect::new(10, 5, 80, 30);
-    let [card, selector, content] = super::expanded_card_areas(viewport, (20, -1), (40, 20));
+    let [card, title, content] = super::expanded_card_areas(viewport, (20, -1), (40, 20));
     assert_eq!(card, Rect::new(20, 5, 40, 14));
-    // The selector sits at top + 3 = 2, above the viewport.
-    assert!(selector.is_empty());
-    // Content spans rows 3..18 of the card; only rows 5..18 are visible.
+    // The title row sits at top = -1, above the viewport.
+    assert!(title.is_empty());
+    // Content spans rows 1..18 of the card; only rows 5..18 are visible.
     assert_eq!(content, Rect::new(22, 5, 36, 13));
     assert_eq!(
         content.bottom(),
@@ -41,10 +41,10 @@ fn expanded_pty_content_grows_with_the_viewport() {
     };
 
     // Before the viewport-fit change the 56-column ceiling produced a
-    // 52x5 PTY content area at this same viewport.
+    // 52x7 PTY content area at this same viewport.
     assert_eq!(
         usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
-        260
+        364
     );
     // The expanded card keeps MARGIN on either side.
     assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
@@ -52,7 +52,7 @@ fn expanded_pty_content_grows_with_the_viewport() {
     let baseline = content_area(56, 10);
     assert_eq!(
         usize::from(expanded.width) * usize::from(expanded.height),
-        330
+        462
     );
     assert!(
         usize::from(expanded.width) * usize::from(expanded.height)

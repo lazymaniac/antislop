@@ -1,4 +1,3 @@
-use super::super::view::Agent;
 use super::*;
 use crate::lean::tui::details::CheckRow;
 mod review;
@@ -24,7 +23,7 @@ impl Details {
         let row = self.row(view);
         let keys = self.session_keys();
         let rows = self.task.as_ref().map(check_rows).unwrap_or_default();
-        let mut sections = now_sections(view, theme, width, row, &keys);
+        let mut sections = Vec::new();
         if let Some(row) = row {
             let context = SectionContext {
                 details: self,
@@ -40,124 +39,6 @@ impl Details {
         filter_tab_sections(self.tab, &mut sections);
         sections
     }
-}
-
-fn now_sections(
-    view: &View,
-    theme: &Theme,
-    width: usize,
-    row: Option<&TaskRow>,
-    keys: &[String],
-) -> Vec<Section> {
-    let mut body = agent_activity(view, theme, width, row, keys);
-    if let Some(row) = row {
-        body.extend(stop_reason(theme, width, row));
-        body.extend(next_step(view, theme, width, row));
-    }
-    if body.is_empty() {
-        return Vec::new();
-    }
-    vec![Section {
-        id: "now",
-        title: "Now",
-        meta: vec![],
-        body,
-        preview: 14,
-        right: false,
-    }]
-}
-
-fn agent_activity(
-    view: &View,
-    theme: &Theme,
-    width: usize,
-    row: Option<&TaskRow>,
-    keys: &[String],
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for key in keys {
-        if let Some(agent) = view.agents.get(key) {
-            lines.extend(agent_lines(view, theme, width, row, key, agent));
-        }
-    }
-    lines
-}
-
-fn agent_lines(
-    view: &View,
-    theme: &Theme,
-    width: usize,
-    row: Option<&TaskRow>,
-    key: &str,
-    agent: &Agent,
-) -> Vec<Line<'static>> {
-    let role = key.split(':').next().unwrap_or(key);
-    let state = agent_state(theme, agent);
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            format!("{} {role:<9}", theme.role_icon(key)),
-            theme.role_accent(key, row.map_or("", |r| r.kind.as_str())),
-        ),
-        state,
-    ])];
-    if let Some(doing) = taskinfo::doing(view, key)
-        .or_else(|| (!agent.activity.is_empty()).then(|| clean(&agent.activity)))
-    {
-        lines.extend(
-            wrap(&theme.clean(&doing), width.saturating_sub(4).max(1))
-                .into_iter()
-                .take(2)
-                .map(|line| Line::styled(format!("    {line}"), theme.text())),
-        );
-    }
-    lines
-}
-
-fn agent_state(theme: &Theme, agent: &Agent) -> Span<'static> {
-    if agent.running {
-        let since = agent
-            .started_ms
-            .map(|at| {
-                format!(
-                    " for {}",
-                    duration(now_ms().saturating_sub(at).max(0) as u64)
-                )
-            })
-            .unwrap_or_default();
-        Span::styled(format!("running{since}"), theme.status("working"))
-    } else {
-        Span::styled("idle", theme.dim())
-    }
-}
-
-fn stop_reason(theme: &Theme, width: usize, row: &TaskRow) -> Vec<Line<'static>> {
-    let Some(cause) = taskinfo::cause(row) else {
-        return Vec::new();
-    };
-    let reason = row
-        .reason
-        .as_deref()
-        .map(theme_clean_one(theme))
-        .unwrap_or(cause);
-    item(
-        theme,
-        Span::styled(theme.glyphs().problem, theme.error()),
-        Some("stopped:".into()),
-        &reason,
-        width,
-        theme.error(),
-    )
-}
-
-fn next_step(view: &View, theme: &Theme, width: usize, row: &TaskRow) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::raw("")];
-    lines.extend(para(
-        theme,
-        &taskinfo::next_step(view, row),
-        width,
-        theme.accent(),
-    ));
-    lines
 }
 
 fn append_task_sections(context: &SectionContext<'_>, out: &mut Vec<Section>) {
@@ -214,7 +95,6 @@ fn review_sections(context: &SectionContext<'_>) -> Vec<Section> {
         context.view,
         context.theme,
         context.width,
-        context.row,
         context.checks,
         context.keys,
     )
