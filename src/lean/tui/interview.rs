@@ -2,11 +2,45 @@
 use super::{InputBuffer, Theme, sanitize_paste};
 use crate::lean::interview::Question;
 
+#[derive(Debug, Clone, PartialEq, Default)]
+struct ScopeCache {
+    key: Option<ScopeCacheKey>,
+    row_count: Option<usize>,
+    window: Option<ScopeWindow>,
+    #[cfg(test)]
+    scans: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScopeCacheKey {
+    revision: u64,
+    width: usize,
+    ascii: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScopeWindow {
+    start: usize,
+    count: usize,
+    rows: Vec<String>,
+}
+
+impl ScopeCache {
+    fn clear_layout(&mut self) {
+        self.key = None;
+        self.row_count = None;
+        self.window = None;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Form {
     pub event: u64,
     pub question: Question,
-    pub scope_summary: Option<String>,
+    scope_summary: Option<String>,
+    scope_revision: u64,
+    scope_source_revision: Option<u64>,
+    scope_cache: ScopeCache,
     pub selected: usize,
     pub input: InputBuffer,
     pub visible: bool,
@@ -24,6 +58,9 @@ impl Form {
             event,
             question,
             scope_summary: None,
+            scope_revision: 0,
+            scope_source_revision: None,
+            scope_cache: ScopeCache::default(),
             selected: 0,
             input: InputBuffer::new(),
             visible: true,
@@ -47,6 +84,15 @@ impl Form {
     pub fn set_scope_summary(&mut self, summary: Option<&str>) {
         if self.scope_summary.as_deref() != summary {
             self.scope_summary = summary.map(str::to_owned);
+            self.scope_revision = self.scope_revision.wrapping_add(1);
+            self.scope_cache.clear_layout();
+        }
+    }
+
+    pub(super) fn sync_scope_summary(&mut self, summary: Option<&str>, source_revision: u64) {
+        if self.scope_source_revision != Some(source_revision) {
+            self.set_scope_summary(summary);
+            self.scope_source_revision = Some(source_revision);
         }
     }
 }
@@ -148,6 +194,23 @@ mod tests {
         let stored = form.scope_summary.as_ref().unwrap();
         assert_eq!(stored.as_ptr(), allocation);
         assert_eq!(stored.capacity(), capacity);
+    }
+
+    #[test]
+    fn scope_sync_checks_content_only_when_the_source_revision_changes() {
+        let mut form = form();
+        form.sync_scope_summary(Some("scope at event 10"), 10);
+        let revision = form.scope_revision;
+
+        // The event revision is stable across redraws, so no summary comparison or
+        // cache invalidation is needed on those frames.
+        form.sync_scope_summary(Some("scope at event 11"), 10);
+        assert_eq!(form.scope_summary.as_deref(), Some("scope at event 10"));
+        assert_eq!(form.scope_revision, revision);
+
+        form.sync_scope_summary(Some("scope at event 11"), 11);
+        assert_eq!(form.scope_summary.as_deref(), Some("scope at event 11"));
+        assert_eq!(form.scope_revision, revision.wrapping_add(1));
     }
 
     #[test]

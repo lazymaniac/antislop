@@ -1,5 +1,5 @@
 use super::super::view::wrap;
-use super::{Form, InputBuffer, Question, Theme};
+use super::{Form, InputBuffer, Question, ScopeCache, ScopeCacheKey, ScopeWindow, Theme};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -17,9 +17,12 @@ impl Form {
         let custom = self.selected == self.question.options.len();
         let (rows, selected_rows, input_row, scope_insert) = self.rows(inner_width, custom, theme);
         let has_scope = self.scope_summary.is_some();
-        let scope_count = self.scope_summary.as_deref().map_or(0, |summary| {
-            wrapped_scope(summary, inner_width, 0, 0, theme).0
-        });
+        let scope_count = self.scope_cache.row_count(
+            self.scope_revision,
+            self.scope_summary.as_deref(),
+            inner_width,
+            theme,
+        );
         let row_count = rows.len().saturating_add(scope_count.saturating_sub(1));
         let area = content_box(area, row_count);
         let viewport = usize::from(area.height.saturating_sub(2).max(1));
@@ -44,8 +47,13 @@ impl Form {
         let scope = self.scope_summary.as_deref();
         let visible = visible_rows(
             rows,
-            scope,
-            (insertion, scope_count),
+            ScopeRows {
+                summary: scope,
+                insertion,
+                count: scope_count,
+                revision: self.scope_revision,
+                cache: &mut self.scope_cache,
+            },
             scroll..scroll.saturating_add(viewport),
             inner_width,
             theme,
@@ -237,6 +245,81 @@ struct ScopeWrapper<'a, 'theme> {
     selected: Vec<Line<'a>>,
 }
 
+impl ScopeCache {
+    fn prepare(&mut self, revision: u64, width: usize, ascii: bool) {
+        let key = ScopeCacheKey {
+            revision,
+            width,
+            ascii,
+        };
+        if self.key.as_ref() != Some(&key) {
+            self.key = Some(key);
+            self.row_count = None;
+            self.window = None;
+        }
+    }
+
+    fn row_count(
+        &mut self,
+        revision: u64,
+        scope: Option<&str>,
+        width: usize,
+        theme: &Theme,
+    ) -> usize {
+        let Some(scope) = scope else {
+            return 0;
+        };
+        self.prepare(revision, width, theme.ascii);
+        if let Some(row_count) = self.row_count {
+            return row_count;
+        }
+        #[cfg(test)]
+        {
+            self.scans += 1;
+        }
+        let row_count = wrapped_scope(scope, width, 0, 0, theme).0;
+        self.row_count = Some(row_count);
+        row_count
+    }
+
+    fn window(
+        &mut self,
+        revision: u64,
+        scope: &str,
+        start: usize,
+        count: usize,
+        width: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        self.prepare(revision, width, theme.ascii);
+        if let Some(window) = &self.window
+            && window.start == start
+            && window.count == count
+        {
+            return window
+                .rows
+                .iter()
+                .map(|row| Line::styled(row.clone(), theme.dim()))
+                .collect();
+        }
+        #[cfg(test)]
+        {
+            self.scans += 1;
+        }
+        let (row_count, rows) = wrapped_scope(scope, width, start, count, theme);
+        self.row_count = Some(row_count);
+        let rows = rows.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.window = Some(ScopeWindow {
+            start,
+            count,
+            rows: rows.clone(),
+        });
+        rows.into_iter()
+            .map(|row| Line::styled(row, theme.dim()))
+            .collect()
+    }
+}
+
 impl<'a, 'theme> ScopeWrapper<'a, 'theme> {
     fn new(width: usize, start: usize, count: usize, theme: &'theme Theme) -> Self {
         ScopeWrapper {
@@ -314,15 +397,28 @@ impl<'a, 'theme> ScopeWrapper<'a, 'theme> {
     }
 }
 
+struct ScopeRows<'a> {
+    summary: Option<&'a str>,
+    insertion: usize,
+    count: usize,
+    revision: u64,
+    cache: &'a mut ScopeCache,
+}
+
 fn visible_rows<'a>(
     rows: Vec<Line<'static>>,
-    scope: Option<&'a str>,
-    scope_rows: (usize, usize),
+    scope_rows: ScopeRows<'a>,
     viewport: std::ops::Range<usize>,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'a>> {
-    let (insertion, scope_count) = scope_rows;
+    let ScopeRows {
+        summary: scope,
+        insertion,
+        count: scope_count,
+        revision: scope_revision,
+        cache: scope_cache,
+    } = scope_rows;
     let scroll = viewport.start;
     let viewport_len = viewport.end.saturating_sub(viewport.start);
     let mut visible = Vec::with_capacity(viewport_len);
@@ -330,14 +426,14 @@ fn visible_rows<'a>(
     let scope_start = scroll.max(insertion);
     let scope_end = end.min(insertion.saturating_add(scope_count));
     let scope_lines = if let Some(scope) = scope.filter(|_| scope_start < scope_end) {
-        wrapped_scope(
+        scope_cache.window(
+            scope_revision,
             scope,
-            width,
             scope_start - insertion,
             scope_end - scope_start,
+            width,
             theme,
         )
-        .1
     } else {
         Vec::new()
     };
@@ -569,5 +665,47 @@ mod tests {
             visible[0].spans[0].content.as_ref().graphemes(true).count(),
             7
         );
+    }
+
+    #[test]
+    fn scope_render_reuses_same_window_and_invalidates_for_content_and_width() {
+        let theme = Theme::new(false, true);
+        let mut form = Form::new(
+            1,
+            serde_json::from_value(serde_json::json!({
+                "id":"scope-cache",
+                "context":"Context",
+                "question":"Choose?",
+                "options":[{"label":"Continue","description":"Proceed"}]
+            }))
+            .unwrap(),
+        );
+        form.set_scope_summary(Some(&"initial scope row ".repeat(80)));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 12)).unwrap();
+        let draw = |terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+                    form: &mut Form| {
+            terminal
+                .draw(|frame| form.draw(frame, frame.area(), &theme))
+                .unwrap();
+        };
+
+        draw(&mut terminal, &mut form);
+        let first_scans = form.scope_cache.scans;
+        assert!(first_scans >= 2, "initial draw counts and wraps scope");
+        let cached = form.scope_cache.window.as_ref().unwrap();
+        assert!(cached.rows.len() <= 10, "cached rows stay within viewport");
+
+        draw(&mut terminal, &mut form);
+        assert_eq!(form.scope_cache.scans, first_scans);
+
+        form.set_scope_summary(Some(&"changed scope row ".repeat(80)));
+        draw(&mut terminal, &mut form);
+        let content_scans = form.scope_cache.scans;
+        assert!(content_scans > first_scans);
+
+        terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(32, 12)).unwrap();
+        draw(&mut terminal, &mut form);
+        assert!(form.scope_cache.scans > content_scans);
     }
 }

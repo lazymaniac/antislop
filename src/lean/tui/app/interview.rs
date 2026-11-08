@@ -3,19 +3,17 @@ use super::super::*;
 impl App {
     pub(in crate::lean::tui) fn sync_interview(&mut self) {
         if let Some((event, question)) = &self.view.interview_question {
-            let same = self
+            let form = self
                 .interview_forms
-                .get(&self.conversation)
-                .is_some_and(|form| form.event == *event);
-            if !same {
-                self.interview_forms.insert(
-                    self.conversation.clone(),
-                    interview::Form::new(*event, question.clone()),
-                );
+                .entry(self.conversation.clone())
+                .or_insert_with(|| interview::Form::new(*event, question.clone()));
+            if form.event != *event {
+                *form = interview::Form::new(*event, question.clone());
             }
-            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
-                form.set_scope_summary(self.view.scope_confirmation_summary.as_deref());
-            }
+            form.sync_scope_summary(
+                self.view.scope_confirmation_summary.as_deref(),
+                self.view.after,
+            );
         }
     }
 
