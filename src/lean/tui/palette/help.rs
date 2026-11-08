@@ -279,6 +279,7 @@ fn help_diff() -> &'static [&'static str] {
         "Ctrl+D / Ctrl+U  half page down / up",
         "[/] or ←/→       previous / next file",
         "Tab              file list / lines",
+        "f                hide / show the file list",
         "c                comment on line or file",
         "R                code review of this change",
         "r                refresh",

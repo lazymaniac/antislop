@@ -3,6 +3,13 @@ use ratatui::{
     style::{Modifier, Style},
     text::Line,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// The gutter of a diff line: two line numbers and the sign, then `│`.
+const GUTTER: usize = 14;
+/// Where a hunk header's text starts.
+const HUNK_INDENT: usize = 12;
 
 pub(super) fn file_comments<'a>(view: &'a View, target: &str) -> Vec<&'a Comment> {
     view.comments
@@ -91,7 +98,7 @@ fn append_diff_lines(
         if index == selected_line && !on_files {
             cursor_row = rows.len();
         }
-        rows.push(diff_line(line, index == selected_line && !on_files, width));
+        rows.extend(diff_line(line, index == selected_line && !on_files, width));
         if let Some(key) = comment_target(target, line) {
             append_comments(
                 rows,
@@ -158,15 +165,56 @@ fn comment_target(target: &str, line: &DiffLine) -> Option<String> {
     }
 }
 
-fn diff_line(line: &DiffLine, selected: bool, width: usize) -> Line<'static> {
+/// One diff line wrapped to `width`: the first row carries the gutter, the
+/// rows after it continue the text under the code column.
+fn diff_line(line: &DiffLine, selected: bool, width: usize) -> Vec<Line<'static>> {
     let (sign, style) = diff_style(&line.kind);
-    let text = diff_text(line, sign);
     let style = if selected {
         style.add_modifier(Modifier::REVERSED)
     } else {
         style
     };
-    Line::styled(truncate(&text, width), style)
+    let (first, text, indent) = diff_text(line, sign);
+    let room = width.saturating_sub(indent);
+    if room < 8 {
+        // Too narrow to wrap under the gutter: cut the line as before.
+        return vec![Line::styled(
+            truncate(&format!("{first}{text}"), width),
+            style,
+        )];
+    }
+    let continuation = if indent == GUTTER {
+        format!("{}│", " ".repeat(GUTTER - 1))
+    } else {
+        " ".repeat(indent)
+    };
+    wrap_graphemes(&text, room)
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let prefix = if index == 0 { &first } else { &continuation };
+            Line::styled(format!("{prefix}{chunk}"), style)
+        })
+        .collect()
+}
+
+/// `text` cut into rows at most `width` columns wide, on grapheme cluster
+/// boundaries; an empty text is one empty row.
+fn wrap_graphemes(text: &str, width: usize) -> Vec<String> {
+    let mut rows = vec![String::new()];
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = grapheme.width();
+        if used + grapheme_width > width && used > 0 {
+            rows.push(String::new());
+            used = 0;
+        }
+        if let Some(row) = rows.last_mut() {
+            row.push_str(grapheme);
+        }
+        used += grapheme_width;
+    }
+    rows
 }
 
 fn diff_style(kind: &str) -> (&'static str, Style) {
@@ -187,15 +235,19 @@ fn diff_style(kind: &str) -> (&'static str, Style) {
     }
 }
 
-fn diff_text(line: &DiffLine, sign: &str) -> String {
+/// A diff line's first-row prefix, its text and the column the text starts at.
+fn diff_text(line: &DiffLine, sign: &str) -> (String, String, usize) {
     if line.kind == "hunk" {
-        format!("            {}", line.text)
+        (" ".repeat(HUNK_INDENT), line.text.clone(), HUNK_INDENT)
     } else {
-        format!(
-            "{} {} {sign}│{}",
-            diff_number(line.old),
-            diff_number(line.new),
-            line.text.replace('\t', "    ")
+        (
+            format!(
+                "{} {} {sign}│",
+                diff_number(line.old),
+                diff_number(line.new)
+            ),
+            line.text.replace('\t', "    "),
+            GUTTER,
         )
     }
 }

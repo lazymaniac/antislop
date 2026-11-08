@@ -32,7 +32,7 @@ impl DiffView {
 
     fn draw_loaded_body(&mut self, frame: &mut Frame, body: Rect, view: &View) {
         let file_count = self.files().len();
-        if body.width >= 90 {
+        if body.width >= 90 && !self.files_hidden {
             let width = (body.width / 3).min(44);
             let [list, rest] =
                 Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(body);

@@ -24,6 +24,9 @@ pub struct DiffView {
     line: usize,
     /// Whether arrows move through files rather than lines.
     on_files: bool,
+    /// Whether the side list of files is hidden, giving the lines the whole
+    /// width (`f`).
+    files_hidden: bool,
     scroll: usize,
     pub reviewer: Option<ReviewerProfile>,
 }
@@ -38,6 +41,7 @@ impl DiffView {
             file: 0,
             line: 0,
             on_files: false,
+            files_hidden: false,
             scroll: 0,
             reviewer: None,
         }
@@ -122,6 +126,16 @@ impl DiffView {
         match code {
             KeyCode::Tab | KeyCode::BackTab => {
                 self.on_files = !self.on_files;
+                if self.on_files {
+                    // Choosing a file brings its list back.
+                    self.files_hidden = false;
+                }
+            }
+            KeyCode::Char('f') => {
+                self.files_hidden = !self.files_hidden;
+                if self.files_hidden {
+                    self.on_files = false;
+                }
             }
             // Next or previous file from anywhere; inside an expanded graph
             // card ←/→ switch tabs, so these are the file keys there.
@@ -207,6 +221,55 @@ mod tests {
                 "{width}: {hint}"
             );
         }
+    }
+
+    #[test]
+    fn long_diff_lines_wrap_and_f_hides_the_file_list() {
+        let view = View::default();
+        let mut diff = DiffView::new("t2".into());
+        let long = format!("let x = \"{}\"; // tail-marker", "żółw🧑‍💻".repeat(30));
+        diff.files = Some(Ok(vec![FileDiff {
+            path: "src/main.rs".into(),
+            old_path: None,
+            status: "modified".into(),
+            binary: false,
+            added: 1,
+            removed: 0,
+            lines: vec![DiffLine {
+                kind: "add".into(),
+                old: None,
+                new: Some(7),
+                text: long.clone(),
+            }],
+        }]));
+        let screen = |diff: &mut DiffView| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+            terminal.draw(|frame| diff.draw(frame, &view)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..20)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let rows = screen(&mut diff);
+        let text = rows.concat();
+        assert!(text.contains("M src/main.rs"), "{text}");
+        // The whole line is kept: its end shows on a continuation row.
+        assert!(text.contains("marker"), "{text}");
+        let wrapped = rows.iter().filter(|row| row.contains('│')).count();
+        assert!(wrapped >= 3, "{rows:#?}");
+        let first = rows.iter().position(|row| row.contains("+│")).unwrap();
+        assert!(rows[first + 1].trim_start().starts_with('│'), "{rows:#?}");
+
+        diff.key(crossterm::event::KeyCode::Char('f'));
+        let hidden = screen(&mut diff).concat();
+        assert!(!hidden.contains("M src/main.rs"), "{hidden}");
+        assert!(hidden.contains("marker"), "{hidden}");
+        diff.key(crossterm::event::KeyCode::Tab);
+        assert!(screen(&mut diff).concat().contains("M src/main.rs"));
     }
 
     #[test]
