@@ -1236,8 +1236,8 @@ src
       append_scoped_comment_event(store,tx,conversation,comment,round,run):Result<()> > comment_payload
       insert_comment_message(tx,conversation,text,now,plan_id):Result<u64>
       insert_comment_row(tx,conversation,comment,stored_text,now):Result<u64>
-      insert_draft_comment(store,tx,conversation,comment,stored_text):Result<Comment> > append_comment_event
-      persist_comment(store,tx,conversation,comment,round,run,text):Result<Comment> > insert_comment_row,{insert,link}_comment_message,save_comment_metadata
+      insert_draft_comment(store,tx,conversation,comment,stored_text):Result<Comment> > now_ms,append_comment_event
+      persist_comment(store,tx,conversation,comment,round,run,text):Result<Comment> > now_ms,insert_comment_row,{insert,link}_comment_message,save_comment_metadata
       set_comment_message(tx,comment_id,message):Result<()>
      updates
       append_reopened_message_event(tx,conversation,comment,text):Result<()>
@@ -1254,7 +1254,7 @@ src
     mail
      append_mail_event(tx,conversation,mail,stored_text):Result<()>
      append_mail_source(tx,mail_id,conversation,turn):Result<()>
-     insert_mail_row(tx,conversation,role,mail,source_turn,stored_text):Result<Mail> > Mail,append_mail_source
+     insert_mail_row(tx,conversation,role,mail,source_turn,stored_text):Result<Mail> > now_ms,Mail,append_mail_source
    dependency_results
     DependencyReports(C{retained,producer,current,reports})
     ReportReference(C{result_ref,round,input_generation,bytes,result_type,producer_task,current_inputs})
@@ -1284,7 +1284,7 @@ src
     recovery
      close_open_approvals(tx):Result<()>
      insert_proposed_tasks(tx,conversation,plan_id,specs,now):Result<Vec<Task>> > insert_proposed_task
-     record_turn_interruptions(tx):Result<()> > running_turn_rows,record_turn_interruption
+     record_turn_interruptions(tx):Result<()> > running_turn_rows,record_turn_interruption,now_ms
      running_orchestrators(tx):Result<Vec<String>>
      unfinished_plans(tx):Result<Vec<(String,String)>>
      - interrupted_report,proposed_task
@@ -1313,8 +1313,8 @@ src
    SessionInfo(C{{turn,plan}_id,role,provider,session_id,status,error,upto_message,{started,finished}_ms,pid})
    Store(C{connection,content,content_write})
     history_content(conversation,owner,offset):Result<crate::lean::content::Chunk> > chunk,history_reference
-    enqueue_agent_message(request):Result<Value> > agent_message_signature,db,existing_agent_message,validate_agent_recipient,insert_agent_mail,update_agent_task
-    invalidate_task_dependents(conversation,task):Result<()> > db,invalidate_dependents
+    enqueue_agent_message(request):Result<Value> > agent_message_signature,db,existing_agent_message,validate_agent_recipient,now_ms,insert_agent_mail,update_agent_task
+    invalidate_task_dependents(conversation,task):Result<()> > db,invalidate_dependents,now_ms
     attribute_mail(conversation,ids,turn):Result<()> > db
     assert_comment_run(conversation,plan,target,run):Result<()> > db
     comment_scope(conversation,id):Result<Value> > db
@@ -1433,7 +1433,7 @@ src
     add_comment_at(conversation,comment,round,run,text):Result<Comment> > add_comment_at_with_operation
     add_comment_at_with_operation(conversation,operation_id,comment,round,run,text):Result<Comment> > db
     add_draft_comment(conversation,comment):Result<Comment> > db,insert_draft_comment
-    send_draft_comments(conversation,plan_id):Result<Vec<Comment>> > db,draft_comments,{draft,insert_draft}_message,open_draft_comments
+    send_draft_comments(conversation,plan_id):Result<Vec<Comment>> > db,draft_{comments,message},now_ms,insert_draft_message,open_draft_comments
     set_comment_status(conversation,id,status):Result<Comment> > db,update_comment_status,load_comment,ensure_comment_was_sent,reopen_comment,append_comment_event
     retain_work(tx,source,target,generation,reason):Result<()>
     retain_work_from_ids(tx,source,source_generation,target,generation,reason):Result<()> > flatten
@@ -1464,7 +1464,7 @@ src
     resolve_event_plan(db,turn,plan_id,payload):Result<Option<String>> > infer_event_plan
     pending_mail_plans():Result<Vec<(String,String)>> ×0 > db
     mail(conversation):Result<Vec<Mail>> > db,Mail,sql_text
-    mark_delivered(conversation,ids,turn):Result<()> > db
+    mark_delivered(conversation,ids,turn):Result<()> > db,now_ms
     sessions(conversation):Result<Vec<SessionInfo>> > conversation,SessionInfo
     latest_event_seq(conversation):Result<u64> > db
     event_bounds(conversation):Result<(u64,u64,usize)> > db
@@ -1504,7 +1504,7 @@ src
     revision_job(id):Result<Value> > db
     finish_revision_job(id,result):Result<()> > db
     rejected_revisions_in_a_row(plan):Result<usize> > db
-    interrupt_revision_jobs():Result<()> > db
+    interrupt_revision_jobs():Result<()> > db,now_ms
     validate_session_identity(tx,turn,session):Result<()>
     update_session_identity(tx,turn,session):Result<()>
     last_turn_for_roles(conversation,roles):Result<Option<Turn>> > db
@@ -1523,7 +1523,7 @@ src
     plan_review_approved(conversation,plan_id):Result<bool> > db
     queue_plan(conversation,plan_id):Result<usize> > db,proposed_task_count,carry_approved,record_plan_activation,advance_workflow
     set_plan_status(plan_id,from,to):Result<usize> > db
-    add_plan(conversation,specs):Result<Vec<Task>> > db,insert_proposed_tasks
+    add_plan(conversation,specs):Result<Vec<Task>> > db,now_ms,insert_proposed_tasks
     latest_plan(conversation):Result<Vec<Task>> > plan
     open(path):Result<Self> > validate_database
     check_runtime_repository(path,identity):Result<()> > validate_database
@@ -1532,7 +1532,7 @@ src
     db():std::sync::MutexGuard<'_,Connection>
     record_project_identity(project,identity):Result<()> > db
     repository_id(project):Result<Option<String>> > db
-    create_conversation(project):Result<Conversation> > Conversation,db,begin_interview
+    create_conversation(project):Result<Conversation> > Conversation,now_ms,db,begin_interview
     conversation(id):Result<Conversation> > db,Conversation
     conversations():Result<Vec<Conversation>> > db,Conversation
     conversation_goal(conversation):Result<String> > db,sql_text
@@ -1838,22 +1838,20 @@ src
      - identity_{id,summary,kind}
     sections
      history
-      outcome_and_history(this,view,theme,width,row,keys):Vec<Section> > comments,rounds,agents
-      - outcome,append_{revisions,coverage,worker_report},comment_lines,round_{spans,hint},
-        agent_{lines,identity,usage,activity}
+      comments_and_agents(this,view,theme,width,keys):Vec<Section> > comments,agents
+      - comment_lines,agent_{lines,identity,usage,activity}
      review
       - check_{section,body,rank,lines},pending_line,finding_{section,body,lines,rank}
      scope
       lines(details,view,theme,width,row):Vec<Line<'static>> > dependencies,metadata
       - append_{section,requirements,resolution,parallel}
     sections.rs
-     - agent_{activity,lines,state},stop_reason,next_step,append_{primary_sections,goal_sections,risk_scope},review_sections,
-       {text,risks}_section
+     - append_{primary_sections,goal_sections,risk_scope},review_sections,{text,risks}_section
    dashboard.rs
     Fold(E{Preview,Full,Folded})
     Section(C{id,title,meta,body,preview,right})
     = TWO_COLUMNS=118,GAP=3
-    - gauge,compact,now_ms,para,item,{first,continuation,empty}_item_line,chip,join_chips,theme_clean_one
+    - gauge,compact,para,item,{first,continuation,empty}_item_line,chip,join_chips
    details
     checks
      check_rows(stored):Vec<CheckRow> > obligations,make_check_row
@@ -1869,8 +1867,8 @@ src
       check_chips(theme):Vec<Vec<Span<'static>>> > check_rows
       activity_chips(view,theme):Vec<Vec<Span<'static>>> > obligation_chip,{comment,usage}_chips
       hero(view,theme):Vec<Line<'static>> > hero_key,provider_chip,{check,activity}_chips
-      review_sections(view,theme,width,row,rows,keys):Vec<Section> > check_findings,outcome_and_history
-      sections(view,theme,width):Vec<Section> > row,session_keys,now_sections,SectionContext,{append_task,filter_tab}_sections
+      review_sections(view,theme,width,rows,keys):Vec<Section> > check_findings,comments_and_agents
+      sections(view,theme,width):Vec<Section> > row,session_keys,SectionContext,{append_task,filter_tab}_sections
       dashboard_visible():bool > overview
       fold_of(id):Fold
       dash_move(delta) > len
@@ -2155,6 +2153,7 @@ src
       new(tasks,viewport_width):Self ~80 > as_str
       render(tasks,canvas,selected,theme) > as_str,accent,Theme.dim,draw_card
    graph.rs
+    agent_heading(view,key):String
     card_key(view,key):String > requirements_round,task_card
     expanded_card_areas(viewport,(i32,i32),(u16,u16)):[Rect; 3] > clip
     expanded_tab_names(view,key):&'static [&'static str] > has_delivery
@@ -2453,8 +2452,8 @@ src
      - composer_status_area,session_{block,title},ascii_border_set,session_round_label,
        {native,draw_session,composer,primary_composer}_status,place_session_cursor
     specialized_screens/graph
-     - render_card_round_{selector,data},agent_line,render_card_history_message,graph_vertical_markers,expanded_offset_x,
-       graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
+     - render_card_title,round_label,render_card_round_data,agent_line,render_card_history_message,graph_vertical_markers,
+       expanded_offset_x,graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
     specialized_screens.rs
      draw_secondary_or_main(app,frame) > draw_{plan,diff,details}
      - button_rows
@@ -3047,6 +3046,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,676 LOC · input 1,178,802 · output 44,537 tokens · state 209af7671358 · targets AGENTS.md
+· 132,448 LOC · input 1,177,291 · output 44,523 tokens · state f4e3cb9724e2 · targets AGENTS.md
 ```
 <!-- hologram:end -->
