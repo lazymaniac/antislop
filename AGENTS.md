@@ -1209,7 +1209,7 @@ src
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
                remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
-    screen_stop(provider,screen):Option<StopCause> ~51
+    screen_stop(provider,screen):Option<StopCause> ~59
     StopCause(E{ProviderLimit,LoginRequired,UnexpectedDialog,ProcessExit,Cancelled})
      marker():&'static str
      diagnostic(detail):crate::Error
@@ -1225,7 +1225,7 @@ src
     get(conversation,role):Result<Option<Arc<Session>>>
     claimed():Vec<String>
    Session(C{conversation,core,spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
-   = EXECUTION_FAILED,APPROVAL_LINES=40
+   = EXECUTION_FAILED,SCREEN_LINES=12,APPROVAL_LINES=40
    - turn_text
   paths
    config_dir():Result<PathBuf> > environment_path
@@ -3137,6 +3137,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 135,336 LOC · input 1,204,594 · output 45,548 tokens · state fb8e8dc893ad · targets AGENTS.md
+· 135,361 LOC · input 1,204,881 · output 45,552 tokens · state 3ff354073692 · targets AGENTS.md
 ```
 <!-- hologram:end -->
