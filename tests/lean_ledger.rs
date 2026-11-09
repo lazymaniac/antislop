@@ -1346,7 +1346,17 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 .unwrap()
                 .unwrap()
                 .id,
-            analyst
+            analyst,
+            "reject_plan={reject_plan}: {:?}",
+            core.store
+                .events_since(&f.conversation, 0, 2000)
+                .unwrap()
+                .iter()
+                .map(|e| format!("{} {}", e.kind, e.payload)
+                    .chars()
+                    .take(300)
+                    .collect::<String>())
+                .collect::<Vec<_>>()
         );
         for role in [
             "requirements-options-analyst",

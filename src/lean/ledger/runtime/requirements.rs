@@ -63,6 +63,9 @@ impl Core {
             !self.store.has_pending_ledger_proposal(&r.id)?,
             "requirements proposal awaits user approval",
         )?;
+        // Read again: an approval landing between the first read and the
+        // check moves the revision, and extracting against the old one fails.
+        let r = self.store.run(conversation, &r.id)?;
         let new_source = self.register_missing_sources(conversation, &r, &user)?;
         if self.store.extraction_current(conversation, &r.id)? && !new_source {
             return Ok((r, None));
