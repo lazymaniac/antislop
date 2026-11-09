@@ -153,16 +153,18 @@ impl Card<'_> {
             .max(tab + 1)
             .min(EXPANDED_TABS.len())];
         let y = self.node.y + 1;
+        let strip = self.fill.patch(self.theme.tab_strip());
+        for x in self.node.x + 1..self.node.x + self.node.width.saturating_sub(1) {
+            self.canvas.put(x, y, ' ', strip);
+        }
         let right = self.node.x + self.node.width.saturating_sub(2);
         let mut x = self.node.x + 2;
         for (index, name) in names.iter().enumerate() {
             let label = format!(" {} {name} ", index + 1);
             let style = if index == tab {
-                self.fill
-                    .patch(self.theme.accent())
-                    .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+                self.fill.patch(self.theme.tab_active())
             } else {
-                self.fill.patch(self.theme.dim())
+                strip
             };
             let room = usize::from(right.saturating_sub(x));
             if room == 0 {
@@ -185,7 +187,7 @@ impl Card<'_> {
                 x + 1,
                 y,
                 &truncate(hint, room),
-                self.fill.patch(self.theme.dim()),
+                strip.patch(self.theme.dim()),
             );
         }
     }

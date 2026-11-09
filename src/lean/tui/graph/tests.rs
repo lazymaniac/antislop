@@ -309,6 +309,21 @@ fn expanded_details_tab_shows_agent_and_task_metadata_in_card() {
         !text.contains("round 2"),
         "status duplicates Details round: {text}"
     );
+    // The title row and the tab strip stand out from the card body, and the
+    // open tab stands out from the strip.
+    let theme = Theme::new(true, false);
+    let node = graph.node("worker:t1").unwrap();
+    let mut canvas = Canvas::new(graph.width, graph.height);
+    graph.render_with(&view, &mut canvas, Relations::all(), "worker:t1", &theme, 0);
+    let mut bg = |x: u16, y: u16| canvas.cell(x, y).unwrap().style.bg;
+    let header = theme.card_header().bg;
+    assert_eq!(bg(node.x + node.width / 2, node.y), header);
+    assert_eq!(bg(node.right() - 2, node.y), header);
+    let strip = theme.tab_strip().bg;
+    assert_eq!(bg(node.right() - 2, node.y + 1), strip);
+    assert_eq!(bg(node.x + 3, node.y + 1), theme.tab_active().bg);
+    let body = bg(node.x + 3, node.y + 3);
+    assert!(header != body && strip != body && header != strip);
 }
 
 #[test]

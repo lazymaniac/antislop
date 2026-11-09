@@ -480,7 +480,10 @@ fn render_card_title(
     } else {
         line
     };
-    frame.render_widget(Paragraph::new(line), row.intersection(frame.area()));
+    frame.render_widget(
+        Paragraph::new(line).style(theme.card_header()),
+        row.intersection(frame.area()),
+    );
 }
 
 /// The round an open task card shows, its place among the retained rounds,

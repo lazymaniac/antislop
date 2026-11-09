@@ -152,6 +152,29 @@ impl Theme {
         .add_modifier(Modifier::BOLD)
     }
 
+    /// The title row of an open graph card: a lit strip above its tabs.
+    pub fn card_header(&self) -> Style {
+        self.pick(
+            card_style(ayu::SELECTION, ayu::TITLE),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+        .add_modifier(Modifier::BOLD)
+    }
+
+    /// The tab strip of an open graph card; the tabs not shown sit on it.
+    pub fn tab_strip(&self) -> Style {
+        self.pick(card_style(ayu::LINE, ayu::FG), Style::default())
+    }
+
+    /// The tab an open graph card shows: a filled label on the strip.
+    pub fn tab_active(&self) -> Style {
+        self.pick(
+            card_style(ayu::BLUE, ayu::BG),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+        .add_modifier(Modifier::BOLD)
+    }
+
     /// The primary phase action above the composer: a filled, bold button.
     pub fn button(&self) -> Style {
         self.pick(

@@ -6,8 +6,19 @@ impl Card<'_> {
     pub(super) fn paint_identity(&mut self) {
         if self.expanded_tab.is_some() {
             // An open card's title row (task, status, round) is drawn over
-            // the canvas with the round shown; only the icon belongs here.
-            self.paint_icon();
+            // the canvas with the round shown; only its strip and the icon
+            // belong here.
+            let right = self.node.x + self.node.width.saturating_sub(1);
+            let header = self.fill.patch(self.theme.card_header());
+            for x in self.node.x + 1..right {
+                self.canvas.put(x, self.node.y, ' ', header);
+            }
+            self.canvas.text(
+                self.node.x + 2,
+                self.node.y,
+                self.theme.role_icon(&self.node.key),
+                header.patch(self.accent),
+            );
             self.paint_open_comments();
             return;
         }
@@ -75,12 +86,17 @@ impl Card<'_> {
             .filter(|comment| comment.status == "open")
             .count();
         if open > 0 {
+            let base = if self.expanded_tab.is_some() {
+                self.fill.patch(self.theme.card_header())
+            } else {
+                self.fill
+            };
             let right = self.node.x + self.node.width - 1;
             self.canvas.text(
                 right - 3,
                 self.node.y,
                 &format!("✎{}", open.min(9)),
-                self.fill.patch(self.theme.accent()),
+                base.patch(self.theme.accent()),
             );
         }
     }
