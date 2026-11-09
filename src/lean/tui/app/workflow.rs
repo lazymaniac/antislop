@@ -117,6 +117,9 @@ impl App {
             self.view.paused.then(|| "paused".to_owned()),
             self.view.autonomous.then(|| "approvals: auto".to_owned()),
             (waiting > 0).then(|| format!("{waiting} approval(s) waiting")),
+            view::Usage::total(self.view.agents.values())
+                .short()
+                .map(|usage| format!("tokens {usage}")),
         ]
         .into_iter()
         .flatten()
@@ -124,15 +127,12 @@ impl App {
         .join(" · ");
         let status = status.as_str();
         let stage = self.view.stage();
+        let strip = stage.strip(Theme::from_env().glyphs());
         match stage {
-            view::Stage::Fresh => format!("1/3 interview · {status}"),
-            view::Stage::Interview => format!("1/3 interview · {status}"),
-            view::Stage::Planning => format!("2/3 planning · {status}"),
-            view::Stage::Review => format!("2/3 plan review · {status}"),
-            view::Stage::Executing => format!("3/3 implementation · {status} [Task actions]"),
+            view::Stage::Executing => format!("{strip} · {status} [Task actions]"),
             // The way out is one click away whenever something is stuck.
-            view::Stage::Blocked => format!("{} · {status} [Unblock]", stage.label()),
-            _ => format!("{} · {status}", stage.label()),
+            view::Stage::Blocked => format!("{strip} · {status} [Unblock]"),
+            _ => format!("{strip} · {status}"),
         }
     }
 

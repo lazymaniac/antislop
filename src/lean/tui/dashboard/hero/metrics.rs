@@ -139,21 +139,10 @@ impl Details {
         theme: &Theme,
         agents: &[&super::super::super::view::Agent],
     ) -> Vec<Vec<Span<'static>>> {
-        if !agents.iter().any(|agent| agent.reported > 0) {
+        let Some(usage) = super::super::super::view::Usage::total(agents.iter().copied()).short()
+        else {
             return Vec::new();
-        }
-        let sum = |field: fn(&super::super::super::view::Agent) -> Option<u64>| {
-            agents.iter().filter_map(|agent| field(agent)).sum::<u64>()
         };
-        vec![chip(
-            theme,
-            "tokens",
-            format!(
-                "{} in / {} out",
-                compact(sum(|agent| agent.tokens_in)),
-                compact(sum(|agent| agent.tokens_out))
-            ),
-            theme.text(),
-        )]
+        vec![chip(theme, "tokens", usage, theme.text())]
     }
 }

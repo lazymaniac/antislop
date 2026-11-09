@@ -1237,6 +1237,38 @@ mod tests {
     }
 
     #[test]
+    fn token_use_is_estimated_from_prompt_and_answer_sizes_when_the_cli_reports_none() {
+        let mut view = View::default();
+        for (seq, role, prompt, answer) in [
+            (1, "worker:uuid1", 4000, 2000),
+            (3, "reviewer:uuid1", 8000, 401),
+        ] {
+            view.apply(&event(
+                seq,
+                Some("a"),
+                "turn_started",
+                json!({"role": role}),
+            ));
+            view.apply(&event(
+                seq + 1,
+                Some("a"),
+                "turn_finished",
+                json!({"role": role, "status": "done", "prompt_bytes": prompt, "answer_bytes": answer}),
+            ));
+        }
+        let worker = &view.agents["worker:uuid1"];
+        assert!(worker.tokens().starts_with("estimated ~1000 in / ~500 out"));
+        assert_eq!(
+            worker.usage().short().as_deref(),
+            Some("~1.0k in / ~500 out (estimated)")
+        );
+        assert_eq!(
+            Usage::total(view.agents.values()).short().as_deref(),
+            Some("~3.0k in / ~601 out (estimated)")
+        );
+    }
+
+    #[test]
     fn ac_resp_01_responsive_breakpoint_compact_switch() {
         // Breakpoint: width 84 (< 85) -> compact mode with banner
         let header_chat = render_header("proj", "conv-12345", "ready", PanelFocus::Chat, 84);

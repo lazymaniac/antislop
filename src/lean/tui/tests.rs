@@ -1387,7 +1387,24 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
     assert!(!text.contains("(Tab: switch)"));
     assert!(text.contains("test"));
     assert!(!text.contains("antislop"));
-    assert!(text.contains("1/3 interview"));
+    let strip = view::Stage::Fresh.strip(crate::lean::tui::theme::Theme::from_env().glyphs());
+    assert!(text.contains(&strip), "{text}");
+}
+
+#[test]
+fn the_header_shows_every_step_of_the_run_and_where_it_stands() {
+    let unicode = crate::lean::tui::theme::Theme::new(true, false);
+    let ascii = crate::lean::tui::theme::Theme::new(false, true);
+    assert_eq!(
+        view::Stage::Review.strip(unicode.glyphs()),
+        "✓✓●○○○ plan review"
+    );
+    assert_eq!(
+        view::Stage::Blocked.strip(unicode.glyphs()),
+        "✓✓✓●○○ blocked"
+    );
+    assert_eq!(view::Stage::Done.strip(unicode.glyphs()), "✓✓✓✓✓✓ done");
+    assert_eq!(view::Stage::Audit.strip(ascii.glyphs()), "xxxx*o audit");
 }
 
 #[test]

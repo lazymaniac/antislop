@@ -29,6 +29,9 @@ pub(super) struct TurnEvents<'a> {
     turn: store::Turn,
     inbox: Vec<store::Mail>,
     pub(super) persistence_error: std::cell::RefCell<Option<Error>>,
+    /// Size of the prompt sent, once it was built: frontends estimate cost
+    /// from it when the CLI reports none.
+    pub(super) prompt_bytes: std::cell::Cell<Option<usize>>,
 }
 
 impl<'a> TurnEvents<'a> {
@@ -39,6 +42,7 @@ impl<'a> TurnEvents<'a> {
             turn: state.turn.clone(),
             inbox: state.inbox.clone(),
             persistence_error: std::cell::RefCell::new(None),
+            prompt_bytes: std::cell::Cell::new(None),
         }
     }
 

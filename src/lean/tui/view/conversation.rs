@@ -63,6 +63,14 @@ impl View {
         if self.tasks.iter().any(|task| is_running(&task.status)) {
             return Stage::Executing;
         }
+        if !self.tasks.is_empty()
+            && self
+                .agents
+                .get(super::AUDITOR)
+                .is_some_and(|auditor| auditor.running)
+        {
+            return Stage::Audit;
+        }
         self.stage_after_activity()
     }
 

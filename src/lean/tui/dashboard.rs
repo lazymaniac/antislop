@@ -69,15 +69,6 @@ fn gauge(
     ]
 }
 
-/// 1234 → `1.2k`, so a token count fits a chip.
-fn compact(n: u64) -> String {
-    match n {
-        0..1000 => n.to_string(),
-        1000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
-        _ => format!("{:.1}M", n as f64 / 1e6),
-    }
-}
-
 /// A paragraph wrapped to `width`, blank source lines kept.
 fn para(theme: &Theme, text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let text = theme.clean(text);

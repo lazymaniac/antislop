@@ -33,7 +33,12 @@ fn finish_success(
         .mark_delivered(&events.conversation, &delivered, &turn.id)?;
     events.announce(
         "turn_finished",
-        json!({"role": turn.role, "status": "done"}),
+        json!({
+            "role": turn.role,
+            "status": "done",
+            "prompt_bytes": events.prompt_bytes.get(),
+            "answer_bytes": outcome.text.len(),
+        }),
     );
     Ok(Some(outcome.text))
 }
@@ -55,7 +60,12 @@ fn finish_failure(
     record_failed_mail(&events, &error);
     events.announce(
         "turn_finished",
-        json!({"role": events.turn.role, "status": status, "error": error}),
+        json!({
+            "role": events.turn.role,
+            "status": status,
+            "error": error,
+            "prompt_bytes": events.prompt_bytes.get(),
+        }),
     );
     Ok(None)
 }

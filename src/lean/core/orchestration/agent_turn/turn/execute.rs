@@ -27,6 +27,7 @@ fn execute_profile(
 ) -> Result<agent::Outcome> {
     let mut prepared = prepare_agent(core, state, profile)?;
     let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt)?;
+    events.prompt_bytes.set(Some(text.len()));
     check_task_inputs(core, &state.role)?;
     let handler = tool_handler(core, state);
     run_cli(core, state, &mut prepared, &text, &handler, cancel, events)

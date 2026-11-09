@@ -197,6 +197,12 @@ fn finish_agent_turn(view: &mut View, key: &str, event: &Value, payload: &Value,
         let agent = view.agents.entry(key.to_owned()).or_default();
         agent.running = false;
         agent.turns += 1;
+        if let Some(prompt) = payload["prompt_bytes"].as_u64() {
+            // About four bytes a token in English text and code.
+            agent.estimated += 1;
+            agent.estimated_in += prompt.div_ceil(4);
+            agent.estimated_out += payload["answer_bytes"].as_u64().unwrap_or(0).div_ceil(4);
+        }
         let ended = event["created_ms"].as_i64().filter(|ms| *ms > 0);
         if let (Some(start), Some(end)) = (agent.started_ms.take(), ended) {
             let took = end.saturating_sub(start).max(0) as u64;
