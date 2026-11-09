@@ -91,7 +91,7 @@ fn integrate_current(
     if can_cherry_pick(&plan, base, files, target, unrestricted) {
         return cherry_pick(project, change, files, commit);
     }
-    write_merge_result(project, target, &plan.tree, commit)
+    write_merge_result(project, change, target, &plan.tree, commit)
 }
 
 fn merge_tree(
@@ -203,10 +203,9 @@ fn cherry_pick(
                 change,
             ],
         )?;
-        return Ok(Integration::Committed(commit_paths(
-            project,
-            files,
-            CommitPurpose::Integration,
+        let message = integration_message(project, change)?;
+        return Ok(Integration::Committed(commit_paths_with_message(
+            project, files, &message,
         )?));
     }
     ok(project, &["cherry-pick", "--no-commit", change])?;
@@ -222,6 +221,7 @@ fn unstage_paths(project: &Path, files: &[String]) {
 
 fn write_merge_result(
     project: &Path,
+    change: &str,
     target: &[String],
     tree: &str,
     commit: bool,
@@ -230,11 +230,17 @@ fn write_merge_result(
     if !commit {
         return Ok(Integration::Applied);
     }
-    Ok(Integration::Committed(commit_paths(
-        project,
-        target,
-        CommitPurpose::Integration,
+    let message = integration_message(project, change)?;
+    Ok(Integration::Committed(commit_paths_with_message(
+        project, target, &message,
     )?))
+}
+
+/// A landed change keeps the subject its worker wrote; runtime-made changes
+/// land under the fixed integration subject.
+fn integration_message(project: &Path, change: &str) -> Result<String> {
+    Ok(own_subject(project, change)?
+        .unwrap_or_else(|| commit_subject(CommitPurpose::Integration).to_owned()))
 }
 
 /// Rebuild a repaired result on the current project snapshot, carrying only
@@ -247,10 +253,14 @@ pub fn transplant_repair(
     purpose: CommitPurpose,
 ) -> Result<String> {
     let repaired = commit_all(worktree, purpose)?;
+    let subject = task_subject(worktree, base, &repaired)?;
     let files = changed_files(worktree, base, &repaired)?;
     ok(worktree, &["reset", "--hard", onto])?;
     write_files(worktree, &repaired, &files)?;
-    commit_all(worktree, purpose)
+    match subject {
+        Some(subject) => commit_all_with_message(worktree, &subject),
+        None => commit_all(worktree, purpose),
+    }
 }
 
 /// Applies the squashed commit `change` (made on `base`) to the project's

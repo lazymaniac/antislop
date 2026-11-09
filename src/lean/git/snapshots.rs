@@ -91,7 +91,14 @@ fn with_index(dir: &Path, index: &Path, args: &[&str]) -> Result<String> {
 /// Commits exactly `files` as they are in the working tree, whatever else
 /// the user has staged or changed.
 pub fn commit_paths(dir: &Path, files: &[String], purpose: CommitPurpose) -> Result<String> {
-    let message = commit_subject(purpose);
+    commit_paths_with_message(dir, files, commit_subject(purpose))
+}
+
+pub(crate) fn commit_paths_with_message(
+    dir: &Path,
+    files: &[String],
+    message: &str,
+) -> Result<String> {
     let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
     add.extend(files.iter().map(String::as_str));
     ok(dir, &add)?;

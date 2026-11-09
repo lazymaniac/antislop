@@ -150,6 +150,54 @@ pub(super) fn commit_subject(purpose: CommitPurpose) -> &'static str {
     purpose.subject()
 }
 
+/// Whether `subject` is one of the runtime's own fixed commit subjects.
+fn is_runtime_subject(subject: &str) -> bool {
+    use CommitPurpose::*;
+    #[cfg(test)]
+    if subject == TestFixture.subject() {
+        return true;
+    }
+    [
+        TaskResult,
+        Checkpoint,
+        ArtifactCheckpoint,
+        Integration,
+        Repair,
+        ManualRecovery,
+        WorkspaceSnapshot,
+        ConflictSnapshot,
+        DependencySnapshot,
+        ArtifactInputSnapshot,
+        SourceInputSnapshot,
+        RequirementsSnapshot,
+    ]
+    .iter()
+    .any(|purpose| purpose.subject() == subject)
+}
+
+fn is_task_subject(subject: &str) -> bool {
+    !is_runtime_subject(subject)
+        && crate::lean::turn_result::validate_worker_commit_subject(subject).is_ok()
+}
+
+/// The subject a task's work is known by: the first worker-written commit
+/// subject in `base..rev` (later rounds only correct it), or `None` when the
+/// range holds runtime commits only.
+pub(super) fn task_subject(dir: &Path, base: &str, rev: &str) -> Result<Option<String>> {
+    let range = format!("{base}..{rev}");
+    let subjects = ok(dir, &["log", "--reverse", "--format=%s", &range])?;
+    Ok(subjects
+        .lines()
+        .find(|subject| is_task_subject(subject))
+        .map(str::to_owned))
+}
+
+/// The subject of commit `rev` when a worker wrote it, else `None`.
+pub(super) fn own_subject(dir: &Path, rev: &str) -> Result<Option<String>> {
+    let subject = ok(dir, &["log", "-1", "--format=%s", rev])?;
+    Ok(is_task_subject(&subject).then_some(subject))
+}
+
 /// The working tree as it is now (tracked and untracked files, ignored ones
 /// left out) recorded as a commit on top of HEAD, without touching the user's
 /// index, files or branch. A copy of the index keeps git from re-reading
@@ -229,6 +277,85 @@ mod tests {
         commit_all(&worktree, CommitPurpose::TestFixture).unwrap();
         let change = squash(&worktree, &base, CommitPurpose::TestFixture).unwrap();
         (trees, base, change)
+    }
+
+    fn worker_rounds(project: &Path, subjects: &[&str]) -> (tempfile::TempDir, String, String) {
+        let trees = tempfile::tempdir().unwrap();
+        let worktree = trees.path().join("t1");
+        let base = head(project).unwrap();
+        add_worktree(project, &worktree, "antislop/t1", &base).unwrap();
+        for (round, subject) in subjects.iter().enumerate() {
+            std::fs::write(worktree.join("a.txt"), format!("round {round}\n")).unwrap();
+            commit_all_with_message(&worktree, subject).unwrap();
+        }
+        let change = squash(&worktree, &base, CommitPurpose::TaskResult).unwrap();
+        (trees, base, change)
+    }
+
+    #[test]
+    fn a_landed_task_keeps_the_subject_its_worker_wrote_first() {
+        for user_edit in [false, true] {
+            let project = repo();
+            let (_trees, base, change) = worker_rounds(
+                project.path(),
+                &[
+                    "feat(a): rewrite a",
+                    "chore: save task checkpoint",
+                    "fix: address review",
+                ],
+            );
+            assert_eq!(
+                ok(project.path(), &["log", "-1", "--format=%s", &change]).unwrap(),
+                "feat(a): rewrite a"
+            );
+            if user_edit {
+                std::fs::write(project.path().join("b.txt"), "user edit\n").unwrap();
+            }
+            let result = integrate(project.path(), &base, &change, true).unwrap();
+            assert!(matches!(result, Integration::Committed(_)));
+            assert_eq!(
+                ok(project.path(), &["log", "-1", "--format=%s"]).unwrap(),
+                "feat(a): rewrite a",
+                "user_edit={user_edit}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_without_a_worker_subject_lands_under_the_fixed_subject() {
+        let project = repo();
+        let (_trees, base, change) = worker_rounds(
+            project.path(),
+            &["chore: save task checkpoint", "not a conventional subject"],
+        );
+        assert_eq!(
+            ok(project.path(), &["log", "-1", "--format=%s", &change]).unwrap(),
+            "chore: record task result"
+        );
+        integrate(project.path(), &base, &change, true).unwrap();
+        assert_eq!(
+            ok(project.path(), &["log", "-1", "--format=%s"]).unwrap(),
+            "chore: integrate task changes"
+        );
+    }
+
+    #[test]
+    fn a_repaired_task_keeps_its_worker_subject() {
+        let project = repo();
+        let trees = tempfile::tempdir().unwrap();
+        let worktree = trees.path().join("t1");
+        let base = head(project.path()).unwrap();
+        add_worktree(project.path(), &worktree, "antislop/t1", &base).unwrap();
+        std::fs::write(worktree.join("a.txt"), "worker\n").unwrap();
+        commit_all_with_message(&worktree, "feat: worker change").unwrap();
+        std::fs::write(project.path().join("b.txt"), "moved on\n").unwrap();
+        let onto = commit_all(project.path(), CommitPurpose::TestFixture).unwrap();
+        std::fs::write(worktree.join("a.txt"), "repaired\n").unwrap();
+        let repaired = transplant_repair(&worktree, &base, &onto, CommitPurpose::Repair).unwrap();
+        assert_eq!(
+            ok(&worktree, &["log", "-1", "--format=%s", &repaired]).unwrap(),
+            "feat: worker change"
+        );
     }
 
     #[test]
