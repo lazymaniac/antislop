@@ -163,4 +163,5 @@ const AUDIT_CHECKS: &str = "List every obligation in the request, each \
      qualifier included, and decide for each whether the results and the files \
      show it done and whether touched code was left in a cleaner, better state \
      than before. A missing, partial or unreviewed obligation is a high \
-     finding. ";
+     finding. List only problems still open: one the results resolve is not \
+     a finding, so leave it out rather than keep it for tracking. ";

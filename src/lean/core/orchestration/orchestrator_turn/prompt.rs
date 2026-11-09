@@ -173,6 +173,7 @@ mod tests {
             })],
             error: None,
             report: hostile.into(),
+            reminders: 0,
         };
         let mut prompt = String::new();
         append_audit_response(&mut prompt, Some(&audit));

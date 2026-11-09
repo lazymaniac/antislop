@@ -36,7 +36,12 @@ pub(super) struct AuditResponse {
     pub(super) findings: Vec<serde_json::Value>,
     pub(super) error: Option<String>,
     pub(super) report: String,
+    /// Runtime reminders already sent for this report.
+    pub(super) reminders: usize,
 }
+
+/// Starts every reminder the runtime sends for an unanswered audit report.
+pub(super) const AUDIT_REMINDER: &str = "The auditor report is still awaiting your response:";
 
 pub(super) fn prepare<'a>(
     core: &Core,
@@ -88,12 +93,19 @@ fn audit_response(core: &Core, conversation: &str) -> Result<Option<AuditRespons
     {
         return Ok(None);
     }
+    let reminders = core
+        .store
+        .messages_by(conversation, RUNTIME, report.seq)?
+        .iter()
+        .filter(|message| message.text.starts_with(AUDIT_REMINDER))
+        .count();
     let Some(event) = core.store.latest_audit_event(conversation)? else {
         return Ok(Some(AuditResponse {
             approved: false,
             findings: Vec::new(),
             error: Some("the auditor report has no persisted audit verdict".into()),
             report: report.text.clone(),
+            reminders,
         }));
     };
     Ok(Some(AuditResponse {
@@ -104,6 +116,7 @@ fn audit_response(core: &Core, conversation: &str) -> Result<Option<AuditRespons
             .unwrap_or_default(),
         error: event.payload["error"].as_str().map(str::to_owned),
         report: report.text.clone(),
+        reminders,
     }))
 }
 

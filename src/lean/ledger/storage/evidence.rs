@@ -225,10 +225,8 @@ impl Store {
         let mut gaps = extraction_gap(self, conversation, run_id)?;
         let all = self.ledger_statuses(conversation, run_id, None, fingerprint)?;
         gaps.extend(entry_gaps(&all));
-        if audit_missing(self, run_id, r.spec_revision, fingerprint)? {
-            gaps.push(
-                "integrated compliance audit and independent review are missing or stale".into(),
-            );
+        if let Some(gap) = audit_gap(self, run_id, r.spec_revision, fingerprint)? {
+            gaps.push(gap.into());
         }
         Ok(gaps)
     }

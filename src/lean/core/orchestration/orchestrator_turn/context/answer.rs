@@ -10,20 +10,37 @@ pub(super) fn finish(
     let result = super::super::turn_result::TurnResult::decode(answer);
     let submitted = submitted_graph(core, context.conversation, &result);
     if let Some(audit) = &context.audit_response
-        && let Some(reason) = audit_response_error(
+        && let Some(error) = audit_response_error(
             audit,
             &result.text(),
             submitted.as_ref().is_some_and(Result::is_ok),
         )
     {
-        core.store.add_message(
+        // A finding the orchestrator answers but leaves open without a plan
+        // is its disposition once reminded; any other gap gets a bounded
+        // number of reminders, then the answer stands and the user decides.
+        let settled = match error {
+            AuditGap::OpenWithoutPlan(_) => audit.reminders >= 1,
+            AuditGap::Malformed(_) => audit.reminders >= MAX_AUDIT_REMINDERS,
+        };
+        if !settled {
+            core.store.add_message(
+                context.conversation,
+                RUNTIME,
+                &format!(
+                    "{AUDIT_REMINDER} {} Re-read the report and provide the required finding-by-finding Audit response before proceeding.",
+                    error.reason()
+                ),
+            )?;
+            return Ok(());
+        }
+        core.notice(
             context.conversation,
-            RUNTIME,
             &format!(
-                "The auditor report is still awaiting your response: {reason} Re-read the report and provide the required finding-by-finding Audit response before proceeding."
+                "The audit stays open: {} Review the audit findings and reply to continue.",
+                error.reason()
             ),
-        )?;
-        return Ok(());
+        );
     }
     let addressed = result.addressed().map(<[u64]>::to_vec);
     let text = result.text();
@@ -35,11 +52,30 @@ pub(super) fn finish(
     handle_plan_answer(core, context, text, plan, addressed, cancel)
 }
 
+/// Reminders sent for one audit report before a malformed answer stands.
+const MAX_AUDIT_REMINDERS: usize = 3;
+
+enum AuditGap {
+    /// The answer does not follow the required audit response format.
+    Malformed(String),
+    /// Every finding is answered, but one is left open without a plan.
+    OpenWithoutPlan(&'static str),
+}
+
+impl AuditGap {
+    fn reason(&self) -> &str {
+        match self {
+            AuditGap::Malformed(reason) => reason,
+            AuditGap::OpenWithoutPlan(reason) => reason,
+        }
+    }
+}
+
 fn audit_response_error(
     audit: &super::AuditResponse,
     response: &str,
     submits_plan: bool,
-) -> Option<String> {
+) -> Option<AuditGap> {
     let lines = response.lines().map(str::trim).collect::<Vec<_>>();
     if audit.error.is_some() {
         let acknowledged = lines.iter().any(|line| {
@@ -47,8 +83,9 @@ fn audit_response_error(
                 .starts_with("audit status: unaudited - ")
                 && line.len() > "audit status: unaudited - ".len()
         });
-        return (!acknowledged)
-            .then(|| "the audit failure was not acknowledged as unaudited".to_owned());
+        return (!acknowledged).then(|| {
+            AuditGap::Malformed("the audit failure was not acknowledged as unaudited".to_owned())
+        });
     }
     if audit.findings.is_empty() {
         let status = if audit.approved { "complete" } else { "open" };
@@ -57,18 +94,22 @@ fn audit_response_error(
             .iter()
             .any(|line| line.to_ascii_lowercase().starts_with(&prefix) && line.len() > prefix.len())
         {
-            return Some(format!("the report requires `{prefix}<assessment>`"));
+            return Some(AuditGap::Malformed(format!(
+                "the report requires `{prefix}<assessment>`"
+            )));
         }
-        return (status == "open" && !submits_plan).then(|| {
-            "an open audit result needs a remediation plan submitted for independent review".into()
-        });
+        return (status == "open" && !submits_plan).then_some(AuditGap::OpenWithoutPlan(
+            "an open audit result needs a remediation plan submitted for independent review",
+        ));
     }
     let Some(section) = lines
         .iter()
         .position(|line| line.eq_ignore_ascii_case("audit response:"))
         .map(|section| &lines[section + 1..])
     else {
-        return Some("the response is missing the `Audit response:` section".into());
+        return Some(AuditGap::Malformed(
+            "the response is missing the `Audit response:` section".into(),
+        ));
     };
     let mut has_open_finding = false;
     for (index, _) in audit.findings.iter().enumerate() {
@@ -81,18 +122,18 @@ fn audit_response_error(
                 .iter()
                 .any(|prefix| line.starts_with(prefix) && line.len() > prefix.len())
         }) {
-            return Some(format!(
+            return Some(AuditGap::Malformed(format!(
                 "finding {number} needs a `resolved` or `open` disposition with a reason"
-            ));
+            )));
         }
         has_open_finding |= section
             .iter()
             .any(|line| line.to_ascii_lowercase().starts_with(&open));
     }
     if has_open_finding && !submits_plan {
-        return Some(
-            "open audit findings need a remediation plan submitted for independent review".into(),
-        );
+        return Some(AuditGap::OpenWithoutPlan(
+            "open audit findings need a remediation plan submitted for independent review",
+        ));
     }
     None
 }
@@ -496,6 +537,70 @@ mod tests {
                 runtime[1]
                     .text
                     .contains("remediation plan submitted for independent review")
+            );
+        });
+    }
+
+    fn answer_after_reminder(
+        core: &Arc<Core>,
+        conversation: &str,
+        context: &OrchestrationContext<'_>,
+        answer: &str,
+    ) -> usize {
+        finish(core, context, answer, &AtomicBool::new(false)).unwrap();
+        let reminder = core.store.messages_by(conversation, RUNTIME, 0).unwrap();
+        let retry =
+            super::super::prepare(core, conversation, reminder.last().unwrap().seq).unwrap();
+        finish(core, &retry, answer, &AtomicBool::new(false)).unwrap();
+        core.store
+            .messages_by(conversation, ORCHESTRATOR, 0)
+            .unwrap()
+            .len()
+    }
+
+    #[test]
+    fn a_finding_left_open_without_a_plan_stands_after_one_reminder() {
+        with_audited_context(|core, conversation, context| {
+            let answers = answer_after_reminder(
+                core,
+                conversation,
+                context,
+                "Audit response:\nfinding 1: open - no project work can close it; the user decides.",
+            );
+            assert_eq!(answers, 1);
+            let runtime = core.store.messages_by(conversation, RUNTIME, 0).unwrap();
+            assert_eq!(runtime.len(), 2, "one reminder, then the answer stands");
+            let events = core.store.events_since(conversation, 0, 256).unwrap();
+            assert!(events.iter().any(|event| event.kind == "notice"
+                && event.payload.to_string().contains("The audit stays open")));
+        });
+    }
+
+    #[test]
+    fn a_malformed_audit_answer_stands_after_three_reminders() {
+        with_audited_context(|core, conversation, context| {
+            let mut retry = super::super::prepare(core, conversation, context.upto).unwrap();
+            for sent in 1..=MAX_AUDIT_REMINDERS {
+                finish(core, &retry, "Done.", &AtomicBool::new(false)).unwrap();
+                let runtime = core.store.messages_by(conversation, RUNTIME, 0).unwrap();
+                assert_eq!(runtime.len(), 1 + sent);
+                retry =
+                    super::super::prepare(core, conversation, runtime.last().unwrap().seq).unwrap();
+            }
+            finish(core, &retry, "Done.", &AtomicBool::new(false)).unwrap();
+            assert_eq!(
+                core.store
+                    .messages_by(conversation, RUNTIME, 0)
+                    .unwrap()
+                    .len(),
+                1 + MAX_AUDIT_REMINDERS
+            );
+            assert_eq!(
+                core.store
+                    .messages_by(conversation, ORCHESTRATOR, 0)
+                    .unwrap()
+                    .len(),
+                1
             );
         });
     }

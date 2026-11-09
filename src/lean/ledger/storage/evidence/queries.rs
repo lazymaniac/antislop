@@ -81,12 +81,20 @@ pub(super) fn entry_gaps(entries: &[LedgerEntry]) -> Vec<String> {
     gaps
 }
 
-pub(super) fn audit_missing(
+/// Why the integrated audit does not count for this revision and
+/// fingerprint, if it does not.
+pub(super) fn audit_gap(
     store: &Store,
     run: &str,
     revision: i64,
     fingerprint: &str,
-) -> Result<bool> {
+) -> Result<Option<&'static str>> {
     let approved: Option<bool> = store.db().query_row("SELECT approved FROM ledger_reviews WHERE run_id=?1 AND spec_revision=?2 AND kind='audit' AND fingerprint=?3 ORDER BY created_ms DESC,rowid DESC LIMIT 1", params![run,revision,fingerprint], |row| row.get(0)).optional()?;
-    Ok(!approved.unwrap_or(false))
+    Ok(match approved {
+        Some(true) => None,
+        Some(false) => {
+            Some("the independent review did not approve the integrated compliance audit")
+        }
+        None => Some("integrated compliance audit and independent review are missing or stale"),
+    })
 }
