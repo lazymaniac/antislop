@@ -1,0 +1,422 @@
+use crate::lean::*;
+
+const PLAN_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+pub(super) fn run(core: &Arc<Core>, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
+    std::thread::scope(|scope| {
+        let mut scheduler = Scheduler::new(core, conversation, plan_id, cancel);
+        scheduler.run(scope);
+    });
+}
+
+struct Scheduler<'a> {
+    core: &'a Arc<Core>,
+    conversation: &'a str,
+    plan_id: &'a str,
+    cancel: &'a AtomicBool,
+    done_tx: std::sync::mpsc::Sender<String>,
+    done_rx: std::sync::mpsc::Receiver<String>,
+    reservations: Reservations,
+    blocked_worktrees: std::collections::HashSet<PathBuf>,
+}
+
+#[derive(Default)]
+struct Reservations {
+    tasks: std::collections::HashSet<String>,
+}
+
+impl Reservations {
+    fn contains(&self, id: &str) -> bool {
+        self.tasks.contains(id)
+    }
+
+    fn reserve(&mut self, id: &str) {
+        self.tasks.insert(id.to_owned());
+    }
+
+    fn release(&mut self, id: &str) {
+        self.tasks.remove(id);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
+impl<'a> Scheduler<'a> {
+    fn new(
+        core: &'a Arc<Core>,
+        conversation: &'a str,
+        plan_id: &'a str,
+        cancel: &'a AtomicBool,
+    ) -> Self {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        Self {
+            core,
+            conversation,
+            plan_id,
+            cancel,
+            done_tx,
+            done_rx,
+            reservations: Default::default(),
+            blocked_worktrees: Default::default(),
+        }
+    }
+
+    fn run<'scope, 'env>(&mut self, scope: &'scope std::thread::Scope<'scope, 'env>)
+    where
+        'a: 'scope,
+    {
+        loop {
+            let settled = self.schedule_ready(scope);
+            if settled {
+                continue;
+            }
+            if self.reservations.is_empty() {
+                if !self.blocked_worktrees.is_empty() {
+                    let blocked = std::mem::take(&mut self.blocked_worktrees);
+                    if self.core.wait_for_worktree_available(&blocked, self.cancel) {
+                        continue;
+                    }
+                    break;
+                }
+                break;
+            }
+            if !self.cancel.load(Ordering::SeqCst) {
+                self.core
+                    .report_stopped_tasks(self.conversation, self.plan_id);
+            }
+            if !self.receive_completion() {
+                break;
+            }
+        }
+    }
+
+    fn schedule_ready<'scope, 'env>(
+        &mut self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+    ) -> bool
+    where
+        'a: 'scope,
+    {
+        let _graph_guard = self
+            .core
+            .locks
+            .graph_updates
+            .lock()
+            .expect("graph update mutex");
+        let Ok(mut tasks) = self.core.store.plan(self.plan_id) else {
+            return false;
+        };
+        let state = task_states(&tasks);
+        let mut settled = false;
+        for task in &mut tasks {
+            settled |= self.schedule_one(scope, task, &state);
+        }
+        settled
+    }
+
+    fn schedule_one<'scope, 'env>(
+        &mut self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        task: &mut Task,
+        state: &HashMap<String, String>,
+    ) -> bool
+    where
+        'a: 'scope,
+    {
+        let id = task.spec["id"].as_str().unwrap_or_default().to_owned();
+        if !self.is_schedulable(task, &id) {
+            return false;
+        }
+        if task.status == status::SKIPPED {
+            self.restore_skipped_task(task);
+            return true;
+        }
+        if self.cancel.load(Ordering::SeqCst) || !dependencies_approved(task, state) {
+            return false;
+        }
+        self.schedule_if_available(scope, task, id);
+        false
+    }
+
+    fn is_schedulable(&self, task: &Task, id: &str) -> bool {
+        !self
+            .core
+            .revisions
+            .revising
+            .lock()
+            .expect("revision mutex")
+            .contains(&task.id)
+            && self.is_runnable(task, id)
+    }
+
+    fn restore_skipped_task(&self, task: &mut Task) {
+        let _ = self
+            .core
+            .set_status(self.conversation, task, status::QUEUED);
+    }
+
+    fn is_runnable(&self, task: &Task, id: &str) -> bool {
+        matches!(task.status.as_str(), status::QUEUED | status::SKIPPED)
+            && task.spec["deferred"] != true
+            && !self.reservations.contains(id)
+    }
+
+    fn schedule_if_available<'scope, 'env>(
+        &mut self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        task: &Task,
+        id: String,
+    ) where
+        'a: 'scope,
+    {
+        let (needs_lease, lease) = match self.core.try_task_worktree_lease(task) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                self.core.notice(
+                    self.conversation,
+                    &format!("could not reserve task checkout for {id}: {error}"),
+                );
+                return;
+            }
+        };
+        if needs_lease && lease.is_none() {
+            if let Ok(Some(path)) = self.core.task_worktree_path(task) {
+                self.blocked_worktrees.insert(path);
+            }
+            return;
+        }
+        self.reservations.reserve(&id);
+        self.spawn_task(scope, task.clone(), id, lease);
+    }
+
+    fn spawn_task<'scope, 'env>(
+        &self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        task: Task,
+        id: String,
+        lease: Option<crate::lean::core::worktree::cleanup::WorktreeLease<'a>>,
+    ) where
+        'a: 'scope,
+    {
+        let tx = self.done_tx.clone();
+        let task_cancel = Arc::new(AtomicBool::new(self.cancel.load(Ordering::SeqCst)));
+        self.core
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex")
+            .insert(
+                task.id.clone(),
+                (self.conversation.into(), task_cancel.clone()),
+            );
+        let core = self.core;
+        let conversation = self.conversation;
+        let plan_cancel = self.cancel;
+        scope.spawn(move || {
+            execute_task(core, conversation, task, task_cancel, plan_cancel, lease);
+            let _ = tx.send(id);
+        });
+    }
+
+    fn receive_completion(&mut self) -> bool {
+        let finished = match self.done_rx.recv_timeout(PLAN_POLL) {
+            Ok(finished) => finished,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return true,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+        };
+        self.release(&finished);
+        while let Ok(more) = self.done_rx.try_recv() {
+            self.release(&more);
+        }
+        true
+    }
+
+    fn release(&mut self, id: &str) {
+        self.reservations.release(id);
+    }
+}
+
+fn task_states(tasks: &[Task]) -> HashMap<String, String> {
+    tasks
+        .iter()
+        .map(|task| {
+            (
+                task.spec["id"].as_str().unwrap_or_default().to_owned(),
+                if task.spec["deferred"] == true {
+                    status::NEEDS_USER.into()
+                } else {
+                    task.status.clone()
+                },
+            )
+        })
+        .collect()
+}
+
+fn dependencies_approved(task: &Task, states: &HashMap<String, String>) -> bool {
+    let dependencies: Vec<String> =
+        serde_json::from_value(task.spec["depends_on"].clone()).unwrap_or_default();
+    dependencies
+        .iter()
+        .all(|id| states.get(id).map(String::as_str) == Some(status::APPROVED))
+}
+
+fn execute_task(
+    core: &Arc<Core>,
+    conversation: &str,
+    mut task: Task,
+    cancel: Arc<AtomicBool>,
+    _plan_cancel: &AtomicBool,
+    lease: Option<crate::lean::core::worktree::cleanup::WorktreeLease<'_>>,
+) {
+    fail_task(core, conversation, &mut task, &cancel, lease);
+    restart_agent(core, conversation, &task);
+    core.queue_worktree_cleanup(&task.id);
+}
+
+fn fail_task(
+    core: &Arc<Core>,
+    conversation: &str,
+    task: &mut Task,
+    cancel: &AtomicBool,
+    lease: Option<crate::lean::core::worktree::cleanup::WorktreeLease<'_>>,
+) {
+    if let Err(error) = core.run_task_with_lease(conversation, task, cancel, lease) {
+        core.fail_scheduled_task(conversation, task, &error);
+    }
+}
+
+fn restart_agent(core: &Arc<Core>, conversation: &str, task: &Task) {
+    let restart = {
+        let mut active = core
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex");
+        active.remove(&task.id);
+        core.activity
+            .task_restarts
+            .lock()
+            .expect("task restart mutex")
+            .remove(&task.id)
+    };
+    if let Some(mut request) = restart {
+        let result = core
+            .task_freshness_token(conversation, &request.plan, &request.task)
+            .and_then(|token| {
+                request.freshness_token = token;
+                core.recover_task(request)
+            });
+        if let Err(error) = result {
+            core.notice(conversation, &format!("agent restart failed: {error}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reservations_track_independent_tasks_and_release_them() {
+        let mut reservations = Reservations::default();
+        reservations.reserve("first-writer");
+        reservations.reserve("second-writer");
+        assert_eq!(reservations.tasks.len(), 2);
+        assert!(reservations.contains("first-writer"));
+        reservations.release("first-writer");
+        assert!(!reservations.contains("first-writer"));
+        assert!(reservations.contains("second-writer"));
+        reservations.release("second-writer");
+        assert!(reservations.is_empty());
+    }
+    #[test]
+    fn deferred_tasks_cannot_schedule_or_launch_but_independent_work_is_runnable() {
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let mut tasks = core.store.add_plan(&conversation, &[
+            json!({"id":"future","title":"Future","goal":"Preserve future obligation","change_kind": "code", "kind":"implementation","deferred":true}),
+            json!({"id":"consumer","title":"Consumer","goal":"Wait for future result","change_kind": "none", "kind":"analysis","depends_on":["future"]}),
+            json!({"id":"diagnose","title":"Diagnose","goal":"Inspect current files","change_kind": "none", "kind":"analysis"})
+        ]).unwrap();
+        tasks.sort_by_key(|task| match task.spec["id"].as_str() {
+            Some("future") => 0,
+            Some("consumer") => 1,
+            _ => 2,
+        });
+        for task in &mut tasks {
+            task.status = status::QUEUED.into();
+            core.store.update_task(task).unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let scheduler_plan = tasks[0].plan_id.clone();
+        let scheduler = Scheduler::new(&core, &conversation, &scheduler_plan, &cancel);
+        assert!(!scheduler.is_runnable(&tasks[0], "future"));
+        assert!(scheduler.is_runnable(&tasks[2], "diagnose"));
+        tasks[2].status = status::COORDINATING.into();
+        assert!(!scheduler.is_runnable(&tasks[2], "diagnose"));
+        assert!(!scheduler.is_schedulable(&tasks[2], "diagnose"));
+        tasks[2].status = status::APPROVED.into();
+        core.store.update_task(&tasks[2]).unwrap();
+        tasks[0].status = status::APPROVED.into();
+        core.store.update_task(&tasks[0]).unwrap();
+        assert!(
+            !dependencies_approved(&tasks[1], &task_states(&tasks)),
+            "a held historical approval cannot unlock its consumers"
+        );
+        let plan = tasks[0].plan_id.clone();
+        run(&core, &conversation, &plan, &cancel);
+        assert!(
+            core.store
+                .last_turn(&conversation, &format!("worker:{}", tasks[0].id))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            core.store
+                .last_turn(&conversation, &format!("worker:{}", tasks[1].id))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            core.run_task(&conversation, &mut tasks[0], &cancel)
+                .unwrap_err()
+                .to_string()
+                .contains("deferred")
+        );
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Codex,
+            binary: dir.path().join("must-not-launch"),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().to_path_buf(),
+            runtime: core.state.clone(),
+            add_dirs: vec![],
+
+            resume: None,
+        };
+        let role = format!("worker:{}", tasks[0].id);
+        assert!(
+            core.native
+                .prepare_scoped(&core, &conversation, &role, &spec, "")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("deferred"),
+            "a restored writable CLI must not bypass the hold"
+        );
+        assert!(
+            !core.state.join("worktrees").exists(),
+            "even direct execution cannot allocate a writer checkout"
+        );
+    }
+}

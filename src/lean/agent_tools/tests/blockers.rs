@@ -1,5 +1,5 @@
 use super::*;
-use crate::lean::core_task_execution::task_execution::worker::complete_report;
+use crate::lean::core::task::execution::task_execution::worker::complete_report;
 use std::sync::atomic::AtomicBool;
 
 #[test]

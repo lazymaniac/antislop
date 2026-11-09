@@ -1,6 +1,6 @@
-use super::core_path_helpers::*;
-use super::core_plan_helpers::writer_base_scratch;
 use super::*;
+use crate::lean::core::plan::helpers::writer_base_scratch;
+use crate::lean::core::worktree::paths::*;
 
 #[test]
 fn task_path_components_reject_unsafe_database_ids() {
@@ -46,12 +46,12 @@ fn task_branches_validate_ids_and_distinguish_shared_prefixes() {
     assert_eq!(branch(&task).unwrap(), format!("antislop/{}", task.id));
     let first = branch(&task).unwrap();
     let state = Path::new("state");
-    let first_path = super::core_path_helpers::worktree_path(state, &task).unwrap();
+    let first_path = crate::lean::core::worktree::paths::worktree_path(state, &task).unwrap();
     task.input_generation += 1;
     assert_eq!(first, branch(&task).unwrap());
     assert_eq!(
         first_path,
-        super::core_path_helpers::worktree_path(state, &task).unwrap()
+        crate::lean::core::worktree::paths::worktree_path(state, &task).unwrap()
     );
     task.id = "12345678-2222-4222-8222-222222222222".into();
     assert_ne!(first, branch(&task).unwrap());
@@ -78,7 +78,7 @@ fn worktrees_bind_stable_task_identity_and_reject_foreign_branches() {
     }))
     .unwrap();
     let state = root.join(".antislop");
-    let path = super::core_path_helpers::worktree_path(&state, &task).unwrap();
+    let path = crate::lean::core::worktree::paths::worktree_path(&state, &task).unwrap();
     let owner_branch = branch(&task).unwrap();
     git::add_worktree(root, &path, &owner_branch, &base).unwrap();
     let actual = worktree_branch(&state, &task).unwrap();
@@ -87,7 +87,7 @@ fn worktrees_bind_stable_task_identity_and_reject_foreign_branches() {
     assert_eq!(git::worktree_branch(&path).unwrap(), owner_branch);
     // A second task sharing the prefix gets its own branch and worktree.
     task.id = "12345678-2222-4222-8222-222222222222".into();
-    let other = super::core_path_helpers::worktree_path(&state, &task).unwrap();
+    let other = crate::lean::core::worktree::paths::worktree_path(&state, &task).unwrap();
     let unique = worktree_branch(&state, &task).unwrap();
     git::add_worktree(root, &other, &unique, &base).unwrap();
     git::remove_worktree(root, &path, &actual).unwrap();

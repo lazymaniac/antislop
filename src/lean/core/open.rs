@@ -108,7 +108,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
 fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()> {
     core.store.interrupt_revision_jobs()?;
     if let Err(error) =
-        crate::lean::core_path_helpers::release_settled_views(&core.store, &core.state)
+        crate::lean::core::worktree::paths::release_settled_views(&core.store, &core.state)
     {
         eprintln!("antislop: settled task checkouts were not removed: {error}");
     }

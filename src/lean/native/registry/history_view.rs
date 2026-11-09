@@ -14,7 +14,7 @@ pub(super) fn restore_view_directory(core: &Core, context: &store::RunContext) -
         core.store.plan_conversation(&owner.plan_id)? == context.conversation,
         "the view belongs to another conversation",
     )?;
-    let id = crate::lean::core_path_helpers::task_path_component(&task)?;
+    let id = crate::lean::core::worktree::paths::task_path_component(&task)?;
     let generation: i64 = core.store.db().query_row(
         "SELECT generation FROM turn_inputs WHERE turn_id=?1",
         [&context.turn_id],
@@ -27,7 +27,7 @@ pub(super) fn restore_view_directory(core: &Core, context: &store::RunContext) -
         .unwrap_or_default();
     let expected_review = format!("{id}-review-g{generation}-{round}");
     let expected_observation = format!("{id}-observation-g{generation}");
-    let directory = crate::lean::core_path_helpers::worktree_directory(&core.state)?;
+    let directory = crate::lean::core::worktree::paths::worktree_directory(&core.state)?;
     require(
         context.cwd.parent() == Some(directory.as_path())
             && (name == expected_review || name == expected_observation),

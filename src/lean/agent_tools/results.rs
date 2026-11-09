@@ -57,7 +57,7 @@ impl Core {
                 }
             }
         }
-        super::core_plan_proposal::checked_plan(&specs, &self.config_snapshot())
+        crate::lean::core::plan::proposal::checked_plan(&specs, &self.config_snapshot())
             .map(|_| ())
             .map_err(Error::Invalid)
     }

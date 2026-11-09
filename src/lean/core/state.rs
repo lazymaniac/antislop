@@ -59,7 +59,7 @@ pub(in crate::lean) struct WorktreeState {
     pub(in crate::lean) cleanup: Mutex<BTreeSet<String>>,
     pub(in crate::lean) cleanup_notes: Mutex<HashMap<String, String>>,
     pub(in crate::lean) leases:
-        Mutex<HashMap<PathBuf, super::super::core_worktree_cleanup::WorktreeLeaseState>>,
+        Mutex<HashMap<PathBuf, crate::lean::core::worktree::cleanup::WorktreeLeaseState>>,
     pub(in crate::lean) lease_changed: std::sync::Condvar,
 }
 

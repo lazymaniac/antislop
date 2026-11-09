@@ -1,5 +1,5 @@
-use super::core_plan_helpers::*;
 use super::*;
+use crate::lean::core::plan::helpers::*;
 
 fn test_tempdir() -> tempfile::TempDir {
     std::fs::create_dir_all(".antislop/tmp").unwrap();
@@ -355,7 +355,7 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
     config.policy.required_gates = true;
-    let finalized = super::core_plan_proposal::checked_plan(&specs, &config).unwrap();
+    let finalized = crate::lean::core::plan::proposal::checked_plan(&specs, &config).unwrap();
     tasks::validate(&finalized).unwrap();
     let task = |id: &str| finalized.iter().find(|task| task.id == id).unwrap();
     assert!(
@@ -383,11 +383,11 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     }
     assert_eq!(
         finalized,
-        super::core_plan_proposal::checked_plan(&finalized, &config).unwrap()
+        crate::lean::core::plan::proposal::checked_plan(&finalized, &config).unwrap()
     );
     config.policy.required_gates = false;
     assert!(
-        super::core_plan_proposal::checked_plan(&specs, &config)
+        crate::lean::core::plan::proposal::checked_plan(&specs, &config)
             .unwrap_err()
             .contains("unknown task")
     );
@@ -419,7 +419,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
     config.policy.required_gates = true;
     config.policy.local_options = true;
-    let final_plan = super::core_plan_proposal::checked_plan(&specs, &config).unwrap();
+    let final_plan = crate::lean::core::plan::proposal::checked_plan(&specs, &config).unwrap();
     tasks::validate(&final_plan).unwrap();
     let task = |id: &str| final_plan.iter().find(|task| task.id == id).unwrap();
     assert!(
@@ -445,7 +445,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     );
     assert_eq!(
         final_plan,
-        super::core_plan_proposal::checked_plan(&final_plan, &config).unwrap()
+        crate::lean::core::plan::proposal::checked_plan(&final_plan, &config).unwrap()
     );
 }
 
