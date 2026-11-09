@@ -983,7 +983,7 @@ src
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,check_submitted_plan,select_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,Team.parse,check_submitted_plan,select_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1461,7 +1461,7 @@ src
     refresh_answer_waits(conversation):Result<()> > db
     approval_mode(conversation):Result<String> > db
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
-    team(conversation):Result<crate::lean::tasks::Team> > db
+    team(conversation):Result<crate::lean::tasks::Team> > db,Team.parse
     team_note(conversation):Result<String> > db
     select_team(conversation,team,reason):Result<()> > append_event
     open_approval(conversation,request):Result<String> > append_event
@@ -1727,6 +1727,17 @@ src
      worker_turn_prompt(project,task,continuation,upstream):String > worker_prompt,change_kind
      DependencyReport(C{id,title,report})
      - worker_{prompt_opening,prompt_closing,checks,change_rules},has_options_prerequisite
+   templates
+    team_catalog():String
+    Team(E{SmallChange,Feature,Refactoring,SecurityFix,Research,Document})
+     name():&'static str
+     parse(name):crate::Result<Self>
+     gates():&'static [WorkKind]
+     options():bool
+     needs_context_scout():bool
+     summary():String > gates
+     misfit(tasks):Option<String> > gates
+    = TEAM_VERSION=1,ALL
    validation
     check_comments_text(comments):String
     obligations(task):Vec<(String,String)> > for_kind
@@ -3123,6 +3134,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 134,934 LOC · input 1,200,706 · output 45,427 tokens · state 9ec949fb9697 · targets AGENTS.md
+· 135,084 LOC · input 1,202,043 · output 45,522 tokens · state aa101cc3d639 · targets AGENTS.md
 ```
 <!-- hologram:end -->
