@@ -123,6 +123,26 @@ impl DaemonGuard {
         panic!("daemon did not start within 10 seconds");
     }
 
+    /// Accepts the latest proposed plan once its independent review approved
+    /// it; a plan the user did not accept never starts.
+    fn accept_active_plan(&self, conversation: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let plans = self
+                .call_raw(&json!({"op":"plans","conversation":conversation}))
+                .unwrap();
+            if let Some(plan) = plans["active_plan_id"].as_str()
+                && self
+                    .call_raw(&json!({"op":"resume","conversation":conversation,"plan":plan}))
+                    .is_ok()
+            {
+                return plan.to_owned();
+            }
+            assert!(Instant::now() < deadline, "reviewed plan was not accepted");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn wait_for_planning(&self, conversation: &str) {
         // Parallel protocol tests launch independent PTYs and daemons. Use the
         // same budget as plan completion instead of assuming a five-second startup.
@@ -902,22 +922,7 @@ fn test_task_scoped_query_includes_freshness_token() {
         .call_raw(&json!({"op":"pause","conversation":conv_id,"paused":true}))
         .unwrap();
     std::fs::write(dir_path.join("release-plan-review"), "").unwrap();
-    let mut plan_id = String::new();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        let plans = daemon
-            .call_raw(&json!({
-                "op": "plans",
-                "conversation": conv_id
-            }))
-            .unwrap();
-        if let Some(id) = plans["active_plan_id"].as_str() {
-            plan_id = id.to_string();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(!plan_id.is_empty(), "plan was not proposed");
+    let plan_id = daemon.accept_active_plan(conv_id);
 
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
@@ -991,6 +996,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         .call_raw(&json!({"op":"pause","conversation":conv,"paused":true}))
         .unwrap();
     std::fs::write(dir_path.join("release-plan-review"), "").unwrap();
+    daemon.accept_active_plan(conv);
     let deadline = Instant::now() + Duration::from_secs(120);
     // Candidate task rows appear before review/replanning finishes. Wait for
     // the completed planning turn, then select its final active plan and token.

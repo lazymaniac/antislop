@@ -143,10 +143,31 @@ fn run(core: &Arc<Core>, dir: &Path) -> String {
         .unwrap()
         .id;
     core.send(&conversation, "zbadaj").unwrap();
-    wait_until("reviewed plan activated", || {
-        core.store.accepted_plan(&conversation).unwrap().is_some()
-    });
+    accept_reviewed_plan(core, &conversation);
     conversation
+}
+
+/// Plans wait for the user's explicit acceptance after a successful review.
+fn accept_reviewed_plan(core: &Arc<Core>, conversation: &str) -> String {
+    let mut plan = None;
+    wait_until("reviewed plan proposed", || {
+        plan = core
+            .store
+            .latest_plan(conversation)
+            .unwrap()
+            .first()
+            .filter(|task| task.status == "proposed")
+            .map(|task| task.plan_id.clone())
+            .filter(|plan| core.store.plan_review_approved(conversation, plan).unwrap());
+        plan.is_some()
+    });
+    let plan = plan.unwrap();
+    core.resume_plan(conversation, &plan).unwrap();
+    assert_eq!(
+        core.store.accepted_plan(conversation).unwrap().as_deref(),
+        Some(plan.as_str())
+    );
+    plan
 }
 
 #[test]
@@ -599,10 +620,7 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "The plan finished. Resul
         .unwrap()
         .id;
     core.send(&conversation, "two things").unwrap();
-    wait_until("plan proposed", || core.is_idle(&conversation));
-    let plan = core.store.latest_plan(&conversation).unwrap()[0]
-        .plan_id
-        .clone();
+    let plan = accept_reviewed_plan(&core, &conversation);
     wait_until("plan done", || {
         core.is_idle(&conversation)
             && core
