@@ -7,6 +7,7 @@ usage:
   antislop [chat] [options] [message]
   antislop stop [--state DIR] [--force]
                               stop the daemon; --force cancels running work
+  antislop init [--force]     write antislop.toml for the agent CLIs found on PATH
   antislop doctor [--config FILE] [--state DIR]
                               check the configuration and that every profile's CLI launches
   antislop setup agy          register antislop's MCP bridge in Agy's own MCP list (once)
@@ -37,7 +38,14 @@ fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version") => {
-            println!("antislop {}", env!("CARGO_PKG_VERSION"));
+            // The build identity tells two installs of one version apart
+            // and matches what a running daemon reports.
+            let build = std::env::current_exe()
+                .ok()
+                .and_then(|path| antislop::lean::daemon::build_identity(&path).ok())
+                .map(|identity| format!(" (build {})", &identity[..12.min(identity.len())]))
+                .unwrap_or_default();
+            println!("antislop {}{build}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("help" | "--help" | "-h") => {
@@ -55,6 +63,7 @@ fn run() -> Result<()> {
         // Started by Agy as its stdio MCP server; see `antislop setup agy`.
         Some("mcp-bridge") => antislop::lean::mcp::bridge(),
         Some("setup") => antislop::lean::cli::setup(&args[1..]),
+        Some("init") => antislop::lean::cli::init(&args[1..]),
         Some("doctor") => antislop::lean::cli::doctor(&args[1..]),
         Some("stop") => antislop::lean::cli::stop(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),

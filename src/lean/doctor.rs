@@ -1,5 +1,6 @@
 //! Whether the configured CLIs can be launched, checked before a team starts
-//! and on demand with `antislop doctor`.
+//! and on demand with `antislop doctor`; and `antislop init`, which writes a
+//! first configuration from the CLIs that can.
 
 use crate::Result;
 use crate::config::{Config, ProviderKind, RoleKind, WorkKind};
@@ -184,6 +185,107 @@ pub fn report(
     Ok(healthy)
 }
 
+/// The CLIs `init` looks for, in the order it prefers them as workers.
+const KNOWN: [(&str, ProviderKind); 5] = [
+    ("codex", ProviderKind::Codex),
+    ("claude", ProviderKind::Claude),
+    ("gemini", ProviderKind::Gemini),
+    ("agy", ProviderKind::Agy),
+    ("opencode", ProviderKind::Opencode),
+];
+
+/// A configuration that sends work to `worker` and reviews to `reviewer`,
+/// built from the documented example so routing and policy stay current.
+fn initial_config(worker: &str, reviewer: &str) -> Result<String> {
+    let template = include_str!("../../examples/antislop.toml");
+    let providers_start = template
+        .find("[providers.codex]")
+        .ok_or_else(|| crate::Error::Invalid("example configuration has no providers".into()))?;
+    let providers_end = template
+        .find("# Profiles select")
+        .ok_or_else(|| crate::Error::Invalid("example configuration has no profiles".into()))?;
+    let mut providers = String::new();
+    for name in [worker, reviewer] {
+        let table = format!("[providers.{name}]\nbinary = \"{name}\"\n\n");
+        if !providers.contains(&table) {
+            providers.push_str(&table);
+        }
+    }
+    let mut text = format!(
+        "# Written by `antislop init` from the CLIs found on PATH: {worker} works,\n\
+         # {reviewer} reviews. See examples/antislop.toml in the antislop sources\n\
+         # for every option; `antislop doctor` checks this file.\n"
+    );
+    let body = format!(
+        "{}{providers}{}",
+        &template[..providers_start],
+        &template[providers_end..]
+    );
+    let mut profile = "";
+    for line in body.lines().skip_while(|line| line.starts_with('#')) {
+        if let Some(name) = line
+            .strip_prefix("[profiles.")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            profile = name;
+        } else if line.starts_with('[') {
+            profile = "";
+        }
+        let line = match line {
+            line if !profile.is_empty() && line.starts_with("provider = ") => {
+                let provider = if profile == "review" {
+                    reviewer
+                } else {
+                    worker
+                };
+                format!("provider = \"{provider}\"")
+            }
+            // Model examples name other providers' models.
+            line if !profile.is_empty() && line.starts_with("# model = ") => continue,
+            line => line.to_owned(),
+        };
+        text.push_str(&line);
+        text.push('\n');
+    }
+    Config::from_toml(&text)?;
+    Ok(text)
+}
+
+/// `antislop init`: writes `antislop.toml` in `project` for the CLIs found
+/// on PATH. Refuses to replace an existing file unless `force`.
+pub fn init(project: &Path, force: bool, out: &mut dyn std::io::Write) -> Result<PathBuf> {
+    let path = project.join("antislop.toml");
+    crate::require(
+        force || !path.exists(),
+        &format!(
+            "{} already exists; edit it, or pass --force to replace it",
+            path.display()
+        ),
+    )?;
+    let found = KNOWN
+        .iter()
+        .filter(|(binary, _)| find_executable(Path::new(binary)).is_some())
+        .collect::<Vec<_>>();
+    let names = KNOWN.map(|(binary, _)| binary).join(", ");
+    let (worker, _) = found.first().ok_or_else(|| {
+        crate::Error::Invalid(format!(
+            "none of {names} is on PATH; install one and log in first"
+        ))
+    })?;
+    let (reviewer, _) = found.get(1).unwrap_or(&found[0]);
+    std::fs::write(&path, initial_config(worker, reviewer)?)?;
+    writeln!(out, "wrote {}", path.display())?;
+    writeln!(out, "  {worker} orchestrates and works; {reviewer} reviews")?;
+    if [*worker, *reviewer].contains(&"agy") && super::launch::agy_ready().is_err() {
+        writeln!(
+            out,
+            "  run `antislop setup agy` once so agy can reach antislop"
+        )?;
+    }
+    writeln!(out, "next: `antislop doctor`, then `antislop`")?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +338,21 @@ mod tests {
             profile.provider = ProviderKind::Codex;
         }
         assert!(launch_problems(&fixed, [WorkKind::Implementation]).is_empty());
+    }
+
+    #[test]
+    fn the_initial_configuration_routes_work_and_review_to_the_cli_found() {
+        for (worker, reviewer) in [("codex", "claude"), ("claude", "claude"), ("gemini", "agy")] {
+            let config = Config::from_toml(&initial_config(worker, reviewer).unwrap()).unwrap();
+            let implementation = config
+                .resolve(WorkKind::Implementation, RoleKind::Executor)
+                .unwrap();
+            let review = config
+                .resolve(WorkKind::Implementation, RoleKind::Reviewer)
+                .unwrap();
+            assert_eq!(super::super::agent::name(implementation.provider), worker);
+            assert_eq!(super::super::agent::name(review.provider), reviewer);
+            assert_eq!(config.providers.len(), 1 + usize::from(worker != reviewer));
+        }
     }
 }

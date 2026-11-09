@@ -224,6 +224,21 @@ pub fn doctor(args: &[String]) -> Result<()> {
     crate::require(healthy, "some profiles cannot be launched")
 }
 
+/// `antislop init [--force]`: a first `antislop.toml` for this project.
+pub fn init(args: &[String]) -> Result<()> {
+    let force = match args {
+        [] => false,
+        [flag] if flag == "--force" => true,
+        _ => {
+            return Err(crate::Error::Invalid(
+                "usage: antislop init [--force]".into(),
+            ));
+        }
+    };
+    super::doctor::init(&std::env::current_dir()?, force, &mut std::io::stdout())?;
+    Ok(())
+}
+
 pub fn stop(args: &[String]) -> Result<()> {
     let mut state = None;
     let mut force = false;
