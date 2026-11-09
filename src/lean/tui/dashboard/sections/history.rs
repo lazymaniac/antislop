@@ -1,5 +1,6 @@
 use super::*;
-use crate::lean::tui::view::{Agent, Comment};
+use crate::lean::store::now_ms;
+use crate::lean::tui::view::{Agent, Comment, clean};
 
 pub(super) fn comments_and_agents(
     this: &Details,
@@ -14,6 +15,69 @@ pub(super) fn comments_and_agents(
         sections.push(agents);
     }
     sections
+}
+
+/// Whether each agent runs and what it is doing; agents without a task card
+/// have no card title to carry their state.
+pub(super) fn now(view: &View, theme: &Theme, width: usize, keys: &[String]) -> Vec<Section> {
+    let body: Vec<Line<'static>> = keys
+        .iter()
+        .filter_map(|key| {
+            view.agents
+                .get(key)
+                .map(|agent| now_lines(view, theme, width, key, agent))
+        })
+        .flatten()
+        .collect();
+    if body.is_empty() {
+        return Vec::new();
+    }
+    vec![Section {
+        id: "now",
+        title: "Now",
+        meta: vec![],
+        body,
+        preview: 14,
+        right: false,
+    }]
+}
+
+fn now_lines(
+    view: &View,
+    theme: &Theme,
+    width: usize,
+    key: &str,
+    agent: &Agent,
+) -> Vec<Line<'static>> {
+    let state = if agent.running {
+        let since = agent.started_ms.map_or_default(|at| {
+            format!(
+                " for {}",
+                duration(now_ms().saturating_sub(at).max(0) as u64)
+            )
+        });
+        Span::styled(format!("running{since}"), theme.status("working"))
+    } else {
+        Span::styled("idle", theme.dim())
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("{} {} ", theme.role_icon(key), agent_name(key)),
+            theme.role_accent(key, ""),
+        ),
+        state,
+    ])];
+    if let Some(doing) = taskinfo::doing(view, key)
+        .or_else(|| (!agent.activity.is_empty()).then(|| clean(&agent.activity)))
+    {
+        lines.extend(
+            wrap(&theme.clean(&doing), width.saturating_sub(4).max(1))
+                .into_iter()
+                .take(2)
+                .map(|line| Line::styled(format!("    {line}"), theme.text())),
+        );
+    }
+    lines
 }
 
 fn comments(this: &Details, view: &View, theme: &Theme, width: usize) -> Vec<Section> {

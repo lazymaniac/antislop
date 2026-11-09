@@ -7761,6 +7761,44 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
     }
 }
 
+#[test]
+fn an_orchestrator_dashboard_shows_what_it_is_doing() {
+    use antislop::lean::tui::view::{Agent, View};
+    let mut view = View::default();
+    view.agents.insert(
+        "orchestrator".into(),
+        Agent {
+            running: true,
+            provider: "claude".into(),
+            model: Some("opus".into()),
+            activity: "drafting the plan".into(),
+            ..Agent::default()
+        },
+    );
+    let mut details = Details::new("orchestrator".into());
+    details.show_info = true;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen = (0..24)
+        .map(|y| {
+            (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for needle in [
+        "Now",
+        "running",
+        "drafting the plan",
+        "Agents",
+        "claude · opus",
+    ] {
+        assert!(screen.contains(needle), "{needle}\n{screen}");
+    }
+}
+
 fn scoped(query: &str) -> antislop::lean::tui::Scope {
     antislop::lean::tui::Scope {
         query: Some(query.to_owned()),

@@ -204,4 +204,18 @@ impl Details {
     ) -> Vec<Section> {
         history::comments_and_agents(self, view, theme, width, keys)
     }
+
+    /// An agent without a task card (orchestrator, planner, plan reviewer,
+    /// auditor, …): what it is doing now, then its comments and identity.
+    pub(super) fn agent_sections(
+        &self,
+        view: &View,
+        theme: &Theme,
+        width: usize,
+        keys: &[String],
+    ) -> Vec<Section> {
+        let mut out = history::now(view, theme, width, keys);
+        out.extend(self.comments_and_agents(view, theme, width, keys));
+        out
+    }
 }

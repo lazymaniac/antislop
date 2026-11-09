@@ -35,6 +35,8 @@ impl Details {
                 keys: &keys,
             };
             append_task_sections(&context, &mut sections);
+        } else {
+            sections = self.agent_sections(view, theme, width, &keys);
         }
         filter_tab_sections(self.tab, &mut sections);
         sections
