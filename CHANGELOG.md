@@ -18,6 +18,15 @@ from the commits since the last tag with `packaging/changelog.sh`.
   and answered through the runtime.
 - Landed and repaired task commits keep the subject their worker wrote.
 - Release archives for macOS and Linux, and a Homebrew formula.
+- A message to a working agent can be steered into its running turn or
+  interrupt it (Ctrl+T in the composer); steered mail the turn never
+  confirms returns to the queue.
+- The header shows the run stage and the conversation's token use, marked
+  reported, estimated or unavailable.
+- The planner picks a team template for a plan (`small-change`, `feature`,
+  `refactoring`, `security-fix`, `research`, `document`) and says why; the
+  runtime adds only that team's quality gates and options, and the plan
+  reviewer sees the choice.
 
 ## 0.1.0
 

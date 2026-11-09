@@ -486,3 +486,46 @@ fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
         serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
     assert_eq!(restored, graph, "holds survive persistence and restart");
 }
+
+#[test]
+fn a_team_runs_only_its_own_gates_and_options() {
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Fix typo", "goal": "Correct the message",
+        "change_kind": "code", "kind": "implementation",
+        "reviewer": {"summary": "Check change"}}))
+    .unwrap();
+    let feature = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::Feature);
+    assert_eq!(feature, finalize_plan(vec![writer.clone()], true, true));
+    let small = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::SmallChange);
+    let gates: Vec<_> = small
+        .iter()
+        .filter(|spec| spec.quality_gate)
+        .map(|spec| spec.kind)
+        .collect();
+    assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
+    assert!(small.iter().all(|spec| spec.kind != WorkKind::Options));
+    tasks::validate(&small).unwrap();
+    assert_eq!(
+        small,
+        finalize_team_plan(small.clone(), true, true, tasks::Team::SmallChange)
+    );
+    // Switching back to feature restores the full gate pipeline.
+    assert_eq!(
+        finalize_team_plan(small, true, true, tasks::Team::Feature),
+        feature
+    );
+
+    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::SmallChange).is_none());
+    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::Feature).is_some());
+    assert!(
+        tasks::Team::Research
+            .misfit(std::slice::from_ref(&writer))
+            .is_some()
+    );
+    assert!(tasks::Team::SmallChange.misfit(&[writer]).is_none());
+    assert_eq!(
+        tasks::Team::parse("security-fix").unwrap(),
+        tasks::Team::SecurityFix
+    );
+    assert!(tasks::Team::parse("everything").is_err());
+}

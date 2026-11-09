@@ -29,6 +29,8 @@ mod plan_review;
 mod requirements;
 #[path = "tasks/prompts/review.rs"]
 mod review;
+#[path = "tasks/templates.rs"]
+mod templates;
 #[path = "tasks/validation.rs"]
 mod validation;
 #[path = "tasks/prompts/worker.rs"]
@@ -48,6 +50,7 @@ pub use plan_review::*;
 pub use requirements::*;
 use requirements::{COVERAGE_FORMAT, OUTSIDE, PROJECT_RULES, REVIEW_RULES};
 pub use review::*;
+pub use templates::*;
 use validation::obligations_text;
 pub use validation::*;
 #[cfg(test)]

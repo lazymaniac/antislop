@@ -46,6 +46,7 @@ impl Core {
         conversation: &str,
         tasks: Vec<PlannedTask>,
         keep: &[String],
+        team: crate::lean::tasks::Team,
     ) -> Result<()> {
         let mut specs = self.submitted_graph(conversation, tasks, keep)?;
         if let Some(run) = self.store.planning_run(conversation)? {
@@ -57,7 +58,7 @@ impl Core {
                 }
             }
         }
-        crate::lean::core::plan::proposal::checked_plan(&specs, &self.config_snapshot())
+        crate::lean::core::plan::proposal::checked_team_plan(&specs, &self.config_snapshot(), team)
             .map(|_| ())
             .map_err(Error::Invalid)
     }

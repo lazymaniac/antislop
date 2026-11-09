@@ -4,7 +4,7 @@ use helpers::PreparedPlan;
 
 #[path = "proposal/helpers.rs"]
 mod helpers;
-use crate::lean::core::plan::helpers::{finalize_plan, planning_gaps};
+use crate::lean::core::plan::helpers::{finalize_team_plan, planning_gaps};
 use crate::lean::*;
 
 struct ProposalPublication<'a> {
@@ -18,17 +18,30 @@ struct ProposalPublication<'a> {
     cancel: &'a AtomicBool,
 }
 
-/// The plan the runtime runs: `specs` with its options and quality gates, if
-/// it fits the policy and every task can be carried out as written. The
-/// error is what the planner must change; `submit_plan` returns it at once.
+#[cfg(test)]
 pub(in crate::lean) fn checked_plan(
     specs: &[TaskContract],
     config: &Config,
 ) -> std::result::Result<Vec<TaskContract>, String> {
-    let specs = finalize_plan(
+    checked_team_plan(specs, config, tasks::Team::Feature)
+}
+
+/// The plan the runtime runs: `specs` with its options and quality gates, if
+/// it fits the policy and `team`, and every task can be carried out as written. The
+/// error is what the planner must change; `submit_plan` returns it at once.
+pub(in crate::lean) fn checked_team_plan(
+    specs: &[TaskContract],
+    config: &Config,
+    team: tasks::Team,
+) -> std::result::Result<Vec<TaskContract>, String> {
+    if let Some(misfit) = team.misfit(specs) {
+        return Err(misfit);
+    }
+    let specs = finalize_team_plan(
         specs.to_vec(),
         config.policy.required_gates,
         config.policy.local_options,
+        team,
     );
     let specs = tasks::order_graph(specs).map_err(|error| error.to_string())?;
     let findings = feasibility::check(&specs);
@@ -91,7 +104,7 @@ impl Core {
         let Some(specs) = self.covered_plan(conversation, &run, specs)? else {
             return Ok(None);
         };
-        match checked_plan(&specs, config) {
+        match checked_team_plan(&specs, config, self.store.team(conversation)?) {
             Ok(specs) => Ok(Some((run, specs))),
             Err(message) => {
                 self.record_plan_lint(conversation, &message)?;

@@ -195,6 +195,8 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
     if name == "submit_plan" {
         let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a redeclared task retains existing work and is assessed before executor continuation; use revise_plan.replacements for unfinished successors"}});
+        fields["team"] = json!({"enum": crate::lean::tasks::Team::ALL.map(crate::lean::tasks::Team::name), "description": format!("The team template that runs the plan (default feature):\n{}", crate::lean::tasks::team_catalog())});
+        fields["team_reason"] = json!({"type": "string", "description": "Why this team fits the work; required for any team but feature"});
         if orchestrator {
             fields["addressed"] = schema::addressed();
         }

@@ -253,6 +253,7 @@ impl Store {
             "DELETE FROM approval_modes WHERE conversation_id=?1",
             [conversation],
         )?;
+        tx.execute("DELETE FROM teams WHERE conversation_id=?1", [conversation])?;
         tx.execute(
             "DELETE FROM request_operations WHERE conversation_id=?1",
             [conversation],

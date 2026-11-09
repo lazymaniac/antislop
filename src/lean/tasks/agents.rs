@@ -102,12 +102,18 @@ pub const GATE_KINDS: [WorkKind; 6] = [
 /// Returns the required quality gates from `PREDEFINED_AGENT_POOL` that a plan
 /// modifying code (`change_kind == code`) lacks: no task of the gate's kind exists.
 pub fn missing_quality_agents(tasks: &[TaskContract]) -> Vec<&'static PredefinedAgent> {
+    missing_gates(tasks, &GATE_KINDS)
+}
+
+/// Like [`missing_quality_agents`], for a team that runs only `gates`.
+pub fn missing_gates(tasks: &[TaskContract], gates: &[WorkKind]) -> Vec<&'static PredefinedAgent> {
     if !tasks.iter().any(|t| t.changes_code()) {
         return Vec::new();
     }
     PREDEFINED_AGENT_POOL
         .iter()
         .filter(|agent| agent.required_for_code_changes && is_gate_kind(agent.kind))
+        .filter(|agent| gates.contains(&agent.kind))
         .filter(|agent| !tasks.iter().any(|t| t.kind == agent.kind))
         .collect()
 }
@@ -184,14 +190,22 @@ fn expand_gate_dependencies(
 /// run in parallel after it; integration runs last, after them too.
 /// When authored tasks depend on generated gates, the pipeline is placed after
 /// upstream tasks and before those consumers, rather than after all writers.
-pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
+pub fn with_required_agents(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
+    with_team_gates(tasks, &GATE_KINDS)
+}
+
+/// Like [`with_required_agents`], adding only the gates of `team_gates`; an
+/// authored edge to a gate the team does not run is dropped.
+pub fn with_team_gates(mut tasks: Vec<TaskContract>, team_gates: &[WorkKind]) -> Vec<TaskContract> {
     // Existing options may also be explicit inputs of independent consumers.
     // Keep their identities and edges while the generated gate pipeline refreshes.
     tasks.retain(|task| !task.quality_gate);
-    if !tasks.iter().any(TaskContract::changes_code) {
+    let changes_code = tasks.iter().any(TaskContract::changes_code);
+    {
         let gates: BTreeSet<_> = PREDEFINED_AGENT_POOL
             .iter()
             .filter(|agent| GATE_KINDS.contains(&agent.kind))
+            .filter(|agent| !changes_code || !team_gates.contains(&agent.kind))
             .map(|agent| agent.id)
             .collect();
         for task in &mut tasks {
@@ -199,7 +213,7 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
         }
     }
     resolve_gate_dependencies(&mut tasks);
-    let missing = missing_quality_agents(&tasks);
+    let missing = missing_gates(&tasks, team_gates);
     if missing.is_empty() {
         return refresh_existing_options(tasks);
     }

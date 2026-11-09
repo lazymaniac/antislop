@@ -231,3 +231,35 @@ fn an_operation_runs_once_and_a_failed_attempt_can_be_retried() {
     }
     assert_eq!(runs, 1);
 }
+
+#[test]
+fn a_team_choice_is_recorded_once_with_its_reason_and_deleted_with_the_session() {
+    use crate::lean::tasks::Team;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let id = &conversation.id;
+    assert_eq!(store.team(id).unwrap(), Team::Feature);
+    assert_eq!(store.team_note(id).unwrap(), "");
+    let selected = |store: &Store| {
+        store
+            .events_since(id, 0, 1000)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.kind == "team_selected")
+            .count()
+    };
+    store.select_team(id, Team::Feature, "").unwrap();
+    assert_eq!(selected(&store), 0);
+    for _ in 0..2 {
+        store
+            .select_team(id, Team::SmallChange, "one-line typo fix")
+            .unwrap();
+    }
+    assert_eq!(selected(&store), 1);
+    assert_eq!(store.team(id).unwrap(), Team::SmallChange);
+    assert!(store.team_note(id).unwrap().contains("one-line typo fix"));
+    store.delete_session(id).unwrap();
+    let again = store.create_conversation("project").unwrap();
+    assert_eq!(store.team(&again.id).unwrap(), Team::Feature);
+}

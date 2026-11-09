@@ -12,7 +12,9 @@ impl Core {
     ) -> Result<std::result::Result<Verdict, String>> {
         record_plan_review_start(&self.store, conversation, &plan.id, config, specs)?;
         let project_text = project.to_string_lossy().into_owned();
-        let gaps = planning_gaps(specs);
+        let team = self.store.team(conversation)?;
+        let gaps = planning_gaps(specs, team);
+        let team_note = self.store.team_note(conversation)?;
         let dependency_note = dependency_note(specs);
         self.review(
             conversation,
@@ -22,7 +24,7 @@ impl Core {
             cancel,
             |first, request| {
                 let prompt = plan_review_prompt(&project_text, request, specs, first);
-                append_planning_gaps(prompt, gaps.as_deref()) + &dependency_note
+                append_planning_gaps(prompt, gaps.as_deref()) + &dependency_note + &team_note
             },
         )
     }

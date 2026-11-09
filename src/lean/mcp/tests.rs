@@ -485,3 +485,15 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
     assert!(schema["properties"]["R1.1"].is_object());
     assert_eq!(schema["required"].as_array().unwrap().len(),crate::lean::tasks::obligations(&task).len());
 }
+
+#[test]
+fn the_planner_chooses_a_team_with_submit_plan() {
+    use crate::lean::mcp::tools::tool_list;
+    let list = tool_list("planner");
+    let submit = list.iter().find(|entry| entry["name"] == "submit_plan").unwrap();
+    let team = &submit["inputSchema"]["properties"]["team"];
+    assert_eq!(team["enum"].as_array().unwrap().len(), crate::lean::tasks::Team::ALL.len());
+    assert!(team["description"].as_str().unwrap().contains("small-change"));
+    assert!(submit["inputSchema"]["properties"]["team_reason"].is_object());
+    assert!(crate::lean::tasks::planner_instructions().contains("`security-fix`"));
+}

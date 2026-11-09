@@ -98,7 +98,7 @@ impl Core {
     ) -> Result<RevisionRegistration<'_>> {
         // Keep the graph lock order used by plan execution, then serialize
         // durable reservation and worker registration against session deletion.
-        let graph_guard = self.locks.graph_updates.lock().expect("graph update mutex");
+        let graph_guard = self.locks.graph();
         let lifecycle_guard = self
             .locks
             .session_lifecycle
@@ -225,10 +225,14 @@ impl Core {
         baseline: &[Task],
     ) -> Result<Vec<TaskContract>> {
         let config = self.config_snapshot();
-        let specs = crate::lean::core::plan::helpers::finalize_plan(
+        let team = self
+            .store
+            .team(&self.store.plan_conversation(&revision.plan)?)?;
+        let specs = crate::lean::core::plan::helpers::finalize_team_plan(
             revision.merge(baseline)?,
             config.policy.required_gates,
             config.policy.local_options,
+            team,
         );
         tasks::validate(&specs)?;
         Ok(specs)

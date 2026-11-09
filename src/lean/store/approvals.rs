@@ -52,6 +52,83 @@ impl Store {
         Ok(())
     }
 
+    /// The team template the conversation's plans run with (`feature` until
+    /// the planner chooses another).
+    pub(in crate::lean) fn team(&self, conversation: &str) -> Result<crate::lean::tasks::Team> {
+        let name: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT team FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        name.map_or(Ok(crate::lean::tasks::Team::default()), |name| {
+            crate::lean::tasks::Team::parse(&name)
+        })
+    }
+
+    /// The team line for the plan reviewer, empty for the default team.
+    pub(in crate::lean) fn team_note(&self, conversation: &str) -> Result<String> {
+        let row: Option<(String, String)> = self
+            .db()
+            .query_row(
+                "SELECT team,reason FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(match row {
+            Some((team, reason)) if team != crate::lean::tasks::Team::default().name() => format!(
+                "\n\nThe planner chose team `{team}` (fewer quality gates than `feature`): {reason}\nReject the plan if the work needs more checking than that team runs."
+            ),
+            _ => String::new(),
+        })
+    }
+
+    /// Records the planner's team choice; a change is an event with its reason.
+    pub(in crate::lean) fn select_team(
+        &self,
+        conversation: &str,
+        team: crate::lean::tasks::Team,
+        reason: &str,
+    ) -> Result<()> {
+        let current: Option<(String, String)> = self
+            .db()
+            .query_row(
+                "SELECT team,reason FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let unchanged = match &current {
+            Some((name, saved)) => name == team.name() && saved == reason,
+            None => team == crate::lean::tasks::Team::default(),
+        };
+        if unchanged {
+            return Ok(());
+        }
+        self.db().execute(
+            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(conversation_id) DO UPDATE SET team=?2,reason=?3,version=?4,updated_ms=?5",
+            params![
+                conversation,
+                team.name(),
+                reason,
+                crate::lean::tasks::TEAM_VERSION,
+                now_ms()
+            ],
+        )?;
+        self.append_event(
+            conversation,
+            None,
+            None,
+            "team_selected",
+            &serde_json::json!({"team": team.name(), "reason": reason, "version": crate::lean::tasks::TEAM_VERSION}),
+        )?;
+        Ok(())
+    }
+
     pub(in crate::lean) fn open_approval(
         &self,
         conversation: &str,
