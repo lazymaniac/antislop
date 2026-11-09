@@ -64,7 +64,7 @@ Runtime, daemon, adapters (§7, §9, §10, §13, §14):
 - [x] One active controlling client plus observer clients; control conflicts cannot use last-write-wins (§9.3): Take control in the palette.
 - [ ] Adapter contract: probe with capabilities, send with delivery_mode/receipt, interrupt with receipts distinguishing requests from confirmed termination (§9.4).
 - [x] Interactive CLIs in daemon terminals with one MCP return channel replace the headless JSON and app-server transports (§9.5).
-- [ ] Run/review the gemini adapter against a real binary and complete the M0 version matrix (§16). Gemini CLI 0.67.0 ran through the runtime (fake model API, 2026-11-09): trust and shell dialogs answered, finish_turn over MCP; a real-model run is not possible (the user's subscription cannot log in to Gemini CLI); the version matrix is still open.
+- [ ] Run/review the gemini adapter against a real binary and complete the M0 version matrix (§16). Gemini CLI 0.67.0 ran through the runtime (fake model API, 2026-11-09): trust and shell dialogs answered, finish_turn over MCP; a real-model run is not possible (the user's subscription cannot log in to Gemini CLI) and the user accepted the fake-API run as the live check; the version matrix is still open.
 - [ ] Permission profiles read-only, workspace-write, restricted-execution, extended-access; block sessions when restrictions cannot be enforced (§13).
 - [ ] Secret redaction in logs/artifacts, file permissions, retention policy (§13).
 - [x] Token usage marked reported / estimated / unavailable (§14).
