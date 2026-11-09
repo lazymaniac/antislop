@@ -22,6 +22,7 @@ impl App {
             Command::ApprovalsSupervised => self.set_approval_mode("supervised"),
             Command::ApprovalsAutonomous => self.set_approval_mode("autonomous"),
             Command::PendingApprovals => self.show_pending_approvals(),
+            Command::TakeControl => self.take_control(),
             Command::NewConversation => self.new_conversation(),
             Command::SwitchConversation => self.open_conversation_picker(),
             Command::Projects => self.open_projects_picker(),
@@ -69,6 +70,7 @@ impl App {
         self.send_command(Some("plan rejected"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Reject {
                 conversation,
+                operation_id: Some(crate::id()),
                 plan,
                 reason: None,
                 revision_token: None,
@@ -90,6 +92,7 @@ impl App {
         self.send_command(Some("plan accepted"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
+                operation_id: Some(crate::id()),
                 plan,
                 revision_token: None,
             })
@@ -109,16 +112,30 @@ impl App {
         self.send_command(Some("plan resumed"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
+                operation_id: Some(crate::id()),
                 plan,
                 revision_token: None,
             })
         });
     }
 
+    fn take_control(&mut self) {
+        self.observer = false;
+        self.send_command(
+            Some("this window steers the conversation"),
+            |conversation| {
+                Request::Conversation(crate::lean::daemon::ConversationRequest::TakeControl {
+                    conversation,
+                })
+            },
+        );
+    }
+
     fn request_cancel(&mut self) {
         self.send_command(Some("cancelled"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
                 conversation,
+                operation_id: Some(crate::id()),
                 revision_token: None,
             })
         });

@@ -21,6 +21,7 @@ impl Store {
             connection: Mutex::new(connection),
             content: crate::lean::content::Content::new(path),
             content_write: Mutex::new(()),
+            operations: Mutex::new(()),
         })
     }
 
@@ -250,6 +251,10 @@ impl Store {
         )?;
         tx.execute(
             "DELETE FROM approval_modes WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM request_operations WHERE conversation_id=?1",
             [conversation],
         )?;
         tx.execute(

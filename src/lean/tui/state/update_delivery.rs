@@ -79,6 +79,10 @@ impl App {
         else {
             unreachable!("update routed to wrong handler");
         };
+        if result.is_ok() {
+            self.send_operations
+                .remove(&(conversation.clone(), sent_text.clone()));
+        }
         if conversation == self.conversation && request_id == self.send_request_id {
             self.finish_active_send(sent_text, result);
         } else {

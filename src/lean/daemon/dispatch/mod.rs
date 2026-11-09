@@ -11,14 +11,51 @@ pub(super) fn handle(
     project: &Path,
     config: &Path,
     request: Request,
+    frontend: Option<(&str, &super::lease::Leases)>,
 ) -> Result<Value> {
     ensure_accepting(core, &request)?;
+    let scope = super::lease::scope(&request);
+    let observer = match (frontend, scope) {
+        (Some((client, leases)), Some((conversation, access))) => {
+            leases.access(conversation, client, access)?
+        }
+        _ => false,
+    };
+    let follows = matches!(scope, Some((_, super::lease::Access::Follow)));
+    let mut reply = handle_request(core, project, config, request)?;
+    if follows && let Some(reply) = reply.as_object_mut() {
+        reply.insert("observer".into(), json!(observer));
+    }
+    Ok(reply)
+}
+
+fn handle_request(
+    core: &Arc<Core>,
+    project: &Path,
+    config: &Path,
+    request: Request,
+) -> Result<Value> {
     let context = Context {
         core,
         project,
         config,
     };
-    match route_all(&context, request)? {
+    let operation = match &request {
+        Request::Conversation(request) => request
+            .operation()
+            .map(|(conversation, id, kind)| (conversation.to_owned(), id.to_owned(), kind)),
+        _ => None,
+    };
+    match operation {
+        Some((conversation, id, kind)) => core.store.idempotent(&conversation, &id, kind, || {
+            route_request(&context, request)
+        }),
+        None => route_request(&context, request),
+    }
+}
+
+fn route_request(context: &Context<'_>, request: Request) -> Result<Value> {
+    match route_all(context, request)? {
         Route::Handled(value) => Ok(value),
         Route::Unmatched(_) => Err(Error::Invalid("unhandled daemon request".into())),
     }

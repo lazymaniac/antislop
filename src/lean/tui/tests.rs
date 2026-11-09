@@ -952,6 +952,7 @@ fn requirements_event(app: &mut App, seq: u64, run: &str, resolved: bool) {
         generation: app.generation,
         events,
         idle: true,
+        observer: false,
     });
 }
 fn review_app() -> App {
@@ -1101,6 +1102,7 @@ fn requirements_approval_automatically_opens_comparison() {
             "seq": 1, "kind": "ledger_approval_required", "payload": {"run": "r1"}
         })],
         idle: true,
+        observer: false,
     });
     let ledger = app.ledger_view.as_ref().unwrap();
     assert!(ledger.visible);
@@ -1490,7 +1492,7 @@ fn ac_resp_app_draw_picker_visible_and_reversed_at_60x12() {
     let mut app = test_app();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&app.view);
-    assert_eq!(items.len(), 4, "Only four commands remain in the palette");
+    assert_eq!(items.len(), 5, "Only five commands remain in the palette");
     picker.selected = items.len() - 1;
     app.picker = Some(picker);
 
@@ -2450,4 +2452,22 @@ fn a_hint_drops_its_least_needed_parts_and_keeps_its_way_out() {
     );
     assert_eq!(fit_hint(&parts, 5, true), "↑/↓ card · Esc back");
     assert_eq!(fit_hint(&parts[..3], 22, false), "↑/↓ card · Enter fold");
+}
+
+#[test]
+fn a_window_another_frontend_steers_says_it_only_watches() {
+    let mut app = test_app();
+    let follow = |app: &mut App, observer| {
+        app.apply_update(Update::Events {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            events: Vec::new(),
+            idle: true,
+            observer,
+        })
+    };
+    follow(&mut app, true);
+    assert!(app.header_status().contains("observer"));
+    follow(&mut app, false);
+    assert!(!app.header_status().contains("observer"));
 }

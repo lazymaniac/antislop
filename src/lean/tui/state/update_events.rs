@@ -8,12 +8,14 @@ impl App {
             generation,
             events,
             idle,
+            observer,
         } = update
         else {
             unreachable!("update routed to wrong handler");
         };
         self.apply_delivery_events(&conversation, &events);
         if conversation == self.conversation && generation == self.generation {
+            self.observer = observer;
             self.apply_active_event_batch(&events, idle);
         }
     }

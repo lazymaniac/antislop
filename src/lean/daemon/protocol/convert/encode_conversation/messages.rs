@@ -13,10 +13,12 @@ fn encode_send(request: Request) -> std::result::Result<WireRequest, Box<Request
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
             conversation,
+            operation_id,
             text,
             to,
         }) => Ok(WireRequest::Send {
             conversation,
+            operation_id,
             text,
             to,
         }),
@@ -28,11 +30,13 @@ fn encode_reject(request: Request) -> std::result::Result<WireRequest, Box<Reque
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Reject {
             conversation,
+            operation_id,
             plan,
             reason,
             revision_token,
         }) => Ok(WireRequest::Reject {
             conversation,
+            operation_id,
             plan,
             reason,
             revision_token,
@@ -45,10 +49,12 @@ fn encode_resume(request: Request) -> std::result::Result<WireRequest, Box<Reque
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
             conversation,
+            operation_id,
             plan,
             revision_token,
         }) => Ok(WireRequest::Resume {
             conversation,
+            operation_id,
             plan,
             revision_token,
         }),
@@ -60,8 +66,13 @@ fn encode_review_comments(request: Request) -> std::result::Result<WireRequest, 
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewComments {
             conversation,
+            operation_id,
             plan,
-        }) => Ok(WireRequest::ReviewComments { conversation, plan }),
+        }) => Ok(WireRequest::ReviewComments {
+            conversation,
+            operation_id,
+            plan,
+        }),
         other => Err(Box::new(other)),
     }
 }
@@ -87,7 +98,20 @@ fn encode_restart_orchestrator(request: Request) -> std::result::Result<WireRequ
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::RestartOrchestrator {
             conversation,
-        }) => Ok(WireRequest::RestartOrchestrator { conversation }),
+            operation_id,
+        }) => Ok(WireRequest::RestartOrchestrator {
+            conversation,
+            operation_id,
+        }),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn encode_take_control(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::TakeControl {
+            conversation,
+        }) => Ok(WireRequest::TakeControl { conversation }),
         other => Err(Box::new(other)),
     }
 }
@@ -96,9 +120,11 @@ fn encode_cancel(request: Request) -> std::result::Result<WireRequest, Box<Reque
     match request {
         Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
             conversation,
+            operation_id,
             revision_token,
         }) => Ok(WireRequest::Cancel {
             conversation,
+            operation_id,
             revision_token,
         }),
         other => Err(Box::new(other)),
@@ -126,10 +152,12 @@ fn encode_approvals(request: Request) -> std::result::Result<WireRequest, Box<Re
         }
         Request::Conversation(C::AnswerApproval {
             conversation,
+            operation_id,
             request,
             choice,
         }) => Ok(WireRequest::AnswerApproval {
             conversation,
+            operation_id,
             request,
             choice,
         }),
@@ -147,6 +175,7 @@ pub(super) fn encode_group_messages(
         .or_else(|request| encode_review_comments(*request))
         .or_else(|request| encode_recover(*request))
         .or_else(|request| encode_restart_orchestrator(*request))
+        .or_else(|request| encode_take_control(*request))
         .or_else(|request| encode_cancel(*request))
         .or_else(|request| encode_pause(*request))
         .or_else(|request| encode_approvals(*request))

@@ -18,6 +18,7 @@ mod client;
 mod config_write;
 pub use client::Client;
 mod dispatch;
+mod lease;
 mod lifecycle;
 mod protocol;
 #[cfg(test)]
@@ -66,7 +67,7 @@ pub fn build_identity(executable: &Path) -> Result<String> {
     )))
 }
 
-const PROTOCOL_VERSION: u32 = 5;
+const PROTOCOL_VERSION: u32 = 6;
 
 pub(crate) use protocol::RequestEnvelope;
 
@@ -127,8 +128,14 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     lifecycle::serve(project, config_path, state)
 }
 
-fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> Result<Value> {
-    dispatch::handle(core, project, config, request)
+fn handle(
+    core: &Arc<Core>,
+    project: &Path,
+    config: &Path,
+    request: Request,
+    frontend: Option<(&str, &lease::Leases)>,
+) -> Result<Value> {
+    dispatch::handle(core, project, config, request, frontend)
 }
 
 fn modified(path: &Path) -> u64 {
@@ -204,7 +211,7 @@ mod live_config_tests {
         )
         .unwrap();
         let old = core.config_snapshot();
-        let call = |request| handle(&core, dir.path(), &path, request);
+        let call = |request| handle(&core, dir.path(), &path, request, None);
         assert!(
             call(Request::Control(
                 crate::lean::daemon::ControlRequest::SetConfig {

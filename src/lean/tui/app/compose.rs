@@ -36,10 +36,15 @@ impl App {
         self.sending = true;
         self.pending_send = Some(sent_text.clone());
         self.failed_send = None;
-        self.launch_chat_send(request_id, sent_text);
+        let operation_id = self
+            .send_operations
+            .entry((self.conversation.clone(), sent_text.clone()))
+            .or_insert_with(crate::id)
+            .clone();
+        self.launch_chat_send(request_id, sent_text, operation_id);
     }
 
-    fn launch_chat_send(&self, request_id: u64, sent_text: String) {
+    fn launch_chat_send(&self, request_id: u64, sent_text: String, operation_id: String) {
         let client = self.client.clone();
         let updates = self.updates.clone();
         let conversation = self.conversation.clone();
@@ -49,6 +54,7 @@ impl App {
                 .call(&Request::Conversation(
                     crate::lean::daemon::ConversationRequest::Send {
                         conversation: conversation.clone(),
+                        operation_id: Some(operation_id.clone()),
                         text: sent_text.clone(),
                         to: None,
                     },

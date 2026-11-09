@@ -51,6 +51,7 @@ impl App {
                 .call(&Request::Conversation(
                     crate::lean::daemon::ConversationRequest::Send {
                         conversation: conversation.clone(),
+                        operation_id: Some(crate::id()),
                         text,
                         to: None,
                     },

@@ -231,6 +231,7 @@ fn recover_orchestrator(
         .call(&Request::Conversation(
             crate::lean::daemon::ConversationRequest::RestartOrchestrator {
                 conversation: conversation.into(),
+                operation_id: Some(crate::id()),
             },
         ))
         .map(|reply| {

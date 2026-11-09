@@ -7,6 +7,7 @@ struct Runtime {
     project: PathBuf,
     config: PathBuf,
     socket: PathBuf,
+    leases: Arc<super::lease::Leases>,
 }
 
 pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
@@ -40,6 +41,7 @@ fn start(project: &Path, config_path: &Path, state: &Path) -> Result<(Runtime, U
             project,
             config,
             socket,
+            leases: Arc::default(),
         },
         listener,
     ))
@@ -92,7 +94,7 @@ fn accept_connections(listener: UnixListener, runtime: Runtime) {
 fn serve_connection(mut stream: UnixStream, runtime: Runtime) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let response = match read_request(&stream) {
-        Ok(Some(request)) => handle(&runtime, request),
+        Ok(Some((request, client))) => handle(&runtime, request, client.as_deref()),
         Ok(None) => error_response(Error::Invalid("empty request".into())),
         Err(error) => error_response(error),
     };
@@ -110,7 +112,7 @@ struct ConnectionResponse {
     shutdown: bool,
 }
 
-fn read_request(stream: &UnixStream) -> Result<Option<Request>> {
+fn read_request(stream: &UnixStream) -> Result<Option<(Request, Option<String>)>> {
     let envelope = crate::transport::read::<RequestEnvelope>(&mut BufReader::new(stream))?;
     envelope
         .map(|wire| {
@@ -118,18 +120,25 @@ fn read_request(stream: &UnixStream) -> Result<Option<Request>> {
                 wire.protocol == PROTOCOL_VERSION,
                 "incompatible daemon protocol; restart client and daemon together",
             )?;
-            Ok(wire.request)
+            Ok((wire.request, wire.client))
         })
         .transpose()
 }
 
-fn handle(runtime: &Runtime, request: Request) -> ConnectionResponse {
+fn handle(runtime: &Runtime, request: Request, client: Option<&str>) -> ConnectionResponse {
     let shutdown = matches!(
         request,
         Request::Control(crate::lean::daemon::ControlRequest::Shutdown)
             | Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown)
     );
-    let response = match super::handle(&runtime.core, &runtime.project, &runtime.config, request) {
+    let frontend = client.map(|client| (client, runtime.leases.as_ref()));
+    let response = match super::handle(
+        &runtime.core,
+        &runtime.project,
+        &runtime.config,
+        request,
+        frontend,
+    ) {
         Ok(data) => Response {
             data: Some(data),
             error: None,

@@ -213,6 +213,7 @@ impl super::App {
                     crate::lean::daemon::Request::Conversation(
                         crate::lean::daemon::ConversationRequest::AnswerApproval {
                             conversation,
+                            operation_id: Some(crate::id()),
                             request,
                             choice,
                         },

@@ -5,4 +5,7 @@ use super::Request;
 pub(crate) struct RequestEnvelope {
     pub(crate) protocol: u32,
     pub(crate) request: Request,
+    /// The frontend's self-chosen identity; only named frontends are leased.
+    #[serde(default)]
+    pub(crate) client: Option<String>,
 }

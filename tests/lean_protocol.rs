@@ -185,9 +185,20 @@ impl DaemonGuard {
     }
 
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
+        self.call_as(None, json_payload)
+    }
+
+    /// A request from the frontend named `client`; unnamed when `None`.
+    fn call_as(
+        &self,
+        client: Option<&str>,
+        json_payload: &Value,
+    ) -> std::result::Result<Value, String> {
         let socket_path = antislop::lean::daemon::socket(&self.state);
         let mut stream = UnixStream::connect(&socket_path).unwrap();
-        let mut bytes = serde_json::to_vec(&json!({"protocol":5,"request":json_payload})).unwrap();
+        let mut bytes =
+            serde_json::to_vec(&json!({"protocol":6,"request":json_payload,"client":client}))
+                .unwrap();
         bytes.push(b'\n');
         stream.write_all(&bytes).unwrap();
         let mut reader = BufReader::new(stream);
@@ -1249,7 +1260,7 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
         let mut line = String::new();
         BufReader::new(&stream).read_line(&mut line).unwrap();
         let request: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["protocol"], 5);
+        assert_eq!(request["protocol"], 6);
         assert_eq!(request["request"]["op"], "task_checks");
         writeln!(stream, "{}", json!({"error":"incompatible protocol"})).unwrap();
     });
@@ -1585,4 +1596,83 @@ fn removed_ledger_endpoint_is_rejected() {
         .is_err()
     );
     assert!(serde_json::from_value::<Request>(json!({"op":"list_requirements","query":{"conversation":"c","run_id":"r","kind":"requirement"}})).is_err());
+}
+
+#[test]
+fn retried_operations_act_once_and_return_their_first_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let daemon = DaemonGuard::start(&project, &config, &dir_path.join("state"));
+    let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    let conv = started["id"].as_str().unwrap();
+    let operation = "6f1d7c1e-3c55-4c1a-9a43-0d1f0b6f7a10";
+    let send =
+        json!({"op":"send","conversation":conv,"text":"say this once","operation_id":operation});
+    let first = daemon.call_raw(&send).unwrap();
+    let retry = daemon.call_raw(&send).unwrap();
+    assert_eq!(first, retry);
+    let events = daemon
+        .call_raw(&json!({"op":"events","conversation":conv,"after":0,"wait_ms":0}))
+        .unwrap();
+    let sent = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "message" && event["payload"]["text"] == "say this once")
+        .count();
+    assert_eq!(sent, 1, "{events}");
+    let reused = daemon
+        .call_raw(&json!({"op":"cancel","conversation":conv,"operation_id":operation}))
+        .unwrap_err();
+    assert!(reused.contains("already used for send"), "{reused}");
+    let invalid = daemon
+        .call_raw(&json!({"op":"send","conversation":conv,"text":"x","operation_id":"not-a-uuid"}))
+        .unwrap_err();
+    assert!(invalid.contains("UUID"), "{invalid}");
+    daemon
+        .call_raw(&json!({"op":"cancel","conversation":conv}))
+        .unwrap();
+}
+
+#[test]
+fn one_named_frontend_steers_a_conversation_and_the_others_watch_until_they_take_control() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let daemon = DaemonGuard::start(&project, &config, &dir_path.join("state"));
+    let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    let conv = started["id"].as_str().unwrap();
+    let pause = |paused: bool| json!({"op":"pause","conversation":conv,"paused":paused});
+    let events = json!({"op":"events","conversation":conv,"after":0,"wait_ms":0});
+    let observer =
+        |client: &str| daemon.call_as(Some(client), &events).unwrap()["observer"].clone();
+
+    assert_eq!(observer("first"), false);
+    daemon.call_as(Some("first"), &pause(true)).unwrap();
+    assert_eq!(observer("first"), false);
+    assert_eq!(observer("second"), true);
+    let refused = daemon.call_as(Some("second"), &pause(false)).unwrap_err();
+    assert!(refused.starts_with("observer:"), "{refused}");
+    // Scripts that do not name themselves are never leased.
+    daemon.call_raw(&pause(true)).unwrap();
+
+    daemon
+        .call_as(
+            Some("second"),
+            &json!({"op":"take_control","conversation":conv}),
+        )
+        .unwrap();
+    assert_eq!(observer("second"), false);
+    assert_eq!(observer("first"), true);
+    daemon.call_as(Some("first"), &pause(false)).unwrap_err();
+    daemon.call_as(Some("second"), &pause(false)).unwrap();
 }

@@ -696,6 +696,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         .call(&antislop::lean::daemon::Request::Conversation(
             antislop::lean::daemon::ConversationRequest::Send {
                 conversation: conversation.clone(),
+                operation_id: None,
                 text: "sleepy".into(),
                 to: None,
             },

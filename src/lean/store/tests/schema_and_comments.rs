@@ -208,3 +208,26 @@ fn plan_review_progress_survives_restart_and_resets_for_new_user_input() {
             .is_none()
     );
 }
+
+#[test]
+fn an_operation_runs_once_and_a_failed_attempt_can_be_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let id = crate::id();
+    let failed = store.idempotent(&conversation.id, &id, "send", || {
+        Err(crate::Error::Invalid("daemon busy".into()))
+    });
+    assert!(failed.is_err());
+    let mut runs = 0;
+    for _ in 0..2 {
+        let result = store
+            .idempotent(&conversation.id, &id, "send", || {
+                runs += 1;
+                Ok(serde_json::json!({"seq": runs}))
+            })
+            .unwrap();
+        assert_eq!(result, serde_json::json!({"seq": 1}));
+    }
+    assert_eq!(runs, 1);
+}

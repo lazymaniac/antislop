@@ -47,6 +47,7 @@ mod core_planning_context;
 mod core_prompt_helpers;
 pub mod daemon;
 pub mod diff;
+pub mod doctor;
 mod feasibility;
 pub mod git;
 pub mod interview;

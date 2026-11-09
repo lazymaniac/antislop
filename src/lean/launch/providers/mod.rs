@@ -6,6 +6,7 @@ use crate::{Error, Result};
 use portable_pty::CommandBuilder;
 use serde_json::{Value, json};
 mod agy;
+pub(crate) use agy::agy_ready;
 mod claude;
 mod codex;
 #[path = "../common.rs"]

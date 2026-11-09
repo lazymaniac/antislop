@@ -13,6 +13,9 @@ pub struct Client {
     /// Project, configuration and state, to start the daemon again if it
     /// dies under a frontend that is following events.
     origin: Option<(PathBuf, PathBuf, PathBuf, PathBuf)>,
+    /// This frontend's identity, shared by its clones; a named frontend
+    /// steers a conversation alone while it follows events.
+    identity: Option<String>,
 }
 
 impl Client {
@@ -23,7 +26,15 @@ impl Client {
             state: state.to_owned(),
             notice: None,
             origin: None,
+            identity: None,
         }
+    }
+
+    /// This handle, named as one frontend: the first named frontend to
+    /// change a conversation steers it, the others watch.
+    pub fn named(mut self) -> Self {
+        self.identity = Some(crate::id());
+        self
     }
 
     /// The state directory this daemon serves, including custom `--state` paths.
@@ -97,7 +108,7 @@ impl Client {
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         crate::transport::write(
             &mut stream,
-            &json!({"protocol":PROTOCOL_VERSION,"request":request}),
+            &json!({"protocol":PROTOCOL_VERSION,"request":request,"client":self.identity}),
         )?;
         let response: Response = crate::transport::read(&mut BufReader::new(stream))?
             .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;

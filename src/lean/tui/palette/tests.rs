@@ -26,9 +26,10 @@ fn command_palette_keeps_only_actions_without_a_direct_route() {
             Action::Run(Command::ApprovalsSupervised),
             Action::Run(Command::ApprovalsAutonomous),
             Action::Run(Command::ConversationDetails),
+            Action::Run(Command::TakeControl),
         ]
     );
-    assert_eq!(COMMANDS.len(), 4);
+    assert_eq!(COMMANDS.len(), 5);
     assert!(
         Help::Chat
             .lines_for_width(100)
@@ -209,7 +210,7 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
     let view = View::default();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&view);
-    assert_eq!(items.len(), 4, "Only four commands remain in the palette");
+    assert_eq!(items.len(), 5, "Only five commands remain in the palette");
 
     // Select the last item.
     picker.selected = items.len() - 1;

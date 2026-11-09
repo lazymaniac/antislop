@@ -71,7 +71,9 @@ pub fn connect(path: &Path, executable: &Path) -> Result<ProjectConn, String> {
     let state = super::super::paths::project_state(&path).map_err(|e| fail(&e))?;
     super::super::daemon::private_directory(&state).map_err(|e| fail(&e))?;
     let state = state.canonicalize().map_err(|e| fail(&e))?;
-    let client = Client::connect(&path, &config, &state, executable).map_err(|e| fail(&e))?;
+    let client = Client::connect(&path, &config, &state, executable)
+        .map_err(|e| fail(&e))?
+        .named();
     Ok(ProjectConn::new(path, client))
 }
 

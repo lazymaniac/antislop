@@ -17,6 +17,7 @@ impl Core {
             "a plan is already running",
         )?;
         self.validate_plan_inputs(conversation, plan_id)?;
+        self.ensure_profiles_launch(plan_id)?;
         queue(&self.store)?;
         let activated: bool = self.store.db().query_row(
             "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
@@ -36,6 +37,21 @@ impl Core {
         drop(plans);
         self.spawn_plan_runner(conversation, plan_id, cancel, &tasks);
         Ok(tasks)
+    }
+
+    /// Refuses to start a team whose CLIs cannot be launched, naming the
+    /// profiles that could, instead of failing task by task once it runs.
+    fn ensure_profiles_launch(&self, plan_id: &str) -> Result<()> {
+        let kinds = self
+            .store
+            .plan_specs(plan_id)?
+            .into_iter()
+            .map(serde_json::from_value::<TaskContract>)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|spec| spec.kind);
+        let problems = super::doctor::launch_problems(&self.config_snapshot(), kinds);
+        require(problems.is_empty(), &problems.join("; "))
     }
 
     fn ensure_plan_can_start(&self, conversation: &str) -> Result<()> {

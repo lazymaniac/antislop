@@ -169,12 +169,16 @@ pub(crate) enum WireRequest {
     },
     Send {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         text: String,
         #[serde(default)]
         to: Option<String>,
     },
     Reject {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         plan: String,
         #[serde(default)]
         reason: Option<String>,
@@ -183,12 +187,16 @@ pub(crate) enum WireRequest {
     },
     Resume {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         plan: String,
         #[serde(default)]
         revision_token: Option<String>,
     },
     ReviewComments {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         plan: String,
     },
     Recover {
@@ -202,11 +210,18 @@ pub(crate) enum WireRequest {
         #[serde(default)]
         message: Option<String>,
     },
+    TakeControl {
+        conversation: String,
+    },
     RestartOrchestrator {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
     },
     Cancel {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         #[serde(default)]
         revision_token: Option<String>,
     },
@@ -220,6 +235,8 @@ pub(crate) enum WireRequest {
     },
     AnswerApproval {
         conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
         request: String,
         choice: String,
     },

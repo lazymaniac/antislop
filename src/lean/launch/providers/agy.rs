@@ -4,12 +4,7 @@ use super::*;
 /// stdio bridge there once; the gateway of each session travels in the
 /// environment the bridge inherits.
 pub(super) fn agy(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway) -> Result<()> {
-    if std::env::var_os("ANTISLOP_SKIP_AGY_BRIDGE_CHECK").is_none() && !agy_bridge_registered() {
-        return Err(Error::Invalid(format!(
-            "agy cannot reach antislop yet: run `antislop setup agy` once to register the \
-             `{SERVER}` MCP bridge in Agy's MCP list"
-        )));
-    }
+    agy_ready()?;
     command.env("ANTISLOP_MCP_URL", gateway.url());
     command.env("ANTISLOP_MCP_TOKEN", gateway.token());
     command.arg("--disable-slash-commands");
@@ -31,6 +26,17 @@ fn agy_overrides(command: &mut CommandBuilder, spec: &Spec) {
     if let Some(id) = &spec.resume {
         command.args(["--conversation", id]);
     }
+}
+
+/// Whether Agy can reach antislop's MCP bridge; the reason when it cannot.
+pub(crate) fn agy_ready() -> Result<()> {
+    if std::env::var_os("ANTISLOP_SKIP_AGY_BRIDGE_CHECK").is_none() && !agy_bridge_registered() {
+        return Err(Error::Invalid(format!(
+            "agy cannot reach antislop yet: run `antislop setup agy` once to register the \
+             `{SERVER}` MCP bridge in Agy's MCP list"
+        )));
+    }
+    Ok(())
 }
 
 fn agy_bridge_registered() -> bool {

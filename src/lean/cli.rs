@@ -211,6 +211,19 @@ pub fn setup(args: &[String]) -> Result<()> {
 }
 
 /// Stops the existing daemon without starting one or loading configuration.
+/// `antislop doctor`: whether the configuration loads and every profile's
+/// CLI can be launched.
+pub fn doctor(args: &[String]) -> Result<()> {
+    let options = Options::parse(args)?;
+    let healthy = super::doctor::report(
+        &options.project,
+        &options.config,
+        &options.state,
+        &mut std::io::stdout(),
+    )?;
+    crate::require(healthy, "some profiles cannot be launched")
+}
+
 pub fn stop(args: &[String]) -> Result<()> {
     let mut state = None;
     let mut force = false;

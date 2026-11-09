@@ -55,6 +55,7 @@ impl App {
             self.request(
                 Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewComments {
                     conversation: self.conversation.clone(),
+                    operation_id: Some(crate::id()),
                     plan,
                 }),
                 Some("comments sent to the agent for review"),
@@ -112,6 +113,7 @@ impl App {
     pub(in crate::lean::tui) fn header_status(&self) -> String {
         let waiting = self.view.approvals.len();
         let status = [
+            self.observer.then(|| "observer".to_owned()),
             self.view.paused.then(|| "paused".to_owned()),
             self.view.autonomous.then(|| "approvals: auto".to_owned()),
             (waiting > 0).then(|| format!("{waiting} approval(s) waiting")),

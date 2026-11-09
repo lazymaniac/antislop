@@ -74,6 +74,12 @@ pub struct App {
     /// Stable idempotency ids for comment submissions, keyed by conversation,
     /// target and text so a failed retry keeps the same durable identity.
     pub comment_operations: std::collections::HashMap<(String, String, String), String>,
+    /// Stable idempotency ids for chat messages, keyed by conversation and
+    /// text, so resending a failed message cannot post it twice.
+    pub send_operations: std::collections::HashMap<(String, String), String>,
+    /// Another frontend steers this conversation; this one watches until
+    /// the user takes control.
+    pub observer: bool,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
     /// Which cards the graph shows.
@@ -187,6 +193,8 @@ macro_rules! initial_app {
             conversation_drafts: std::collections::HashMap::new(),
             comment_drafts: std::collections::HashMap::new(),
             comment_operations: std::collections::HashMap::new(),
+            send_operations: std::collections::HashMap::new(),
+            observer: false,
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
             graph_scope: graph::Scope::default(),

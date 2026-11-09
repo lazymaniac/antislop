@@ -1785,7 +1785,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     // 3. Picker visibility and reversed selection at 60x12
     let mut picker = Picker::new(Kind::Commands);
     let items_len = picker.items(&app.view).len();
-    assert_eq!(items_len, 4);
+    assert_eq!(items_len, 5);
     picker.selected = items_len - 1;
     app.picker = Some(picker);
 
@@ -1889,6 +1889,7 @@ fn tui_isolated_fake_request_capture() {
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Send {
             conversation: "conv-1".into(),
+            operation_id: None,
             text: "hello orchestrator".into(),
             to: None,
         },
@@ -1921,6 +1922,7 @@ fn tui_isolated_fake_request_capture() {
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Resume {
             conversation: "conv-1".into(),
+            operation_id: None,
             plan: "p-100".into(),
             revision_token: None,
         },
@@ -1946,6 +1948,7 @@ fn tui_isolated_fake_request_capture() {
     let res = client.call(&Request::Conversation(
         antislop::lean::daemon::ConversationRequest::Cancel {
             conversation: "conv-1".into(),
+            operation_id: None,
             revision_token: None,
         },
     ));
@@ -5412,6 +5415,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": 1, "kind": "plan_proposed", "payload": {
             "plan": "p1", "tasks": [{"change_kind":"none","id": "t1", "title": "Store"}]}})],
         idle: true,
+        observer: false,
     });
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
@@ -5419,6 +5423,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": 3, "kind": "task", "payload": {
             "id": "t1", "task": "u1", "status": "working", "round": 1}})],
         idle: false,
+        observer: false,
     });
     app.open_details("worker:t1".into());
     let issued = app.task_request_id;
@@ -5458,6 +5463,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": 3, "kind": "task", "payload": {
             "id": "t1", "task": "u1", "status": "working", "round": 2}})],
         idle: false,
+        observer: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
     assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(2));
@@ -5507,6 +5513,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         events: vec![json!({"seq": seq, "kind": "check", "payload": {
             "id": id, "task": task, "round": 2, "check": "V01", "state": "settled"}})],
         idle: false,
+        observer: false,
     };
     app.apply_update(check("another-task", "u2", 5));
     assert_eq!(
@@ -5763,6 +5770,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
         idle: false,
+        observer: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -5784,6 +5792,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
             json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1,"approved":true}}),
         ],
         idle: false,
+        observer: false,
     });
     assert_eq!(app.task_request_id, request + 1);
     assert_eq!(
@@ -5795,6 +5804,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         generation: 1,
         events: vec![],
         idle: false,
+        observer: false,
     });
     assert_eq!(app.task_request_id, request + 1);
 }
@@ -6428,6 +6438,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             .call(&Request::Conversation(
                 antislop::lean::daemon::ConversationRequest::Send {
                     conversation: conversation.clone(),
+                    operation_id: None,
                     text: "first turn".into(),
                     to: None,
                 },
@@ -6496,6 +6507,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             .call(&Request::Conversation(
                 antislop::lean::daemon::ConversationRequest::Send {
                     conversation,
+                    operation_id: None,
                     text: "second turn".into(),
                     to: None,
                 },
@@ -6677,6 +6689,7 @@ mod text_selection_acceptance {
                 generation: app.generation,
                 events: vec![json!({"seq": 1, "kind": "conversation_state", "payload": {"state": "waiting"}})],
                 idle: true,
+                observer: false,
 
             });
                 assert!(
@@ -6739,6 +6752,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
         idle: false,
+        observer: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -6765,6 +6779,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
         generation: 1,
         events: vec![],
         idle: false,
+        observer: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
     let reply = updates.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -6784,6 +6799,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":1}})],
         idle: false,
+        observer: false,
     });
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
@@ -6802,6 +6818,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":3,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1,"feedback":{"summary":"accepted"}}})],
         idle: false,
+        observer: false,
     });
     assert_eq!(app.task_request_id, issued + 1);
 }
@@ -6846,6 +6863,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
         idle: false,
+        observer: false,
     });
     app.open_details("worker:t1".into());
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
@@ -6855,6 +6873,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
         generation: 1,
         events: vec![json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1}})],
         idle: false,
+        observer: false,
     });
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     let task = app.details.as_ref().unwrap().task.as_ref().unwrap();
@@ -6864,6 +6883,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":4,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1}})],
         idle: false,
+        observer: false,
     });
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     server.join().unwrap();
@@ -6958,7 +6978,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
             app.apply_update(Update::Events {
                 conversation:"test-conv".into(), generation:1,
                 events:vec![json!({"seq":round,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":round}})],
-                idle:false,
+                idle:false,observer:false,
             });
         }
         issued.push((round, app.task_request_id));
@@ -7053,6 +7073,7 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
         generation: 1,
         events: vec![],
         idle: false,
+        observer: false,
     };
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     assert!(app.notice.take().is_some());
@@ -7428,7 +7449,7 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
 fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
     use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
-    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,});
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,observer:false,});
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
     let issued = app.task_request_id;
@@ -7438,6 +7459,7 @@ fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
             generation: 1,
             events: vec![json!({"seq":seq,"kind":"check","payload":{"task":"u1","round":1}})],
             idle: false,
+            observer: false,
         });
     }
     assert_eq!(
@@ -7482,7 +7504,7 @@ fn inspector_delivery_failure_before_send_receipt_remains_visible_until_delivery
             ..Default::default()
         },
     );
-    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"mail_delivery_failed","payload":{"recipient":recipient,"ids":[7],"reason":"authentication required"}})],idle:true,});
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"mail_delivery_failed","payload":{"recipient":recipient,"ids":[7],"reason":"authentication required"}})],idle:true,observer:false,});
     app.apply_update(Update::AgentMessage {
         conversation: "test-conv".into(),
         recipient: recipient.clone(),
@@ -7503,6 +7525,7 @@ fn inspector_delivery_failure_before_send_receipt_remains_visible_until_delivery
         generation: 1,
         events: vec![json!({"seq":2,"kind":"mail_delivered","payload":{"ids":[7]}})],
         idle: true,
+        observer: false,
     });
     assert!(drafts.borrow()[&key].error.is_none());
     assert_eq!(drafts.borrow()[&key].delivery.as_deref(), Some("delivered"));
@@ -7548,7 +7571,7 @@ fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
         composer.sending = true;
         composer.address = Some(key.1.clone());
     }
-    app.apply_update(Update::Events {conversation:key.0.clone(),generation:1,events:vec![json!({"seq":9,"kind":"mail_delivered","payload":{"recipient":"orchestrator","ids":[9,10]}})],idle:true,});
+    app.apply_update(Update::Events {conversation:key.0.clone(),generation:1,events:vec![json!({"seq":9,"kind":"mail_delivered","payload":{"recipient":"orchestrator","ids":[9,10]}})],idle:true,observer:false,});
     app.apply_update(Update::AgentMessage {
         conversation: key.0.clone(),
         recipient: key.1.clone(),

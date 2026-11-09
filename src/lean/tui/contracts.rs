@@ -41,6 +41,7 @@ pub enum Update {
         generation: u64,
         events: Vec<Value>,
         idle: bool,
+        observer: bool,
     },
     Conversation(String),
     Notice(String),

@@ -5,7 +5,7 @@
 use portable_pty::CommandBuilder;
 
 pub(crate) mod providers;
-pub(crate) use providers::command;
+pub(crate) use providers::{agy_ready, command};
 
 pub(crate) struct Launch {
     pub command: CommandBuilder,

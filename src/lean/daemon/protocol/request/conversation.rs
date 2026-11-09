@@ -15,12 +15,14 @@ pub enum ConversationRequest {
     },
     Send {
         conversation: String,
+        operation_id: Option<String>,
         text: String,
         to: Option<String>,
     },
     /// Rejects a proposed plan and asks the orchestrator to revise it.
     Reject {
         conversation: String,
+        operation_id: Option<String>,
         plan: String,
         reason: Option<String>,
         revision_token: Option<String>,
@@ -28,14 +30,21 @@ pub enum ConversationRequest {
     /// Runs again what the plan left unfinished, through the same sessions.
     Resume {
         conversation: String,
+        operation_id: Option<String>,
         plan: String,
         revision_token: Option<String>,
     },
+    /// This frontend steers the conversation from now on; others watch.
+    TakeControl {
+        conversation: String,
+    },
     RestartOrchestrator {
         conversation: String,
+        operation_id: Option<String>,
     },
     Cancel {
         conversation: String,
+        operation_id: Option<String>,
         revision_token: Option<String>,
     },
     /// Stops starting new plan work, or continues it.
@@ -52,6 +61,7 @@ pub enum ConversationRequest {
     /// The user's decision on an agent CLI's approval dialog.
     AnswerApproval {
         conversation: String,
+        operation_id: Option<String>,
         request: String,
         choice: String,
     },
@@ -59,6 +69,7 @@ pub enum ConversationRequest {
     /// the draft comments together.
     ReviewComments {
         conversation: String,
+        operation_id: Option<String>,
         plan: String,
     },
     /// Paginated read of all stored plans for a conversation.
@@ -111,4 +122,49 @@ pub enum ConversationRequest {
         plan: String,
         id: String,
     },
+}
+
+impl ConversationRequest {
+    /// The conversation, idempotency id and kind of a state-changing request
+    /// the client may safely retry.
+    pub(in crate::lean::daemon) fn operation(&self) -> Option<(&str, &str, &'static str)> {
+        let (conversation, operation_id, kind) = match self {
+            Self::Send {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "send"),
+            Self::Reject {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "reject"),
+            Self::Resume {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "resume"),
+            Self::ReviewComments {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "review_comments"),
+            Self::RestartOrchestrator {
+                conversation,
+                operation_id,
+            } => (conversation, operation_id, "restart_orchestrator"),
+            Self::Cancel {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "cancel"),
+            Self::AnswerApproval {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "answer_approval"),
+            _ => return None,
+        };
+        Some((conversation, operation_id.as_deref()?, kind))
+    }
 }

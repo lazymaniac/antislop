@@ -13,11 +13,13 @@ fn decode_send(wire: WireRequest) -> std::result::Result<Request, Box<WireReques
     match wire {
         WireRequest::Send {
             conversation,
+            operation_id,
             text,
             to,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Send {
                 conversation,
+                operation_id,
                 text,
                 to,
             },
@@ -30,12 +32,14 @@ fn decode_reject(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
     match wire {
         WireRequest::Reject {
             conversation,
+            operation_id,
             plan,
             reason,
             revision_token,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Reject {
                 conversation,
+                operation_id,
                 plan,
                 reason,
                 revision_token,
@@ -49,11 +53,13 @@ fn decode_resume(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
     match wire {
         WireRequest::Resume {
             conversation,
+            operation_id,
             plan,
             revision_token,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
+                operation_id,
                 plan,
                 revision_token,
             },
@@ -64,9 +70,14 @@ fn decode_resume(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
 
 fn decode_review_comments(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
-        WireRequest::ReviewComments { conversation, plan } => Ok({
+        WireRequest::ReviewComments {
+            conversation,
+            operation_id,
+            plan,
+        } => Ok({
             Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewComments {
                 conversation,
+                operation_id,
                 plan,
             })
         }),
@@ -103,11 +114,26 @@ fn decode_restart_orchestrator(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
-        WireRequest::RestartOrchestrator { conversation } => Ok({
+        WireRequest::RestartOrchestrator {
+            conversation,
+            operation_id,
+        } => Ok({
             Request::Conversation(
-                crate::lean::daemon::ConversationRequest::RestartOrchestrator { conversation },
+                crate::lean::daemon::ConversationRequest::RestartOrchestrator {
+                    conversation,
+                    operation_id,
+                },
             )
         }),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn decode_take_control(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::TakeControl { conversation } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::TakeControl { conversation },
+        )),
         other => Err(Box::new(other)),
     }
 }
@@ -116,10 +142,12 @@ fn decode_cancel(wire: WireRequest) -> std::result::Result<Request, Box<WireRequ
     match wire {
         WireRequest::Cancel {
             conversation,
+            operation_id,
             revision_token,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Cancel {
                 conversation,
+                operation_id,
                 revision_token,
             },
         )),
@@ -153,10 +181,12 @@ fn decode_approvals(wire: WireRequest) -> std::result::Result<Request, Box<WireR
         }
         WireRequest::AnswerApproval {
             conversation,
+            operation_id,
             request,
             choice,
         } => Ok(Request::Conversation(C::AnswerApproval {
             conversation,
+            operation_id,
             request,
             choice,
         })),
@@ -174,6 +204,7 @@ pub(super) fn decode_group_messages(
         .or_else(|wire| decode_review_comments(*wire))
         .or_else(|wire| decode_recover(*wire))
         .or_else(|wire| decode_restart_orchestrator(*wire))
+        .or_else(|wire| decode_take_control(*wire))
         .or_else(|wire| decode_cancel(*wire))
         .or_else(|wire| decode_pause(*wire))
         .or_else(|wire| decode_approvals(*wire))

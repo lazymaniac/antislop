@@ -51,6 +51,9 @@ pub struct Store {
     // Serializes file-backed message writes through their SQLite commit with
     // session deletion's reference scan and file cleanup.
     content_write: Mutex<()>,
+    // Serializes idempotent requests so a concurrent retry waits for the
+    // first attempt's recorded result.
+    operations: Mutex<()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,6 +270,8 @@ const SCHEMA: u32 = 16;
 
 #[path = "store/approvals.rs"]
 mod approvals;
+#[path = "store/operations.rs"]
+mod operations;
 pub(in crate::lean) use approvals::{AUTONOMOUS, ApprovalRequest};
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;

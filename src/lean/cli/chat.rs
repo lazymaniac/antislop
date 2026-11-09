@@ -10,7 +10,7 @@ use std::sync::mpsc;
 pub(super) fn run(args: &[String]) -> Result<()> {
     let (options, client) = connect(args)?;
     if options.message.is_none() && std::io::stdin().is_terminal() {
-        return super::super::tui::run(&options, client);
+        return super::super::tui::run(&options, client.named());
     }
     if let Some(notice) = &client.notice {
         eprintln!("{notice}");
@@ -75,6 +75,7 @@ fn send_message(client: &Client, conversation: &str, message: &str) -> Result<()
     client.call(&Request::Conversation(
         crate::lean::daemon::ConversationRequest::Send {
             conversation: conversation.to_owned(),
+            operation_id: Some(crate::id()),
             text: message.to_owned(),
             to: None,
         },
@@ -168,6 +169,7 @@ fn plan_request(conversation: &str, plan: &Option<String>) -> Option<Request> {
     Some(Request::Conversation(
         crate::lean::daemon::ConversationRequest::Resume {
             conversation: conversation.to_owned(),
+            operation_id: Some(crate::id()),
             plan: plan.clone(),
             revision_token: None,
         },
@@ -177,6 +179,7 @@ fn plan_request(conversation: &str, plan: &Option<String>) -> Option<Request> {
 fn cancel_request(conversation: &str) -> Request {
     Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
         conversation: conversation.to_owned(),
+        operation_id: Some(crate::id()),
         revision_token: None,
     })
 }
@@ -191,6 +194,7 @@ fn pause_request(conversation: &str, command: &str) -> Request {
 fn send_request(conversation: &str, text: &str) -> Request {
     Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
         conversation: conversation.to_owned(),
+        operation_id: Some(crate::id()),
         text: text.to_owned(),
         to: None,
     })

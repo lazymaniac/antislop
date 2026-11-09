@@ -96,6 +96,7 @@ impl CommentSend {
         self.client.call(&Request::Conversation(
             crate::lean::daemon::ConversationRequest::Reject {
                 conversation: self.conversation.clone(),
+                operation_id: Some(self.operation_id.clone()),
                 plan: plan.to_owned(),
                 reason,
                 revision_token: None,

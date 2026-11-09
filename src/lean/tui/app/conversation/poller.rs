@@ -56,6 +56,7 @@ impl Poller {
             generation: self.generation,
             events,
             idle: reply["idle"] == true,
+            observer: reply["observer"] == true,
         }
     }
 }

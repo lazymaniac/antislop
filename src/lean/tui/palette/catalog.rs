@@ -31,9 +31,10 @@ pub enum Command {
     ApprovalsSupervised,
     ApprovalsAutonomous,
     PendingApprovals,
+    TakeControl,
 }
 
-pub(super) const COMMANDS: [(Command, &str); 4] = [
+pub(super) const COMMANDS: [(Command, &str); 5] = [
     (
         Command::PendingApprovals,
         "Answer agents' pending approval requests",
@@ -49,6 +50,10 @@ pub(super) const COMMANDS: [(Command, &str); 4] = [
     (
         Command::ConversationDetails,
         "Conversation details (inspector) · Ctrl+T",
+    ),
+    (
+        Command::TakeControl,
+        "Take control: steer this conversation from this window",
     ),
 ];
 

@@ -39,6 +39,7 @@ fn addressed_send(context: &Context<'_>, request: Request) -> Result<Route> {
     Ok(match request {
         Request::Conversation(ConversationRequest::Send {
             conversation,
+            operation_id: _,
             text,
             to,
         }) => Route::Handled({
@@ -55,6 +56,7 @@ fn reject_plan(context: &Context<'_>, request: Request) -> Result<Route> {
     Ok(match request {
         Request::Conversation(ConversationRequest::Reject {
             conversation,
+            operation_id: _,
             plan,
             reason,
             revision_token,
@@ -78,13 +80,15 @@ fn review_recovery_and_resume(context: &Context<'_>, request: Request) -> Result
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::ReviewComments { conversation, plan }) => {
-            Route::Handled({
-                validate_project_conversation(core, project, &conversation)?;
-                validate_conversation_plan(core, &conversation, &plan)?;
-                json!(core.review_comments(&conversation, &plan)?)
-            })
-        }
+        Request::Conversation(ConversationRequest::ReviewComments {
+            conversation,
+            operation_id: _,
+            plan,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            json!(core.review_comments(&conversation, &plan)?)
+        }),
         Request::Conversation(ConversationRequest::Recover(req)) => Route::Handled({
             validate_project_conversation(core, project, &req.conversation)?;
             validate_conversation_plan(core, &req.conversation, &req.plan)?;
@@ -101,6 +105,7 @@ fn resume_plan(context: &Context<'_>, request: Request) -> Result<Route> {
     Ok(match request {
         Request::Conversation(ConversationRequest::Resume {
             conversation,
+            operation_id: _,
             plan,
             revision_token,
         }) => Route::Handled({
@@ -122,13 +127,14 @@ fn restart_and_cancel(context: &Context<'_>, request: Request) -> Result<Route> 
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversation(ConversationRequest::RestartOrchestrator { conversation }) => {
-            Route::Handled({
-                validate_project_conversation(core, project, &conversation)?;
-                core.restart_orchestrator(&conversation)?;
-                json!("restarting the orchestrator in a fresh session")
-            })
-        }
+        Request::Conversation(ConversationRequest::RestartOrchestrator {
+            conversation,
+            operation_id: _,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            core.restart_orchestrator(&conversation)?;
+            json!("restarting the orchestrator in a fresh session")
+        }),
         request => Route::Unmatched(request),
     })
 }
@@ -139,6 +145,7 @@ fn cancel_work(context: &Context<'_>, request: Request) -> Result<Route> {
     Ok(match request {
         Request::Conversation(ConversationRequest::Cancel {
             conversation,
+            operation_id: _,
             revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
@@ -175,6 +182,13 @@ fn approvals(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
+        // The lease itself changed before routing; only the conversation is checked.
+        Request::Conversation(ConversationRequest::TakeControl { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                Value::Null
+            })
+        }
         Request::Conversation(ConversationRequest::SetApprovalMode { conversation, mode }) => {
             Route::Handled({
                 validate_project_conversation(core, project, &conversation)?;
@@ -184,6 +198,7 @@ fn approvals(context: &Context<'_>, request: Request) -> Result<Route> {
         }
         Request::Conversation(ConversationRequest::AnswerApproval {
             conversation,
+            operation_id: _,
             request,
             choice,
         }) => Route::Handled({

@@ -7,6 +7,8 @@ usage:
   antislop [chat] [options] [message]
   antislop stop [--state DIR] [--force]
                               stop the daemon; --force cancels running work
+  antislop doctor [--config FILE] [--state DIR]
+                              check the configuration and that every profile's CLI launches
   antislop setup agy          register antislop's MCP bridge in Agy's own MCP list (once)
 
 With no message in a terminal it opens the TUI; with a message, or when
@@ -53,6 +55,7 @@ fn run() -> Result<()> {
         // Started by Agy as its stdio MCP server; see `antislop setup agy`.
         Some("mcp-bridge") => antislop::lean::mcp::bridge(),
         Some("setup") => antislop::lean::cli::setup(&args[1..]),
+        Some("doctor") => antislop::lean::cli::doctor(&args[1..]),
         Some("stop") => antislop::lean::cli::stop(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),
         _ => antislop::lean::cli::chat(&args),

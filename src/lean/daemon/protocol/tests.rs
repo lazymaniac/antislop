@@ -128,11 +128,15 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"conversations"}),
         json!({"op":"start"}),
         json!({"op":"send","conversation":"c","text":"hello"}),
+        json!({"op":"send","conversation":"c","text":"hello","operation_id":"op"}),
+        json!({"op":"cancel","conversation":"c","operation_id":"op"}),
+        json!({"op":"answer_approval","conversation":"c","request":"r","choice":"1","operation_id":"op"}),
         json!({"op":"reject","conversation":"c","plan":"p"}),
         json!({"op":"resume","conversation":"c","plan":"p"}),
         json!({"op":"review_comments","conversation":"c","plan":"p"}),
         json!({"op":"recover","conversation":"c","plan":"p","task":"t","action":"retry_with_guidance","freshness_token":"f"}),
         json!({"op":"restart_orchestrator","conversation":"c"}),
+        json!({"op":"take_control","conversation":"c"}),
         json!({"op":"cancel","conversation":"c"}),
         json!({"op":"pause","conversation":"c","paused":true}),
         json!({"op":"plans","conversation":"c"}),
@@ -195,6 +199,8 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         | "restart_orchestrator"
         | "cancel"
         | "pause"
+        | "answer_approval"
+        | "take_control"
         | "plans"
         | "plan"
         | "comments"

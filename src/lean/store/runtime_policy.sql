@@ -44,3 +44,8 @@ CREATE TABLE IF NOT EXISTS approvals(
  state TEXT NOT NULL CHECK(state IN ('open','answered','closed')),
  choice TEXT, answered_by TEXT, created_ms INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS approvals_by_conversation ON approvals(conversation_id,state);
+CREATE TABLE IF NOT EXISTS request_operations(
+ conversation_id TEXT NOT NULL REFERENCES conversations(id),
+ operation_id TEXT NOT NULL, kind TEXT NOT NULL, result TEXT NOT NULL,
+ created_ms INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id,operation_id));
