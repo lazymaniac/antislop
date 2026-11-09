@@ -1136,8 +1136,8 @@ src
     Key(E{Char,Enter,Escape,Up,Down,Right})
     Kind(E{Command,Mcp,Confirm,Trust,Other})
     Verdict(E{Choose,AnsweredInTerminal})
-    - mcp_heading,numbered_choices,number,{marked,navigation}_choices,navigate,split_shortcut,choice,decision,finish,
-      {is,is_solid}_rule
+    - agy_tool,mcp_heading,numbered_choices,number,{marked,navigation}_choices,navigate,split_shortcut,choice,decision,
+      finish,{is,is_solid}_rule
    readiness
     Tracker(C{saw_work,reminded})
      observe(provider,screen,approval_open,paused):bool > classify
@@ -3028,10 +3028,10 @@ src
   lean_core:*fake_codex,config,wait_idle,chat
   lean_ledger:*Fixture
   lean_ledger_tui:*key,screen
-  lean_messages:*open,events,run,ReleaseOnDrop
+  lean_messages:*open,events,run,accept_reviewed_plan,ReleaseOnDrop
   lean_options:*writer,run
   lean_options_delivery:*task
-  lean_options_probe:*git,idle
+  lean_options_probe:*git,idle,accept_reviewed_plan
   lean_plan:*fake_clis,config,wait_idle,calls
   lean_plan_history:*fake_clis,DaemonGuard
   lean_projects:*project,Daemon,pump,conversations
@@ -3050,6 +3050,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,667 LOC · input 1,179,679 · output 44,609 tokens · state cb106911d1c4 · targets AGENTS.md
+· 132,792 LOC · input 1,181,046 · output 44,622 tokens · state b12de776a6a3 · targets AGENTS.md
 ```
 <!-- hologram:end -->
