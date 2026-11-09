@@ -2452,8 +2452,8 @@ src
      - composer_status_area,session_{block,title},ascii_border_set,session_round_label,
        {native,draw_session,composer,primary_composer}_status,place_session_cursor
     specialized_screens/graph
-     - render_card_title,round_label,render_card_round_data,agent_line,render_card_history_message,graph_vertical_markers,
-       expanded_offset_x,graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
+     - render_card_title,round_label,render_card_{round_data,history_message},graph_vertical_markers,expanded_offset_x,
+       graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
     specialized_screens.rs
      draw_secondary_or_main(app,frame) > draw_{plan,diff,details}
      - button_rows
@@ -3046,6 +3046,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,568 LOC · input 1,178,566 · output 44,534 tokens · state f58133d8b84f · targets AGENTS.md
+· 132,521 LOC · input 1,178,233 · output 44,529 tokens · state d2765855814a · targets AGENTS.md
 ```
 <!-- hologram:end -->
