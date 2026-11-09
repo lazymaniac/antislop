@@ -271,8 +271,9 @@ src
     answer
      PlanAnswer(C{conversation,project,config,text,plan,addressed,is_comment,answered,upto})
     helpers
-     finalize_plan(specs,required_gates,local_options):Vec<TaskContract>
-     planning_gaps(specs):Option<String>
+     finalize_plan(specs,required_gates,local_options):Vec<TaskContract> > finalize_team_plan
+     finalize_team_plan(specs,required_gates,local_options,team):Vec<TaskContract>
+     planning_gaps(specs,team):Option<String>
      writer_base_scratch(state,{plan,spec}_id):PathBuf
     kept_tasks
      - authored,not_keepable
@@ -285,7 +286,8 @@ src
      helpers.rs
       PreparedPlan(C{id,tasks,answered})
     proposal.rs
-     checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > finalize_plan,check,message
+     checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > checked_team_plan
+     checked_team_plan(specs,config,team):std::result::Result<Vec<TaskContract>,String> > finalize_team_plan,check,message
     report
      - task_{result,findings},apply_audit_gates,invalidate_unearned_approval,unapproved_task_ids,audit_text
     revision
@@ -981,7 +983,7 @@ src
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,check_submitted_plan,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,check_submitted_plan,select_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1001,7 +1003,7 @@ src
     record_result(turn,result):Result<Value> > save_turn_result
     record_task_result(conversation,role,turn,result):Result<Value> > record_task_result_with_evidence
     record_task_result_with_evidence(conversation,role,turn,result,evidence):Result<Value> > validate_agent_result,save_turn_result_with_evidence,invalidate_open_questions
-    check_submitted_plan(conversation,tasks,keep):Result<()> > submitted_graph,planning_run,ledger_entries,checked_plan,config_snapshot
+    check_submitted_plan(conversation,tasks,keep,team):Result<()> > submitted_graph,planning_run,ledger_entries,checked_team_plan,config_snapshot
     revised_tasks(conversation,plan,tasks):Result<Vec<TaskContract>> > plan_run,ledger_entries
     link_revised_task(task,baseline,entries):Result<TaskContract> > into_contract,restore_requirement_links
     await_agent_answer(conversation,turn,request):Result<Value> > agent_question,require
@@ -1057,7 +1059,7 @@ src
     require_plan_correction(conversation,turn):Result<()> > db,has_uncorrected_review_draft,require
     submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
     keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
-    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,planning_gaps,dependency_note,review,append_planning_gaps
+    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,team,planning_gaps,{team,dependency}_note,review,append_planning_gaps
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
     planning_requirements(&Arc<Self>,conversation,addressed,cancel):Result<Option<Run>> > record_addressed_comments,count_since_requirements_reset,ensure_requirements,record_requirements_failure
@@ -1459,6 +1461,9 @@ src
     refresh_answer_waits(conversation):Result<()> > db
     approval_mode(conversation):Result<String> > db
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
+    team(conversation):Result<crate::lean::tasks::Team> > db
+    team_note(conversation):Result<String> > db
+    select_team(conversation,team,reason):Result<()> > append_event
     open_approval(conversation,request):Result<String> > append_event
     approval_state(id):Result<(String,Option<String>,String)> > db
     answer_approval(conversation,id,choice,by):Result<()> ~66 > flatten,append_event
@@ -1596,7 +1601,7 @@ src
     conversation(id):Result<Conversation> > db,Conversation
     conversations():Result<Vec<Conversation>> > db,Conversation
     conversation_goal(conversation):Result<String> > db,sql_text
-    delete_session(conversation):Result<()> ~132 > db,remove_unreferenced
+    delete_session(conversation):Result<()> ~133 > db,remove_unreferenced
     add_message(conversation,author,text):Result<Message> > add_message_with_content_lock
     add_message_with_content_lock(conversation,author,text):Result<Message> > db,insert_message,maybe_start_requirements_checkpoint,record_scope_confirmation_answer,Message
     task_progress(conversation,task):Result<Option<Value>> > db
@@ -1631,11 +1636,13 @@ src
      next():Option<TaskContract> > remove,reserve_task_id,dependencies,gate_{description,task}
     - GateDescription,gate_summaries,is_audit,gate_goal
    agents.rs
-    missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > is_gate_kind
+    missing_gates(tasks,gates):Vec<&'static PredefinedAgent> > is_gate_kind
+    missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > missing_gates
     refresh_existing_options(tasks):Vec<TaskContract> > options_{task,goal}
     resolve_gate_dependencies(tasks) > expand_gate_dependencies
     with_options(tasks):Vec<TaskContract> > options_{task,goal}
-    with_required_agents(tasks):Vec<TaskContract> > resolve_gate_dependencies,missing_quality_agents,refresh_existing_options,GatePlan.new,order_graph
+    with_required_agents(tasks):Vec<TaskContract> > with_team_gates
+    with_team_gates(tasks,team_gates):Vec<TaskContract> > resolve_gate_dependencies,missing_gates,refresh_existing_options,GatePlan.new,order_graph
     without_options(tasks):Vec<TaskContract>
     PredefinedAgent(C{id,kind,title,focus,required_for_code_changes})
     = PREDEFINED_AGENT_POOL,GATE_KINDS
@@ -3094,7 +3101,7 @@ src
   lean_core:*fake_codex,config,wait_idle,chat
   lean_ledger:*Fixture
   lean_ledger_tui:*key,screen
-  lean_messages:*open,events,run,accept_reviewed_plan,ReleaseOnDrop
+  lean_messages:*open,prompts,events,run,accept_reviewed_plan,ReleaseOnDrop
   lean_options:*writer,run
   lean_options_delivery:*task
   lean_options_probe:*git,idle,accept_reviewed_plan
@@ -3116,6 +3123,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 134,543 LOC · input 1,196,801 · output 45,280 tokens · state 027330996d58 · targets AGENTS.md
+· 134,934 LOC · input 1,200,706 · output 45,427 tokens · state 9ec949fb9697 · targets AGENTS.md
 ```
 <!-- hologram:end -->
