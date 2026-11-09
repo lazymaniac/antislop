@@ -63,6 +63,14 @@ pub(crate) fn screen_stop(provider: ProviderKind, screen: &str) -> Option<StopCa
         {
             return Some(StopCause::LoginRequired);
         }
+        // Gemini's sign-in box is taller than the screen tail checked here,
+        // so its question can scroll out of view; its foot cannot.
+        if provider == ProviderKind::Gemini
+            && (line.starts_with("failed to sign in.")
+                || line.starts_with("terms of services and privacy notice for gemini cli"))
+        {
+            return Some(StopCause::LoginRequired);
+        }
         if provider == ProviderKind::Codex && line.starts_with("message exceeds the maximum length")
         {
             return Some(StopCause::UnexpectedDialog);
@@ -122,6 +130,23 @@ mod tests {
         assert_eq!(
             screen_stop(ProviderKind::Claude, "Do you want to allow Bash?"),
             Some(StopCause::UnexpectedDialog)
+        );
+    }
+
+    #[test]
+    fn a_gemini_sign_in_box_stops_the_turn_from_its_foot() {
+        let screen = include_str!("../../../tests/fixtures/approvals/gemini/auth_live.txt");
+        let lines: Vec<&str> = screen.lines().collect();
+        // The runtime checks only the screen's tail, where the question is gone.
+        let tail = lines[lines.len() - crate::lean::native::SCREEN_LINES..].join("\n");
+        assert!(!tail.contains("How would you like to authenticate"));
+        assert_eq!(
+            screen_stop(ProviderKind::Gemini, &tail),
+            Some(StopCause::LoginRequired)
+        );
+        assert_eq!(
+            screen_stop(ProviderKind::Claude, "Failed to sign in. Message: offline"),
+            None
         );
     }
 }

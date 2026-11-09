@@ -33,6 +33,8 @@ from the commits since the last tag with `packaging/changelog.sh`.
   after three, and the user is told the audit is still open. Auditors list
   only open problems, and a rejected audit review is named as such.
 - Approval choices are picked with Alt+digit (Ctrl+Alt+digit still works).
+- A Gemini session stuck at its sign-in box fails at once as `login_required`
+  instead of waiting with no progress.
 
 ## 0.1.0
 

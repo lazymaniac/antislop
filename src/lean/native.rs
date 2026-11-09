@@ -35,7 +35,7 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 const SETTLE: Duration = Duration::from_millis(400);
 /// UI animation must not block a CLI whose MCP tools are already available.
 const SETTLE_LIMIT: Duration = Duration::from_secs(2);
-const SCREEN_LINES: usize = 12;
+pub(crate) const SCREEN_LINES: usize = 12;
 /// A dialog can be taller than the lines shown in a failure.
 pub(crate) const APPROVAL_LINES: usize = 40;
 
