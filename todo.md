@@ -53,23 +53,23 @@ TUI (§8):
 - [ ] All 12 node statuses (queued, starting, running, waiting_agent, waiting_user, reviewing, changes_requested, paused, blocked, failed, completed, cancelled), with text/symbols and optional color (§8.3).
 - [ ] Stage/module grouping and collapsed completed branches for large teams (§8.3).
 - [ ] Comments on every agent-panel element: relationship, session, turn, message, evidence, checklist item, gate (§8.5).
-- [ ] Run/stage header and stages (Intake..Delivery) in run state (§6.1, §8.1).
-- [ ] Active-agent message delivery choice: native steering, next-turn queue, interrupt/resume; show available options in the UI (§8.4).
+- [x] Run/stage header and stages (Intake..Delivery) in run state (§6.1, §8.1): the header shows the stage strip, compact and ASCII forms included.
+- [x] Active-agent message delivery choice: native steering, next-turn queue, interrupt/resume; show available options in the UI (§8.4): Ctrl+T in the composer.
 - [ ] The `antislop ui` command settled in §8.2 (currently `antislop chat` and launching without arguments).
 
 Runtime, daemon, adapters (§7, §9, §10, §13, §14):
 
 - [x] Ledger-operation idempotency, expected_spec_revision, and exact-diff approval in daemon API (§9.3).
-- [ ] request_id and idempotency keys for remaining state changes in daemon protocol (§9.3).
-- [ ] One active controlling client plus observer clients; control conflicts cannot use last-write-wins (§9.3).
+- [x] request_id and idempotency keys for remaining state changes in daemon protocol (§9.3).
+- [x] One active controlling client plus observer clients; control conflicts cannot use last-write-wins (§9.3): Take control in the palette.
 - [ ] Adapter contract: probe with capabilities, send with delivery_mode/receipt, interrupt with receipts distinguishing requests from confirmed termination (§9.4).
 - [x] Interactive CLIs in daemon terminals with one MCP return channel replace the headless JSON and app-server transports (§9.5).
 - [ ] Run/review the gemini adapter against a real binary and complete the M0 version matrix (§16).
 - [ ] Permission profiles read-only, workspace-write, restricted-execution, extended-access; block sessions when restrictions cannot be enforced (§13).
 - [ ] Secret redaction in logs/artifacts, file permissions, retention policy (§13).
-- [ ] Token usage marked reported / estimated / unavailable (currently reported or absent only) (§14).
+- [x] Token usage marked reported / estimated / unavailable (§14).
 - [ ] Native CLI subagents disabled or registered as managed nodes; agy/gemini have no switch (§9.5).
-- [ ] Team templates (small-change, feature, refactoring, security-fix, greenfield, research, document, analysis) as versioned code definitions, not just orchestrator instructions (§7.3).
+- [x] Team templates (small-change, feature, refactoring, security-fix, research, document) as versioned code definitions chosen in submit_plan with a recorded reason (§7.3). Greenfield and analysis are not separate teams: feature and research cover them.
 - [ ] Versioned built-in roles/templates persisted at run start (§9.6).
 - [ ] Task-level resume and retries for waiting tasks (§14).
 - [ ] delivery_unknown state and session reconciliation for uncertain message delivery (§10.4).
@@ -116,6 +116,6 @@ Other:
 - [x] t8: compared saved t4/t5/t6/t7 results; resolved details.rs conflict preserving helpers and both behaviors, without final src/tests changes. Six-requirement matrix and manual terminal checks: docs/lean-core.md, “t8 integration gate” section.
 - [x] t8: repeated final gate: fmt, clippy -D warnings, check, full cargo test --no-fail-fast — exit 0; 496/496, none skipped. All 31 earlier failures now pass; log /tmp/antislop-t8-final-review.log. Evidence for six requirements in docs/lean-core.md.
 - [x] t8: manual real-terminal checks (2026-11-09, tmux, codex + claude live, scratch project): OSC 52 selection/copy — mouse drag + Ctrl+Y put exactly the selected line on tmux's clipboard; /config (F8) live saving — an effort change applied with "Saved and applied live." and the file's comments kept; single task node — expanded card with Details/PTY/Results/Diff tabs, coverage and round shown; small-change team chosen by the planner, landed commit kept the worker's subject. Fixed on the way: the header stage said "done" while the requirements audit ran.
-- [ ] t8: Checks across several rounds not seen live — every task was approved in round 1; still covered only by tests.
-- [ ] t8 live run: after an approved audit review the orchestrator still reported completion "pending runtime ledger reconciliation" and the audit re-ran; a one-task small-change plan should close after one approved audit.
-- [ ] TUI: Ctrl+Alt+digit approval keys need a terminal that reports them (tmux legacy keys send Alt+digit); offer a fallback key. Config editor is reachable only by F8, not from the palette.
+- [x] t8: Checks across several rounds seen live (2026-11-09): with a scripted implementation reviewer that rejects round 1, the worker fixed the finding in round 2; the expanded card switches rounds with `,`/`.`. Fixed on the way: an earlier round showed "Findings 0 · approved without notes" because its verdict arrived as a content reference; the TUI now fetches it.
+- [x] t8 live run: the audit loop came from a low finding the auditor kept "for tracking" (the audit review then stayed unapproved, reported as "missing or stale") and from unbounded reminders: each answer leaving a finding open without a plan woke the orchestrator again (12 turns). Auditors now list only open problems, a rejected audit review is named as such, an answered-but-open finding stands after one reminder and a malformed answer after three, with a notice to the user.
+- [x] TUI: the approval card also takes Alt+digit, which terminals without extended keys (tmux) send for Ctrl+Alt+digit, and labels the shorter form. The config editor stays on F8 only: the palette lists only actions without a direct key, by design.

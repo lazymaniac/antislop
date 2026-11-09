@@ -27,6 +27,12 @@ from the commits since the last tag with `packaging/changelog.sh`.
   `refactoring`, `security-fix`, `research`, `document`) and says why; the
   runtime adds only that team's quality gates and options, and the plan
   reviewer sees the choice.
+- An earlier round's card shows that round's own findings.
+- The audit no longer wakes the orchestrator without end: a finding it
+  answers but leaves open stands after one reminder, a malformed answer
+  after three, and the user is told the audit is still open. Auditors list
+  only open problems, and a rejected audit review is named as such.
+- Approval choices are picked with Alt+digit (Ctrl+Alt+digit still works).
 
 ## 0.1.0
 
