@@ -78,8 +78,35 @@ fn round_snapshot(
         },
     ))?;
     task["_rounds"] = rounds;
+    hydrate_verdict(client, conversation, uuid, selected, &mut task)?;
     let documents = round_documents(client, conversation, uuid, selected, &task)?;
     Ok(Snapshot { task, documents })
+}
+
+/// A round's verdict comes as a content reference; the checks and findings
+/// panels read it as JSON, so it is fetched whole.
+fn hydrate_verdict(
+    client: &Client,
+    conversation: &str,
+    uuid: &str,
+    round: u64,
+    task: &mut Value,
+) -> Result<()> {
+    if task["verdict"].get("session_content").is_none() {
+        return Ok(());
+    }
+    let owner = super::super::super::store::ContentOwner::Round {
+        task: uuid.into(),
+        round: round as u32,
+        field: "verdict".into(),
+    };
+    let mut text = String::new();
+    read_content(client, conversation, &owner, &mut |chunk| {
+        text.push_str(chunk);
+        Ok(())
+    })?;
+    task["verdict"] = serde_json::from_str(&text)?;
+    Ok(())
 }
 
 fn selected_round(requested: Option<u64>, rounds: &Value) -> u64 {
@@ -255,6 +282,61 @@ mod tests {
                 && !text.contains("```json")
                 && !text.contains("\"alternatives\""),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn an_earlier_round_shows_its_own_findings_from_the_verdict_reference() {
+        std::fs::create_dir_all(".antislop/tmp").unwrap();
+        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
+                .unwrap();
+        let verdict = json!({"approved":false,"findings":[
+            {"check":"goal","severity":"medium","issue":"Round 1 finding","where":"calc.py:1"}]});
+        let server = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            while !asked.contains(&"history_content:verdict".to_owned()) {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request: Value = crate::transport::read(&mut std::io::BufReader::new(
+                    stream.try_clone().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+                let request = &request["request"];
+                let op = request["op"].as_str().unwrap().to_owned();
+                let data = match op.as_str() {
+                    "task_rounds" => json!([{"round":1},{"round":2}]),
+                    "task_round" => {
+                        assert_eq!(request["round"], 1);
+                        json!({"round":1,"status":"continued","report":null,"turns":[],
+                            "verdict":{"session_content":{"id":"v1","bytes":120}}})
+                    }
+                    "history_content" => {
+                        assert_eq!(request["owner"]["field"], "verdict");
+                        asked.push("history_content:verdict".into());
+                        json!({"text":verdict.to_string(),"next_offset":120,"done":true})
+                    }
+                    other => panic!("unexpected request {other}"),
+                };
+                crate::transport::write(&mut stream, &json!({"data":data,"error":null})).unwrap();
+            }
+        });
+        let client = Client::at(directory.path());
+        let snapshot = task_snapshot(
+            &client,
+            "c",
+            "p",
+            "6f2b9a6e-2d0c-4b8e-9d39-6c4e3c1f0a11",
+            Some(1),
+            false,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(snapshot.task["verdict"]["approved"], false);
+        assert_eq!(
+            snapshot.task["verdict"]["findings"][0]["issue"],
+            "Round 1 finding"
         );
     }
 }
