@@ -75,7 +75,17 @@ impl App {
         let width = details.input_width[details.active_panel];
         let draft_key = details.composer_key();
         let mut drafts = details.drafts.borrow_mut();
-        let input = &mut drafts.entry(draft_key).or_default().input;
+        let composer = drafts.entry(draft_key).or_default();
+        if control && key.code == KeyCode::Char('t') {
+            use crate::lean::store::Delivery;
+            composer.mode = match composer.mode {
+                Delivery::Queue => Delivery::Steer,
+                Delivery::Steer => Delivery::Interrupt,
+                Delivery::Interrupt => Delivery::Queue,
+            };
+            return true;
+        }
+        let input = &mut composer.input;
         match key.code {
             KeyCode::Up => input.move_up(width),
             KeyCode::Down => input.move_down(width),

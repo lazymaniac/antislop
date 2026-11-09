@@ -37,7 +37,13 @@ impl App {
             if owner != conversation || !delivery_matches(composer, event) {
                 continue;
             }
-            composer.delivery = Some("delivered".into());
+            composer.delivery = Some(
+                match event["payload"]["state"].as_str() {
+                    Some("steered") => "steered into the running turn",
+                    _ => "delivered",
+                }
+                .into(),
+            );
             composer.error = None;
             composer.delivery_failure = None;
             composer.delivery_receipts.extend(

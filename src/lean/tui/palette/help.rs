@@ -256,6 +256,7 @@ fn help_details() -> &'static [&'static str] {
         "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
         "Graph card       , / . select round; . on newest follows live work",
         "i / a            native CLI focus / message composer",
+        "Ctrl+T           composer: queue / steer / interrupt the running turn",
         "Ctrl+]           leave PTY and return to Details",
         "Graph card PTY   opens as a read-only console: ↑/↓ PgUp/PgDn wheel scroll, i types",
         "Ctrl+W           switch worker / reviewer panel",

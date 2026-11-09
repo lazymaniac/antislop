@@ -112,6 +112,7 @@ fn dispatch_reviewer(
         operation_id: crate::id(),
         expected_round: None,
         expected_run: run,
+        delivery: Default::default(),
         text: body.into(),
     })
 }
@@ -130,6 +131,7 @@ fn direct_task(
         operation_id: crate::id(),
         expected_round: Some(task.round),
         expected_run: None,
+        delivery: Default::default(),
         text: body.into(),
     })?;
     receipt["recipient_finished"] = json!(status::finished(&task.status));

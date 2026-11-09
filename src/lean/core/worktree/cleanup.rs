@@ -254,7 +254,7 @@ impl Core {
             Vec::new()
         };
         let (task, candidates, reservation_blocked) = {
-            let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+            let _graph = self.locks.graph();
             if self.activity.task_running(id) {
                 return Ok(false);
             }
@@ -292,7 +292,7 @@ impl Core {
                 // Recheck eligibility under the graph lock while the path lease
                 // prevents a new writer or pin from reaching this checkout.
                 let still_eligible = {
-                    let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+                    let _graph = self.locks.graph();
                     self.store
                         .task_by_id(id)?
                         .is_some_and(|current| eligible(&current, kind))

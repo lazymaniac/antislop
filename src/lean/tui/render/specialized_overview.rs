@@ -248,7 +248,7 @@ fn composer_status(
     active: bool,
 ) -> String {
     if let Some(status) = primary_composer_status(composer, active && details.editing) {
-        return status.to_owned();
+        return status;
     }
     if let Some(error) = details
         .native
@@ -267,17 +267,33 @@ fn composer_status(
 fn primary_composer_status(
     composer: Option<&super::super::details::Composer>,
     editing: bool,
-) -> Option<&str> {
-    let value = composer?;
-    value
-        .sending
-        .then_some("Sending...")
-        .or(value.error.as_deref())
-        .or(if editing {
-            Some("Enter send · Alt+Enter newline · Esc navigation")
-        } else {
-            value.delivery.as_deref()
-        })
+) -> Option<String> {
+    let mode = composer.map_or_else(Default::default, |composer| composer.mode);
+    if let Some(composer) = composer {
+        if composer.sending {
+            return Some("Sending...".into());
+        }
+        if let Some(error) = &composer.error {
+            return Some(error.clone());
+        }
+    }
+    if editing {
+        return Some(format!(
+            "Enter {} · Ctrl+T mode · Alt+Enter newline · Esc navigation",
+            mode_label(mode)
+        ));
+    }
+    composer?.delivery.clone()
+}
+
+/// What Enter does with the message in `mode`.
+fn mode_label(mode: crate::lean::store::Delivery) -> &'static str {
+    use crate::lean::store::Delivery;
+    match mode {
+        Delivery::Queue => "queue for next turn",
+        Delivery::Steer => "steer the running turn",
+        Delivery::Interrupt => "interrupt and steer",
+    }
 }
 
 fn place_session_cursor(frame: &mut Frame, area: Rect, column: u16, row: usize, start: usize) {
@@ -288,4 +304,30 @@ fn place_session_cursor(frame: &mut Frame, area: Rect, column: u16, row: usize, 
             .saturating_add(row.saturating_sub(start) as u16)
             .min(area.bottom().saturating_sub(1)),
     ));
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    use crate::lean::store::Delivery;
+
+    #[test]
+    fn the_composer_says_how_enter_delivers_the_message() {
+        let mut composer = super::super::super::details::Composer::default();
+        let hint = |composer: &super::super::super::details::Composer| {
+            primary_composer_status(Some(composer), true).unwrap()
+        };
+        assert!(hint(&composer).starts_with("Enter queue for next turn · Ctrl+T mode"));
+        composer.mode = Delivery::Interrupt;
+        assert!(hint(&composer).starts_with("Enter interrupt and steer"));
+        assert_eq!(
+            primary_composer_status(None, true).as_deref(),
+            Some("Enter queue for next turn · Ctrl+T mode · Alt+Enter newline · Esc navigation")
+        );
+        composer.delivery = Some("steered into the running turn".into());
+        assert_eq!(
+            primary_composer_status(Some(&composer), false).as_deref(),
+            Some("steered into the running turn")
+        );
+    }
 }

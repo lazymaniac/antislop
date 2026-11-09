@@ -62,6 +62,8 @@ pub struct Composer {
     pub delivery_receipts: Vec<u64>,
     pub delivery_failure: Option<(Vec<u64>, String)>,
     pub address: Option<String>,
+    /// How the next message reaches an agent in the middle of a turn.
+    pub mode: crate::lean::store::Delivery,
 }
 
 pub type Drafts = std::rc::Rc<std::cell::RefCell<HashMap<(String, String), Composer>>>;

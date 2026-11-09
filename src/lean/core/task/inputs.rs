@@ -27,8 +27,8 @@ impl Core {
         conversation: &str,
         task: &Task,
     ) -> Result<()> {
-        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.locks.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph();
+        let _integration = self.locks.integration();
         self.store.assert_task_inputs(task)?;
         let before = self.store.plan(&task.plan_id)?;
         self.store.invalidate_task_dependents(conversation, task)?;

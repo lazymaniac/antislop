@@ -203,13 +203,9 @@ fn record_message_and_wake_locked(
 }
 
 fn wake_locked(core: &Arc<Core>, conversation: &str) {
-    let mut running = core.activity.running.lock().expect("running mutex");
-    if running.contains_key(conversation) {
+    let Some(cancel) = core.activity.start_orchestrator(conversation) else {
         return;
-    }
-    let cancel = Arc::new(AtomicBool::new(false));
-    running.insert(conversation.to_owned(), cancel.clone());
-    drop(running);
+    };
     let core = core.clone();
     let conversation = conversation.to_owned();
     std::thread::spawn(move || core.orchestrate(&conversation, &cancel));

@@ -16,7 +16,7 @@ impl Core {
         config: &Config,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let lock = self.locks.integrating.lock().expect("integration mutex");
+        let lock = self.locks.integration();
         if self.defer_agent_work(conversation, task)? {
             return Ok(());
         }

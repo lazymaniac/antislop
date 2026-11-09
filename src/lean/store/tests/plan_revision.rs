@@ -388,6 +388,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
             operation_id: crate::id(),
             expected_round: Some(retired.round),
             expected_run: None,
+            delivery: Default::default(),
             text: "Resume retired work".into(),
         })
         .unwrap_err();

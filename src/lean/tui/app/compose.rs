@@ -105,6 +105,12 @@ impl App {
             expected_round: task
                 .and_then(|task| task["round"].as_u64())
                 .map(|round| round as u32),
+            delivery: details
+                .drafts
+                .borrow()
+                .get(&(details.composer_key()))
+                .map(|composer| composer.mode)
+                .unwrap_or_default(),
         })
     }
 

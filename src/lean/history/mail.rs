@@ -37,6 +37,49 @@ impl Store {
         Ok(())
     }
 
+    /// Records that queued mail `id` was typed into running turn `turn`:
+    /// it counts as delivered to that turn unless the turn fails.
+    pub fn mark_steered(&self, conversation: &str, id: u64, turn: &str) -> Result<bool> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_ms();
+        let changed = tx.execute(
+            "UPDATE mail SET delivered_turn=?3,delivered_ms=?4
+             WHERE id=?1 AND conversation_id=?2 AND delivered_turn IS NULL",
+            params![id as i64, conversation, turn, now],
+        )?;
+        if changed == 1 {
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms)
+                 VALUES(?1,?2,(SELECT plan_id FROM turns WHERE id=?2),'mail_delivered',?3,?4)",
+                params![
+                    conversation,
+                    turn,
+                    serde_json::json!({"ids": [id], "delivered_ms": now, "state": "steered",
+                        "recipient": tx.query_row("SELECT recipient FROM mail WHERE id=?1", [id as i64], |row| row.get::<_, String>(0))?})
+                    .to_string(),
+                    now
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Returns to the queue the mail typed into `turn`, which ended without
+    /// a result: whether the agent acted on it is unknown, so its next turn
+    /// gets it again.
+    pub fn requeue_steered(&self, turn: &str) -> Result<Vec<u64>> {
+        let db = self.db();
+        let mut statement =
+            db.prepare("UPDATE mail SET delivered_turn=NULL,delivered_ms=NULL WHERE delivered_turn=?1 RETURNING id")?;
+        let ids = statement
+            .query_map([turn], |row| row.get::<_, i64>(0))?
+            .map(|id| id.map(|id| id as u64))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids)
+    }
+
     /// Bind queued direct mail to the turn that actually consumes it, before
     /// starting the CLI. Delivery is acknowledged separately after success.
     pub fn attribute_mail(&self, conversation: &str, ids: &[u64], turn: &str) -> Result<()> {

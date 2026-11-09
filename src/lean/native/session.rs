@@ -244,6 +244,22 @@ impl Session {
         }
     }
 
+    /// Types `text` into the turn running now, first stopping what the CLI
+    /// does when `interrupt`. Returns that turn, or `None` when no turn runs
+    /// or a dialog waits for an answer.
+    pub(crate) fn steer(&self, text: &str, interrupt: bool) -> Result<Option<String>> {
+        self.check_alive()?;
+        if !self.executing.load(Ordering::SeqCst) || self.approval().is_some() {
+            return Ok(None);
+        }
+        self.gateway.while_open(|| {
+            if interrupt {
+                terminal::Session::interrupt(&self.screen)?;
+            }
+            terminal::Session::submit(&self.screen, text)
+        })
+    }
+
     /// Whether the last run failed before the CLI took its prompt.
     pub(crate) fn failed_before_start(&self) -> bool {
         self.startup_failed.load(Ordering::SeqCst)

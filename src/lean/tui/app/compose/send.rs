@@ -141,6 +141,7 @@ pub(super) struct AgentMessageTarget {
     pub(super) plan: Option<String>,
     pub(super) expected_run: Option<String>,
     pub(super) expected_round: Option<u32>,
+    pub(super) delivery: crate::lean::store::Delivery,
 }
 
 pub(super) struct AgentMessageSend {
@@ -168,6 +169,7 @@ impl AgentMessageSend {
                         operation_id: self.operation.clone(),
                         expected_round: self.target.expected_round,
                         expected_run: self.target.expected_run,
+                        delivery: self.target.delivery,
                         text: self.text.clone(),
                     },
                 },

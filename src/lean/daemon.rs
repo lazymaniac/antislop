@@ -11,7 +11,6 @@ use std::io::{BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 mod client;

@@ -34,7 +34,7 @@ impl Core {
     ) -> Result<bool> {
         self.run_plan(conversation, plan_id, cancel);
         self.wait_for_revision_jobs(conversation, cancel);
-        let graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let graph = self.locks.graph();
         if cancel.load(Ordering::SeqCst) {
             self.clear_running_plan(conversation);
             return Ok(true);
@@ -82,7 +82,7 @@ impl Core {
         plan_id: &str,
         cancel: &AtomicBool,
     ) -> Result<bool> {
-        let graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let graph = self.locks.graph();
         if self.has_runnable_dependents(plan_id)? {
             return Ok(false);
         }
@@ -104,7 +104,7 @@ impl Core {
     ) -> Result<bool> {
         let snapshot = self.audited_plan_snapshot(plan_id)?;
         let report = self.plan_report(conversation, plan_id, cancel);
-        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _graph = self.locks.graph();
         if self.audited_plan_changed(conversation, plan_id, cancel, &snapshot)? {
             return Ok(false);
         }

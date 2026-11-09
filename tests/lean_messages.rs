@@ -792,6 +792,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
         expected_round: Some(first.round),
         expected_run: None,
         text: "make correction".into(),
+        delivery: Default::default(),
     };
     let receipt = core.send_to_agent(&message).unwrap();
     assert_eq!(
@@ -892,6 +893,7 @@ def dependency_report():
         expected_round: Some(source.round),
         expected_run: None,
         text: "make correction".into(),
+        delivery: Default::default(),
     })
     .unwrap();
     wait_until("recomputed chain", || {
@@ -981,6 +983,7 @@ fn worker_message_during_review_requires_another_round_before_approval() {
         expected_round: Some(task.round),
         expected_run: None,
         text: "correct during review".into(),
+        delivery: Default::default(),
     })
     .unwrap();
     wait_until("correction reviewed", || {
@@ -1032,8 +1035,17 @@ fn direct_orchestrator_message_uses_normal_workflow_and_validates_the_run() {
         expected_round: None,
         expected_run: Some(first.id.clone()),
         text: "next question".into(),
+        // With no turn running, steering falls back to the next turn.
+        delivery: antislop::lean::store::Delivery::Steer,
     };
-    core.send_to_agent(&message).unwrap();
+    let receipt = core.send_to_agent(&message).unwrap();
+    assert_eq!(receipt["state"], "queued");
+    assert!(
+        receipt["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("has no turn running")),
+        "{receipt}"
+    );
     wait_until("direct answer", || core.is_idle(&conversation));
     assert_eq!(
         core.store
@@ -1109,6 +1121,7 @@ fn direct_reviewer_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
         expected_round: Some(initial[0].round),
         expected_run: None,
         text: "please check again".into(),
+        delivery: Default::default(),
     };
     core.send_to_agent(&message).unwrap();
     wait_until("unchanged recheck", || {
@@ -1188,6 +1201,7 @@ fn direct_worker_failure_remains_queued_and_is_never_consumed_by_a_receipt_turn(
         expected_round: Some(first.round),
         expected_run: None,
         text: "fail direct delivery".into(),
+        delivery: Default::default(),
     };
     let receipt = core.send_to_agent(&message).unwrap();
     wait_until("failed direct turn", || {
@@ -1268,6 +1282,7 @@ fn direct_reviewers_receive_review_context_instead_of_receipt_only_instructions(
             expected_round: None,
             expected_run: Some(run.clone()),
             text: "review this concern again".into(),
+            delivery: Default::default(),
         })
         .unwrap();
         wait_until("direct reviewer", || {
@@ -1514,6 +1529,7 @@ fn a_dependency_correction_cancels_the_old_consumer_and_releases_its_only_slot()
         expected_round: Some(before[0].round),
         expected_run: None,
         text: "make correction".into(),
+        delivery: Default::default(),
     })
     .unwrap();
     wait_until(

@@ -11,7 +11,7 @@ mod history;
 mod run_context;
 #[path = "workflow.rs"]
 mod workflow;
-pub use history::{AgentMessage, ContentOwner, HistoryScope};
+pub use history::{AgentMessage, ContentOwner, Delivery, HistoryScope};
 pub use run_context::RunContext;
 pub use workflow::Workflow;
 

@@ -55,6 +55,7 @@ impl Core {
                 operation_id,
                 expected_round: Some(task.round),
                 expected_run: None,
+                delivery: Default::default(),
                 text: format!(
                     "Diff comment #{} at {} (task round {}):\n{}\nAddress this location-specific feedback in your changes.",
                     comment.id, target, task.round, text

@@ -11,6 +11,32 @@ pub struct AgentMessage {
     pub expected_round: Option<u32>,
     pub expected_run: Option<String>,
     pub text: String,
+    /// How the message reaches an agent that is in the middle of a turn.
+    #[serde(default)]
+    pub delivery: Delivery,
+}
+
+/// How a message reaches its agent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// With the agent's next turn.
+    #[default]
+    Queue,
+    /// Typed into the turn running now, which goes on with it.
+    Steer,
+    /// The running turn stops what it is doing and takes the message.
+    Interrupt,
+}
+
+impl Delivery {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Steer => "steer",
+            Self::Interrupt => "interrupt",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

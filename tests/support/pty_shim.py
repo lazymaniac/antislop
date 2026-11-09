@@ -553,6 +553,10 @@ def main():
         prompt = pasted.split("\n\n---\nWhen this turn is complete", 1)[0]
         with open(here + ".prompts", "a") as record:
             record.write(json.dumps({"turn": turn, "prompt": prompt}) + "\n")
+        if turn is None:
+            # Typed into a running turn (steering): the CLI takes it in as
+            # more input for the work in progress.
+            continue
         done = run_fixture(prompt, turn)
         text, seen = answer_of(done.stdout)
         if done.returncode != 0 or text is None:

@@ -5,6 +5,63 @@ mod mail_tests {
     use super::*;
 
     #[test]
+    fn steered_mail_belongs_to_its_turn_and_returns_to_the_queue_when_the_turn_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let mail = |text: &str| {
+            store
+                .add_mail(
+                    &conversation.id,
+                    "orchestrator",
+                    &Mail {
+                        id: 0,
+                        sender: "user".into(),
+                        recipient: "orchestrator".into(),
+                        kind: "agent_work".into(),
+                        text: text.into(),
+                        created_ms: 0,
+                        delivered_turn: None,
+                        delivered_ms: None,
+                        state: "queued".into(),
+                    },
+                )
+                .unwrap()
+        };
+        let (steered, waiting) = (mail("look at the README too"), mail("later"));
+        let turn = store
+            .start_turn(&conversation.id, "orchestrator", "codex", 0, None)
+            .unwrap();
+        assert!(
+            store
+                .mark_steered(&conversation.id, steered.id, &turn.id)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mark_steered(&conversation.id, steered.id, &turn.id)
+                .unwrap()
+        );
+        let pending = store
+            .pending_mail(&conversation.id, "orchestrator")
+            .unwrap();
+        assert_eq!(
+            pending.iter().map(|m| m.id).collect::<Vec<_>>(),
+            [waiting.id]
+        );
+        let delivered = store.events_since(&conversation.id, 0, 100).unwrap();
+        assert!(delivered.iter().any(|event| event.kind == "mail_delivered"
+            && event.payload["state"] == "steered"
+            && event.payload["recipient"] == "orchestrator"));
+
+        assert_eq!(store.requeue_steered(&turn.id).unwrap(), [steered.id]);
+        let pending = store
+            .pending_mail(&conversation.id, "orchestrator")
+            .unwrap();
+        assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
     fn queued_mail_survives_reopen_and_delivery_is_read_back() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("core.db");
@@ -72,6 +129,7 @@ mod mail_tests {
                     operation_id: crate::id(),
                     expected_round: None,
                     expected_run: None,
+                    delivery: Default::default(),
                     text: "same correction 👩‍💻".into(),
                 })
                 .unwrap();
@@ -209,6 +267,7 @@ mod round_tests {
             operation_id: uuid::Uuid::new_v4().to_string(),
             expected_round: Some(1),
             expected_run: None,
+            delivery: Default::default(),
             text: "fix 👩‍💻".into(),
         };
         let receipt = store.enqueue_agent_message(&request).unwrap();

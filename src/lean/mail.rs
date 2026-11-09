@@ -38,20 +38,7 @@ pub(super) fn lock_cancellable<'a>(
 
 impl Core {
     pub(super) fn turn_lock(&self, conversation: &str, role: &str) -> Arc<Mutex<()>> {
-        let mut locks = self
-            .locks
-            .turns
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        // Weak entries must not accumulate with completed historical sessions.
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        let key = (conversation.to_owned(), role.to_owned());
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            return lock;
-        }
-        let lock = Arc::new(Mutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        lock
+        self.locks.turn(conversation, role)
     }
 }
 

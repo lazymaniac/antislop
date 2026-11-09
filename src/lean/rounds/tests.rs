@@ -419,6 +419,7 @@ fn file_history_includes_deletions_renames_and_restored_paths() {
             operation_id: crate::id(),
             expected_round: Some(2),
             expected_run: None,
+            delivery: Default::default(),
             text: "Review this result again".into(),
         })
         .unwrap();

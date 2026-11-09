@@ -27,17 +27,7 @@ impl Core {
         change: &LedgerChange,
         result: &ChangeResult,
     ) -> Result<()> {
-        let flags = self
-            .activity
-            .task_cancels
-            .lock()
-            .expect("task cancel mutex");
-        for task in &result.affected_tasks {
-            if let Some((_, flag)) = flags.get(task) {
-                flag.store(true, Ordering::SeqCst);
-            }
-        }
-        drop(flags);
+        self.activity.cancel_tasks(&result.affected_tasks);
         for id in &result.affected_tasks {
             self.queue_worktree_cleanup(id);
             if let Some(task) = self.store.task_by_id(id)? {

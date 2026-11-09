@@ -229,6 +229,17 @@ impl Gateway {
         Ok(true)
     }
 
+    /// Runs `action` while some turn is open and returns that turn; `None`
+    /// when no turn is open, and then nothing runs.
+    pub(crate) fn while_open(&self, action: impl FnOnce() -> Result<()>) -> Result<Option<String>> {
+        let state = self.shared.state.lock().map_err(invalid)?;
+        let Some(turn) = state.expected.clone().filter(|_| state.finished.is_none()) else {
+            return Ok(None);
+        };
+        action()?;
+        Ok(Some(turn))
+    }
+
     /// The session identifier the CLI announced, if any.
     pub(crate) fn session(&self) -> Option<String> {
         self.shared.state.lock().ok()?.session.clone()

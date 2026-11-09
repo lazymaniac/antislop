@@ -26,11 +26,7 @@ fn set_config(context: &Context<'_>, toml: String, expected_revision: String) ->
     let parsed = Config::from_toml(&toml)?;
     let core = context.core;
     let config = context.config;
-    let _guard = core
-        .config
-        .update
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let _guard = core.config.updating();
     validate_config_revision(config, &expected_revision)?;
     let prepared = PreparedConfigWrite::prepare(config, &toml)?;
     let warnings = publish_config(core, config, parsed, &prepared)?;
@@ -55,9 +51,7 @@ fn publish_config(
     let result = core.store.publish_config_with_event(config, || {
         prepared.publish()?;
         core.replace_config(parsed);
-        core.config
-            .modified
-            .store(modified(config), Ordering::SeqCst);
+        core.config.set_modified(modified(config));
         applied = true;
         Ok(())
     });
@@ -116,12 +110,7 @@ fn get_config_route(context: &Context<'_>, request: Request) -> Result<Route> {
 }
 
 fn get_config(context: &Context<'_>) -> Result<Value> {
-    let _guard = context
-        .core
-        .config
-        .update
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let _guard = context.core.config.updating();
     let toml = std::fs::read_to_string(context.config)?;
     Ok(json!({
         "revision": crate::hash(&toml),

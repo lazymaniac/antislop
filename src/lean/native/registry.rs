@@ -37,7 +37,7 @@ impl Registry {
         conversation: &str,
         role_key: &str,
     ) -> Result<Arc<Session>> {
-        let _graph = core.locks.graph_updates.lock().expect("graph update mutex");
+        let _graph = core.locks.graph();
         let (role, round) = parse_role_key(role_key)?;
         let turn_id = recorded_turn(core, conversation, role, round)?;
         let context = recorded_context(core, conversation, &turn_id)?;

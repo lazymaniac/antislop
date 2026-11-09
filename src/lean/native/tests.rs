@@ -457,6 +457,82 @@ fn cancelling_a_running_turn_interrupts_without_discarding_its_session() {
 }
 
 #[test]
+fn a_message_is_typed_into_the_running_turn_and_only_while_one_runs() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = dir.path().join("steered-agent");
+    let started = dir.path().join("turn-started");
+    let release = dir.path().join("release-turn");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/usr/bin/env python3\nimport json, os, time\nopen({:?}, 'w').write('started')\nwhile not os.path.exists({:?}): time.sleep(0.01)\nprint(json.dumps({{'type':'text','part':{{'text':'done'}}}}))\n",
+            started.to_string_lossy(), release.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    fixture::interactive(&binary);
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.canonicalize().unwrap(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "steer", "orchestrator", &spec, "")
+        .unwrap();
+    assert_eq!(session.steer("too early", false).unwrap(), None);
+    let worker = session.clone();
+    let registry = core.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let cancel = AtomicBool::new(false);
+        let _ = send.send(worker.run(&registry.native, "running-turn", "work", &cancel));
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !started.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not receive the prompt"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        session
+            .steer("also check the README", false)
+            .unwrap()
+            .as_deref(),
+        Some("running-turn")
+    );
+    std::fs::write(&release, "go").unwrap();
+    receive
+        .recv_timeout(Duration::from_secs(20))
+        .expect("turn ends")
+        .unwrap();
+    let mut prompts = binary.as_os_str().to_owned();
+    prompts.push(".prompts");
+    while !std::fs::read_to_string(&prompts)
+        .unwrap_or_default()
+        .contains("also check the README")
+    {
+        assert!(
+            Instant::now() < deadline + Duration::from_secs(20),
+            "the steered text never reached the CLI"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(session.steer("after the turn", false).unwrap(), None);
+    core.native.shutdown().unwrap();
+}
+
+#[test]
 fn failed_fixture_reports_raw_terminal_tail_and_discards_the_session() {
     let dir = test_tempdir();
     let project = dir.path().join("project");

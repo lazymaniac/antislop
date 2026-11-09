@@ -59,19 +59,59 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
-        let reply = self.enqueue_and_refresh(message)?;
-        if reply["state"] != "delivered" {
-            self.resume_after_delivery(message)?;
+        let mut reply = self.enqueue_and_refresh(message)?;
+        if reply["state"] == "delivered" {
+            return Ok(reply);
         }
+        if message.delivery != store::Delivery::Queue {
+            match self.steer(message, reply["mail"].as_u64())? {
+                Some(turn) => {
+                    reply["state"] = "steered".into();
+                    reply["delivered_turn"] = turn.into();
+                    return Ok(reply);
+                }
+                None => {
+                    reply["note"] = format!(
+                        "{} has no turn running; the message goes with its next turn",
+                        message.recipient
+                    )
+                    .into();
+                }
+            }
+        }
+        self.resume_after_delivery(message)?;
         Ok(reply)
+    }
+
+    /// Types `message` into its recipient's running turn and binds the mail
+    /// to that turn.
+    fn steer(&self, message: &store::AgentMessage, mail: Option<u64>) -> Result<Option<String>> {
+        let Some(mail) = mail else {
+            return Ok(None);
+        };
+        let Some(session) = self.native.get(&message.conversation, &message.recipient)? else {
+            return Ok(None);
+        };
+        let text = format!(
+            "Message from the user while you work on this turn:\n{}\n\nTake it into account, keep working, and end the turn with its result tool as before.",
+            message.text
+        );
+        let interrupt = message.delivery == store::Delivery::Interrupt;
+        let Some(turn) = session.steer(&text, interrupt)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .mark_steered(&message.conversation, mail, &turn)?
+            .then_some(turn))
     }
 
     fn enqueue_and_refresh(
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
-        let graph = self.locks.graph_updates.lock().expect("graph update mutex");
-        let _scope = self.locks.integrating.lock().expect("integration mutex");
+        let graph = self.locks.graph();
+        let _scope = self.locks.integration();
         let before = message
             .plan
             .as_ref()

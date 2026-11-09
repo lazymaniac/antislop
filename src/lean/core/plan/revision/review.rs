@@ -31,7 +31,7 @@ impl Core {
         // Held from the review on: a task the revision changes would start on
         // the contract it is about to lose and be cancelled when it applies.
         let _barrier = {
-            let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+            let _graph = self.locks.graph();
             RevisionBarrier::new(self, affected.clone())
         };
         self.review_revision(&ReviewData {
@@ -107,8 +107,8 @@ impl Core {
     ) -> Result<()> {
         self.cancel_affected_tasks(&affected);
         self.wait_for_affected_tasks(&affected, context.cancel)?;
-        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.locks.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph();
+        let _integration = self.locks.integration();
         require(
             self.store
                 .revision_checkpoints(context.conversation, context.revision)?

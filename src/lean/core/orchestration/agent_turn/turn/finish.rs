@@ -58,6 +58,18 @@ fn finish_failure(
     core.store
         .finish_turn(&events.turn.id, status, Some(&error))?;
     record_failed_mail(&events, &error);
+    let steered = core.store.requeue_steered(&events.turn.id)?;
+    if !steered.is_empty() {
+        events.announce(
+            "mail_delivery_failed",
+            json!({
+                "recipient": events.turn.role,
+                "ids": steered,
+                "reason": "typed into a turn that ended without a result; it goes again with the next turn",
+                "state": "queued",
+            }),
+        );
+    }
     events.announce(
         "turn_finished",
         json!({
