@@ -170,6 +170,17 @@ src
    open
     - write_state_gitignore,open_lock_file,acquire_lock,reap_orphaned_agents,spawn_native_reaper,
       restore_{conversations,conversation},wake_pending_work,resume_{cut_off,interrupted},answer_pending_mail
+   state
+    Activity(C{running,plans,reviews,agent_reviews,task_cancels,{task,orchestrator}_restarts,blocked_seen})
+     plan_running(conversation):bool > has
+     review_running(conversation):bool > has
+     agent_review_running(key):bool > has
+     task_running(task):bool > has
+    ConfigState(C{current,update,modified})
+     new(config):Self
+    Locks(C{integrating,graph_updates,turns,session_lifecycle})
+    RevisionState(C{revising,jobs,views})
+    WorktreeState(C{cleanup,cleanup_notes,leases,lease_changed})
   core_agent_review
    - run_review_queue,next_review_role,review_{mail,role,audit,plan},task_contracts,plan_review_prompt
   core_agent_turn
@@ -940,7 +951,7 @@ src
    task_role(key):Option<(&str,bool)>
    task_state_digest(tasks):String
    ConversationSummary(C{id,goal,project,created_ms,status,active_plan,tasks_{total,done},revision_token})
-   Core(C{store,native,weak,_lock,opened_ms,config,config_{update,modified},state,integrating,graph_updates,revising,revision_{jobs,views},agent_reviews,task_{cancels,restarts},worktree_{cleanup,cleanup_notes,leases,lease_changed},orchestrator_restarts,turn_locks,session_lifecycle,running,plans,reviews,blocked_seen}) : Drop
+   Core(C{store,native,weak,_lock,opened_ms,config,state,activity,revisions,worktrees,locks}) : Drop
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
     defer_question_tool(conversation,args):Result<Value> > required_text,agent_question,defer_question_to_user,notice
@@ -1076,7 +1087,7 @@ src
     check_comments(conversation,plan,spec_id):String
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
-    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > start_plan_with_scope_lock
+    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > plan_running,start_plan_with_scope_lock
     lease_worktree(path):WorktreeLease<'_> > wait,WorktreeLease
     wait_for_worktree_available(paths,cancel):bool > all
     try_lease_worktree(path):Option<WorktreeLease<'_>> > WorktreeLease
@@ -3066,6 +3077,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 133,698 LOC · input 1,189,308 · output 44,825 tokens · state f7445f93cf4a · targets AGENTS.md
+· 133,839 LOC · input 1,190,095 · output 44,902 tokens · state 682928eb4746 · targets AGENTS.md
 ```
 <!-- hologram:end -->
