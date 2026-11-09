@@ -626,7 +626,7 @@ src
     matching_paths(dir,left,right,paths):Result<Vec<String>> > changed_paths
     patch(dir,base,rev):Result<String> > make_patch
     source_patch(dir,base,rev):Result<String> > make_patch
-    squash(worktree,base,purpose):Result<String> > commit_subject
+    squash(worktree,base,purpose):Result<String> > {task,commit}_subject
     - parse_changed_paths
    integration/files
     blobs(dir,rev,files):Result<HashMap<String,String>>
@@ -635,15 +635,16 @@ src
    integration.rs
     integrate(project,base,change,commit):Result<Integration> > integrate_scoped
     integrate_scoped(project,base,change,allowed_files,commit):Result<Integration> > changed_files,target_paths,previously_landed,unchanged_since,write_files,integrate_current
-    transplant_repair(worktree,base,onto,purpose):Result<String> > commit_all,{changed,write}_files
+    transplant_repair(worktree,base,onto,purpose):Result<String> > commit_all,task_subject,{changed,write}_files,commit_all_with_message
     - MergePlan,{merge,run_merge}_tree,{merge_tree,conflict}_result,{can_cherry,cherry}_pick,unstage_paths,
-      write_merge_result
+      write_merge_result,integration_message
    recovery
     recovery_fingerprint(project,scope):Result<String> > is_repository,scope_observations,append_repository_state
     - observe_non_repository_path,append_{head_and_diffs,untracked},raw_git
    snapshots
     base_with_artifacts(dir,base,artifacts):Result<String> ~55 > {absolute,snapshot,with}_index
-    commit_paths(dir,files,purpose):Result<String> > commit_{subject,staged_paths}
+    commit_paths(dir,files,purpose):Result<String> > commit_{paths_with_message,subject}
+    commit_paths_with_message(dir,files,message):Result<String> > commit_staged_paths
     integrated_fingerprint(project):Result<String> > snapshot
     snapshot(dir,purpose):Result<String> > snapshot_with_artifacts
     snapshot_with_artifacts(dir,outputs,purpose):Result<String> > artifact_files,commit_subject,{absolute,snapshot}_index,write_snapshot
@@ -684,11 +685,14 @@ src
    commit_subject(purpose):&'static str > subject
    git(dir,args):Result<std::process::Output>
    ok(dir,args):Result<String> > git
+   own_subject(dir,rev):Result<Option<String>> > ok,is_task_subject
+   task_subject(dir,base,rev):Result<Option<String>> > ok,is_task_subject
    tree_entry(dir,tree,name):Result<Option<TreeEntry>> ~44 > git,TreeEntry,len
    CommitPurpose(E{TaskResult,Checkpoint,ArtifactCheckpoint,Integration,Repair,ManualRecovery,{Workspace,Conflict,Dependency,ArtifactInput,SourceInput,Requirements}Snapshot,TestFixture})
     subject():&'static str
    Integration(E{Committed,Applied,Conflict,UserEdits})
    TreeEntry(C{object,is_tree,stdout_bytes})
+   - is_runtime_subject
   history
    mail/agent
     agent_message_signature(request):Result<String>
@@ -3046,6 +3050,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,521 LOC · input 1,178,233 · output 44,529 tokens · state d2765855814a · targets AGENTS.md
+· 132,667 LOC · input 1,179,679 · output 44,609 tokens · state cb106911d1c4 · targets AGENTS.md
 ```
 <!-- hologram:end -->
