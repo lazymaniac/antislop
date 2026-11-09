@@ -29,7 +29,11 @@ impl ApprovalCard {
     }
 
     pub fn key(&self, key: KeyEvent) -> Option<Outcome> {
-        if key.modifiers != (KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        // Alt+digit is what terminals without extended key reporting (tmux,
+        // many SSH sessions) send for Ctrl+Alt+digit; both choose.
+        if key.modifiers != KeyModifiers::ALT
+            && key.modifiers != (KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             return None;
         }
         match key.code {
@@ -98,7 +102,7 @@ impl ApprovalCard {
         for (index, (_, label, _)) in self.approval.options.iter().take(option_rows).enumerate() {
             let shortcut = index + 1;
             let binding = if shortcut <= 9 {
-                format!("Ctrl+Alt+{shortcut}  ")
+                format!("Alt+{shortcut}  ")
             } else {
                 String::new()
             };
@@ -109,10 +113,7 @@ impl ApprovalCard {
             )));
         }
         if footer_rows > 0 {
-            lines.push(Line::from(Span::styled(
-                "Ctrl+Alt+0  decide later",
-                theme.dim(),
-            )));
+            lines.push(Line::from(Span::styled("Alt+0  decide later", theme.dim())));
         }
         let mut block = Block::default()
             .borders(Borders::ALL)
@@ -282,6 +283,15 @@ mod tests {
             Some(Outcome::Later)
         );
         assert_eq!(press(&card, KeyCode::Char('9'), chord), None);
+        // Terminals without extended keys deliver the chord as Alt+digit.
+        assert_eq!(
+            press(&card, KeyCode::Char('1'), KeyModifiers::ALT),
+            Some(Outcome::Choose("1".into()))
+        );
+        assert_eq!(
+            press(&card, KeyCode::Char('1'), KeyModifiers::CONTROL),
+            None
+        );
     }
 
     #[test]
@@ -444,7 +454,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(rendered.contains("touch /tmp/x"));
-            assert!(rendered.contains("Ctrl+Alt+1"));
+            assert!(rendered.contains("Alt+1"));
             assert!(rendered.contains("Yes"));
             if focus == super::super::contracts::Focus::Graph {
                 assert!(app.graph_area.is_some());
