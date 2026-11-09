@@ -262,24 +262,8 @@ impl App {
         }
         frame.render_widget(ratatui::widgets::Clear, content);
         frame.render_widget(Block::default().style(theme.raised()), content);
-        let mut lines = Vec::new();
-        if let Some(agent) = self.view.agents.get(key) {
-            lines.push(Line::styled(
-                truncate(&theme.clean(&agent_line(agent)), usize::from(content.width)),
-                theme.dim(),
-            ));
-        }
-        let used = (lines.len() as u16).min(content.height);
-        frame.render_widget(
-            Paragraph::new(lines),
-            Rect::new(content.x, content.y, content.width, used),
-        );
-        let body = Rect::new(
-            content.x,
-            content.y + used,
-            content.width,
-            content.height - used,
-        );
+        // One blank row parts the tabs from the first card.
+        let body = Rect::new(content.x, content.y + 1, content.width, content.height - 1);
         details.draw_dashboard(frame, &self.view, body, &theme);
     }
 
@@ -596,38 +580,6 @@ fn render_card_round_data(
         render_card_history_message(frame, area, "No result data is retained for this round.");
     }
     None
-}
-
-/// The CLI behind a card and what its turns cost so far; the round is in
-/// the card's title.
-fn agent_line(agent: &crate::lean::tui::view::Agent) -> String {
-    let mut parts = vec![format!(
-        "CLI: {}",
-        if agent.provider.is_empty() {
-            "unknown"
-        } else {
-            &agent.provider
-        }
-    )];
-    if let Some(model) = agent.model.as_deref() {
-        parts.push(match agent.effort.as_deref() {
-            Some(effort) => format!("model {model} ({effort})"),
-            None => format!("model {model}"),
-        });
-    }
-    if agent.running {
-        parts.push("running".to_owned());
-    }
-    if agent.tokens_in.is_some() {
-        parts.push(format!("tokens {}", agent.tokens()));
-    }
-    if agent.busy_ms > 0 {
-        parts.push(format!(
-            "busy {}",
-            crate::lean::tui::view::duration(agent.busy_ms)
-        ));
-    }
-    parts.join(" · ")
 }
 
 fn render_card_history_message(frame: &mut Frame, area: Rect, message: &str) {

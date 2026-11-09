@@ -1310,8 +1310,9 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
+    // The open card's title row names the newly selected card.
     assert!(
-        expanded_text.contains("CLI: fixture-cli"),
+        expanded_text.contains(&format!("{next} · ")),
         "expanded content belongs to {next}: {expanded_text}"
     );
     let expanded_graph = Graph::new_with_expanded(
