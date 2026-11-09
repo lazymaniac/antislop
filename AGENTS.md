@@ -139,6 +139,7 @@ src
     - value,plan_{tasks,status},describe_mail
   cli.rs
    chat(args):Result<()> > chat.run
+   doctor(args):Result<()> > Options.parse,report
    resolve_config(project,explicit):Result<PathBuf> > checked_config,config_dir
    setup(args):Result<()> ~43 > status,system_settings_path,settings_text
    stop(args):Result<()> > project_state
@@ -406,8 +407,9 @@ src
     spawn_daemon(project,config,state,executable):Result<std::process::Child> > detach_daemon
     wait_for_daemon(client,child,state):Result<()> > Client.call,daemon_exit_error,require
    client.rs
-    Client(C{socket,state,notice,origin})
+    Client(C{socket,state,notice,origin,identity})
      at(state):Self > socket
+     named():Self
      state_dir():&Path
      frontend_binary():Result<PathBuf>
      stop(state,force):Result<bool> > stop_client,send_stop
@@ -451,10 +453,10 @@ src
      - list_runs,reject_proposal,get_{proposal_and_requirements,entry,diff,evidence_and_propose},apply_change_and_create_run,
        {add,get}_source
     mod
-     handle(core,project,config,request):Result<Value> > ensure_accepting,Context,route_all
+     handle(core,project,config,request,frontend):Result<Value> > ensure_accepting,scope,handle_request
      Context(C{core,project,config})
      Route(E{Handled,Unmatched})
-     - validate_{project_conversation,conversation_plan,plan_task}
+     - route_{request,all},validate_{project_conversation,conversation_plan,plan_task}
     planning
      actions
       route(context,request):Result<Route> > route_pipeline
@@ -467,6 +469,12 @@ src
     terminal
      route(context,request):Result<Route> > route_pipeline
      - terminal_{open,read,input,resize,detach}
+   lease
+    scope(request):Option<(&str,Access)>
+    Access(E{Follow,Change,Take})
+    Leases(C{held})
+     access(conversation,client,access):Result<bool> > require
+    = OBSERVER
    lifecycle
     serve(project,config_path,state):Result<()> > start,spawn_idle_cleanup,accept_connections
     - Runtime,ConnectionResponse,warn_on_config_cleanup,open_core,bind_socket,serve_connection,read_request,handle,
@@ -481,7 +489,7 @@ src
       comments
        decode_group_comments(wire):std::result::Result<Request,Box<WireRequest>> > decode_{comment,comments,comment_status}
       messages
-       decode_group_messages(wire):std::result::Result<Request,Box<WireRequest>> > decode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,cancel,pause,approvals}
+       decode_group_messages(wire):std::result::Result<Request,Box<WireRequest>> > decode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,take_control,cancel,pause,approvals}
       planning
        decode_group_planning(wire):std::result::Result<Request,Box<WireRequest>> > decode_{plans,plan,diff,review,task_checks,task}
      decode_conversation.rs
@@ -518,7 +526,7 @@ src
       comments
        encode_group_comments(request):std::result::Result<WireRequest,Box<Request>> > encode_{comment,comments,comment_status}
       messages
-       encode_group_messages(request):std::result::Result<WireRequest,Box<Request>> > encode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,cancel,pause,approvals}
+       encode_group_messages(request):std::result::Result<WireRequest,Box<Request>> > encode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,take_control,cancel,pause,approvals}
       planning
        encode_group_planning(request):std::result::Result<WireRequest,Box<Request>> > encode_{plans,plan,diff,review,task_checks,task}
      encode_conversation.rs
@@ -551,12 +559,13 @@ src
       decode(wire):Request > decode_terminal,decode_session,decode_history.decode_history,decode_ledger,decode_conversation,decode_control
       encode(request):WireRequest > encode_terminal,encode_session,encode_history.encode_history,encode_ledger,encode_conversation,encode_control
     envelope
-     RequestEnvelope(C{protocol,request})
+     RequestEnvelope(C{protocol,request,client})
     request
      control
       ControlRequest(E{Identity,RuntimeNotice,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn})
      conversation
-      ConversationRequest(E{Recover,Comment,SendToAgent,Send,Reject,Resume,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,ReviewComments,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task})
+      ConversationRequest(E{Recover,Comment,SendToAgent,Send,Reject,Resume,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,ReviewComments,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task})
+       operation():Option<(&str,&str,&'static str)> ~40
      history
       HistoryRequest(E{TaskRounds,TaskRound,HistoryContent,HistoryMessages,Events,EventsPaged,History,Mail})
      ledger
@@ -569,7 +578,7 @@ src
      terminal
       TerminalRequest(E{TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach})
     wire
-     WireRequest(E{RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,Events,Sessions,DeleteSession,History,Mail})
+     WireRequest(E{RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,Events,Sessions,DeleteSession,History,Mail})
   daemon.rs
    build_identity(executable):Result<String>
    private_directory(path):Result<()> > require
@@ -588,6 +597,11 @@ src
    DiffLine(C{kind,old,new,text})
    FileDiff(C{path,old_path,status,added,removed,binary,lines})
    ReviewerProfile(C{provider,model,effort})
+  doctor
+   find_executable(binary):Option<PathBuf>
+   launch_problems(config,kinds):Vec<String> > err,profile_command
+   report(project,config_path,state,out):Result<bool> ~43 > name,profile_command
+   - version
   feasibility
    check(specs):Vec<Finding> > descendants,missing_delivery,forbids_reading,finding,waits_for_descendant
    forbids_reading(spec):Option<String>
@@ -724,7 +738,8 @@ src
     toml_string(text):String
    providers
     agy
-     agy(command,spec,gateway):Result<()> > agy_bridge_registered,url,token,agy_overrides
+     agy(command,spec,gateway):Result<()> > agy_ready,url,token,agy_overrides
+     agy_ready():Result<()> > agy_bridge_registered
     claude
      claude(command,spec,gateway):Option<String> > clear_parent_session,append_{gateway_config,provider_options,session_id}
     codex
@@ -1034,7 +1049,7 @@ src
     warn_of_uncommitted(conversation,writes) > uncommitted_notice
     wake(&Arc<Self>,conversation)
     orchestrate(&Arc<Self>,conversation,cancel) > next_orchestration_{upto,turn},stop_orchestrator
-    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,require,validate_plan_inputs,db,remove,announce_plan_tasks,drop,spawn_plan_runner
+    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,require,validate_plan_inputs,ensure_profiles_launch,db,remove,announce_plan_tasks,drop,spawn_plan_runner
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
     run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
@@ -1315,7 +1330,7 @@ src
    PlanHistory(C{run_id,id,conversation_id,created_ms,status,is_active,tasks,agents,turns,reports,verdicts})
    PlansPage(C{plans,offset,limit,total,has_more,active_plan_id})
    SessionInfo(C{{turn,plan}_id,role,provider,session_id,status,error,upto_message,{started,finished}_ms,pid})
-   Store(C{connection,content,content_write})
+   Store(C{connection,content,content_write,operations})
     history_content(conversation,owner,offset):Result<crate::lean::content::Chunk> > chunk,history_reference
     enqueue_agent_message(request):Result<Value> > agent_message_signature,db,existing_agent_message,validate_agent_recipient,now_ms,insert_agent_mail,update_agent_task
     invalidate_task_dependents(conversation,task):Result<()> > db,invalidate_dependents,now_ms
@@ -1490,6 +1505,7 @@ src
     finish_turn(turn,status,error):Result<()> > db
     last_turn(conversation,role):Result<Option<Turn>> > last_turn_for_roles
     last_orchestration_turn(conversation):Result<Option<Turn>> > last_turn_for_roles
+    idempotent(conversation,operation_id,kind,run):Result<Value> > run
     plan_history(conversation,plan_id):Result<PlanHistory> > conversation,plan,plan_history_{timing,status,sessions,outcomes,run},PlanHistory
     previous_plan_rejection(conversation):Result<Option<crate::lean::tasks::Verdict>> > db
     set_check(task,round,check,state,status,note):Result<bool> > {previous,merge}_check,db
@@ -1540,7 +1556,7 @@ src
     conversation(id):Result<Conversation> > db,Conversation
     conversations():Result<Vec<Conversation>> > db,Conversation
     conversation_goal(conversation):Result<String> > db,sql_text
-    delete_session(conversation):Result<()> ~128 > db,remove_unreferenced
+    delete_session(conversation):Result<()> ~132 > db,remove_unreferenced
     add_message(conversation,author,text):Result<Message> > add_message_with_content_lock
     add_message_with_content_lock(conversation,author,text):Result<Message> > db,insert_message,maybe_start_requirements_checkpoint,record_scope_confirmation_answer,Message
     task_progress(conversation,task):Result<Option<Value>> > db
@@ -2342,7 +2358,7 @@ src
    palette
     catalog
      Action(E{Run,Select,Show,SwitchConversation,Address,OpenProject})
-     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals})
+     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals,TakeControl})
      ConversationItem(C{id,project,title})
      Kind(E{Commands,Agents,History,Conversations,Recipients,Projects})
      Picker(C{kind,query,selected,conversations,projects,confirm_delete})
@@ -2386,7 +2402,7 @@ src
      - DocumentBuilder: build,add_line,update_section,add_empty_document
     document.rs
      section_state(ids,tasks):SectionState > as_str,all
-     section_tasks(heading,tasks):Vec<String> > named
+     section_tasks(heading,tasks):Vec<String>
      synthesize_document(tasks):String > append_task_section
      - append_task_{heading,facts},{dependency,parallel}_label
     graph
@@ -2518,10 +2534,10 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},conversation_drafts,comment_{drafts,operations,draft_cursors},conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
-     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,new_conversation,{open_conversation,open_projects}_picker
+     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker
      accept_plan() > plan_proposed,send_command
      send_command(notice,request) > request
      submit() > {reject_duplicate,begin_chat}_send
@@ -2619,7 +2635,7 @@ src
      apply_native_input_rejected(update) > recover_native_input
      apply_agent_message(update) > apply_agent_receipt
      apply_interview_result(update)
-     apply_send_result(update) > finish_{active_send,background_send}
+     apply_send_result(update) > remove,finish_{active_send,background_send}
      apply_comment_result(update) > {finish_active,finish_background}_comment
      apply_task_failed(update) > {fail_active,fail_background}_task
      apply_task(update) > apply_task_snapshot,TaskSnapshotReply
@@ -3050,6 +3066,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 132,792 LOC · input 1,181,046 · output 44,622 tokens · state b12de776a6a3 · targets AGENTS.md
+· 133,698 LOC · input 1,189,308 · output 44,825 tokens · state f7445f93cf4a · targets AGENTS.md
 ```
 <!-- hologram:end -->
