@@ -234,7 +234,9 @@ src
     orchestrator_turn
      context
       answer
-       finish(core,context,answer,cancel):Result<()> > TurnResult.decode,submitted_graph,audit_response_error,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
+       finish(core,context,answer,cancel):Result<()> ~45 > TurnResult.decode,submitted_graph,audit_response_error,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
+       - AuditGap
+       - AuditGap: reason
       comments
        comment_context(core,conversation,upto,answered,is_comment):Result<String> > append_comment_{instructions,plans,followup}
        - append_{last_orchestrator_reply,latest_plan,original_request,referenced_plans}
@@ -245,8 +247,9 @@ src
       ask(core,context,cancel):Result<Option<String>> > turn_setup,Core.turn,render_prompt
       finish(core,context,answer,cancel):Result<()>
       prepare(core,conversation,upto):Result<OrchestrationContext<'a>> > request_context,config_snapshot,plan_view.load,history_context,audit_response,OrchestrationContext,interviewing,open_user_decision
-      AuditResponse(C{approved,findings,error,report})
+      AuditResponse(C{approved,findings,error,report,reminders})
       OrchestrationContext(C{conversation,upto,answered,asked,is_comment,config,project,open,comment_text,workflow,interviewing,graph,editable_graph,graph_json,history,ledger_context,decision,audit_response})
+      = AUDIT_REMINDER
       - RequestContext,open_comments
      prompt
       orchestrator_prompt_text(context):String > orchestrator_prompt,append_{history,decision,graph},prepend_phase,append_{audit_response,ledger}
@@ -869,7 +872,7 @@ src
      - EntryRelations,entry_{spec,relations},source_text_for_span,entry_criteria
     evidence
      queries
-      audit_missing(store,run,revision,fingerprint):Result<bool> > db
+      audit_gap(store,run,revision,fingerprint):Result<Option<&'static str>> > db
       build_ledger_page(run,entries,offset,requested):LedgerPage > LedgerPage
       entry_gaps(entries):Vec<String>
       extraction_gap(store,conversation,run):Result<Vec<String>> > extraction_current
@@ -1402,7 +1405,7 @@ src
     ledger_evidence(conversation,run_id,entry):Result<Vec<Evidence>> > run,Evidence,EvidenceProposal
     ledger_statuses(conversation,run_id,revision,fingerprint):Result<Vec<LedgerEntry>> > ledger_{entries,evidence,status_tasks},{set_ledger,enforce_dependency}_statuses
     list_ledger(query,fingerprint):Result<LedgerPage> > linked_entry_ids,ledger_statuses,build_ledger_page,filter_ledger_entries
-    requirements_gaps(conversation,run_id,fingerprint):Result<Vec<String>> > extraction_gap,ledger_statuses,entry_gaps,audit_missing
+    requirements_gaps(conversation,run_id,fingerprint):Result<Vec<String>> > extraction_gap,ledger_statuses,entry_gaps,audit_gap
     bind_task_ledger(conversation,run_id,plan):Result<()> > ledger_entries,run_tasks,prior_covered_criteria,bind_current_tasks
     rejected_requirements_feedback(conversation,run_id):Result<Option<serde_json::Value>> > run,decode_content
     requirements_review_findings(conversation,run_id):Result<String> > run,review_verdict
@@ -1831,7 +1834,7 @@ src
     ApprovalCard(C{approval})
      new(approval):Self
      key(key):Option<Outcome>
-     draw(frame,area) ~92 > Theme.from_env,bounded_clean,truncate,style,len,bounded_summary,title,borders
+     draw(frame,area) ~89 > Theme.from_env,bounded_clean,truncate,style,len,bounded_summary,title,borders
     Outcome(E{Later,Choose})
     super::App: sync_approval() > ApprovalCard.new; route_approval(key):Option<bool>; set_approval_mode(mode); show_pending_approvals()
    buffer
@@ -2274,8 +2277,8 @@ src
    inspection
     history
      task_snapshot(client,conversation,plan,id,round,checks_only):Result<Snapshot> > {round,task_id}_snapshot
-     - task_request,selected_round,round_documents,result_document,append_{history_notice,round_fields,field_content},
-       read_content
+     - task_request,hydrate_verdict,selected_round,round_documents,result_document,
+       append_{history_notice,round_fields,field_content},read_content
     session
      append_answers(client,conversation,turn,builder):Result<bool> > session_page,append_final_events,next_event_cursor
      run_snapshot(client,conversation,role,selected):Result<Snapshot> > session_runs,selected_run_index,session_metadata,selected_run_snapshot
@@ -3134,6 +3137,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 135,105 LOC · input 1,202,230 · output 45,522 tokens · state 2ec556db8341 · targets AGENTS.md
+· 135,336 LOC · input 1,204,594 · output 45,548 tokens · state 269b2eeaf119 · targets AGENTS.md
 ```
 <!-- hologram:end -->
