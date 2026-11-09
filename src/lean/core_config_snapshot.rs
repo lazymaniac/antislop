@@ -4,6 +4,7 @@ impl Core {
     /// Pin configuration for one decision or operation. Existing snapshots survive updates.
     pub fn config_snapshot(&self) -> Arc<Config> {
         self.config
+            .current
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -12,6 +13,7 @@ impl Core {
     pub fn replace_config(&self, config: Config) {
         *self
             .config
+            .current
             .write()
             .unwrap_or_else(|error| error.into_inner()) = Arc::new(config);
     }
@@ -22,6 +24,7 @@ impl Core {
         // Otherwise delete_session could purge the accepted message after
         // add_message but before wake installs the running slot.
         let _lifecycle = self
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -67,8 +70,8 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
-        let graph = self.graph_updates.lock().expect("graph update mutex");
-        let _scope = self.integrating.lock().expect("integration mutex");
+        let graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _scope = self.locks.integrating.lock().expect("integration mutex");
         let before = message
             .plan
             .as_ref()

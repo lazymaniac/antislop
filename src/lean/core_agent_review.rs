@@ -16,11 +16,16 @@ impl Core {
     fn register_agent_review(&self, conversation: &str) -> Result<Option<Arc<AtomicBool>>> {
         // Make the active slot visible before deletion can pass its idle check.
         let _lifecycle = self
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
         self.store.conversation(conversation)?;
-        let mut jobs = self.agent_reviews.lock().expect("agent reviews mutex");
+        let mut jobs = self
+            .activity
+            .agent_reviews
+            .lock()
+            .expect("agent reviews mutex");
         if jobs.contains_key(conversation) {
             return Ok(None);
         }
@@ -36,7 +41,8 @@ impl Core {
     }
 
     fn clear_agent_review(&self, conversation: &str) {
-        self.agent_reviews
+        self.activity
+            .agent_reviews
             .lock()
             .expect("agent reviews mutex")
             .remove(conversation);
@@ -54,7 +60,11 @@ fn run_review_queue(core: Arc<Core>, conversation: String, cancel: Arc<AtomicBoo
 }
 
 fn next_review_role(core: &Core, conversation: &str, cancel: &AtomicBool) -> Option<&'static str> {
-    let mut jobs = core.agent_reviews.lock().expect("agent reviews mutex");
+    let mut jobs = core
+        .activity
+        .agent_reviews
+        .lock()
+        .expect("agent reviews mutex");
     let role = [PLAN_REVIEWER, AUDITOR].into_iter().find(|role| {
         core.store
             .pending_mail(conversation, role)
@@ -175,6 +185,7 @@ mod tests {
         // Hold the same lifecycle gate as deletion, queue a review resume,
         // then remove the session before allowing registration to continue.
         let lifecycle = core
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -193,12 +204,6 @@ mod tests {
 
         assert!(error.contains("no conversation"), "{error}");
         assert!(core.store.conversation(&session.id).is_err());
-        assert!(
-            !core
-                .agent_reviews
-                .lock()
-                .expect("agent reviews mutex")
-                .contains_key(&session.id)
-        );
+        assert!(!core.activity.agent_review_running(&session.id));
     }
 }

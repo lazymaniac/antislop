@@ -31,8 +31,8 @@ impl Core {
         req: TaskRecoveryRequest,
         actor: &str,
     ) -> Result<TaskRecoveryResponse> {
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         let mut work = prepare::load(self, req, actor)?;
         if let Some(response) = prepare::interrupt_if_active(self, &mut work) {
             return Ok(response);

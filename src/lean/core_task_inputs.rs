@@ -4,7 +4,11 @@ use super::*;
 impl Core {
     /// Caller holds the graph and integration locks across the input update.
     pub(in crate::lean) fn cancel_changed_task_inputs(&self, before: &[Task], after: &[Task]) {
-        let active = self.task_cancels.lock().expect("task cancel mutex");
+        let active = self
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex");
         for task in after {
             if before
                 .iter()
@@ -23,8 +27,8 @@ impl Core {
         conversation: &str,
         task: &Task,
     ) -> Result<()> {
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         self.store.assert_task_inputs(task)?;
         let before = self.store.plan(&task.plan_id)?;
         self.store.invalidate_task_dependents(conversation, task)?;

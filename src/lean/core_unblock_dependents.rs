@@ -59,7 +59,7 @@ impl Core {
         let has_queued = tasks.iter().any(|t| t.status == status::QUEUED);
         let all_approved = !tasks.is_empty() && tasks.iter().all(|t| t.status == status::APPROVED);
         if has_queued || all_approved {
-            let plans = self.plans.lock().expect("plans mutex");
+            let plans = self.activity.plans.lock().expect("plans mutex");
             if !plans.contains_key(conversation) {
                 drop(plans);
                 self.start_plan_with_scope_lock(conversation, plan_id, |_| Ok(()))?;
@@ -78,14 +78,10 @@ impl Core {
         // Reject replacement start before waiting for that lock. The inner
         // check still closes the race with another start.
         require(
-            !self
-                .plans
-                .lock()
-                .expect("plans mutex")
-                .contains_key(conversation),
+            !self.activity.plan_running(conversation),
             "a plan is already running; revise the active plan instead",
         )?;
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         self.start_plan_with_scope_lock(conversation, plan_id, queue)
     }
 }
@@ -139,11 +135,12 @@ mod start_tests {
             .store
             .create_conversation(directory.path().to_str().unwrap())
             .unwrap();
-        core.plans
+        core.activity
+            .plans
             .lock()
             .unwrap()
             .insert(conversation.id.clone(), Arc::new(AtomicBool::new(false)));
-        let held = core.integrating.lock().unwrap();
+        let held = core.locks.integrating.lock().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = core.clone();
         let id = conversation.id.clone();
@@ -159,7 +156,7 @@ mod start_tests {
             .expect("replacement start waited on active integration")
             .unwrap_err();
         assert!(error.contains("a plan is already running"), "{error}");
-        assert!(core.plans.lock().unwrap().contains_key(&conversation.id));
-        core.plans.lock().unwrap().remove(&conversation.id);
+        assert!(core.activity.plan_running(&conversation.id));
+        core.activity.plans.lock().unwrap().remove(&conversation.id);
     }
 }

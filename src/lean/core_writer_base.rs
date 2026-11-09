@@ -8,7 +8,7 @@ impl Core {
         spec: &TaskContract,
         project: &Path,
     ) -> Result<String> {
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         let onto = self.plan_base(plan_id, project)?;
         // A result that landed is in the project the base was taken from.
         let landed = self.plan_base_record(plan_id)?.landed;

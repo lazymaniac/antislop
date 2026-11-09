@@ -11,7 +11,7 @@ impl Core {
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
         self.ensure_plan_can_start(conversation)?;
-        let mut plans = self.plans.lock().expect("plans mutex");
+        let mut plans = self.activity.plans.lock().expect("plans mutex");
         require(
             !plans.contains_key(conversation),
             "a plan is already running",
@@ -26,7 +26,8 @@ impl Core {
         )?;
         require(activated, "plan is not active")?;
 
-        self.blocked_seen
+        self.activity
+            .blocked_seen
             .lock()
             .expect("blocked mutex")
             .remove(conversation);

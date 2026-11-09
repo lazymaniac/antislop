@@ -108,7 +108,7 @@ mod tests {
         assert!(!path.exists());
         std::fs::write(root.join("data"), "new primary data").unwrap();
         git::commit_all(&root, git::CommitPurpose::TestFixture).unwrap();
-        let graph = core.graph_updates.lock().unwrap();
+        let graph = core.locks.graph_updates.lock().unwrap();
         let restored = recorded_context(&core, &conversation.id, &turn.id).unwrap();
         assert_eq!(restored, context);
         assert_eq!(

@@ -255,7 +255,12 @@ impl Execution<'_> {
                 self.cancel,
             );
         }
-        let _integration = self.core.integrating.lock().expect("integration mutex");
+        let _integration = self
+            .core
+            .locks
+            .integrating
+            .lock()
+            .expect("integration mutex");
         if self.core.defer_agent_work(self.conversation, self.task)? {
             return Ok(());
         }

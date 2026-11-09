@@ -55,7 +55,7 @@ fn warn_on_config_cleanup(config_path: &Path) {
 
 fn open_core(state: &Path, config: &Path, loaded: u64) -> Result<Arc<Core>> {
     let core = Core::open(state, Config::load(config)?)?;
-    core.config_modified.store(loaded, Ordering::SeqCst);
+    core.config.modified.store(loaded, Ordering::SeqCst);
     Ok(core)
 }
 

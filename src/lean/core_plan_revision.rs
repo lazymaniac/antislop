@@ -98,8 +98,9 @@ impl Core {
     ) -> Result<RevisionRegistration<'_>> {
         // Keep the graph lock order used by plan execution, then serialize
         // durable reservation and worker registration against session deletion.
-        let graph_guard = self.graph_updates.lock().expect("graph update mutex");
+        let graph_guard = self.locks.graph_updates.lock().expect("graph update mutex");
         let lifecycle_guard = self
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -137,7 +138,8 @@ impl Core {
         prepared: PreparedRevision,
         cancel: Arc<AtomicBool>,
     ) -> Result<()> {
-        self.revision_jobs
+        self.revisions
+            .jobs
             .lock()
             .expect("revision jobs mutex")
             .insert(conversation.to_owned(), cancel.clone());
@@ -151,7 +153,8 @@ impl Core {
             })
             .map(|_| ())
             .map_err(|error| {
-                self.revision_jobs
+                self.revisions
+                    .jobs
                     .lock()
                     .expect("revision jobs mutex")
                     .remove(conversation);
@@ -172,7 +175,8 @@ impl Core {
                 &format!("could not record revision {request} outcome: {error}"),
             );
         }
-        self.revision_jobs
+        self.revisions
+            .jobs
             .lock()
             .expect("revision jobs mutex")
             .remove(owner);
@@ -314,6 +318,7 @@ mod tests {
         // Hold deletion's lifecycle gate until submit_revision has acquired
         // the graph lock and is waiting to register its durable job.
         let lifecycle = core
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -328,7 +333,7 @@ mod tests {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            match core.graph_updates.try_lock() {
+            match core.locks.graph_updates.try_lock() {
                 Ok(guard) => drop(guard),
                 Err(std::sync::TryLockError::WouldBlock) => break,
                 Err(std::sync::TryLockError::Poisoned(error)) => {
@@ -348,7 +353,7 @@ mod tests {
 
         assert!(error.contains("no conversation"), "{error}");
         assert!(core.store.conversation(&session.id).is_err());
-        assert!(core.revision_jobs.lock().unwrap().is_empty());
+        assert!(core.revisions.jobs.lock().unwrap().is_empty());
         let durable_jobs: i64 = core
             .store
             .db()
@@ -509,6 +514,6 @@ mod tests {
             assert_eq!(state, "rejected");
             assert!(reason.contains("plan has no requirements"));
         }
-        assert!(core.revision_jobs.lock().unwrap().is_empty());
+        assert!(core.revisions.jobs.lock().unwrap().is_empty());
     }
 }

@@ -72,7 +72,11 @@ pub(super) fn interrupt_if_active(
     if !is_running_action(&work.req.action) {
         return None;
     }
-    let active = core.task_cancels.lock().expect("task cancel mutex");
+    let active = core
+        .activity
+        .task_cancels
+        .lock()
+        .expect("task cancel mutex");
     let (_, cancel) = active.get(&work.task.id)?;
     queue_restart(core, work);
     cancel.store(true, Ordering::SeqCst);
@@ -80,7 +84,8 @@ pub(super) fn interrupt_if_active(
 }
 
 fn queue_restart(core: &Core, work: &RecoveryWork) {
-    core.task_restarts
+    core.activity
+        .task_restarts
         .lock()
         .expect("task restart mutex")
         .insert(work.task.id.clone(), work.req.clone());

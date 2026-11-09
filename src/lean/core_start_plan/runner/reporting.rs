@@ -8,13 +8,14 @@ impl Core {
         tasks: &[Task],
         cancel: &AtomicBool,
     ) {
-        let mut plans = self.plans.lock().expect("plans mutex");
+        let mut plans = self.activity.plans.lock().expect("plans mutex");
         if cancel.load(Ordering::SeqCst) {
             plans.remove(conversation);
             return;
         }
         let report = blocked_report(tasks);
         let told = self
+            .activity
             .blocked_seen
             .lock()
             .expect("blocked mutex")
@@ -41,6 +42,7 @@ impl Core {
             return;
         };
         let told = self
+            .activity
             .blocked_seen
             .lock()
             .expect("blocked mutex")

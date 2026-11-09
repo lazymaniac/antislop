@@ -53,7 +53,8 @@ fn record_revision_view(core: &Core, conversation: &str, graph: &[Task]) -> Resu
             ))
         })
         .transpose()?;
-    core.revision_views
+    core.revisions
+        .views
         .lock()
         .expect("revision views mutex")
         .insert(conversation.into(), view);

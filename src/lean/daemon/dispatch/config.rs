@@ -27,7 +27,8 @@ fn set_config(context: &Context<'_>, toml: String, expected_revision: String) ->
     let core = context.core;
     let config = context.config;
     let _guard = core
-        .config_update
+        .config
+        .update
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     validate_config_revision(config, &expected_revision)?;
@@ -54,7 +55,8 @@ fn publish_config(
     let result = core.store.publish_config_with_event(config, || {
         prepared.publish()?;
         core.replace_config(parsed);
-        core.config_modified
+        core.config
+            .modified
             .store(modified(config), Ordering::SeqCst);
         applied = true;
         Ok(())
@@ -116,7 +118,8 @@ fn get_config_route(context: &Context<'_>, request: Request) -> Result<Route> {
 fn get_config(context: &Context<'_>) -> Result<Value> {
     let _guard = context
         .core
-        .config_update
+        .config
+        .update
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let toml = std::fs::read_to_string(context.config)?;

@@ -214,40 +214,13 @@ pub struct Core {
     /// When this process took the state directory; a session last used
     /// before it may hold instructions of an older build.
     opened_ms: i64,
-    config: RwLock<Arc<Config>>,
-    config_update: Mutex<()>,
-    config_modified: std::sync::atomic::AtomicU64,
+    config: core::state::ConfigState,
     /// Private state directory; writers' worktrees live under it.
     state: PathBuf,
-    /// Writers land on the user's branch one at a time.
-    integrating: Mutex<()>,
-    graph_updates: Mutex<()>,
-    revising: Mutex<std::collections::BTreeSet<String>>,
-    revision_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// Per conversation, the plan and revision its orchestrator was last
-    /// shown; `revise_plan` edits exactly that graph.
-    revision_views: Mutex<HashMap<String, Option<(String, i64)>>>,
-    agent_reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// Active task processes can be cancelled independently.
-    task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
-    task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
-    worktree_cleanup: Mutex<std::collections::BTreeSet<String>>,
-    worktree_cleanup_notes: Mutex<HashMap<String, String>>,
-    worktree_leases: Mutex<HashMap<PathBuf, core_worktree_cleanup::WorktreeLeaseState>>,
-    worktree_lease_changed: std::sync::Condvar,
-    orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
-    turn_locks: Mutex<mail::TurnLocks>,
-    /// Serializes starting an orchestrator with permanent session deletion.
-    session_lifecycle: Mutex<()>,
-    /// Conversations with an orchestrator loop running, and its cancel flag.
-    running: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// Conversations with a plan running, and its cancel flag.
-    plans: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// Conversations with a code review the user asked for, and its flag.
-    reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// The blocked report last handed to each conversation's orchestrator,
-    /// so that an unchanged block is told once.
-    blocked_seen: Mutex<HashMap<String, String>>,
+    activity: core::state::Activity,
+    revisions: core::state::RevisionState,
+    worktrees: core::state::WorktreeState,
+    locks: core::state::Locks,
 }
 
 impl Drop for Core {
@@ -268,7 +241,7 @@ fn record_message_and_wake_locked(
 }
 
 fn wake_locked(core: &Arc<Core>, conversation: &str) {
-    let mut running = core.running.lock().expect("running mutex");
+    let mut running = core.activity.running.lock().expect("running mutex");
     if running.contains_key(conversation) {
         return;
     }

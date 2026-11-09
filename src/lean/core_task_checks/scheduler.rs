@@ -99,7 +99,12 @@ impl<'a> Scheduler<'a> {
     where
         'a: 'scope,
     {
-        let _graph_guard = self.core.graph_updates.lock().expect("graph update mutex");
+        let _graph_guard = self
+            .core
+            .locks
+            .graph_updates
+            .lock()
+            .expect("graph update mutex");
         let Ok(mut tasks) = self.core.store.plan(self.plan_id) else {
             return false;
         };
@@ -138,6 +143,7 @@ impl<'a> Scheduler<'a> {
     fn is_schedulable(&self, task: &Task, id: &str) -> bool {
         !self
             .core
+            .revisions
             .revising
             .lock()
             .expect("revision mutex")
@@ -197,6 +203,7 @@ impl<'a> Scheduler<'a> {
         let tx = self.done_tx.clone();
         let task_cancel = Arc::new(AtomicBool::new(self.cancel.load(Ordering::SeqCst)));
         self.core
+            .activity
             .task_cancels
             .lock()
             .expect("task cancel mutex")
@@ -282,9 +289,14 @@ fn fail_task(
 
 fn restart_agent(core: &Arc<Core>, conversation: &str, task: &Task) {
     let restart = {
-        let mut active = core.task_cancels.lock().expect("task cancel mutex");
+        let mut active = core
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex");
         active.remove(&task.id);
-        core.task_restarts
+        core.activity
+            .task_restarts
             .lock()
             .expect("task restart mutex")
             .remove(&task.id)

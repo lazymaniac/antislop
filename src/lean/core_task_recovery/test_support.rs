@@ -72,11 +72,13 @@ pub(super) fn recovery_fixture() -> (tempfile::TempDir, Arc<Core>, String, Task,
         )
         .unwrap();
     core.pause(&conversation, true).unwrap();
-    core.running
+    core.activity
+        .running
         .lock()
         .unwrap()
         .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));
-    core.plans
+    core.activity
+        .plans
         .lock()
         .unwrap()
         .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));

@@ -9,14 +9,14 @@ pub(in crate::lean) struct WorktreeLease<'a> {
 }
 impl Drop for WorktreeLease<'_> {
     fn drop(&mut self) {
-        if let Ok(mut leases) = self.core.worktree_leases.lock() {
+        if let Ok(mut leases) = self.core.worktrees.leases.lock() {
             if let Some(state) = leases.get_mut(&self.path) {
                 state.leased = false;
                 if state.pins == 0 {
                     leases.remove(&self.path);
                 }
             }
-            self.core.worktree_lease_changed.notify_all();
+            self.core.worktrees.lease_changed.notify_all();
         }
     }
 }
@@ -35,14 +35,14 @@ pub(in crate::lean) struct WorktreePin<'a> {
 
 impl Drop for WorktreePin<'_> {
     fn drop(&mut self) {
-        if let Ok(mut leases) = self.core.worktree_leases.lock()
+        if let Ok(mut leases) = self.core.worktrees.leases.lock()
             && let Some(state) = leases.get_mut(&self.path)
         {
             state.pins -= 1;
             if !state.leased && state.pins == 0 {
                 leases.remove(&self.path);
             }
-            self.core.worktree_lease_changed.notify_all();
+            self.core.worktrees.lease_changed.notify_all();
         }
     }
 }
@@ -50,10 +50,11 @@ impl Drop for WorktreePin<'_> {
 impl Core {
     #[cfg(test)]
     pub(in crate::lean) fn lease_worktree(&self, path: &Path) -> WorktreeLease<'_> {
-        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        let mut leases = self.worktrees.leases.lock().expect("worktree leases mutex");
         while leases.contains_key(path) {
             leases = self
-                .worktree_lease_changed
+                .worktrees
+                .lease_changed
                 .wait(leases)
                 .expect("worktree leases mutex");
         }
@@ -69,10 +70,11 @@ impl Core {
         paths: &std::collections::HashSet<PathBuf>,
         cancel: &AtomicBool,
     ) -> bool {
-        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        let mut leases = self.worktrees.leases.lock().expect("worktree leases mutex");
         while paths.iter().all(|path| leases.contains_key(path)) && !cancel.load(Ordering::SeqCst) {
             leases = self
-                .worktree_lease_changed
+                .worktrees
+                .lease_changed
                 .wait_timeout(leases, std::time::Duration::from_millis(100))
                 .expect("worktree leases mutex")
                 .0;
@@ -81,7 +83,7 @@ impl Core {
     }
 
     pub(in crate::lean) fn try_lease_worktree(&self, path: &Path) -> Option<WorktreeLease<'_>> {
-        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        let mut leases = self.worktrees.leases.lock().expect("worktree leases mutex");
         if leases.contains_key(path) {
             return None;
         }
@@ -93,7 +95,7 @@ impl Core {
     }
 
     pub(in crate::lean) fn try_pin_worktree(&self, path: &Path) -> Option<WorktreePin<'_>> {
-        let mut leases = self.worktree_leases.lock().expect("worktree leases mutex");
+        let mut leases = self.worktrees.leases.lock().expect("worktree leases mutex");
         let state = leases.entry(path.to_path_buf()).or_default();
         if state.leased {
             return None;
@@ -143,7 +145,8 @@ impl Core {
     }
 
     pub(in crate::lean) fn queue_worktree_cleanup(&self, task: &str) {
-        self.worktree_cleanup
+        self.worktrees
+            .cleanup
             .lock()
             .expect("worktree cleanup mutex")
             .insert(task.into());
@@ -152,7 +155,8 @@ impl Core {
     pub(in crate::lean) fn drain_worktree_cleanup(&self) {
         let pending = std::mem::take(
             &mut *self
-                .worktree_cleanup
+                .worktrees
+                .cleanup
                 .lock()
                 .expect("worktree cleanup mutex"),
         );
@@ -247,13 +251,8 @@ impl Core {
             Vec::new()
         };
         let (task, candidates, reservation_blocked) = {
-            let _graph = self.graph_updates.lock().expect("graph update mutex");
-            if self
-                .task_cancels
-                .lock()
-                .expect("task cancel mutex")
-                .contains_key(id)
-            {
+            let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+            if self.activity.task_running(id) {
                 return Ok(false);
             }
             let Some(task) = self.store.task_by_id(id)? else {
@@ -290,15 +289,11 @@ impl Core {
                 // Recheck eligibility under the graph lock while the path lease
                 // prevents a new writer or pin from reaching this checkout.
                 let still_eligible = {
-                    let _graph = self.graph_updates.lock().expect("graph update mutex");
+                    let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
                     self.store
                         .task_by_id(id)?
                         .is_some_and(|current| eligible(&current, kind))
-                        && !self
-                            .task_cancels
-                            .lock()
-                            .expect("task cancel mutex")
-                            .contains_key(id)
+                        && !self.activity.task_running(id)
                 };
                 if !still_eligible {
                     return Ok(false);
@@ -336,7 +331,8 @@ impl Core {
         if let Some(error) = first_error {
             self.cleanup_notice(id, &error);
         } else {
-            self.worktree_cleanup_notes
+            self.worktrees
+                .cleanup_notes
                 .lock()
                 .expect("worktree cleanup notes mutex")
                 .remove(id);
@@ -347,7 +343,8 @@ impl Core {
     fn cleanup_notice(&self, id: &str, error: &Error) {
         let text = error.to_string();
         let mut notes = self
-            .worktree_cleanup_notes
+            .worktrees
+            .cleanup_notes
             .lock()
             .expect("worktree cleanup notes mutex");
         if notes.get(id) == Some(&text) {

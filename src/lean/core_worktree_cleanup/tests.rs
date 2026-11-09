@@ -149,7 +149,7 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
             rusqlite::params![task.id, run.id],
         )
         .unwrap();
-    core.task_cancels.lock().unwrap().insert(
+    core.activity.task_cancels.lock().unwrap().insert(
         task.id.clone(),
         (conversation.clone(), Arc::new(AtomicBool::new(false))),
     );
@@ -160,7 +160,7 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
         old.exists() && old_view.exists(),
         "active task directories are retained"
     );
-    core.task_cancels.lock().unwrap().remove(&task.id);
+    core.activity.task_cancels.lock().unwrap().remove(&task.id);
     drain_until(&core, || !old.exists() && !old_view.exists());
     assert!(!old.exists() && !old_view.exists());
     assert!(dirty.exists() && current.exists() && current_view.exists() && stable.exists());
@@ -299,7 +299,7 @@ fn view_cleanup_holds_only_its_checkout_lease_during_external_work() {
     });
 
     entered_rx.recv().unwrap();
-    let _graph = core.graph_updates.try_lock().unwrap();
+    let _graph = core.locks.graph_updates.try_lock().unwrap();
     let mut unrelated = tasks[1].clone();
     unrelated.report = Some("independent graph update".into());
     core.store.update_task(&unrelated).unwrap();
@@ -343,7 +343,7 @@ fn deferred_cleanup_reservation_serializes_checkout_reuse_without_graph_locking(
     });
 
     entered_rx.recv().unwrap();
-    assert!(core.graph_updates.try_lock().is_ok());
+    assert!(core.locks.graph_updates.try_lock().is_ok());
     assert!(core.try_lease_worktree(&path).is_none());
     continue_tx.send(()).unwrap();
     assert!(cleanup.join().unwrap());

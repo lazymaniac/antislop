@@ -21,7 +21,8 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
     Ok(match request {
         Request::Control(crate::lean::daemon::ControlRequest::Identity) => Route::Handled({
             let _guard = core
-                .config_update
+                .config
+                .update
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             json!({
@@ -31,7 +32,7 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
                 "project": project,
                 "project_identity": core.store.repository_id(&project.to_string_lossy())?,
                 "config": config,
-                "config_modified": core.config_modified.load(Ordering::SeqCst),
+                "config_modified": core.config.modified.load(Ordering::SeqCst),
             })
         }),
         request => Route::Unmatched(request),

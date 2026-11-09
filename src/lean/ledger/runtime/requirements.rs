@@ -22,7 +22,7 @@ impl Core {
                 && let Some(plan) = self.store.accepted_plan(conversation)?
                 && self.store.plan_run(&plan)?.as_deref() == Some(run.id.as_str())
             {
-                let _scope = self.integrating.lock().expect("integration mutex");
+                let _scope = self.locks.integrating.lock().expect("integration mutex");
                 self.maybe_continue_plan(conversation, &plan)?;
             }
         }
@@ -200,7 +200,7 @@ impl Core {
                 "requirements proposal awaits user approval".into(),
             ));
         }
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         self.store
             .apply_analyst_ledger_change(change, &self.state, producer)?;
         Ok(())

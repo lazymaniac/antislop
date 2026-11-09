@@ -159,10 +159,11 @@ impl Core {
     /// Cancels only orchestration; task workers keep their own cancellation flags.
     pub fn restart_orchestrator(self: &Arc<Self>, conversation: &str) -> Result<()> {
         self.store.conversation(conversation)?;
-        let running = self.running.lock().expect("running mutex");
+        let running = self.activity.running.lock().expect("running mutex");
         self.store.add_message(conversation, RUNTIME,
             "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. The runtime imposes no access limits or execution budgets on agents. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
-        self.orchestrator_restarts
+        self.activity
+            .orchestrator_restarts
             .lock()
             .expect("orchestrator restart mutex")
             .insert(conversation.into());
@@ -176,6 +177,7 @@ impl Core {
 
     pub fn cancel(&self, conversation: &str) {
         for (owner, flag) in self
+            .activity
             .task_cancels
             .lock()
             .expect("task cancel mutex")
@@ -186,11 +188,11 @@ impl Core {
             }
         }
         for flags in [
-            &self.plans,
-            &self.running,
-            &self.reviews,
-            &self.revision_jobs,
-            &self.agent_reviews,
+            &self.activity.plans,
+            &self.activity.running,
+            &self.activity.reviews,
+            &self.revisions.jobs,
+            &self.activity.agent_reviews,
         ] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
@@ -201,15 +203,16 @@ impl Core {
     pub fn is_idle(&self, conversation: &str) -> bool {
         // A plan hands its report to the orchestrator while holding plans.
         // Read those two slots in the same order to observe that handoff atomically.
-        let plans = self.plans.lock().expect("plans mutex");
+        let plans = self.activity.plans.lock().expect("plans mutex");
         self.is_idle_with_plans(conversation, &plans)
     }
 
     /// Delete only while no in-memory worker is active, excluding a concurrent wake.
     pub fn delete_session(&self, conversation: &str) -> Result<()> {
         // Keep the established plan-to-running lock order used by idle checks.
-        let plans = self.plans.lock().expect("plans mutex");
+        let plans = self.activity.plans.lock().expect("plans mutex");
         let _lifecycle = self
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -225,41 +228,46 @@ impl Core {
         conversation: &str,
         plans: &HashMap<String, Arc<AtomicBool>>,
     ) -> bool {
-        let running = self.running.lock().expect("running mutex");
-        !self
-            .agent_reviews
-            .lock()
-            .expect("agent reviews mutex")
-            .contains_key(conversation)
+        let running = self.activity.running.lock().expect("running mutex");
+        !self.activity.agent_review_running(conversation)
             && !self
-                .revision_jobs
+                .revisions
+                .jobs
                 .lock()
                 .expect("revision jobs mutex")
                 .contains_key(conversation)
             && !plans.contains_key(conversation)
             && !running.contains_key(conversation)
-            && !self
-                .reviews
-                .lock()
-                .expect("reviews mutex")
-                .contains_key(conversation)
+            && !self.activity.review_running(conversation)
     }
 
     /// Whether any conversation has an agent or a plan running.
     pub fn busy(&self) -> bool {
         !self
+            .activity
             .agent_reviews
             .lock()
             .expect("agent reviews mutex")
             .is_empty()
             || !self
-                .revision_jobs
+                .revisions
+                .jobs
                 .lock()
                 .expect("revision jobs mutex")
                 .is_empty()
-            || !self.running.lock().expect("running mutex").is_empty()
-            || !self.plans.lock().expect("plans mutex").is_empty()
-            || !self.reviews.lock().expect("reviews mutex").is_empty()
+            || !self
+                .activity
+                .running
+                .lock()
+                .expect("running mutex")
+                .is_empty()
+            || !self.activity.plans.lock().expect("plans mutex").is_empty()
+            || !self
+                .activity
+                .reviews
+                .lock()
+                .expect("reviews mutex")
+                .is_empty()
     }
 
     pub fn task_freshness_token(

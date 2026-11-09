@@ -39,7 +39,8 @@ pub(super) fn lock_cancellable<'a>(
 impl Core {
     pub(super) fn turn_lock(&self, conversation: &str, role: &str) -> Arc<Mutex<()>> {
         let mut locks = self
-            .turn_locks
+            .locks
+            .turns
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         // Weak entries must not accumulate with completed historical sessions.

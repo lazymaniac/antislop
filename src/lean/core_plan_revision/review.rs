@@ -31,7 +31,7 @@ impl Core {
         // Held from the review on: a task the revision changes would start on
         // the contract it is about to lose and be cancelled when it applies.
         let _barrier = {
-            let _graph = self.graph_updates.lock().expect("graph update mutex");
+            let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
             RevisionBarrier::new(self, affected.clone())
         };
         self.review_revision(&ReviewData {
@@ -107,8 +107,8 @@ impl Core {
     ) -> Result<()> {
         self.cancel_affected_tasks(&affected);
         self.wait_for_affected_tasks(&affected, context.cancel)?;
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         require(
             self.store
                 .revision_checkpoints(context.conversation, context.revision)?
@@ -158,7 +158,11 @@ impl Core {
     }
 
     fn cancel_affected_tasks(&self, affected: &BTreeSet<String>) {
-        let tasks = self.task_cancels.lock().expect("task cancel mutex");
+        let tasks = self
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex");
         for id in affected {
             if let Some((_, cancel)) = tasks.get(id) {
                 cancel.store(true, Ordering::SeqCst);
@@ -173,6 +177,7 @@ impl Core {
     ) -> Result<()> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while self
+            .activity
             .task_cancels
             .lock()
             .expect("task cancel mutex")
@@ -276,7 +281,8 @@ struct RevisionBarrier<'a> {
 
 impl<'a> RevisionBarrier<'a> {
     fn new(core: &'a Core, ids: BTreeSet<String>) -> Self {
-        core.revising
+        core.revisions
+            .revising
             .lock()
             .expect("revision mutex")
             .extend(ids.iter().cloned());
@@ -287,6 +293,7 @@ impl<'a> RevisionBarrier<'a> {
 impl Drop for RevisionBarrier<'_> {
     fn drop(&mut self) {
         self.core
+            .revisions
             .revising
             .lock()
             .expect("revision mutex")

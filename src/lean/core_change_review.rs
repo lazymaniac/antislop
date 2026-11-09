@@ -10,6 +10,7 @@ impl Core {
         // deletion. Deletion takes plans before this lock, so this path must
         // not acquire plans while holding the lifecycle lock.
         let _lifecycle = self
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
@@ -21,7 +22,8 @@ impl Core {
             "code_review",
             &json!({"id": id, "status": "running"}),
         ) {
-            self.reviews
+            self.activity
+                .reviews
                 .lock()
                 .expect("reviews mutex")
                 .remove(conversation);
@@ -52,7 +54,7 @@ impl Core {
     }
 
     fn reserve_review(&self, conversation: &str) -> Result<Arc<AtomicBool>> {
-        let mut reviews = self.reviews.lock().expect("reviews mutex");
+        let mut reviews = self.activity.reviews.lock().expect("reviews mutex");
         require(
             !reviews.contains_key(conversation),
             "a code review is already running",
@@ -66,12 +68,13 @@ impl Core {
         let review = execute_code_review(&self, &work);
         // Keep the review-to-orchestrator handoff atomic to idle observers
         // and cancellation, using the same outer lock as plan completion.
-        let _plans = self.plans.lock().expect("plans mutex");
+        let _plans = self.activity.plans.lock().expect("plans mutex");
         publish_code_review(&self, &work, &review);
         if !work.cancel.load(Ordering::SeqCst) {
             self.wake(&work.conversation);
         }
-        self.reviews
+        self.activity
+            .reviews
             .lock()
             .expect("reviews mutex")
             .remove(&work.conversation);
@@ -293,13 +296,14 @@ mod tests {
         // Model review preparation holding the lifecycle gate while it
         // registers its active slot. Deletion queues behind that gate.
         let lifecycle = core
+            .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
         let deleting_core = core.clone();
         let conversation = session.id.clone();
         let deleting = std::thread::spawn(move || deleting_core.delete_session(&conversation));
-        while core.plans.try_lock().is_ok() {
+        while core.activity.plans.try_lock().is_ok() {
             std::thread::yield_now();
         }
         core.reserve_review(&session.id).unwrap();

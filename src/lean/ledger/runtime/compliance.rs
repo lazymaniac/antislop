@@ -128,7 +128,7 @@ impl Core {
         review: &Review,
         turns: &AuditTurns,
     ) -> Result<Vec<String>> {
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         self.check_audit_scope(conversation, scope)?;
         self.save_audit_evidence(conversation, scope, proposal, review, &turns.reviewer)?;
         self.save_audit_review(

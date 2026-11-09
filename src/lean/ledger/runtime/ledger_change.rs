@@ -27,7 +27,11 @@ impl Core {
         change: &LedgerChange,
         result: &ChangeResult,
     ) -> Result<()> {
-        let flags = self.task_cancels.lock().expect("task cancel mutex");
+        let flags = self
+            .activity
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex");
         for task in &result.affected_tasks {
             if let Some((_, flag)) = flags.get(task) {
                 flag.store(true, Ordering::SeqCst);

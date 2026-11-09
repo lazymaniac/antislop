@@ -51,8 +51,8 @@ impl Core {
         if args["disposition"] == "escalate_to_user" {
             return self.defer_question_tool(conversation, &json!({"request":required_text(args,"request")?,"explanation":required_text(args,"answer")?}));
         }
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         let request = required_text(args, "request")?;
         let answer = required_text(args, "answer")?;
         let disposition = match args.get("disposition").filter(|value| !value.is_null()) {
@@ -78,8 +78,8 @@ impl Core {
     }
 
     pub(super) fn defer_question_tool(&self, conversation: &str, args: &Value) -> Result<Value> {
-        let _graph = self.graph_updates.lock().expect("graph update mutex");
-        let _integration = self.integrating.lock().expect("integration mutex");
+        let _graph = self.locks.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.locks.integrating.lock().expect("integration mutex");
         let request = required_text(args, "request")?;
         let explanation = required_text(args, "explanation")?;
         let already =
@@ -200,7 +200,8 @@ impl Core {
     }
 
     fn revision_view(&self, conversation: &str) -> Result<(String, i64)> {
-        self.revision_views
+        self.revisions
+            .views
             .lock()
             .expect("revision views mutex")
             .get(conversation)
