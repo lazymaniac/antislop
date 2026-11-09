@@ -140,6 +140,7 @@ src
   cli.rs
    chat(args):Result<()> > chat.run
    doctor(args):Result<()> > Options.parse,report
+   init(args):Result<()>
    resolve_config(project,explicit):Result<PathBuf> > checked_config,config_dir
    setup(args):Result<()> ~43 > status,system_settings_path,settings_text
    stop(args):Result<()> > project_state
@@ -165,11 +166,143 @@ src
    Reference(C{id,bytes})
    = CHUNK_BYTES
   core
+   integration
+    conflicts/repair
+     Repair(C{core,conversation,task,spec,worktree,onto,change,files,outcome,cancel,base,attempts})
+      new(parts):Self > repair_count
+      run():Result<()> > {request,stop}_repair,finish_repair_report
+      - apply_repair_report,wait_for_repair_input,record_attempt,worker_{report,setup,prompt},persist_repair,queue_review,
+        review_prompt
+     RepairParts(C{core,conversation,task,spec,worktree,onto,change,files,outcome,cancel})
+    land
+     flow
+      Integration(C{core,conversation,task,spec,project,worktree,config,cancel})
+       new(core,conversation,task,spec,project,worktree,config,cancel):Self
+       run(lock):Result<()> > finish_no_changes,{create,apply}_change,record_plan_landing,repair_conflict,finish_outcome
+       - register_conflict_repair,complete_landing
+      - conflict_with_files
+     landing
+      record(core,conversation,task,spec,outcome,files):Result<Landing> > record_outcome,append_event
+      Landing(C{status,text})
+      - approved,unresolved
+    writer_base
+     - PlanBase
    messages
     - dispatch_{to_plan,broadcast,reviewer},direct_task,reject_recipient
    open
     - write_state_gitignore,open_lock_file,acquire_lock,reap_orphaned_agents,spawn_native_reaper,
       restore_{conversations,conversation},wake_pending_work,resume_{cut_off,interrupted},answer_pending_mail
+   orchestration
+    agent_turn
+     turn
+      execute
+       execute(core,state,cancel,prompt,events):Result<agent::Outcome> > execute_profile
+       - PreparedAgent,clone_error,prepare_agent,agent_spec,session_scope,{record_run,run}_context,check_task_inputs,
+         tool_handler,protocol_observer,record_rejected_tool,run_cli,{should,announce_startup}_retry,restart_native
+      finish
+       finish(core,outcome,events,cancel):Result<Option<String>> > finish_{success,failure}
+       - record_failed_mail
+      prompt
+       prepare_prompt(core,state,spec,prompt):Result<String> > inbox_text,{append_task,append_allocation}_context,role_introduction,prompt,append_round_handoff
+       - append_{questions,local_checks}
+      setup
+       begin(core,setup):Result<TurnState<'a>> > TurnStart.new,pending_{inbox,comments},start_turn,attribute_inbox
+       wait_until_resumed(core,setup,cancel):Result<()> > as_str,paused
+       - TurnStart,SetupParts,profile_provider,resume_session
+       - SetupParts: from_setup
+       - TurnStart: finish
+     turn.rs
+      TurnEvents(C{store,conversation,turn,inbox,persistence_error,prompt_bytes})
+       announce(kind,payload)
+      TurnState(C{session_policy,conversation,role,profile,cwd,add_dirs,provider,resume,inbox,history_mail,comments,turn})
+    approvals
+     approver(core,conversation,role,turn,spec):Arc<approvals::Approver> > ApprovalSeat,name,settle_approval
+     ApprovalSeat(C{conversation,role,turn,provider,directories})
+     - {parse_trust,same_directory}_target,decision_name
+    comment_helpers
+     comment_label(target,plan):String > {plan,check,finding,artifact,addressed_target}_label
+     is_plan_target(target):bool
+     - {task,diff,diff_location,named_target}_label
+    config_snapshot
+     - {live,plan}_status
+    orchestrator_turn
+     context
+      answer
+       finish(core,context,answer,cancel):Result<()> > TurnResult.decode,submitted_graph,audit_response_error,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
+      comments
+       comment_context(core,conversation,upto,answered,is_comment):Result<String> > append_comment_{instructions,plans,followup}
+       - append_{last_orchestrator_reply,latest_plan,original_request,referenced_plans}
+      plan_view
+       load(core,conversation):Result<PlanView> > workflow,announce_planning,editable_plan,record_revision_view,graph_json,PlanView
+       PlanView(C{workflow,graph,graph_json})
+     context.rs
+      ask(core,context,cancel):Result<Option<String>> > turn_setup,turn,render_prompt
+      finish(core,context,answer,cancel):Result<()>
+      prepare(core,conversation,upto):Result<OrchestrationContext<'a>> > request_context,config_snapshot,plan_view.load,history_context,audit_response,OrchestrationContext,interviewing,open_user_decision
+      AuditResponse(C{approved,findings,error,report})
+      OrchestrationContext(C{conversation,upto,answered,asked,is_comment,config,project,open,comment_text,workflow,interviewing,graph,editable_graph,graph_json,history,ledger_context,decision,audit_response})
+      - RequestContext,open_comments
+     prompt
+      orchestrator_prompt_text(context):String > orchestrator_prompt,append_{history,decision,graph},prepend_phase,append_{audit_response,ledger}
+      PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision,audit_response})
+    planner_turn/prompt
+     planner_prompt_text(context):String > format_messages,append_ledger
+     PlannerPrompt(C{project,first,requirements,asked,replaced,keepable,ledger_context})
+    planner_turn.rs
+     - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
+    planning_context
+     append_ledger(context,prompt)
+     planning_ledger_context(core,conversation):Result<Option<String>> > load_planning_context,planning_run,ledger_context
+    prompt_helpers
+     blocked_report(tasks):String > blocked_entries
+     format_messages(messages):String
+     orchestrator_prompt(project,first,messages,open):String > initial_orchestrator_prompt,format_messages,append_open_comments
+     stopped_report(tasks):Option<String> > blocked_entries
+     - stopped_for_coordination,format_message
+    unanswered
+     includes_comment(asked):bool
+   plan
+    answer
+     PlanAnswer(C{conversation,project,config,text,plan,addressed,is_comment,answered,upto})
+    helpers
+     finalize_plan(specs,required_gates,local_options):Vec<TaskContract>
+     planning_gaps(specs):Option<String>
+     writer_base_scratch(state,{plan,spec}_id):PathBuf
+    kept_tasks
+     - authored,not_keepable
+    proposal
+     helpers/recording
+      append_planning_gaps(prompt,gaps):String
+      plan_event_payload(text,plan,specs,review,waiting,revision_token):Result<serde_json::Value>
+      plan_review_prompt(project,request,specs,first):String
+      record_plan_review_start(store,conversation,plan,config,specs):Result<()> > Store.append_event
+     helpers.rs
+      PreparedPlan(C{id,tasks,answered})
+    proposal.rs
+     checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > finalize_plan,check,message
+    report
+     - task_{result,findings},apply_audit_gates,invalidate_unearned_approval,unapproved_task_ids,audit_text
+    revision
+     acceptance
+      ensure_accepted_plan(core,conversation,plan):Result<()> > db,unaccepted_plan_error
+     review
+      affected_tasks(baseline,specs,redo):BTreeSet<String> > changed_tasks,as_str
+      ReviewContext(C{conversation,revision,baseline,specs,cancel,project})
+      - ApprovedRevisionWork,RevisionBarrier,contract_changed,reworded_only,checkpoint_review_context,previous_specs
+      - RevisionBarrier: drop
+    revision.rs
+     - PreparedRevision,RevisionRegistration,run_revision_worker
+     - RevisionRegistration: fresh,existing
+    start
+     runner/reporting
+      has_blocked_tasks(tasks):bool
+     runner.rs
+      - AuditedPlanSnapshot,format_uncommitted_notice
+   review
+    agent
+     - run_review_queue,next_review_role,review_{mail,role,audit,plan},task_contracts,plan_review_prompt
+    change
+     - CodeReview,review_comments,execute_code_review,review_{turn_setup,prompt,failure},publish_{code_review,review_message}
    state
     Activity(C{running,plans,reviews,agent_reviews,task_cancels,{task,orchestrator}_restarts,blocked_seen})
      plan_running(conversation):bool > has
@@ -181,236 +314,110 @@ src
     Locks(C{integrating,graph_updates,turns,session_lifecycle})
     RevisionState(C{revising,jobs,views})
     WorktreeState(C{cleanup,cleanup_notes,leases,lease_changed})
-  core_agent_review
-   - run_review_queue,next_review_role,review_{mail,role,audit,plan},task_contracts,plan_review_prompt
-  core_agent_turn
-   turn
-    execute
-     execute(core,state,cancel,prompt,events):Result<agent::Outcome> > execute_profile
-     - PreparedAgent,clone_error,prepare_agent,agent_spec,session_scope,{record_run,run}_context,check_task_inputs,
-       tool_handler,protocol_observer,record_rejected_tool,run_cli,{should,announce_startup}_retry,restart_native
-    finish
-     finish(core,outcome,events,cancel):Result<Option<String>> > finish_{success,failure}
-     - record_failed_mail
-    prompt
-     prepare_prompt(core,state,spec,prompt):Result<String> > inbox_text,{append_task,append_allocation}_context,role_introduction,prompt,append_round_handoff
-     - append_{questions,local_checks}
-    setup
-     begin(core,setup):Result<TurnState<'a>> > TurnStart.new,pending_{inbox,comments},start_turn,attribute_inbox
-     wait_until_resumed(core,setup,cancel):Result<()> > as_str,paused
-     - TurnStart,SetupParts,profile_provider,resume_session
-     - SetupParts: from_setup
-     - TurnStart: finish
-   turn.rs
-    TurnEvents(C{store,conversation,turn,inbox,persistence_error})
-     announce(kind,payload)
-    TurnState(C{session_policy,conversation,role,profile,cwd,add_dirs,provider,resume,inbox,history_mail,comments,turn})
-  core_approvals
-   approver(core,conversation,role,turn,spec):Arc<approvals::Approver> > ApprovalSeat,name,settle_approval
-   ApprovalSeat(C{conversation,role,turn,provider,directories})
-   - {parse_trust,same_directory}_target,decision_name
-  core_change_review
-   - CodeReview,review_comments,execute_code_review,review_{turn_setup,prompt,failure},publish_{code_review,review_message}
-  core_comment_helpers
-   comment_label(target,plan):String > {plan,check,finding,artifact,addressed_target}_label
-   is_plan_target(target):bool
-   - {task,diff,diff_location,named_target}_label
-  core_config_snapshot
-   - {live,plan}_status
-  core_feedback_helpers
-   event_files(files):Vec<String>
-   land(task,outcome,source,detail,commit,on_branch,files) > current_feedback,integration_record
-   note(task,text)
-   review_json(review):serde_json::Value
-   - add_{commit,branch,files}
-  core_integration
-   flow
-    Integration(C{core,conversation,task,spec,project,worktree,config,cancel})
-     new(core,conversation,task,spec,project,worktree,config,cancel):Self
-     run(lock):Result<()> > finish_no_changes,{create,apply}_change,record_plan_landing,repair_conflict,finish_outcome
-     - register_conflict_repair,complete_landing
-    - conflict_with_files
-   landing
-    record(core,conversation,task,spec,outcome,files):Result<Landing> > record_outcome,append_event
-    Landing(C{status,text})
-    - approved,unresolved
-  core_integration_repair/repair
-   Repair(C{core,conversation,task,spec,worktree,onto,change,files,outcome,cancel,base,attempts})
-    new(parts):Self > repair_count
-    run():Result<()> > {request,stop}_repair,finish_repair_report
-    - apply_repair_report,wait_for_repair_input,record_attempt,worker_{report,setup,prompt},persist_repair,queue_review,
-      review_prompt
-   RepairParts(C{core,conversation,task,spec,worktree,onto,change,files,outcome,cancel})
-  core_kept_tasks
-   - authored,not_keepable
-  core_orchestrator_turn
-   context
-    answer
-     finish(core,context,answer,cancel):Result<()> > TurnResult.decode,submitted_graph,audit_response_error,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
-    comments
-     comment_context(core,conversation,upto,answered,is_comment):Result<String> > append_comment_{instructions,plans,followup}
-     - append_{last_orchestrator_reply,latest_plan,original_request,referenced_plans}
-    plan_view
-     load(core,conversation):Result<PlanView> > workflow,announce_planning,editable_plan,record_revision_view,graph_json,PlanView
-     PlanView(C{workflow,graph,graph_json})
-   context.rs
-    ask(core,context,cancel):Result<Option<String>> > turn_setup,turn,render_prompt
-    finish(core,context,answer,cancel):Result<()>
-    prepare(core,conversation,upto):Result<OrchestrationContext<'a>> > request_context,config_snapshot,plan_view.load,history_context,audit_response,OrchestrationContext,interviewing,open_user_decision
-    AuditResponse(C{approved,findings,error,report})
-    OrchestrationContext(C{conversation,upto,answered,asked,is_comment,config,project,open,comment_text,workflow,interviewing,graph,editable_graph,graph_json,history,ledger_context,decision,audit_response})
-    - RequestContext,open_comments
-   prompt
-    orchestrator_prompt_text(context):String > orchestrator_prompt,append_{history,decision,graph},prepend_phase,append_{audit_response,ledger}
-    PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision,audit_response})
-  core_path_helpers
-   branch(task):Result<String>
-   release_settled_views(store,state):Result<()> > worktree_directory,{release_settled_view,release_writer}_checkouts,prune_settled_view_branches
-   release_view(path):Result<()> > require
-   release_views(state,task_id,keep):Result<()> > task_view_paths,release_view
-   task_path_component(id):Result<&str> > all
-   task_view_paths(state,task_id,keep):Result<Vec<PathBuf>> > task_path_component,worktree_directory
-   worktree_branch(state,task):Result<String> > worktree_path,branch,require
-   worktree_directory(state):Result<PathBuf> > require
-   worktree_path(state,task):Result<PathBuf> > task_path_component
-   - view_task,settled,release_writer_checkout,writer_checkout_{id,is_clean}
-  core_plan_answer
-   PlanAnswer(C{conversation,project,config,text,plan,addressed,is_comment,answered,upto})
-  core_plan_helpers
-   finalize_plan(specs,required_gates,local_options):Vec<TaskContract>
-   planning_gaps(specs):Option<String>
-   writer_base_scratch(state,{plan,spec}_id):PathBuf
-  core_plan_proposal
-   helpers/recording
-    append_planning_gaps(prompt,gaps):String
-    plan_event_payload(text,plan,specs,review,waiting,revision_token):Result<serde_json::Value>
-    plan_review_prompt(project,request,specs,first):String
-    record_plan_review_start(store,conversation,plan,config,specs):Result<()> > Store.append_event
-   helpers.rs
-    PreparedPlan(C{id,tasks,answered})
-  core_plan_proposal.rs
-   checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > finalize_plan,check,message
-  core_plan_report
-   - task_{result,findings},apply_audit_gates,invalidate_unearned_approval,unapproved_task_ids,audit_text
-  core_plan_revision
-   acceptance
-    ensure_accepted_plan(core,conversation,plan):Result<()> > db,unaccepted_plan_error
-   review
-    affected_tasks(baseline,specs,redo):BTreeSet<String> > changed_tasks,as_str
-    ReviewContext(C{conversation,revision,baseline,specs,cancel,project})
-    - ApprovedRevisionWork,RevisionBarrier,contract_changed,reworded_only,checkpoint_review_context,previous_specs
-    - RevisionBarrier: drop
-  core_plan_revision.rs
-   - PreparedRevision,RevisionRegistration,run_revision_worker
-   - RevisionRegistration: fresh,existing
-  core_planner_turn/prompt
-   planner_prompt_text(context):String > format_messages,append_ledger
-   PlannerPrompt(C{project,first,requirements,asked,replaced,keepable,ledger_context})
-  core_planner_turn.rs
-   - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
-  core_planning_context
-   append_ledger(context,prompt)
-   planning_ledger_context(core,conversation):Result<Option<String>> > load_planning_context,planning_run
-  core_prompt_helpers
-   blocked_report(tasks):String > blocked_entries
-   format_messages(messages):String
-   orchestrator_prompt(project,first,messages,open):String > initial_orchestrator_prompt,format_messages,append_open_comments
-   stopped_report(tasks):Option<String> > blocked_entries
-   - stopped_for_coordination,format_message
-  core_start_plan
-   runner/reporting
-    has_blocked_tasks(tasks):bool
-   runner.rs
-    - AuditedPlanSnapshot,format_uncommitted_notice
-  core_task_checks/scheduler
-   run(core,conversation,plan_id,cancel) > Scheduler.new
-   - Scheduler,Reservations,task_states,dependencies_approved,{execute,fail}_task,restart_agent
-   - Reservations: contains,reserve,release,is_empty
-   - Scheduler: run,schedule_{ready,one},is_schedulable,restore_skipped_task,is_runnable,schedule_if_available,spawn_task,
-                receive_completion,release
-  core_task_execution
-   reviewer_setup
-    build(conversation,task,role,profile,cwd,add_dirs):TurnSetup<'a> > TurnSetup
-   task_execution
-    review
-     record_checks(core,conversation,task,spec,verdict):Result<()> > record_one
-     run(input):Result<Option<Verdict>> > request_review,stop_task,parse_verdict
-     save_verdict(input):Result<()> > stamp_verdict,set_feedback,update_task
-     ReviewRound(C{core,conversation,task,cancel,spec,workdir,add_dirs,upstream,reviewer,round,findings,report,changes})
-     VerdictSave(C{core,task,spec,verdict,report,changes,summary_effect,repairs})
-     - ReviewTurn,run_review_turn
-    rounds
-     - FinishedWorker
-    worker/completion
-     commit_round(task,spec,worktree,_round,report,summary,commit_message):Result<Option<String>> > validate_change_paths
-     complete_report(core,conversation,task,spec,worktree,raw):Result<Option<WorkerCompletion>> > update_task,finish_report
-     WorkerCompletion(C{report,effect,commit_message})
-     - save_checkpoint,commit_worker_files
-    worker.rs
-     is_recheck(core,conversation,task,worker,reviewer):Result<bool> > completed_task_output,pending_mail
-     run(input):Result<Option<String>> > completed_task_output,run_worker_round
-     task_directories(core,task,spec,project,worktree):Result<(PathBuf,Vec<PathBuf>)> > task_worktree
-     writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~60 > has_delivery,require,prepare_artifact_outputs,writer_base,combine_saved_checkpoint,worktree_path,ok
-     WorkerRound(C{core,conversation,task,cancel,spec,workdir,project_text,add_dirs,upstream,worker,round,state,recheck})
-     - run_worker_turn,worker_{setup,dirs},continuation
-   task_execution.rs
-    Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
-     run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,{review,settle}_round
-     new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
-     run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
-     - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,
-       dependents_invalidated,resumed_progress
-    - RoundState,Prepared
-  core_task_recovery
-   actions
-    apply(core,work):Result<()> > keep_branch,retry,restart,cancel
-    - queue_guidance,persist_simple,recovery_payload,{retry,restart}_event
-   events
-    append(core,work,payload):Result<()>
-   integrate
-    apply(core,work):Result<()> > require,integration_commits,validate_consent,{integrate,mark_remaining}_changes,finish_integration
-    - validate_consent_file,integration_result,persist_integration,integration_event
-   manual/finish
-    approve(core,work,review,fixed):Result<()> > commit_manual_fixes,approval_notice,land,note,persist_manual
-    reject(core,work,review,fixed):Result<()> > append_findings,land,persist_manual
-    - manual_event
-   manual.rs
-    apply(core,work):Result<()> > prepare_review,update_review_state,feedback,approve,reject
-    - ManualReview,Group,run_reviewer,reviewer_setup,snapshot_conflict,
-      restore_snapshot_{conflicts,conflicts_counted,conflicts_with_budget},snapshot_contains_path,apply_snapshot_paths,
-      materialize_snapshot,snapshot_lookup_{fixed_arg_bytes,batches},reviewer_prompt,decode_answer,failed_reviewer,
-      awaiting_answer
-   prepare
-    interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,queue_restart,interrupted
-    load(core,req,actor):Result<RecoveryWork> > accepted_plan,config_snapshot,Core.task,assert_task_inputs,task_freshness_token,validate_request,RecoveryWork
-    - allowed_status
-   response
-    build(core,work):Result<TaskRecoveryResponse> > task_freshness_token,TaskRecoveryResponse
-    interrupted(work):TaskRecoveryResponse > TaskRecoveryResponse
-  core_task_recovery.rs
-   RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
-  core_task_runtime
-   citations(core,task,report,verdict):Result<String> > flatten,task_evidence_context,evidence_text
-   directory(state,task):Result<PathBuf> > task_path_component,private_directory
-   prune_settled_generations(state,task):Result<()> > task_path_component
-   sources(core,task):Result<Vec<serde_json::Value>> ~51 > task_in_plan_by_id,plan_conversation,task_path_component,private_directory
-   sweep_uncited(state,task,citations,cutoff):Result<Sweep> > task_path_component,sweep_directory
-   Sweep(C{removed,bytes,errors})
-   - Citation,is_path_char,cited,scan,newest_modification
-  core_task_state
-   - stop_records_progress
-  core_unanswered
-   includes_comment(asked):bool
-  core_unblock_dependents
-   - skipped_task_ready,dependency_approved
-  core_worktree_cleanup
-   WorktreeLease,WorktreePin(C{core,path}) : Drop
-    WorktreeLease - drop
-    WorktreePin - drop
-   WorktreeLeaseState(C{leased,pins})
-   - CheckoutKind,checkout_kind,eligible
-  core_writer_base
-   - PlanBase
+   task
+    checks/scheduler
+     run(core,conversation,plan_id,cancel) > Scheduler.new
+     - Scheduler,Reservations,task_states,dependencies_approved,{execute,fail}_task,restart_agent
+     - Reservations: contains,reserve,release,is_empty
+     - Scheduler: run,schedule_{ready,one},is_schedulable,restore_skipped_task,is_runnable,schedule_if_available,spawn_task,
+                  receive_completion,release
+    execution
+     reviewer_setup
+      build(conversation,task,role,profile,cwd,add_dirs):TurnSetup<'a> > TurnSetup
+     task_execution
+      review
+       record_checks(core,conversation,task,spec,verdict):Result<()> > record_one
+       run(input):Result<Option<Verdict>> > request_review,stop_task,parse_verdict
+       save_verdict(input):Result<()> > stamp_verdict,set_feedback,update_task
+       ReviewRound(C{core,conversation,task,cancel,spec,workdir,add_dirs,upstream,reviewer,round,findings,report,changes})
+       VerdictSave(C{core,task,spec,verdict,report,changes,summary_effect,repairs})
+       - ReviewTurn,run_review_turn
+      rounds
+       - FinishedWorker
+      worker/completion
+       commit_round(task,spec,worktree,_round,report,summary,commit_message):Result<Option<String>> > validate_change_paths
+       complete_report(core,conversation,task,spec,worktree,raw):Result<Option<WorkerCompletion>> > update_task,finish_report
+       WorkerCompletion(C{report,effect,commit_message})
+       - save_checkpoint,commit_worker_files
+      worker.rs
+       is_recheck(core,conversation,task,worker,reviewer):Result<bool> > completed_task_output,pending_mail
+       run(input):Result<Option<String>> > completed_task_output,run_worker_round
+       task_directories(core,task,spec,project,worktree):Result<(PathBuf,Vec<PathBuf>)> > task_worktree
+       writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~60 > has_delivery,require,prepare_artifact_outputs,writer_base,combine_saved_checkpoint,worktree_path,ok
+       WorkerRound(C{core,conversation,task,cancel,spec,workdir,project_text,add_dirs,upstream,worker,round,state,recheck})
+       - run_worker_turn,worker_{setup,dirs},continuation
+     task_execution.rs
+      Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
+       run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,{review,settle}_round
+       new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
+       run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
+       - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,
+         dependents_invalidated,resumed_progress
+      - RoundState,Prepared
+    feedback_helpers
+     event_files(files):Vec<String>
+     land(task,outcome,source,detail,commit,on_branch,files) > current_feedback,integration_record
+     note(task,text)
+     review_json(review):serde_json::Value
+     - add_{commit,branch,files}
+    recovery
+     actions
+      apply(core,work):Result<()> > keep_branch,retry,restart,cancel
+      - queue_guidance,persist_simple,recovery_payload,{retry,restart}_event
+     events
+      append(core,work,payload):Result<()>
+     integrate
+      apply(core,work):Result<()> > require,integration_commits,validate_consent,{integrate,mark_remaining}_changes,finish_integration
+      - validate_consent_file,integration_result,persist_integration,integration_event
+     manual/finish
+      approve(core,work,review,fixed):Result<()> > commit_manual_fixes,approval_notice,land,note,persist_manual
+      reject(core,work,review,fixed):Result<()> > append_findings,land,persist_manual
+      - manual_event
+     manual.rs
+      apply(core,work):Result<()> > prepare_review,update_review_state,feedback,approve,reject
+      - ManualReview,Group,run_reviewer,reviewer_setup,snapshot_conflict,
+        restore_snapshot_{conflicts,conflicts_counted,conflicts_with_budget},snapshot_contains_path,apply_snapshot_paths,
+        materialize_snapshot,snapshot_lookup_{fixed_arg_bytes,batches},reviewer_prompt,decode_answer,failed_reviewer,
+        awaiting_answer
+     prepare
+      interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,queue_restart,interrupted
+      load(core,req,actor):Result<RecoveryWork> > accepted_plan,config_snapshot,Core.task,assert_task_inputs,task_freshness_token,validate_request,RecoveryWork
+      - allowed_status
+     response
+      build(core,work):Result<TaskRecoveryResponse> > task_freshness_token,TaskRecoveryResponse
+      interrupted(work):TaskRecoveryResponse > TaskRecoveryResponse
+    recovery.rs
+     RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
+    runtime
+     citations(core,task,report,verdict):Result<String> > flatten,task_evidence_context,evidence_text
+     directory(state,task):Result<PathBuf> > task_path_component,private_directory
+     prune_settled_generations(state,task):Result<()> > task_path_component
+     sources(core,task):Result<Vec<serde_json::Value>> ~51 > task_in_plan_by_id,plan_conversation,task_path_component,private_directory
+     sweep_uncited(state,task,citations,cutoff):Result<Sweep> > task_path_component,sweep_directory
+     Sweep(C{removed,bytes,errors})
+     - Citation,is_path_char,cited,scan,newest_modification
+    state
+     - stop_records_progress
+    unblock_dependents
+     - skipped_task_ready,dependency_approved
+   worktree
+    cleanup
+     WorktreeLease,WorktreePin(C{core,path}) : Drop
+      WorktreeLease - drop
+      WorktreePin - drop
+     WorktreeLeaseState(C{leased,pins})
+     - CheckoutKind,checkout_kind,eligible
+    paths
+     branch(task):Result<String>
+     release_settled_views(store,state):Result<()> > worktree_directory,{release_settled_view,release_writer}_checkouts,prune_settled_view_branches
+     release_view(path):Result<()> > require
+     release_views(state,task_id,keep):Result<()> > task_view_paths,release_view
+     task_path_component(id):Result<&str> > all
+     task_view_paths(state,task_id,keep):Result<Vec<PathBuf>> > task_path_component,worktree_directory
+     worktree_branch(state,task):Result<String> > worktree_path,branch,require
+     worktree_directory(state):Result<PathBuf> > require
+     worktree_path(state,task):Result<PathBuf> > task_path_component
+     - view_task,settled,release_writer_checkout,writer_checkout_{id,is_clean}
   daemon
    client/launch
     daemon_exit_error(status,state):Error
@@ -610,6 +617,7 @@ src
    ReviewerProfile(C{provider,model,effort})
   doctor
    find_executable(binary):Option<PathBuf>
+   init(project,force,out):Result<PathBuf> > find_executable,initial_config
    launch_problems(config,kinds):Vec<String> > err,profile_command
    report(project,config_path,state,out):Result<bool> ~43 > name,profile_command
    - version
@@ -981,24 +989,18 @@ src
     await_agent_answer(conversation,turn,request):Result<Value> > agent_question,require
     validate_agent_result(conversation,role,turn,result):Result<()> > task_{role,by_id},assert_task_inputs,validate_task,agent_question
     agent_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > require_open_agent_turn,evidence_tool,read_dependency_result,{task_result,finish,interview,orchestrator,submit_plan,audit,revision}_tool
+    repair_integration(&Arc<Self>,conversation,task,spec,worktree,onto,change,outcome,files,cancel):Result<()> > Repair.new
+    integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > defer_agent_work
+    writer_base(plan_id,spec,project):Result<String> > plan_{base,base_record},writer_{dependency_changes,base_scratch}
+    record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > address,require,dispatch_addressed
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
-    resume_agent_reviews(&Arc<Self>,conversation):Result<()> > register_agent_review,spawn_agent_review_worker
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute,finish.finish
     settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,as_str,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
     decide_approval_tool(conversation,args):Result<Value> > approval_state,escalate_approval,notice,answer_approval
     answer_approval(conversation,request,choice):Result<()>
     approval_mode(conversation):Result<String>
     set_approval_mode(conversation,mode):Result<()>
-    artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
-    artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
-    prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
-    validate_artifact_delta(task,spec,worktree):Result<()> > artifact_commits
-    deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~45 > artifact_commits,validate_change_paths,record_artifact_delivery,ArtifactReceipt
-    review_change(&Arc<Self>,conversation,plan,id):Result<()> > prepare_code_review,remove
-    open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
-    activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
-    reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     comment_at(&Arc<Self>,conversation,plan_id,target,text,round,run):Result<Comment> > comment_at_with_operation
     comment_at_with_operation(&Arc<Self>,conversation,{operation,plan}_id,target,text,round,run):Result<Comment> ~40 > require,comment_plan,diff_author,contextual_comment_label,persist_comment,CommentDraft,send_to_agent
     review_comments(&Arc<Self>,conversation,plan_id):Result<usize> > send_draft_comments,wake
@@ -1026,13 +1028,17 @@ src
     history(conversation,after,limit):Result<store::HistoryPage> > history_page
     comment(&Arc<Self>,conversation,target,text):Result<Comment> > comment_scoped
     comment_scoped(&Arc<Self>,conversation,plan_id,target,text):Result<Comment> > comment_at
-    integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > defer_agent_work
-    repair_integration(&Arc<Self>,conversation,task,spec,worktree,onto,change,outcome,files,cancel):Result<()> > Repair.new
-    submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
-    keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
     orchestrator_turn(&Arc<Self>,conversation,upto,cancel):Result<()> > prepare,ask,context.finish
+    planner_turn(&Arc<Self>,conversation,upto,cancel):Result<()> > planning_requirements_ready,planner_turn_context,run_planner_turn,handle_planner_answer
+    require_refused_plan(conversation,turn):Result<()> > last_orchestration_answered,asked_since,messages_by
+    request_replan(conversation,reason):Result<serde_json::Value> > last_orchestration_answered,messages_by,planning_run,add_message
+    unanswered(conversation):Result<Option<u64>> > last_orchestration_{turn,answered},messages_after
+    asked_since(conversation,answered,upto):Result<Vec<Message>> > messages_after
+    planner_owns_turn(conversation,upto):Result<bool> > last_orchestration_answered,asked_since,includes_comment,awaiting_first_plan,includes_replan
     handle_plan_answer(&Arc<Self>,answer,cancel):Result<()> > propose,PlanProposal,record_invalid_plan,handle_plan_words
     require_plan_correction(conversation,turn):Result<()> > db,has_uncorrected_review_draft,require
+    submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
+    keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
     review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,planning_gaps,dependency_note,review,append_planning_gaps
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
@@ -1041,6 +1047,8 @@ src
     prepare_plan(conversation,specs,run):Result<Option<PreparedPlan>> > persist_proposed_tasks,link_plan_run,bind_proposed_plan,PreparedPlan,last_orchestration_answered
     publish_plan(&Arc<Self>,conversation,text,addressed,plan,specs,review):Result<()> > resolve_plan_comments,plan_{revision_token,event_payload}
     propose(&Arc<Self>,conversation,project,text,proposal,addressed,cancel):Result<()> > prepare_{proposal,plan},complete_proposal,ProposalPublication
+    upstream(plan_id,spec):Result<String> > dependency_inputs
+    dependency_tasks(plan_id,spec):Result<Vec<Task>> > collect_dependencies
     plan_report(&Arc<Self>,conversation,plan_id,cancel):Result<String> > task_results,report_{compliance_gaps,intro},append_plan_audit,PlanAuditInput,append_compliance_gaps
     resume_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> ~49 > plan_{belongs_to_conversation,run},extraction_needs_refresh,add_message,wake,all,activate_reviewed_plan
     recover_task(&Arc<Self>,req):Result<TaskRecoveryResponse> > recover_task_as
@@ -1048,11 +1056,6 @@ src
     turn(setup,cancel,prompt):Result<Option<String>> > turn_inner
     review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,revision_checkpoints,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > reserve_revision,revision_job,process_fresh_revision
-    planner_turn(&Arc<Self>,conversation,upto,cancel):Result<()> > planning_requirements_ready,planner_turn_context,run_planner_turn,handle_planner_answer
-    require_refused_plan(conversation,turn):Result<()> > last_orchestration_answered,asked_since,messages_by
-    request_replan(conversation,reason):Result<serde_json::Value> > last_orchestration_answered,messages_by,planning_run,add_message
-    upstream(plan_id,spec):Result<String> > dependency_inputs
-    dependency_tasks(plan_id,spec):Result<Vec<Task>> > collect_dependencies
     finish_blocked_plan(&Arc<Self>,conversation,tasks,cancel) > blocked_report,add_message,wake
     report_stopped_tasks(&Arc<Self>,conversation,plan_id) > stopped_report,add_message,wake
     plan_runner(&Arc<Self>,conversation,plan_id,cancel,tasks_write) > warn_of_uncommitted,run_plan_cycle,notice,clear_running_plan
@@ -1061,6 +1064,16 @@ src
     wake(&Arc<Self>,conversation)
     orchestrate(&Arc<Self>,conversation,cancel) > next_orchestration_{upto,turn},stop_orchestrator
     start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,require,validate_plan_inputs,ensure_profiles_launch,db,remove,announce_plan_tasks,drop,spawn_plan_runner
+    resume_agent_reviews(&Arc<Self>,conversation):Result<()> > register_agent_review,spawn_agent_review_worker
+    review_change(&Arc<Self>,conversation,plan,id):Result<()> > prepare_code_review,remove
+    open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
+    activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
+    reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
+    artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
+    artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
+    prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
+    validate_artifact_delta(task,spec,worktree):Result<()> > artifact_commits
+    deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~45 > artifact_commits,validate_change_paths,record_artifact_delivery,ArtifactReceipt
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
     run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
@@ -1080,9 +1093,6 @@ src
     announce_task(conversation,task,reason) > task_state_digest
     set_status(conversation,task,status):Result<()> > stop
     stop(conversation,task,status,reason):Result<()> > record_stop_reason,update_task,record_stop_progress,queue_worktree_cleanup,announce_task
-    unanswered(conversation):Result<Option<u64>> > last_orchestration_{turn,answered},messages_after
-    asked_since(conversation,answered,upto):Result<Vec<Message>> > messages_after
-    planner_owns_turn(conversation,upto):Result<bool> > last_orchestration_answered,asked_since,includes_comment,awaiting_first_plan,includes_replan
     unblock_dependent_tasks(conversation,{plan,approved_task}_id):Result<()> > refresh_answer_waits,tasks_to_unblock,{update,announce}_task
     check_comments(conversation,plan,spec_id):String
     notice(conversation,text)
@@ -1098,8 +1108,6 @@ src
     queue_worktree_cleanup(task)
     drain_worktree_cleanup() > cleanup_task_worktrees,queue_worktree_cleanup,cleanup_notice
     release_task_views(id,keep) > release_task_views_with_hook
-    writer_base(plan_id,spec,project):Result<String> > plan_{base,base_record},writer_{dependency_changes,base_scratch}
-    record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     compliance_audit(&Arc<Self>,conversation,plan,cancel):Result<Vec<String>> > audit_scope,{produce,review}_audit,AuditTurns,finish_audit
     apply_checked_ledger_change(proposal_id,diff_hash,change):Result<ChangeResult> > check_ledger_proposal,{applied,preview,apply}_ledger_change
     announce_affected_ledger_tasks(change,result):Result<()> > drop,queue_worktree_cleanup,task_by_id,announce_task
@@ -1128,7 +1136,7 @@ src
     matching_round_session(conversation,role,provider,task,round,profile,cwd,add_dirs):Result<Option<String>> > scoped_turn,session_for_context
     session_for_turn(conversation,role,provider,policy,profile,cwd,add_dirs):Result<Option<String>> > {last,matching_round}_session
     round_handoff(id,round,cwd):Result<RoundHandoff> > task_by_id,new_handoff,add_handoff_{requirements,comments},add_protected_paths,round_interruptions,recover_previous_rounds
-    fail_scheduled_task(conversation,task,error) > append_report_entry,stop
+    fail_scheduled_task(conversation,task,error) > append_report_entry
     stop_task(conversation,task,role,cancel):Result<()> > last_turn,failed_turn_status,record_failed_turn
     defer_agent_work(conversation,task):Result<bool> > flatten,pending_mail,set_status
     wait_for_question(conversation,task,request,reviewer):Result<()> > update_task,park_task_for_question,announce_task
@@ -1137,14 +1145,15 @@ src
     terminal_input(conversation,role,handle,sequence,input):Result<()>
     terminal_resize(conversation,role,handle,columns,rows):Result<()> > size,require
     terminal_detach(conversation,role,handle):Result<()> > remove
-    - revision_view,{clear_agent,reserve,run_code}_review,refresh_delivered_tasks,{conversation,approved_plan}_status,
-      record_{comment_reply,plan_lint},{run,store}_report_audit,require_revision_review,checkpoint_revision_work,
-      {cancel,wait_for}_affected_tasks,{spawn,finish}_revision_worker,prepare_{revision,revision_contents},revised_specs,
-      ensure_revision_accepted,prepared_revision,replaced_graph,planner_submitted_plan,wait_for_revision_jobs,
-      finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,unchanged_recovery_request,
-      cleanup_{view_path,task_worktrees_with_hook},plan_base_path,check_audit_scope,save_audit_{evidence,review},
-      complete_audit,requirements_{failure,feedback},{analyze,apply_extracted,propose_extracted}_requirements,
-      require_extracted_entries,append_interview_question,primary_project,session_matches_context,execution_signature
+    - revision_view,plan_base_path,refresh_delivered_tasks,{conversation,approved_plan}_status,replaced_graph,
+      planner_submitted_plan,record_{comment_reply,plan_lint},{run,store}_report_audit,require_revision_review,
+      checkpoint_revision_work,{cancel,wait_for}_affected_tasks,{spawn,finish}_revision_worker,
+      prepare_{revision,revision_contents},revised_specs,ensure_revision_accepted,prepared_revision,wait_for_revision_jobs,
+      finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,
+      {clear_agent,reserve,run_code}_review,unchanged_recovery_request,cleanup_{view_path,task_worktrees_with_hook},
+      check_audit_scope,save_audit_{evidence,review},complete_audit,requirements_{failure,feedback},
+      {analyze,apply_extracted,propose_extracted}_requirements,require_extracted_entries,append_interview_question,
+      primary_project,session_matches_context,execution_signature
    RecoveryAction(E{IntegrateWithConsent,KeepOnBranch,ReviewManualSnapshot,RetryWithGuidance,RestartAgent,CancelTask})
    TaskRecoveryRequest(C{conversation,plan,task,action,consent_files,freshness_token,message})
    TaskRecoveryResponse(C{task,status,round,integrated_files,preserved_branch,new_freshness_token,notice})
@@ -1992,7 +2001,7 @@ src
      draw(frame,view) > paint_at
      paint_at(frame,area,view) > draw_{header_footer,body}
      new(task):Self > DiffView
-     load(reply) > as_str,len,files,lines_in_file
+     load(reply) > as_str,short,len,files,lines_in_file
      target():Option<String> > files,as_str
      half_page(down) > len,files,lines_in_file
      key(code) > move_{file,selection}
@@ -2594,7 +2603,7 @@ src
      refetch_stale_details() > details_are_stale,fetch_task
      handle_plan_action(action) > accept_plan,open_plan_{rejection,comment},submit_plan_review,set_comment
      header_line(width):Line<'static> > header_{project_label,status},controls,prepend_header_notice
-     header_status():String > len,flatten,stage
+     header_status():String > len,flatten,short,total,stage,glyphs,Theme.from_env
      key(key):bool > key_inner,invalidate_context,selection_{context,blocked}
      config_key(key):bool > {reload,save}_config
      open_config() > config_request
@@ -2806,13 +2815,21 @@ src
        NEW_SHORT="[+ New]",PAUSE_ICON="[‖]",CONTINUE_ICON="[▶]",RESUME_ICON="[↻]",CANCEL_ICON="[✕]",NEW_ICON="[+]"
      - button,{append_full,append_short}_actions
     model
-     Agent(C{branch,provider,model,effort,running,pid,activity,turns,reported,{busy,last,started}_ms,tokens_{in,out}})
-      tokens():String
+     compact(n):String
+     Agent(C{branch,provider,model,effort,running,pid,activity,turns,reported,{busy,last,started}_ms,tokens_{in,out},estimated,estimated_{in,out}})
+      usage():Usage
+      tokens():String > usage
      Comment(C{id,plan_id,target,text,status})
      CommentProgress(C{state,error})
      Link(C{count,last})
-     Stage(E{Fresh,Interview,Planning,Review,Executing,Blocked,Done})
+     Stage(E{Fresh,Interview,Planning,Review,Executing,Blocked,Audit,Done})
+      step():usize
+      strip(glyphs):String > step,label
       label():&'static str
+     Usage(E{Reported,Estimated,Unavailable})
+      total(agents):Self
+      short():Option<String>
+     = STEPS
     presentation
      agent_name(key):String
      bounded_coverage(coverage):Value > bound,clean_line
@@ -2972,16 +2989,18 @@ src
      result_evidence:*fixture,start
    cli
     tests
-   core_approvals
-    tests:*dialog,setup,settle
-   core_artifacts
-    tests:*fixture
-   core_integration
-    tests
-   core_task_recovery
-    test_support
-   core_worktree_cleanup
-    tests:*fixture,checkout
+   core
+    integration/land
+     tests
+    orchestration/approvals
+     tests:*dialog,setup,settle
+    task
+     artifacts
+      tests:*fixture
+     recovery
+      test_support
+    worktree/cleanup
+     tests:*fixture,checkout
    daemon/protocol
     tests
    git/artifact_update
@@ -3077,6 +3096,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 133,839 LOC · input 1,190,095 · output 44,902 tokens · state 682928eb4746 · targets AGENTS.md
+· 134,169 LOC · input 1,193,785 · output 45,075 tokens · state 22dfbeed7ece · targets AGENTS.md
 ```
 <!-- hologram:end -->
