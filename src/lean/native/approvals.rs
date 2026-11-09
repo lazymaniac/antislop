@@ -177,11 +177,14 @@ fn claude(lines: &[&str]) -> Option<Approval> {
 fn agy(lines: &[&str]) -> Option<Approval> {
     let footer = lines
         .iter()
-        .rposition(|line| line.trim().starts_with("↑/↓ Navigate · enter Confirm"))?;
+        .rposition(|line| line.trim().starts_with("↑/↓ Navigate"))?;
     if footer + 2 < lines.len() {
         return None;
     }
     let lines = &lines[..=footer];
+    if let Some((first, numbered)) = numbered_choices(lines, footer) {
+        return agy_tool(lines, first, numbered);
+    }
     let (first, marked) = marked_choices(lines, footer)?;
     let title = lines
         .iter()
@@ -198,6 +201,45 @@ fn agy(lines: &[&str]) -> Option<Approval> {
         .map(|line| line.trim())
         .collect::<String>();
     finish(Kind::Trust, path, navigation_choices(marked))
+}
+
+/// Agy's tool confirmations (`toolPermission` other than `always-proceed`):
+/// a heading (`Command`, `MCP`, `Pending edit`, `File access`) over a full
+/// rule, what is asked, a question and `> 1. …` choices moved through with
+/// the arrow keys.
+fn agy_tool(lines: &[&str], first: usize, numbered: Numbered) -> Option<Approval> {
+    let question = first.checked_sub(1)?;
+    if !lines[question].trim().ends_with('?') {
+        return None;
+    }
+    let rule = lines[..question]
+        .iter()
+        .rposition(|line| is_solid_rule(line))?;
+    let heading = lines[rule.checked_sub(1)?].trim();
+    let summary: Vec<&str> = lines[rule + 1..question]
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| *line != "Requesting permission for:" && !line.starts_with("shift+tab"))
+        .collect();
+    let mut server = None;
+    let kind = match heading {
+        "Command" => Kind::Command,
+        "MCP" => {
+            server = summary
+                .first()
+                .and_then(|tool| tool.split_once('/'))
+                .map(|(server, _)| server.to_owned());
+            Kind::Mcp
+        }
+        "Pending edit" | "File access" => Kind::Other,
+        _ => return None,
+    };
+    let choices = numbered
+        .into_iter()
+        .enumerate()
+        .map(|(index, (number, label, cursor))| choice(number, label, navigate(cursor, index)))
+        .collect();
+    finish(kind, summary.join("\n"), choices).map(|approval| Approval { server, ..approval })
 }
 
 /// Gemini draws its tool confirmation in a bordered box: a question, then
@@ -642,6 +684,10 @@ mod tests {
     const OPENCODE_CONFIRM: &str =
         include_str!("../../../tests/fixtures/approvals/opencode/always_confirm.txt");
     const AGY_TRUST: &str = include_str!("../../../tests/fixtures/approvals/agy/trust.txt");
+    const AGY_COMMAND: &str = include_str!("../../../tests/fixtures/approvals/agy/command.txt");
+    const AGY_MCP: &str = include_str!("../../../tests/fixtures/approvals/agy/mcp.txt");
+    const AGY_EDIT: &str = include_str!("../../../tests/fixtures/approvals/agy/edit.txt");
+    const AGY_OUTSIDE: &str = include_str!("../../../tests/fixtures/approvals/agy/outside.txt");
     const GEMINI_SHELL: &str = include_str!("../../../tests/fixtures/approvals/gemini/shell.txt");
     const GEMINI_LIVE: &str =
         include_str!("../../../tests/fixtures/approvals/gemini/shell_live.txt");
@@ -705,6 +751,61 @@ mod tests {
         assert_eq!(approval.choices[0].keys, [Key::Enter]);
         assert_eq!(approval.choices[1].keys, [Key::Down, Key::Enter]);
         assert!(approval.summary.starts_with("/private/tmp"));
+    }
+
+    #[test]
+    fn agy_tool_dialogs_are_answered_by_moving_the_cursor() {
+        let command = detect(ProviderKind::Agy, fixture(AGY_COMMAND)).unwrap();
+        assert_eq!(command.kind, Kind::Command);
+        assert_eq!(command.summary, "touch b.txt");
+        assert_eq!(command.choices.len(), 4);
+        assert_eq!(command.choices[0].decision, Decision::Allow);
+        assert_eq!(command.choices[0].keys, [Key::Enter]);
+        assert_eq!(command.choices[1].decision, Decision::AllowAlways);
+        assert_eq!(command.choices[3].label, "No, cancel");
+        assert_eq!(command.choices[3].decision, Decision::Deny);
+        assert_eq!(
+            command.choices[3].keys,
+            [Key::Down, Key::Down, Key::Down, Key::Enter]
+        );
+
+        let mcp = detect(ProviderKind::Agy, fixture(AGY_MCP)).unwrap();
+        assert_eq!(mcp.kind, Kind::Mcp);
+        assert_eq!(mcp.summary, "antislop/finish_turn");
+        assert_eq!(mcp.mcp_server(), Some("antislop"));
+        assert_eq!(mcp.choices.len(), 6);
+        assert_eq!(mcp.choices[3].label, "No, deny tool call");
+        assert_eq!(mcp.choices[3].decision, Decision::Deny);
+        assert_eq!(mcp.choices[5].decision, Decision::Deny);
+
+        let edit = detect(ProviderKind::Agy, fixture(AGY_EDIT)).unwrap();
+        assert_eq!(edit.kind, Kind::Other);
+        assert!(
+            edit.summary
+                .ends_with("agyw/a.txt\n1  -  hi\n1  +  hello world"),
+            "{}",
+            edit.summary
+        );
+        assert_eq!(
+            labels(&edit),
+            ["Yes, accept this change", "No, reject this change"]
+        );
+        assert_eq!(edit.choices[1].keys, [Key::Down, Key::Enter]);
+
+        let outside = detect(ProviderKind::Agy, fixture(AGY_OUTSIDE)).unwrap();
+        assert_eq!(outside.kind, Kind::Other);
+        assert!(outside.summary.starts_with("Read:\n/private/tmp/"));
+        assert!(outside.summary.ends_with("Reason: outside workspace"));
+        assert_eq!(outside.choices[1].decision, Decision::AllowAlways);
+        assert_eq!(outside.choices[2].decision, Decision::Deny);
+    }
+
+    #[test]
+    fn agy_dialog_without_its_footer_on_the_last_lines_is_not_answered() {
+        let screen = format!("{}\n> next prompt\n────────\nstatus", fixture(AGY_COMMAND));
+        assert!(detect(ProviderKind::Agy, &screen).is_none());
+        let unknown = fixture(AGY_COMMAND).replace("\nCommand\n", "\nSomething else\n");
+        assert!(detect(ProviderKind::Agy, &unknown).is_none());
     }
 
     #[test]
