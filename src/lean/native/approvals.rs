@@ -244,8 +244,8 @@ fn agy_tool(lines: &[&str], first: usize, numbered: Numbered) -> Option<Approval
 
 /// Gemini draws its tool confirmation in a bordered box: a question, then
 /// `● 1. Allow once` style choices (the dot marks the selected one). The
-/// layout comes from the published bundle (see the fixtures); it has not been
-/// seen on a live Gemini yet.
+/// `*_live` fixtures come from Gemini CLI 0.67.0 run through the runtime
+/// against a local fake model API.
 fn gemini(lines: &[&str]) -> Option<Approval> {
     let rows: Vec<String> = lines
         .iter()
