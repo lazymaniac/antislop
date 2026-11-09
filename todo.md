@@ -115,4 +115,7 @@ Other:
 
 - [x] t8: compared saved t4/t5/t6/t7 results; resolved details.rs conflict preserving helpers and both behaviors, without final src/tests changes. Six-requirement matrix and manual terminal checks: docs/lean-core.md, “t8 integration gate” section.
 - [x] t8: repeated final gate: fmt, clippy -D warnings, check, full cargo test --no-fail-fast — exit 0; 496/496, none skipped. All 31 earlier failures now pass; log /tmp/antislop-t8-final-review.log. Evidence for six requirements in docs/lean-core.md.
-- [ ] t8: manual real-terminal checks: OSC 52 selection/copy, /config live saving, single task node and Overview, Checks across several rounds.
+- [x] t8: manual real-terminal checks (2026-11-09, tmux, codex + claude live, scratch project): OSC 52 selection/copy — mouse drag + Ctrl+Y put exactly the selected line on tmux's clipboard; /config (F8) live saving — an effort change applied with "Saved and applied live." and the file's comments kept; single task node — expanded card with Details/PTY/Results/Diff tabs, coverage and round shown; small-change team chosen by the planner, landed commit kept the worker's subject. Fixed on the way: the header stage said "done" while the requirements audit ran.
+- [ ] t8: Checks across several rounds not seen live — every task was approved in round 1; still covered only by tests.
+- [ ] t8 live run: after an approved audit review the orchestrator still reported completion "pending runtime ledger reconciliation" and the audit re-ran; a one-task small-change plan should close after one approved audit.
+- [ ] TUI: Ctrl+Alt+digit approval keys need a terminal that reports them (tmux legacy keys send Alt+digit); offer a fallback key. Config editor is reachable only by F8, not from the palette.

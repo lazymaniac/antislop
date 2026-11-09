@@ -1098,6 +1098,28 @@ mod tests {
     }
 
     #[test]
+    fn the_run_is_in_audit_while_the_requirements_audit_runs_after_the_tasks() {
+        let mut view = View::default();
+        view.tasks.push(TaskRow {
+            id: "t1".into(),
+            status: "approved".into(),
+            ..TaskRow::default()
+        });
+        assert_eq!(view.stage(), Stage::Done);
+        for role in ["requirements-audit-analyst", "requirements-audit-reviewer"] {
+            view.agents.insert(
+                role.into(),
+                Agent {
+                    running: true,
+                    ..Agent::default()
+                },
+            );
+            assert_eq!(view.stage(), Stage::Audit, "{role}");
+            view.agents.clear();
+        }
+    }
+
+    #[test]
     fn comments_are_listed_on_their_element_and_marked_stale_on_a_new_plan() {
         let mut view = View::default();
         let plan = |seq, id: &str| {
