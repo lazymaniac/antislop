@@ -44,6 +44,14 @@ pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
 /// A worktree on a new branch `branch` at `base`; reused if it exists.
 pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
     if path.exists() {
+        let expected_project = worktree_project(project)?.canonicalize()?;
+        let actual_project = worktree_project(path)?.canonicalize()?;
+        if actual_project != expected_project {
+            return Err(Error::Invalid(format!(
+                "worktree {} belongs to a different project",
+                path.display()
+            )));
+        }
         require_worktree_branch(path, branch)?;
         return Ok(());
     }
@@ -56,13 +64,8 @@ pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Re
         .status
         .success()
     {
-        // A missing worktree can be reattached only at the requested result.
-        // Never reset a preserved branch, even when its name matches.
-        if ok(project, &["rev-parse", &reference])? != ok(project, &["rev-parse", base])? {
-            return Err(Error::Invalid(format!(
-                "existing branch {branch} differs from requested worktree base {base}"
-            )));
-        }
+        // Reattach a preserved branch at its current tip. `git worktree add`
+        // enforces that the branch is not already checked out elsewhere.
         ok(project, &["worktree", "add", "--quiet", &target, branch])?;
     } else {
         ok(

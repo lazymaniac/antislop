@@ -557,6 +557,30 @@ mod tests {
             "keep this edit"
         );
         assert_ne!(resumed_writer, worktree_path(&core.state, options).unwrap());
+
+        let retained_tip =
+            git::commit_all(&resumed_writer, git::CommitPurpose::TestFixture).unwrap();
+        git::remove_worktree_keep_branch(&project, &resumed_writer).unwrap();
+        std::fs::write(project.join("input.txt"), "revised input").unwrap();
+        let revised_base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
+        assert_ne!(retained_tip, revised_base);
+
+        // Options preparation reopens the owner's stable branch after checkout
+        // removal and an upstream revision. It must use that branch's current
+        // tip without rewriting it to the new requested base.
+        let (resumed_options_dir, _) =
+            task_directories(&core, options, &options_spec, &project, &None).unwrap();
+        assert_eq!(resumed_options_dir, resumed_writer);
+        assert_eq!(git::head(&resumed_options_dir).unwrap(), retained_tip);
+        assert_eq!(
+            std::fs::read_to_string(resumed_options_dir.join("local-edit.txt")).unwrap(),
+            "keep this edit"
+        );
+        assert_eq!(
+            std::fs::read_to_string(resumed_options_dir.join("input.txt")).unwrap(),
+            "current input"
+        );
+        assert_eq!(git::head(&project).unwrap(), revised_base);
     }
 
     #[test]

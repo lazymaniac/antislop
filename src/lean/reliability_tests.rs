@@ -100,7 +100,11 @@ fn worktrees_bind_stable_task_identity_and_reject_foreign_branches() {
     std::fs::write(other.join("initial"), "changed").unwrap();
     let changed = git::commit_all(&other, git::CommitPurpose::TestFixture).unwrap();
     git::remove_worktree_keep_branch(root, &other).unwrap();
-    assert!(git::add_worktree(root, &other, &unique, &base).is_err());
+    // A clean checkout can be removed while its branch keeps later commits.
+    // Reattaching after the requested base changes must preserve the branch tip.
+    git::add_worktree(root, &other, &unique, &base).unwrap();
+    assert_eq!(git::head(&other).unwrap(), changed);
+    git::remove_worktree_keep_branch(root, &other).unwrap();
     git::add_worktree(root, &other, &unique, &changed).unwrap();
     assert_eq!(git::head(&other).unwrap(), changed);
     // A switched worktree must neither resume nor delete an unrelated branch.
@@ -141,6 +145,39 @@ fn worktrees_bind_stable_task_identity_and_reject_foreign_branches() {
     assert!(worktree_branch(&state, &task).is_err());
     std::fs::create_dir(&path).unwrap();
     assert!(git::worktree_branch(&path).is_err());
+}
+
+#[test]
+fn add_worktree_rejects_existing_checkout_from_another_project() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    for root in [first.path(), second.path()] {
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet", "-b", "main"])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.join("file"), "content").unwrap();
+        git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
+    }
+    let occupied = first.path().join("occupied");
+    let foreign_base = git::head(second.path()).unwrap();
+    git::add_worktree(second.path(), &occupied, "antislop/foreign", &foreign_base).unwrap();
+
+    let error =
+        git::add_worktree(first.path(), &occupied, "antislop/foreign", &foreign_base).unwrap_err();
+    assert!(error.to_string().contains("different project"));
+    assert_eq!(
+        git::worktree_project(&occupied)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        second.path().canonicalize().unwrap()
+    );
+    assert_eq!(git::worktree_branch(&occupied).unwrap(), "antislop/foreign");
 }
 
 #[test]
