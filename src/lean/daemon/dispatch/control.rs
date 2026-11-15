@@ -5,6 +5,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         context,
         request,
         &[
+            activation,
             identity,
             runtime_notice,
             shutdown,
@@ -12,6 +13,30 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             conversations_and_start,
         ],
     )
+}
+
+fn activation(context: &Context<'_>, request: Request) -> Result<Route> {
+    use crate::lean::daemon::{ControlRequest, activation};
+    Ok(match request {
+        Request::Control(ControlRequest::ActivateRuntime {
+            executable,
+            path,
+            conversation,
+            task,
+        }) => Route::Handled(activation::request(
+            context.core,
+            context.project,
+            context.config,
+            Path::new(&executable),
+            path.as_deref(),
+            conversation.as_deref(),
+            task.as_deref(),
+        )?),
+        Request::Control(ControlRequest::RuntimeActivationStatus) => {
+            Route::Handled(activation::status(&context.core.state)?)
+        }
+        request => Route::Unmatched(request),
+    })
 }
 
 fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
@@ -29,6 +54,8 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
                 "project_identity": core.store.repository_id(&project.to_string_lossy())?,
                 "config": config,
                 "config_modified": core.config.modified(),
+                "launch_path": std::env::var("PATH").ok(),
+                "launch_error": crate::lean::doctor::preflight(&core.config_snapshot()).err().map(|e|e.to_string()),
             })
         }),
         request => Route::Unmatched(request),

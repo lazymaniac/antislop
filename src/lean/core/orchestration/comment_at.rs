@@ -177,6 +177,13 @@ impl Core {
     }
 
     pub fn cancel(&self, conversation: &str) {
+        if let Err(error) = crate::lean::daemon::activation::cancel_conversation(self, conversation)
+        {
+            self.notice(
+                conversation,
+                &format!("could not cancel pending runtime activation: {error}"),
+            );
+        }
         for (owner, flag) in self
             .activity
             .task_cancels

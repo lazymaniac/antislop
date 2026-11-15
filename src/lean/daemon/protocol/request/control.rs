@@ -2,6 +2,13 @@
 pub enum ControlRequest {
     /// Which binary the daemon runs and whether it is executing work.
     Identity,
+    ActivateRuntime {
+        executable: String,
+        path: Option<String>,
+        conversation: Option<String>,
+        task: Option<String>,
+    },
+    RuntimeActivationStatus,
     /// Trusted-client operational information, never an execution grant.
     RuntimeNotice {
         conversation: String,

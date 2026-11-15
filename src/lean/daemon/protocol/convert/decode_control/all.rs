@@ -1,5 +1,26 @@
 use super::super::super::{Request, WireRequest};
 
+fn decode_activation(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    use crate::lean::daemon::ControlRequest;
+    match wire {
+        WireRequest::ActivateRuntime {
+            executable,
+            path,
+            conversation,
+            task,
+        } => Ok(Request::Control(ControlRequest::ActivateRuntime {
+            executable,
+            path,
+            conversation,
+            task,
+        })),
+        WireRequest::RuntimeActivationStatus => {
+            Ok(Request::Control(ControlRequest::RuntimeActivationStatus))
+        }
+        other => Err(Box::new(other)),
+    }
+}
+
 fn decode_runtime_notice(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
         WireRequest::RuntimeNotice { conversation, text } => Ok(Request::Control(
@@ -84,7 +105,8 @@ fn decode_start(wire: WireRequest) -> std::result::Result<Request, Box<WireReque
 pub(super) fn decode_group_all(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
-    decode_runtime_notice(wire)
+    decode_activation(wire)
+        .or_else(|wire| decode_runtime_notice(*wire))
         .or_else(|wire| decode_identity(*wire))
         .or_else(|wire| decode_get_config(*wire))
         .or_else(|wire| decode_set_config(*wire))

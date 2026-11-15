@@ -62,6 +62,40 @@ fn route_request(context: &Context<'_>, request: Request) -> Result<Value> {
 }
 
 fn ensure_accepting(core: &Core, request: &Request) -> Result<()> {
+    use super::{
+        ControlRequest as C, ConversationRequest as Q, LedgerRequest as L, SessionRequest as S,
+    };
+    let supervision = matches!(
+        request,
+        Request::Conversation(
+            Q::Cancel { .. }
+                | Q::Pause { .. }
+                | Q::AnswerApproval { .. }
+                | Q::SetApprovalMode { .. }
+                | Q::TakeControl { .. }
+        ) | Request::Terminal(super::TerminalRequest::TerminalInput { .. })
+    );
+    let changes_work = !supervision
+        && matches!(
+            super::lease::scope(request),
+            Some((_, super::lease::Access::Change | super::lease::Access::Take))
+        )
+        || matches!(
+            request,
+            Request::Control(C::Start | C::StartIn { .. } | C::SetConfig { .. })
+                | Request::Session(S::DeleteSession { .. })
+                | Request::Ledger(
+                    L::RejectLedgerProposal { .. }
+                        | L::ProposeLedgerChange { .. }
+                        | L::ApplyLedgerChange { .. }
+                        | L::CreateRun { .. }
+                        | L::AddLedgerSource { .. }
+                )
+        );
+    require(
+        !super::activation::pending(core) || !changes_work,
+        "runtime activation is pending; current turns can finish, retry new work after readiness is confirmed",
+    )?;
     require(
         !core.state.join("stopped").exists()
             || matches!(

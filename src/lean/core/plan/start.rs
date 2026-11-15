@@ -16,8 +16,7 @@ impl Core {
             !plans.contains_key(conversation),
             "a plan is already running",
         )?;
-        self.validate_plan_inputs(conversation, plan_id)?;
-        self.ensure_profiles_launch(plan_id)?;
+        self.preflight_plan_start(conversation, plan_id)?;
         queue(&self.store)?;
         let activated: bool = self.store.db().query_row(
             "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
@@ -38,6 +37,20 @@ impl Core {
         drop(plans);
         self.spawn_plan_runner(conversation, plan_id, cancel, &tasks);
         Ok(tasks)
+    }
+
+    pub(in crate::lean) fn preflight_plan_start(
+        &self,
+        conversation: &str,
+        plan: &str,
+    ) -> Result<()> {
+        require(
+            !crate::lean::daemon::activation::pending(self),
+            "runtime activation is pending; retry after the successor confirms readiness",
+        )?;
+        self.ensure_plan_can_start(conversation)?;
+        self.ensure_profiles_launch(plan)?;
+        self.validate_plan_inputs(conversation, plan)
     }
 
     /// Refuses to start a team whose CLIs cannot be launched, naming the

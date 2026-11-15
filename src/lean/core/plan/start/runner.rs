@@ -33,6 +33,10 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<bool> {
         self.run_plan(conversation, plan_id, cancel);
+        if crate::lean::daemon::activation::pending(self) {
+            self.clear_running_plan(conversation);
+            return Ok(true);
+        }
         self.wait_for_revision_jobs(conversation, cancel);
         let graph = self.locks.graph();
         if cancel.load(Ordering::SeqCst) {
@@ -186,6 +190,9 @@ impl Core {
     }
 
     pub(in crate::lean) fn wake(self: &Arc<Self>, conversation: &str) {
+        if crate::lean::daemon::activation::pending(self) {
+            return;
+        }
         let _lifecycle = self
             .locks
             .session_lifecycle
@@ -237,6 +244,10 @@ impl Core {
     fn next_orchestration_upto(&self, conversation: &str, cancel: &AtomicBool) -> Option<u64> {
         // Decide under the lock so a message either is seen here or starts a new loop.
         let mut running = self.activity.running.lock().expect("running mutex");
+        if crate::lean::daemon::activation::pending(self) {
+            running.remove(conversation);
+            return None;
+        }
         if self
             .activity
             .orchestrator_restarts

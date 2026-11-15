@@ -179,6 +179,7 @@ pub struct Core {
     config: core::state::ConfigState,
     /// Private state directory; session and writer worktrees live under it.
     state: PathBuf,
+    runtime_activation_lock: Mutex<()>,
     activity: core::state::Activity,
     revisions: core::state::RevisionState,
     worktrees: core::state::WorktreeState,
@@ -203,6 +204,9 @@ fn record_message_and_wake_locked(
 }
 
 fn wake_locked(core: &Arc<Core>, conversation: &str) {
+    if daemon::activation::pending(core) {
+        return;
+    }
     let Some(cancel) = core.activity.start_orchestrator(conversation) else {
         return;
     };

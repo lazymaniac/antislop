@@ -82,6 +82,7 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         _lock: lock,
         config: core::state::ConfigState::new(config),
         state: state.canonicalize()?,
+        runtime_activation_lock: Mutex::new(()),
         opened_ms: store::now_ms(),
         activity: Default::default(),
         revisions: Default::default(),
@@ -115,8 +116,12 @@ fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()>
     }
     core.store.recover_approved_requirements()?;
     restore_conversations(core)?;
-    resume_cut_off(core, &interrupted.0);
-    resume_interrupted(core, &interrupted.1);
+    // Confirm a runtime handoff before registering any plan runner. Otherwise
+    // a runner can exit on the pending marker just as confirmation resumes it.
+    if !crate::lean::daemon::activation::pending(core) {
+        resume_cut_off(core, &interrupted.0);
+        resume_interrupted(core, &interrupted.1);
+    }
     answer_pending_mail(core)?;
     Ok(())
 }

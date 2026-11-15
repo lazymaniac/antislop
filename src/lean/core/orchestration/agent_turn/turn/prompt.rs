@@ -9,7 +9,7 @@ pub(super) fn prepare_prompt(
     let mut text = EXECUTION_POLICY.to_owned();
     text.push_str(&inbox_text(state));
     append_task_context(core, state, spec, &mut text)?;
-    append_allocation_context(state, spec, &mut text);
+    append_allocation_context(core, state, spec, &mut text)?;
     let introduce = role_introduction(core, state)?;
     text.push_str(&prompt(introduce, state.resume.is_none()));
     append_round_handoff(core, state, spec, &mut text)?;
@@ -92,12 +92,20 @@ fn append_local_checks(spec: &serde_json::Value, text: &mut String) -> Result<()
     Ok(())
 }
 
-fn append_allocation_context(state: &TurnState<'_>, spec: &agent::Spec, text: &mut String) {
-    if task_role(&state.role).is_none() {
-        return;
-    }
-    let allocation = json!({"turn":state.turn.id,"role":state.role,"cwd":spec.cwd,"session_policy":format!("{:?}",state.session_policy)});
+fn append_allocation_context(
+    core: &Core,
+    state: &TurnState<'_>,
+    spec: &agent::Spec,
+    text: &mut String,
+) -> Result<()> {
+    let Some((task, _)) = task_role(&state.role) else {
+        return Ok(());
+    };
+    let allocation = json!({"turn":state.turn.id,"role":state.role,"cwd":spec.cwd,
+        "conversation":state.conversation,"task":task,"runtime_state":core.state,
+        "runtime_binary":std::env::current_exe()?,"session_policy":format!("{:?}",state.session_policy)});
     text.push_str(&format!("Current runtime allocation (for this turn only): {allocation}\nThe current cwd is authoritative for your role, including resumed turns. Paths in earlier reports identify historical allocations; do not copy them as the current checkout or infer cross-checkout equivalence from matching HEAD. Allocation metadata alone does not attest file contents or uncommitted state.\n"));
+    Ok(())
 }
 
 fn role_introduction(core: &Core, state: &TurnState<'_>) -> Result<bool> {

@@ -37,6 +37,9 @@ impl Core {
         conversation: &str,
         plan_id: &str,
     ) {
+        if crate::lean::daemon::activation::pending(self) {
+            return;
+        }
         let tasks = self.store.plan(plan_id).unwrap_or_default();
         let Some(report) = stopped_report(&tasks) else {
             return;

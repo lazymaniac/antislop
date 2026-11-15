@@ -50,6 +50,8 @@ antislop --new                   # TUI on a new conversation
 antislop doctor                  # configuration, state directory and CLI checks
 antislop stop                    # stop the idle daemon (--state DIR supported)
 antislop stop --force            # cancel running agents and stop the daemon
+antislop activate --binary FILE  # check and activate a new runtime after active work finishes
+antislop activate --status       # inspect the durable activation result
 antislop "Review architecture"   # line mode, exits when idle
 antislop --config FILE --state DIR   # the directory you start it in is the project
 ```
@@ -60,6 +62,15 @@ else `$XDG_STATE_HOME/antislop`, else `~/.local/state/antislop`. Each project ge
 their canonical common Git directory; non-Git projects use their canonical path.
 Databases, logs, session settings and checkpoints survive worktree cleanup. Long socket
 paths use a short private directory under `/tmp`.
+
+Runtime activation preserves the daemon's environment and merges the requesting
+client's absolute PATH entries. The target checks its configuration, required CLIs
+and database compatibility before a handoff is queued and again before switching.
+Current turns finish normally; new tasks wait until the successor confirms readiness.
+The handoff is durable and runs inside the daemon, without a background helper service.
+When activation is part of a task, pass `--conversation ID --task ID` (and the same
+`--config FILE --state DIR`); that task waits for confirmation and independent review
+before its dependents run. Failures retain their raw cause and existing checkpoints.
 
 Several terminals may follow one conversation; the first to act on it steers
 and the others watch until they take control from the palette.

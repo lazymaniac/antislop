@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WireRequest {
+    ActivateRuntime {
+        executable: String,
+        path: Option<String>,
+        conversation: Option<String>,
+        task: Option<String>,
+    },
+    RuntimeActivationStatus,
     /// Trusted-client operational information, never an execution grant.
     RuntimeNotice {
         conversation: String,

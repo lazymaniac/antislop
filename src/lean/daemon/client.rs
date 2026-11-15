@@ -16,6 +16,7 @@ pub struct Client {
     /// This frontend's identity, shared by its clones; a named frontend
     /// steers a conversation alone while it follows events.
     identity: Option<String>,
+    launch_path: Option<std::ffi::OsString>,
 }
 
 impl Client {
@@ -27,6 +28,7 @@ impl Client {
             notice: None,
             origin: None,
             identity: None,
+            launch_path: None,
         }
     }
 
@@ -70,7 +72,13 @@ impl Client {
             return Ok(client);
         }
         clear_stopped(state)?;
-        let mut child = spawn_daemon(project, &config, state, executable)?;
+        let mut child = spawn_daemon(
+            project,
+            &config,
+            state,
+            executable,
+            client.launch_path.as_deref(),
+        )?;
         wait_for_daemon(&client, &mut child, state)?;
         Ok(client)
     }
@@ -197,7 +205,9 @@ fn reuse_existing(
         return Ok(false);
     };
     let same_build = identity["build"].as_str() == Some(build_identity(executable)?.as_str());
-    if same_daemon_context(&identity, project, config, same_build) {
+    if same_daemon_context(&identity, project, config, same_build)
+        && identity["launch_error"].is_null()
+    {
         return Ok(true);
     }
     if reuse_busy_daemon(client, &identity, project, config, same_build) {
@@ -210,6 +220,13 @@ fn reuse_existing(
             identity["pid"]
         ),
     )?;
+    client.launch_path = Some(super::activation::replacement_path(
+        project,
+        config,
+        state,
+        executable,
+        identity["launch_path"].as_str(),
+    )?);
     client.call(&Request::Control(ControlRequest::Shutdown))?;
     wait_unlocked(state)?;
     Ok(false)

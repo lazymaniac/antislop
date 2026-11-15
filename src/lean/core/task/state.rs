@@ -32,6 +32,11 @@ impl Core {
         task: &mut Task,
         status: &str,
     ) -> Result<()> {
+        if status == tasks::status::APPROVED
+            && crate::lean::daemon::activation::gate_approval(self, task)?
+        {
+            return Ok(());
+        }
         self.stop(conversation, task, status, None)
     }
 

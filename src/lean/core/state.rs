@@ -88,8 +88,9 @@ pub(in crate::lean) struct Locks {
     pub(in crate::lean::core) integrating: Mutex<()>,
     pub(in crate::lean::core) graph_updates: Mutex<()>,
     pub(in crate::lean::core) turns: Mutex<mail::TurnLocks>,
-    /// Serializes starting an orchestrator with permanent session deletion.
-    pub(in crate::lean::core) session_lifecycle: Mutex<()>,
+    /// Serializes message commits and orchestrator starts with session deletion
+    /// and the final runtime handoff.
+    pub(in crate::lean) session_lifecycle: Mutex<()>,
 }
 
 fn has(map: &Mutex<HashMap<String, impl Sized>>, key: &str) -> bool {

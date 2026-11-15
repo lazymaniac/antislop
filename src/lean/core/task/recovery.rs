@@ -37,7 +37,31 @@ impl Core {
         if let Some(response) = prepare::interrupt_if_active(self, &mut work) {
             return Ok(response);
         }
-        actions::apply(self, &mut work)?;
+        if let Err(error) = actions::apply(self, &mut work) {
+            if !matches!(
+                work.req.action,
+                RecoveryAction::RestartAgent | RecoveryAction::RetryWithGuidance
+            ) {
+                return Err(error);
+            }
+            let reason = error.to_string();
+            // Reload: an error may have happened after a partial state change.
+            let mut task = self.task(&work.req.plan, &work.task.id)?;
+            self.stop(
+                &work.req.conversation,
+                &mut task,
+                status::FAILED,
+                Some(&reason),
+            )?;
+            self.store.append_event(
+                &work.req.conversation,
+                None,
+                Some(&work.req.plan),
+                "task_recovery_failed",
+                &json!({"task": task.id, "action": work.req.action, "actor": actor, "reason": reason}),
+            )?;
+            return Err(error);
+        }
         response::build(self, work)
     }
 }

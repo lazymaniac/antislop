@@ -275,7 +275,14 @@ fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
         .lines()
         .find(|line| line.contains("was interrupted"))
         .expect("a resumed worker turn");
-    assert!(!resumed.contains("--conversation"), "{resumed}");
+    let arguments: Vec<String> = serde_json::from_str(resumed).unwrap();
+    assert!(
+        !arguments[..arguments.len() - 1]
+            .iter()
+            .any(|arg| arg == "--conversation"),
+        "{resumed}"
+    );
+    let resumed = arguments.last().unwrap();
     assert!(resumed.contains("Task: Fail"), "{resumed}");
     assert!(resumed.contains("Round: 2"), "{resumed}");
     assert!(
@@ -1233,4 +1240,76 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
     let restarted = core.task_unscoped(&plan, &task.id).unwrap();
     assert_eq!(restarted.status, "approved");
     assert!(restarted.round > task.round);
+}
+
+#[test]
+fn missing_cli_during_restart_preserves_checkpoint_and_records_failure_before_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    wait_idle(&core, &conversation);
+    let mut before = core.store.plan(&plan).unwrap().remove(0);
+    before.feedback.get_or_insert_with(|| json!({}))["checkpoint_note"] =
+        json!("keep this evidence");
+    core.store.update_task(&before).unwrap();
+    let turn = core
+        .store
+        .last_turn(&conversation, &format!("worker:{}", before.id))
+        .unwrap()
+        .unwrap();
+    let cli = dir.path().join("agy");
+    let saved = dir.path().join("agy.saved");
+    std::fs::rename(&cli, &saved).unwrap();
+    let request = |action| TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: before.id.clone(),
+        action,
+        consent_files: None,
+        message: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &plan, &before.id)
+            .unwrap(),
+    };
+    let error = core
+        .recover_task(request(RecoveryAction::RestartAgent))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("not an executable file or on PATH"),
+        "{error}"
+    );
+    let after = core.task(&plan, &before.id).unwrap();
+    assert_eq!(after.status, "failed");
+    assert_eq!(after.report, before.report);
+    assert_eq!(after.base, before.base);
+    assert_eq!(after.result, before.result);
+    assert_eq!(
+        after.feedback.as_ref().unwrap()["checkpoint_note"],
+        "keep this evidence"
+    );
+    assert_eq!(after.feedback.as_ref().unwrap()["reason"], error);
+    assert_eq!(
+        core.store
+            .last_turn(&conversation, &format!("worker:{}", before.id))
+            .unwrap()
+            .unwrap()
+            .session_id,
+        turn.session_id
+    );
+    assert!(
+        core.store
+            .events_since(&conversation, 0, 10000)
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "task_recovery_failed" && e.payload["reason"] == error)
+    );
+    std::fs::rename(saved, cli).unwrap();
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    core.recover_task(request(RecoveryAction::RetryWithGuidance))
+        .unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
 }

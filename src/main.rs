@@ -7,6 +7,10 @@ usage:
   antislop [chat] [options] [message]
   antislop stop [--state DIR] [--force]
                               stop the daemon; --force cancels running work
+  antislop activate --binary FILE [--conversation ID --task ID] [--config FILE] [--state DIR]
+                              activate a checked runtime when current work finishes
+  antislop activate --status [--config FILE] [--state DIR]
+                              show the durable activation result
   antislop init [--force]     write antislop.toml for the agent CLIs found on PATH
   antislop doctor [--config FILE] [--state DIR]
                               check the configuration and that every profile's CLI launches
@@ -60,12 +64,26 @@ fn run() -> Result<()> {
                 std::path::Path::new(&args[3]),
             )
         }
+        Some("__runtime_preflight") => {
+            antislop::require(
+                args.len() == 4,
+                "__runtime_preflight requires PROJECT CONFIG STATE",
+            )?;
+            let checked = antislop::lean::daemon::runtime_preflight(
+                std::path::Path::new(&args[1]),
+                std::path::Path::new(&args[2]),
+                std::path::Path::new(&args[3]),
+            )?;
+            println!("{checked}");
+            Ok(())
+        }
         // Started by Agy as its stdio MCP server; see `antislop setup agy`.
         Some("mcp-bridge") => antislop::lean::mcp::bridge(),
         Some("setup") => antislop::lean::cli::setup(&args[1..]),
         Some("init") => antislop::lean::cli::init(&args[1..]),
         Some("doctor") => antislop::lean::cli::doctor(&args[1..]),
         Some("stop") => antislop::lean::cli::stop(&args[1..]),
+        Some("activate") => antislop::lean::cli::activate(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),
         _ => antislop::lean::cli::chat(&args),
     }

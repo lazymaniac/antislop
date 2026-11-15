@@ -36,6 +36,9 @@ fn keep_branch(core: &Core, work: &mut RecoveryWork) -> Result<()> {
 }
 
 fn retry(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
+    if !core.activity.plan_running(&work.req.conversation) {
+        core.preflight_plan_start(&work.req.conversation, &work.req.plan)?;
+    }
     queue_guidance(core, work)?;
     work.task.status = status::QUEUED.into();
     work.task.verdict = None;
@@ -50,6 +53,9 @@ fn retry(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
 }
 
 fn restart(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
+    if !core.activity.plan_running(&work.req.conversation) {
+        core.preflight_plan_start(&work.req.conversation, &work.req.plan)?;
+    }
     core.store.forget_task_sessions(&work.task.id)?;
     queue_guidance(core, work)?;
     work.task.status = status::QUEUED.into();

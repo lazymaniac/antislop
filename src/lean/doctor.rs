@@ -48,6 +48,14 @@ fn profile_command(config: &Config, name: &str) -> std::result::Result<PathBuf, 
     Ok(resolved)
 }
 
+pub(in crate::lean) fn preflight(config: &Config) -> Result<()> {
+    let mut problems = launch_problems(config, config.routing.keys().copied());
+    if let Err(error) = profile_command(config, &config.orchestrator.profile) {
+        problems.push(error);
+    }
+    crate::require(problems.is_empty(), &problems.join("; "))
+}
+
 /// Why the profiles routed for `kinds` cannot be launched; empty when every
 /// one of them can. Each problem names the profiles that would launch.
 pub(crate) fn launch_problems(
