@@ -83,6 +83,7 @@ impl App {
         let [body, _, footer] = Self::main_areas(area);
         self.workbench_area = None;
         self.workbench_sections = [Rect::default(); 3];
+        self.workbench_file_rows.clear();
 
         let theme = Theme::from_env();
         if self.workbench_docked && area.width >= 100 {
@@ -313,7 +314,7 @@ impl App {
             lines.push(Line::raw(""));
 
             lines.push(Line::from(Span::styled(
-                "[3] Gates & Mini-Diff (click: diff):",
+                truncate("[3] Gates & Mini-Diff ([/] file · d diff · C comment):", w),
                 theme.title().add_modifier(Modifier::BOLD),
             )));
             if task.obligations.is_some() {
@@ -326,29 +327,47 @@ impl App {
                 truncate(&taskinfo::integration_line(task), w),
                 theme.dim(),
             )));
-            if let Some(diff) = self.diff.as_ref().filter(|d| d.task == task.id) {
-                for (kind, line_text) in diff.mini_preview(4) {
-                    let style = match kind.as_str() {
-                        "add" => Style::default().fg(theme::ayu::GREEN),
-                        "del" => Style::default().fg(theme::ayu::RED),
-                        _ => theme.title(),
+            let files = self.workbench_files_for_task(task);
+            if !files.is_empty() {
+                let selected_idx = self.workbench_file_index.min(files.len().saturating_sub(1));
+                let total = files.len();
+                for (idx, entry) in files.iter().enumerate().take(4) {
+                    let row_y = inner.y.saturating_add(lines.len() as u16);
+                    if row_y < inner.bottom().saturating_sub(1) {
+                        self.workbench_file_rows.push((row_y, idx));
+                    }
+                    let prefix = if idx == selected_idx { "▸ " } else { "  " };
+                    let label = match entry.stats {
+                        Some((added, removed)) => format!(
+                            "{prefix}[{}/{total}] {} (+{added}/-{removed})",
+                            idx + 1,
+                            entry.path
+                        ),
+                        None => format!("{prefix}[{}/{total}] {}", idx + 1, entry.path),
+                    };
+                    let style = if idx == selected_idx {
+                        theme.accent().add_modifier(Modifier::BOLD)
+                    } else {
+                        theme.text()
                     };
                     lines.push(Line::from(Span::styled(
-                        truncate(&format!("  {}", view::clean(&line_text)), w),
+                        truncate(&view::clean(&label), w),
                         style,
                     )));
+                    if idx == selected_idx {
+                        for (kind, hunk_line) in entry.hunks.iter().take(2) {
+                            let h_style = match kind.as_str() {
+                                "add" => Style::default().fg(theme::ayu::GREEN),
+                                "del" => Style::default().fg(theme::ayu::RED),
+                                _ => theme.dim(),
+                            };
+                            lines.push(Line::from(Span::styled(
+                                truncate(&format!("    {}", view::clean(hunk_line)), w),
+                                h_style,
+                            )));
+                        }
+                    }
                 }
-            } else if let Some(files) = task
-                .integration
-                .as_ref()
-                .and_then(|v| v["files"].as_array())
-                .filter(|f| !f.is_empty())
-            {
-                let names: Vec<&str> = files.iter().filter_map(|v| v.as_str()).take(3).collect();
-                lines.push(Line::from(Span::styled(
-                    truncate(&format!("  files: {}", names.join(", ")), w),
-                    theme.accent(),
-                )));
             } else if let Some(effect) = &task.effect {
                 lines.push(Line::from(Span::styled(
                     truncate(&format!("  Δ {}", view::clean(effect)), w),

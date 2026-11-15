@@ -244,6 +244,50 @@ impl View {
     pub fn active_rigor(&self) -> crate::lean::tasks::Team {
         self.team.unwrap_or(crate::lean::tasks::Team::SmallChange)
     }
+
+    pub fn task_downstream_dependents(&self, task_id: &str) -> Vec<String> {
+        super::flow_editor::downstream_unfinished_dependents(self, task_id)
+    }
+
+    pub fn task_bottleneck_count(&self, task_id: &str) -> usize {
+        self.task_downstream_dependents(task_id).len()
+    }
+
+    pub fn critical_path_chain(&self) -> Vec<String> {
+        super::flow_editor::critical_path_tasks(self)
+    }
+
+    pub fn is_critical_path_task(&self, task_id: &str) -> bool {
+        self.critical_path_chain().iter().any(|id| id == task_id)
+    }
+
+    pub fn agent_live_clock(&self, key: &str, ascii: bool) -> Option<String> {
+        let prefix = if ascii { "T+" } else { "⏱ " };
+        let elapsed = |agent: &Agent| {
+            let started_ms = agent.started_ms?;
+            let elapsed_ms = crate::lean::store::now_ms()
+                .saturating_sub(started_ms)
+                .max(0) as u64;
+            Some(format!(
+                "{prefix}{}",
+                super::flow_editor::format_clock_mm_ss(elapsed_ms.saturating_add(agent.busy_ms))
+            ))
+        };
+        if let Some(agent) = self.agents.get(key).filter(|agent| agent.running)
+            && let Some(clock) = elapsed(agent)
+        {
+            return Some(clock);
+        }
+        let task_id = key.split_once(':').map_or(key, |(_, id)| id);
+        [format!("worker:{task_id}"), format!("reviewer:{task_id}")]
+            .iter()
+            .find_map(|role| {
+                self.agents
+                    .get(role)
+                    .filter(|agent| agent.running)
+                    .and_then(elapsed)
+            })
+    }
 }
 
 #[cfg(test)]

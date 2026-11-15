@@ -243,6 +243,9 @@ impl App {
             }
             KeyCode::Char('d') => self.set_graph_tab(3),
             KeyCode::Char('c') => self.open_graph_comment(),
+            KeyCode::Char('C') => self.comment_workbench_file(),
+            KeyCode::Char('[') => self.cycle_workbench_file(false),
+            KeyCode::Char(']') => self.cycle_workbench_file(true),
             KeyCode::Char('e') => self.open_flow_edit(),
             KeyCode::Char('a') => self.open_flow_add_dependent(),
             KeyCode::Char('S') => self.open_flow_split(),

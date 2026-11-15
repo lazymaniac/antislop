@@ -238,9 +238,15 @@ impl App {
                 if conversation == self.conversation
                     && request_id == self.diff_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
-                    && let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task)
                 {
-                    diff.load(reply);
+                    let mut cached = DiffView::new(task.clone());
+                    cached.load(reply.clone());
+                    cached.select_file(self.workbench_file_index);
+                    self.workbench_diffs.insert(task.clone(), cached);
+                    if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task) {
+                        diff.load(reply);
+                        diff.select_file(self.workbench_file_index);
+                    }
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.diff_request_id == request_id
                     && let Some(diff) = state.diff.as_mut().filter(|diff| diff.task == task)

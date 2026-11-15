@@ -77,6 +77,43 @@ impl DiffView {
         }
     }
 
+    pub fn file_count(&self) -> usize {
+        self.files().len()
+    }
+
+    pub fn selected_file_index(&self) -> usize {
+        self.file
+    }
+
+    pub fn select_file(&mut self, index: usize) {
+        self.file = index.min(self.files().len().saturating_sub(1));
+        self.line = 0;
+        self.scroll = 0;
+    }
+
+    pub fn file_summaries(&self) -> Vec<super::flow_editor::WorkbenchFileEntry> {
+        self.files()
+            .iter()
+            .map(|file| {
+                let hunks = file
+                    .lines
+                    .iter()
+                    .filter(|line| matches!(line.kind.as_str(), "add" | "del"))
+                    .take(2)
+                    .map(|line| {
+                        let prefix = if line.kind == "add" { "+" } else { "-" };
+                        (line.kind.clone(), format!("{prefix}{}", line.text))
+                    })
+                    .collect();
+                super::flow_editor::WorkbenchFileEntry {
+                    path: file.path.clone(),
+                    stats: Some((file.added, file.removed)),
+                    hunks,
+                }
+            })
+            .collect()
+    }
+
     pub fn mini_preview(&self, max_lines: usize) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for file in self.files() {
