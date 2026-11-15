@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn artifact_bytes_reads_the_landed_blob_instead_of_following_worktree_symlinks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    ok(root, &["init", "-q"]).unwrap();
+    std::fs::create_dir(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/brief.md"), "landed text").unwrap();
+    let commit = commit_all(root, CommitPurpose::TestFixture).unwrap();
+    let outside = dir.path().join("outside.txt");
+    std::fs::write(&outside, "unintended contents").unwrap();
+    std::fs::remove_file(root.join("docs/brief.md")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("docs/brief.md")).unwrap();
+
+    assert_eq!(
+        artifact_bytes(root, &commit, "docs/brief.md").unwrap(),
+        b"landed text"
+    );
+}
+
+#[test]
 fn owned_update_keeps_head_index_permissions_and_the_displaced_inode() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

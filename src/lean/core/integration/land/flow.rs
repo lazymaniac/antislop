@@ -193,12 +193,7 @@ impl<'a> Integration<'a> {
             if !landed.iter().any(|landed_path| landed_path == path) {
                 continue;
             }
-            let file = target.join(path);
-            let metadata = file.symlink_metadata()?;
-            if !metadata.file_type().is_file() {
-                continue;
-            }
-            let bytes = std::fs::read(file)?;
+            let bytes = git::artifact_bytes(target, source_commit, path)?;
             let Some(text) = text_document(&bytes) else {
                 continue;
             };
@@ -295,7 +290,7 @@ mod tests {
                     "goal":"Create the declared text file",
                     "kind":"writing",
                     "change_kind":"artifact",
-                    "outputs":["brief.md", "image.bin"],
+                    "outputs":["brief.md", "image.md"],
                     "reviewer":{"summary":"Check outputs"}
                 })],
             )
@@ -305,7 +300,7 @@ mod tests {
         let worktree = directory.path().join("writer");
         git::add_worktree(&project, &worktree, "test-writer", &base).unwrap();
         std::fs::write(worktree.join("brief.md"), "Deliverable café").unwrap();
-        std::fs::write(worktree.join("image.bin"), b"\0\xff\x01").unwrap();
+        std::fs::write(worktree.join("image.md"), b"\0\xff\x01").unwrap();
         std::fs::write(worktree.join("agent-report.txt"), "Internal worker report").unwrap();
         let change = git::commit_all(&worktree, git::CommitPurpose::TestFixture).unwrap();
         let session_tree = core.session_worktree(&conversation.id, &project).unwrap();
