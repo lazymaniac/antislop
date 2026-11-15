@@ -1313,3 +1313,135 @@ fn missing_cli_during_restart_preserves_checkpoint_and_records_failure_before_re
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
 }
+
+#[test]
+fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let main = git(&project, &["rev-parse", "main"]);
+    std::fs::write(project.join("user-draft.txt"), "unsent user work\n").unwrap();
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    wait_idle(&core, &conversation);
+    let session = support::session_worktree(&core, &project, &conversation);
+    let session_branch = git(&session, &["symbolic-ref", "--short", "HEAD"]);
+    core.store
+        .append_event(
+            &conversation,
+            None,
+            None,
+            "session_started",
+            &json!({"branch":"main"}),
+        )
+        .unwrap();
+    let mut task = core.store.plan(&plan).unwrap().remove(0);
+
+    let checkpoint_dir = dir.path().join("checkpoint");
+    git(
+        &project,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "retained-checkpoint",
+            checkpoint_dir.to_str().unwrap(),
+            "main",
+        ],
+    );
+    std::fs::write(checkpoint_dir.join("retained.txt"), "checkpoint evidence\n").unwrap();
+    git(&checkpoint_dir, &["add", "."]);
+    git(&checkpoint_dir, &["commit", "-qm", "retained checkpoint"]);
+    task.base = Some(main.clone());
+    task.result = Some(git(&checkpoint_dir, &["rev-parse", "HEAD"]));
+    task.report = Some("Retained observations before allocation failed".into());
+    task.status = "failed".into();
+    task.feedback.get_or_insert_with(|| json!({}))["reason"] =
+        json!("legacy session has no persisted integration branch");
+    core.store.update_task(&task).unwrap();
+    let config = (*core.config_snapshot()).clone();
+    drop(core);
+
+    // Model a legacy runtime: task evidence exists, but no session mapping or ref.
+    let state = dir.path().join("state");
+    let record = state.join("session-branches").join(
+        Sha256::digest(conversation.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+    );
+    std::fs::remove_file(record).unwrap();
+    git(&project, &["worktree", "remove", session.to_str().unwrap()]);
+    git(&project, &["branch", "-D", &session_branch]);
+    let task_branch = format!("antislop/{}", task.id);
+    for block in git(&project, &["worktree", "list", "--porcelain"]).split("\n\n") {
+        if block
+            .lines()
+            .any(|line| line == format!("branch refs/heads/{task_branch}"))
+        {
+            let path = block
+                .lines()
+                .find_map(|line| line.strip_prefix("worktree "))
+                .unwrap();
+            git(&project, &["worktree", "remove", path]);
+        }
+    }
+    git(
+        &project,
+        &[
+            "update-ref",
+            &format!("refs/heads/{task_branch}"),
+            task.result.as_deref().unwrap(),
+        ],
+    );
+    let agy = dir.path().join("agy");
+    let source = std::fs::read_to_string(&agy).unwrap();
+    let anchor = "# A reviewer that rejects the same obligation every round.";
+    assert!(source.contains(anchor));
+    std::fs::write(&agy, source.replace(anchor, &format!(r#"
+if worker and "You review" not in prompt and os.path.exists(os.path.join(here, "logged-in")):
+    assert open("retained.txt").read() == "checkpoint evidence\n", "checkpoint missing from resumed allocation"
+    open(os.path.join(here, "retained-checkpoint-seen"), "w").close()
+{anchor}
+"#))).unwrap();
+
+    let core = Core::open(&state, config).unwrap();
+    let restored = core.task(&plan, &task.id).unwrap();
+    assert_eq!(restored.status, "failed");
+    assert_eq!(restored.report, task.report);
+    assert_eq!(restored.base, task.base);
+    assert_eq!(restored.result, task.result);
+    assert_eq!(
+        git(
+            &support::session_worktree(&core, &project, &conversation),
+            &["rev-parse", "HEAD"]
+        ),
+        main
+    );
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::RetryWithGuidance,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &plan, &task.id)
+            .unwrap(),
+        message: Some(
+            "Session integration branch restored; continue from the retained checkpoint".into(),
+        ),
+    })
+    .unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+    assert!(dir.path().join("retained-checkpoint-seen").exists());
+    assert_eq!(git(&project, &["rev-parse", "main"]), main);
+    assert_eq!(
+        std::fs::read_to_string(project.join("user-draft.txt")).unwrap(),
+        "unsent user work\n"
+    );
+    assert!(!project.join("retained.txt").exists());
+}

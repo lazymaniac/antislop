@@ -87,6 +87,8 @@ pub(in crate::lean) struct Locks {
     /// Writers land on the user's branch one at a time.
     pub(in crate::lean::core) integrating: Mutex<()>,
     pub(in crate::lean::core) graph_updates: Mutex<()>,
+    /// Serializes creation, recovery and validation of session-owned checkouts.
+    pub(in crate::lean::core) session_branches: Mutex<()>,
     pub(in crate::lean::core) turns: Mutex<mail::TurnLocks>,
     /// Serializes message commits and orchestrator starts with session deletion
     /// and the final runtime handoff.

@@ -50,7 +50,12 @@ impl Core {
         )?;
         self.ensure_plan_can_start(conversation)?;
         self.ensure_profiles_launch(plan)?;
-        self.validate_plan_inputs(conversation, plan)
+        self.validate_plan_inputs(conversation, plan)?;
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        if git::is_repository(&project) {
+            self.create_session_branch(conversation, &project)?;
+        }
+        Ok(())
     }
 
     /// Refuses to start a team whose CLIs cannot be launched, naming the

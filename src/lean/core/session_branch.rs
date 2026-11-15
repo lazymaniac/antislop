@@ -1,6 +1,7 @@
 use crate::lean::*;
+use rusqlite::OptionalExtension;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionBranch {
     project: String,
@@ -10,52 +11,37 @@ struct SessionBranch {
 
 impl Core {
     pub(super) fn validate_session_project(project: &Path) -> Result<String> {
-        let project = project.canonicalize()?;
-        require(
-            git::is_repository(&project),
-            "cannot start a session integration branch: project is not a Git repository",
-        )?;
-        require(
-            PathBuf::from(git::ok(&project, &["rev-parse", "--show-toplevel"])?).canonicalize()?
-                == project,
-            "cannot start a session integration branch: project must be the Git worktree root",
-        )?;
-        local_main(&project)
+        local_main(&session_project(project)?)
     }
 
-    /// Create a durable, session-owned integration line from the local `main`.
+    /// Ensure the session-owned line exists before any task is allocated.
+    /// Missing legacy records and interrupted creation use the same path as new sessions.
     pub(super) fn create_session_branch(
         &self,
         conversation: &str,
         project: &Path,
     ) -> Result<String> {
+        let _branches = self
+            .locks
+            .session_branches
+            .lock()
+            .expect("session branches mutex");
         let project = project.canonicalize()?;
-        let base = local_main(&project)?;
         let branch = session_branch_name(conversation, &project)?;
-        let worktree = self
-            .state
-            .join("session-worktrees")
-            .join(crate::hash(conversation.as_bytes()));
-        let record = SessionBranch {
-            project: project.to_string_lossy().into_owned(),
-            branch: branch.clone(),
-            worktree: worktree.clone(),
+        let persisted = self.session_branch_path(conversation).try_exists()?;
+        let record = if persisted {
+            self.load_session_branch(conversation)?
+        } else {
+            // A nested directory must never inherit a parent repository.
+            session_project(&project)?;
+            SessionBranch {
+                project: project.to_string_lossy().into_owned(),
+                branch: branch.clone(),
+                worktree: self.session_worktree_path(conversation),
+            }
         };
-        git::add_worktree(&project, &worktree, &branch, &base)?;
-        self.save_session_branch(conversation, &record)?;
-        Ok(branch)
-    }
-
-    /// Return the session target, recreating a missing checkout at its preserved branch tip.
-    pub(in crate::lean) fn session_worktree(
-        &self,
-        conversation: &str,
-        project: &Path,
-    ) -> Result<PathBuf> {
-        let project = project.canonicalize()?;
-        let record = self.load_session_branch(conversation)?;
         require(
-            record.branch == session_branch_name(conversation, &project)?,
+            record.branch == branch,
             "persisted session integration branch name is invalid",
         )?;
         require(
@@ -66,7 +52,7 @@ impl Core {
             Path::new(&record.project) == project,
             "session integration branch belongs to a different project",
         )?;
-        if record.worktree.exists() {
+        if record.worktree.try_exists()? {
             require(
                 git::worktree_project(&record.worktree)?.canonicalize()?
                     == git::worktree_project(&project)?.canonicalize()?,
@@ -76,18 +62,51 @@ impl Core {
                 git::worktree_branch(&record.worktree)? == record.branch,
                 "session integration worktree is on an unexpected branch",
             )?;
-            return Ok(record.worktree);
+            // A symbolic HEAD can survive deletion of its ref; do not accept an unborn checkout.
+            git::head(&record.worktree)?;
+        } else {
+            let reference = format!("refs/heads/{}", record.branch);
+            let found = git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?;
+            require(
+                found.status.success() || found.status.code() == Some(1),
+                &format!(
+                    "cannot inspect session integration branch: {}",
+                    String::from_utf8_lossy(&found.stderr).trim()
+                ),
+            )?;
+            let exists = found.status.success();
+            let base = if exists {
+                git::ok(
+                    &project,
+                    &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+                )?
+            } else {
+                require(
+                    !persisted,
+                    &format!(
+                        "persisted session integration branch {} is missing; restore its Git ref before retrying",
+                        record.branch
+                    ),
+                )?;
+                local_main(&project)?
+            };
+            git::add_worktree(&project, &record.worktree, &record.branch, &base)?;
         }
-        let tip = git::ok(
-            &project,
-            &[
-                "rev-parse",
-                "--verify",
-                &format!("refs/heads/{}", record.branch),
-            ],
-        )?;
-        git::add_worktree(&project, &record.worktree, &record.branch, &tip)?;
-        Ok(record.worktree)
+        if !persisted {
+            self.save_session_branch(conversation, &record)?;
+            self.ensure_session_started_event(conversation, &record.branch)?;
+        }
+        Ok(record.branch)
+    }
+
+    /// Reuses or initializes the durable target, including sessions predating session branches.
+    pub(in crate::lean) fn session_worktree(
+        &self,
+        conversation: &str,
+        project: &Path,
+    ) -> Result<PathBuf> {
+        self.create_session_branch(conversation, project)?;
+        Ok(self.session_worktree_path(conversation))
     }
 
     pub(super) fn restore_session_branches(&self) -> Result<()> {
@@ -103,31 +122,23 @@ impl Core {
             if !git::is_repository(&project) {
                 continue;
             }
-            let branch = session_branch_name(&conversation.id, &project)?;
-            let reference = format!("refs/heads/{branch}");
-            if git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?
-                .status
-                .success()
-            {
-                let record = SessionBranch {
-                    project: project.to_string_lossy().into_owned(),
-                    branch,
-                    worktree: self.session_worktree_path(&conversation.id),
-                };
-                self.save_session_branch(&conversation.id, &record)?;
-                self.session_worktree(&conversation.id, &project)?;
-                self.ensure_session_started_event(&conversation.id, &record.branch)?;
+            if let Err(error) = self.create_session_branch(&conversation.id, &project) {
+                // One legacy session with a missing input must not hide the other sessions.
+                // Allocation retries the same validation and returns the original failure.
+                self.notice(
+                    &conversation.id,
+                    &format!("could not initialize session integration branch: {error}"),
+                );
             }
         }
         Ok(())
     }
 
     fn ensure_session_started_event(&self, conversation: &str, branch: &str) -> Result<()> {
-        let first = self.store.events_since(conversation, 0, 1)?;
-        if first
-            .first()
-            .is_none_or(|event| event.kind != "session_started")
-        {
+        let latest: Option<String> = self.store.db().query_row(
+            "SELECT json_extract(payload,'$.branch') FROM events WHERE conversation_id=?1 AND kind='session_started' ORDER BY seq DESC LIMIT 1",
+            [conversation], |row| row.get(0)).optional()?.flatten();
+        if latest.as_deref() != Some(branch) {
             self.store.append_event(
                 conversation,
                 None,
@@ -176,7 +187,7 @@ impl Core {
         if path.exists() {
             let existing = self.load_session_branch(conversation)?;
             require(
-                existing.branch == record.branch && existing.project == record.project,
+                existing == *record,
                 "session already has a different integration branch",
             )?;
             return Ok(());
@@ -186,10 +197,33 @@ impl Core {
             tempfile::NamedTempFile::new_in(path.parent().expect("session branch parent"))?;
         temporary.write_all(&serde_json::to_vec(record)?)?;
         temporary.as_file().sync_all()?;
-        temporary.persist(&path).map_err(|error| error.error)?;
+        match temporary.persist_noclobber(&path) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                require(
+                    self.load_session_branch(conversation)? == *record,
+                    "session already has a different integration branch",
+                )?;
+            }
+            Err(error) => return Err(error.error.into()),
+        }
         std::fs::File::open(path.parent().expect("session branch parent"))?.sync_all()?;
         Ok(())
     }
+}
+
+fn session_project(project: &Path) -> Result<PathBuf> {
+    let project = project.canonicalize()?;
+    require(
+        git::is_repository(&project),
+        "cannot start a session integration branch: project is not a Git repository",
+    )?;
+    require(
+        PathBuf::from(git::ok(&project, &["rev-parse", "--show-toplevel"])?).canonicalize()?
+            == project,
+        "cannot start a session integration branch: project must be the Git worktree root",
+    )?;
+    Ok(project)
 }
 
 fn session_branch_name(conversation: &str, project: &Path) -> Result<String> {
@@ -221,6 +255,13 @@ fn local_main(project: &Path) -> Result<String> {
     let reference = git::git(
         project,
         &["show-ref", "--verify", "--quiet", "refs/heads/main"],
+    )?;
+    require(
+        reference.status.success() || reference.status.code() == Some(1),
+        &format!(
+            "cannot inspect local main branch: {}",
+            String::from_utf8_lossy(&reference.stderr).trim()
+        ),
     )?;
     require(
         reference.status.success(),
@@ -259,6 +300,242 @@ mod tests {
 
     fn git_output(path: &Path, args: &[&str]) -> String {
         git::ok(path, args).unwrap()
+    }
+
+    #[test]
+    fn legacy_session_without_record_or_ref_recovers_before_allocation() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let main = git::head(&project).unwrap();
+        git::ok(&project, &["checkout", "-qb", "user-work"]).unwrap();
+        std::fs::write(project.join("source.txt"), "user draft\n").unwrap();
+        let state = directory.path().join("state");
+        let core = Core::open(&state, config()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_started",
+                &json!({"branch":"main"}),
+            )
+            .unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({"id":"session-context","title":"Context","goal":"Read source","change_kind":"none","kind":"context"})).unwrap();
+        let mut task = core
+            .store
+            .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
+            .unwrap()
+            .remove(0);
+        task.status = status::FAILED.into();
+        task.round = 2;
+        task.report = Some("retained checkpoint report".into());
+        task.base = Some(main.clone());
+        task.result = Some(main.clone());
+        core.store.update_task(&task).unwrap();
+        assert!(!core.session_branch_path(&conversation.id).exists());
+        drop(core);
+
+        let core = Core::open(&state, config()).unwrap();
+        let tree = core.session_worktree(&conversation.id, &project).unwrap();
+        assert_eq!(git::head(&tree).unwrap(), main);
+        assert_eq!(
+            core.writer_base(&task.plan_id, &spec, &project).unwrap(),
+            main
+        );
+        let restored = core.store.plan(&task.plan_id).unwrap().remove(0);
+        assert_eq!(restored.report, task.report);
+        assert_eq!(restored.base, task.base);
+        assert_eq!(restored.result, task.result);
+        assert_eq!(restored.status, status::FAILED);
+        assert_eq!(restored.round, 2);
+        assert_eq!(git::session_branch(&project).unwrap(), "user-work");
+        assert_eq!(
+            std::fs::read_to_string(project.join("source.txt")).unwrap(),
+            "user draft\n"
+        );
+        let branches: Vec<_> = core
+            .store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "session_started")
+            .collect();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].payload["branch"], "main");
+        assert_eq!(
+            branches[1].payload["branch"],
+            git::worktree_branch(&tree).unwrap()
+        );
+        let mut view = crate::lean::tui::view::View::default();
+        for event in &branches {
+            view.apply(&json!({"seq":event.seq,"kind":event.kind,"payload":event.payload}));
+        }
+        assert_eq!(
+            view.session_branch.as_deref(),
+            branches[1].payload["branch"].as_str()
+        );
+        drop(core);
+        let reopened = Core::open(&state, config()).unwrap();
+        assert_eq!(
+            reopened
+                .store
+                .events_since(&conversation.id, 0, 100)
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == "session_started")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn interrupted_session_creation_preserves_tip_and_serializes_recovery() {
+        for removed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = directory.path().join("project");
+            repository(&project, "main");
+            let main = git::head(&project).unwrap();
+            let state = directory.path().join("state");
+            let core = Core::open(&state, config()).unwrap();
+            let conversation = core
+                .store
+                .create_conversation(project.to_str().unwrap())
+                .unwrap();
+            let branch = session_branch_name(&conversation.id, &project).unwrap();
+            let tree = core.session_worktree_path(&conversation.id);
+            git::add_worktree(&project, &tree, &branch, &main).unwrap();
+            std::fs::write(tree.join("retained.txt"), "retained result\n").unwrap();
+            let tip = git::commit_all(&tree, git::CommitPurpose::TestFixture).unwrap();
+            if removed {
+                git::remove_worktree_keep_branch(&project, &tree).unwrap();
+                git::ok(&project, &["branch", "-m", "main", "user-work"]).unwrap();
+                // A preserved session ref is sufficient even if main was subsequently removed.
+                std::thread::scope(|scope| {
+                    for _ in 0..6 {
+                        scope.spawn(|| {
+                            assert_eq!(
+                                core.session_worktree(&conversation.id, &project).unwrap(),
+                                tree
+                            )
+                        });
+                    }
+                });
+            }
+            drop(core);
+            let core = Core::open(&state, config()).unwrap();
+            assert_eq!(
+                core.session_worktree(&conversation.id, &project).unwrap(),
+                tree
+            );
+            assert_eq!(git::head(&tree).unwrap(), tip);
+            assert_eq!(
+                std::fs::read_to_string(tree.join("retained.txt")).unwrap(),
+                "retained result\n"
+            );
+            assert_eq!(git::head(&project).unwrap(), main);
+            assert_eq!(
+                core.store
+                    .events_since(&conversation.id, 0, 100)
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e.kind == "session_started")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_bootstrap_errors_preserve_foreign_checkouts_and_missing_refs() {
+        for obstacle in [
+            "missing-main",
+            "foreign-project",
+            "wrong-branch",
+            "lost-owned-ref",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = directory.path().join("project");
+            repository(
+                &project,
+                if obstacle == "missing-main" {
+                    "trunk"
+                } else {
+                    "main"
+                },
+            );
+            let state = directory.path().join("state");
+            let core = Core::open(&state, config()).unwrap();
+            let conversation = core
+                .store
+                .create_conversation(project.to_str().unwrap())
+                .unwrap();
+            let tree = core.session_worktree_path(&conversation.id);
+            let record = core.session_branch_path(&conversation.id);
+            let mut expected_record = None;
+            match obstacle {
+                "foreign-project" => {
+                    let foreign = directory.path().join("foreign");
+                    repository(&foreign, "main");
+                    git::add_worktree(&foreign, &tree, "foreign-checkout", "main").unwrap();
+                }
+                "wrong-branch" => {
+                    git::add_worktree(&project, &tree, "user-checkout", "main").unwrap();
+                }
+                "lost-owned-ref" => {
+                    let branch = core
+                        .create_session_branch(&conversation.id, &project)
+                        .unwrap();
+                    expected_record = Some(std::fs::read(&record).unwrap());
+                    git::remove_worktree_keep_branch(&project, &tree).unwrap();
+                    git::ok(&project, &["branch", "-D", &branch]).unwrap();
+                }
+                _ => {}
+            }
+            let error = core
+                .session_worktree(&conversation.id, &project)
+                .unwrap_err()
+                .to_string();
+            let expected = match obstacle {
+                "missing-main" => "local branch `main` does not exist",
+                "foreign-project" => "belongs to a different project",
+                "wrong-branch" => "unexpected branch",
+                _ => "restore its Git ref",
+            };
+            assert!(error.contains(expected), "{obstacle}: {error}");
+            assert_eq!(record.exists(), expected_record.is_some());
+            if let Some(bytes) = expected_record {
+                assert_eq!(std::fs::read(&record).unwrap(), bytes);
+            }
+            if obstacle == "missing-main" {
+                drop(core);
+                let core = Core::open(&state, config()).unwrap();
+                assert!(!record.exists());
+                assert!(
+                    core.store
+                        .events_since(&conversation.id, 0, 100)
+                        .unwrap()
+                        .iter()
+                        .any(|e| e.kind == "notice"
+                            && e.payload["text"]
+                                .as_str()
+                                .is_some_and(|t| t.contains(expected)))
+                );
+            } else if tree.exists() {
+                assert_eq!(
+                    git::worktree_branch(&tree).unwrap(),
+                    if obstacle == "foreign-project" {
+                        "foreign-checkout"
+                    } else {
+                        "user-checkout"
+                    }
+                );
+            }
+        }
     }
 
     #[test]
