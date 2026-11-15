@@ -102,22 +102,7 @@ pub(super) fn document_key(details: &super::super::details::Details) -> Option<S
             .as_ref()
             .filter(|key| details.documents.contains_key(*key))
             .cloned()
-            .or_else(|| {
-                details
-                    .documents
-                    .contains_key("result")
-                    .then(|| "result".into())
-            })
-            .or_else(|| {
-                let mut keys = details
-                    .documents
-                    .keys()
-                    .filter(|key| key.starts_with("result_document:"))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                keys.sort();
-                keys.into_iter().next()
-            })
+            .or_else(|| details.visible_result_keys().into_iter().next())
             .or_else(|| Some("result".into())),
         REVIEW => Some("review".into()),
         _ => None,

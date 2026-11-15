@@ -37,8 +37,8 @@ impl App {
         }
         if details.tab == RESULT
             && details
-                .documents
-                .keys()
+                .visible_result_keys()
+                .iter()
                 .any(|key| key.starts_with("result_document:"))
         {
             match key.code {

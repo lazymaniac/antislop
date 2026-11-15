@@ -223,14 +223,7 @@ impl Details {
         );
         self.draw_document_result(frame, inner, result, theme);
         let mut hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
-        if (self.documents.contains_key("result") as usize)
-            + self
-                .documents
-                .keys()
-                .filter(|key| key.starts_with("result_document:"))
-                .count()
-            > 1
-        {
+        if self.visible_result_keys().len() > 1 {
             hint.push_str(" · ,/. documents");
         }
         self.draw_footer_hint(frame, footer, hint, theme);

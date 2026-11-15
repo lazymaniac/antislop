@@ -147,18 +147,7 @@ impl Details {
     }
 
     pub fn change_result_document(&mut self, direction: isize) {
-        let mut result_keys = self
-            .documents
-            .keys()
-            .filter(|key| key.starts_with("result_document:"))
-            .cloned()
-            .collect::<Vec<_>>();
-        result_keys.sort();
-        let mut keys = Vec::with_capacity(result_keys.len() + 1);
-        if self.documents.contains_key("result") {
-            keys.push("result".to_owned());
-        }
-        keys.extend(result_keys);
+        let keys = self.visible_result_keys();
         if keys.is_empty() {
             self.selected_result_document = None;
             return;
@@ -172,5 +161,22 @@ impl Details {
         let next = (at as isize + direction).rem_euclid(keys.len() as isize) as usize;
         self.selected_result_document = Some(keys[next].clone());
         self.scroll = 0;
+    }
+
+    /// Result documents in the order shown in the Results tab.
+    pub(in crate::lean::tui) fn visible_result_keys(&self) -> Vec<String> {
+        let mut keys = Vec::with_capacity(self.documents.len());
+        if self.documents.contains_key("result") {
+            keys.push("result".to_owned());
+        }
+        let mut artifacts = self
+            .documents
+            .keys()
+            .filter(|key| key.starts_with("result_document:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        artifacts.sort();
+        keys.extend(artifacts);
+        keys
     }
 }
