@@ -105,10 +105,11 @@ impl Core {
             }
             let branch = session_branch_name(&conversation.id, &project)?;
             let reference = format!("refs/heads/{branch}");
-            if git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?
-                .status
-                .success()
-            {
+            let reference_exists =
+                git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?
+                    .status
+                    .success();
+            if reference_exists {
                 let record = SessionBranch {
                     project: project.to_string_lossy().into_owned(),
                     branch,
@@ -117,6 +118,13 @@ impl Core {
                 self.save_session_branch(&conversation.id, &record)?;
                 self.session_worktree(&conversation.id, &project)?;
                 self.ensure_session_started_event(&conversation.id, &record.branch)?;
+            } else {
+                // `start` stores the conversation before creating its branch. If
+                // that operation failed transiently, retry from local main on
+                // startup so the durable conversation is not left branchless.
+                let branch = self.create_session_branch(&conversation.id, &project)?;
+                self.session_worktree(&conversation.id, &project)?;
+                self.ensure_session_started_event(&conversation.id, &branch)?;
             }
         }
         Ok(())
@@ -318,6 +326,63 @@ mod tests {
             git::branches(&project, "antislop/session/")
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn startup_retries_a_failed_session_branch_creation_from_local_main() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let main = git::head(&project).unwrap();
+        let state = directory.path().join("state");
+        let core = Core::open(&state, config()).unwrap();
+        // Reproduce `start`'s durable conversation write followed by a branch
+        // creation failure: local main disappears before create_session_branch.
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        git::ok(&project, &["checkout", "-qb", "temporary-user-work"]).unwrap();
+        git::ok(&project, &["branch", "-D", "main"]).unwrap();
+        let error = core
+            .create_session_branch(&conversation.id, &project)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("local branch `main` does not exist"),
+            "{error}"
+        );
+        assert!(
+            core.store
+                .conversations()
+                .unwrap()
+                .iter()
+                .any(|item| item.id == conversation.id)
+        );
+        drop(core);
+
+        git::ok(&project, &["branch", "main", &main]).unwrap();
+        let reopened = Core::open(&state, config()).unwrap();
+        let record = reopened.load_session_branch(&conversation.id).unwrap();
+        let worktree = reopened
+            .session_worktree(&conversation.id, &project)
+            .unwrap();
+        assert_eq!(git::head(&worktree).unwrap(), main);
+        assert!(record.branch.starts_with("antislop/session/project-"));
+        let events = reopened
+            .store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.kind == "session_started" && event.payload["branch"] == record.branch
+        }));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "session_started")
+                .count(),
+            1
         );
     }
 
