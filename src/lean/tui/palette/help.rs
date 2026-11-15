@@ -251,6 +251,7 @@ fn help_graph() -> &'static [&'static str] {
         "q                quit (work continues in daemon)",
         "e / a / S        flow editor: edit task / add dependent / split",
         "h / D / l        flow editor: hold / retire / link-unlink edge",
+        "[ / ] / C        workbench: prev / next changed file / comment file",
         "s / w / R        steer agent / docked workbench / workflow rigor",
     ]
 }

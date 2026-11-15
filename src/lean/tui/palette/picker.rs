@@ -79,6 +79,10 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::ToggleWorkbench),
         ),
         (
+            "Workbench: comment on selected file in mini-diff · C".into(),
+            Action::Run(Command::CommentSelectedFile),
+        ),
+        (
             "Plan: accept proposed plan and start execution · /accept".into(),
             Action::Run(Command::AcceptPlan),
         ),

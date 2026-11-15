@@ -44,6 +44,7 @@ pub enum Command {
     AcceptPlan,
     DirectExecute,
     LinkTask,
+    CommentSelectedFile,
 }
 
 pub(super) const COMMANDS: [(Command, &str); 5] = [

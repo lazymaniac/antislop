@@ -244,6 +244,54 @@ impl View {
     pub fn active_rigor(&self) -> crate::lean::tasks::Team {
         self.team.unwrap_or(crate::lean::tasks::Team::SmallChange)
     }
+
+    pub fn task_downstream_dependents(&self, task_id: &str) -> Vec<String> {
+        super::flow_editor::downstream_unfinished_dependents(self, task_id)
+    }
+
+    pub fn task_bottleneck_count(&self, task_id: &str) -> usize {
+        self.task_downstream_dependents(task_id).len()
+    }
+
+    pub fn critical_path_chain(&self) -> Vec<String> {
+        super::flow_editor::critical_path_tasks(self)
+    }
+
+    pub fn is_critical_path_task(&self, task_id: &str) -> bool {
+        self.critical_path_chain().iter().any(|id| id == task_id)
+    }
+
+    pub fn agent_live_clock(&self, key: &str, ascii: bool) -> Option<String> {
+        let prefix = if ascii { "T+" } else { "⏱ " };
+        if let Some(agent) = self.agents.get(key).filter(|a| a.running)
+            && let Some(started_ms) = agent.started_ms
+        {
+            let elapsed = crate::lean::store::now_ms()
+                .saturating_sub(started_ms)
+                .max(0) as u64
+                + agent.busy_ms;
+            return Some(format!(
+                "{prefix}{}",
+                super::flow_editor::format_clock_mm_ss(elapsed)
+            ));
+        }
+        let task_id = key.split_once(':').map(|(_, id)| id).unwrap_or(key);
+        for role in [format!("worker:{task_id}"), format!("reviewer:{task_id}")] {
+            if let Some(agent) = self.agents.get(&role).filter(|a| a.running)
+                && let Some(started_ms) = agent.started_ms
+            {
+                let elapsed = crate::lean::store::now_ms()
+                    .saturating_sub(started_ms)
+                    .max(0) as u64
+                    + agent.busy_ms;
+                return Some(format!(
+                    "{prefix}{}",
+                    super::flow_editor::format_clock_mm_ss(elapsed)
+                ));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

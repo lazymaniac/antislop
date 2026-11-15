@@ -79,7 +79,14 @@ impl App {
         };
         let key = format!("worker:{}", task.id);
         let pos = (col, row).into();
-        if self.workbench_sections[0].contains(pos) {
+        if let Some(&(_, idx)) = self
+            .workbench_file_rows
+            .iter()
+            .find(|(file_row, _)| *file_row == row)
+        {
+            self.workbench_file_index = idx;
+            self.open_diff(&key);
+        } else if self.workbench_sections[0].contains(pos) {
             self.open_details(key);
         } else if self.workbench_sections[1].contains(pos) {
             self.selected = key.clone();

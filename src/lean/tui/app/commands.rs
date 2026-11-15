@@ -38,6 +38,7 @@ impl App {
             Command::AcceptPlan => self.accept_plan(),
             Command::DirectExecute => self.trigger_direct_execute(),
             Command::LinkTask => self.toggle_flow_link(),
+            Command::CommentSelectedFile => self.comment_workbench_file(),
             _ => {}
         }
     }
@@ -186,6 +187,91 @@ impl App {
             }
             .into(),
         );
+    }
+
+    pub fn workbench_files_for_task(
+        &self,
+        task: &view::TaskRow,
+    ) -> Vec<flow_editor::WorkbenchFileEntry> {
+        if let Some(diff) = self
+            .diff
+            .as_ref()
+            .filter(|d| d.task == task.id && d.file_count() > 0)
+            .or_else(|| {
+                self.workbench_diffs
+                    .get(&task.id)
+                    .filter(|d| d.file_count() > 0)
+            })
+        {
+            return diff.file_summaries();
+        }
+        if let Some(files) = task
+            .integration
+            .as_ref()
+            .and_then(|v| v["files"].as_array())
+        {
+            let entries: Vec<_> = files
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|path| flow_editor::WorkbenchFileEntry {
+                    path: path.to_owned(),
+                    stats: None,
+                    hunks: Vec::new(),
+                })
+                .collect();
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
+        Vec::new()
+    }
+
+    pub fn cycle_workbench_file(&mut self, next: bool) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            return;
+        };
+        let files = self.workbench_files_for_task(&task);
+        if files.is_empty() {
+            self.notice = Some("✗ brak zmienionych plików w tym zadaniu".into());
+            return;
+        }
+        let len = files.len();
+        let current = self.workbench_file_index.min(len.saturating_sub(1));
+        self.workbench_file_index = if next {
+            (current + 1) % len
+        } else {
+            (current + len - 1) % len
+        };
+        if let Some(diff) = self.diff.as_mut().filter(|d| d.task == task.id) {
+            diff.select_file(self.workbench_file_index);
+        }
+        if let Some(diff) = self.workbench_diffs.get_mut(&task.id) {
+            diff.select_file(self.workbench_file_index);
+        }
+        let chosen = &files[self.workbench_file_index];
+        self.notice = Some(format!(
+            "✓ plik [{}/{}]: {} (d: diff, C: komentarz)",
+            self.workbench_file_index + 1,
+            len,
+            chosen.path
+        ));
+    }
+
+    pub fn comment_workbench_file(&mut self) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            return;
+        };
+        let files = self.workbench_files_for_task(&task);
+        let target = if files.is_empty() {
+            format!("task:{}", task.id)
+        } else {
+            let idx = self.workbench_file_index.min(files.len().saturating_sub(1));
+            format!("diff:{}:{}", task.id, files[idx].path)
+        };
+        let input = self.get_comment_draft(&target);
+        self.editor = Some(Editor { target, input });
     }
 
     pub fn send_flow_revision(
