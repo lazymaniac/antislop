@@ -9,15 +9,24 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
         "independent review must approve the current result before integration",
     )?;
     let (base, change) = integration_commits(work)?;
-    let all_changed = git::changed_files(&work.project, &base, &change)?;
+    let integration_project = integration_project(core, work)?;
+    let all_changed = git::changed_files(&integration_project, &base, &change)?;
     validate_consent(work, &all_changed)?;
-    let (notice, card) = integrate_changes(core, work, &base, &change)?;
+    let (notice, card) = integrate_changes(core, work, &integration_project, &base, &change)?;
     work.integrated_files = work.req.consent_files.take().unwrap_or(all_changed.clone());
-    mark_remaining_changes(work, &change, &all_changed)?;
+    mark_remaining_changes(work, &integration_project, &change, &all_changed)?;
     finish_integration(core, work, &notice, card)?;
     core.queue_worktree_cleanup(&work.task.id);
     work.notice = Some(notice);
     Ok(())
+}
+
+fn integration_project(core: &Core, work: &RecoveryWork) -> Result<PathBuf> {
+    if work.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+        Ok(work.project.clone())
+    } else {
+        core.session_worktree(&work.req.conversation, &work.project)
+    }
 }
 
 fn finish_integration(
@@ -79,18 +88,19 @@ fn validate_consent_file(file: &str, changed: &[String]) -> Result<()> {
 fn integrate_changes(
     core: &Core,
     work: &mut RecoveryWork,
+    integration_project: &Path,
     base: &str,
     change: &str,
 ) -> Result<(String, (Outcome, Option<String>))> {
     work.spec
-        .validate_change_paths(&git::changed_files(&work.project, base, change)?)?;
+        .validate_change_paths(&git::changed_files(integration_project, base, change)?)?;
     if work.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
         let result =
             core.deliver_artifact_change(&work.task, &work.spec, &work.project, base, change)?;
         return integration_result(work, result);
     }
     let result = git::integrate_scoped(
-        &work.project,
+        integration_project,
         base,
         change,
         work.req.consent_files.as_deref(),
@@ -129,12 +139,17 @@ fn integration_result(
     }
 }
 
-fn mark_remaining_changes(work: &mut RecoveryWork, change: &str, all: &[String]) -> Result<()> {
+fn mark_remaining_changes(
+    work: &mut RecoveryWork,
+    integration_project: &Path,
+    change: &str,
+    all: &[String],
+) -> Result<()> {
     if work.integrated_files.len() >= all.len() {
         return Ok(());
     }
-    let snapshot = git::snapshot(&work.project, git::CommitPurpose::WorkspaceSnapshot)?;
-    if git::matching_paths(&work.project, &snapshot, change, all)?.len() != all.len() {
+    let snapshot = git::snapshot(integration_project, git::CommitPurpose::WorkspaceSnapshot)?;
+    if git::matching_paths(integration_project, &snapshot, change, all)?.len() != all.len() {
         work.task.status = status::NEEDS_USER.into();
     }
     Ok(())

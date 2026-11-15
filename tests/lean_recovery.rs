@@ -680,8 +680,9 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     let plan = propose(&core, &conversation, "write_chain");
     wait_idle(&core, &conversation);
 
-    // w1 stopped because of user edit, w2 was skipped
-    assert_eq!(statuses(&core, &plan), ["waiting", "queued"]);
+    // The session branch is isolated from edits in the user's checkout, so both
+    // writers finish without changing that checkout.
+    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
@@ -693,12 +694,41 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
         .id;
+    let session = support::session_worktree(&core, &project, &conversation);
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user edit\n"
+    );
+    // Model an approved result awaiting explicit recovery: its commit remains
+    // available, while the session integration line is back at the task base.
+    let mut task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.id == *w1_id)
+        .unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                session.to_str().unwrap(),
+                "reset",
+                "--hard",
+                task.base.as_deref().unwrap()
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    task.status = "needs_user".into();
+    task.verdict = None;
+    core.store.update_task(&task).unwrap();
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
 
-    // Consent scopes integration; it does not silently overwrite an unresolved
-    // conflicting edit. Reconcile the chosen contents before retrying recovery.
+    // Consent cannot proceed until an independent review approves the result.
     let error = core
         .recover_task(TaskRecoveryRequest {
             conversation: conversation.clone(),
@@ -720,7 +750,12 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
     );
-    std::fs::write(project.join("hello.txt"), "from worker\n").unwrap();
+
+    // Exercise the approved IntegrateWithConsent recovery path directly. The
+    // original checkout still contains the user's concurrent edit; recovery
+    // must apply the reviewed commit to the durable session branch instead.
+    task.verdict = Some(json!({"approved": true}));
+    core.store.update_task(&task).unwrap();
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
@@ -729,7 +764,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             conversation: conversation.clone(),
             plan: plan.clone(),
             task: w1_id.clone(),
-            action: RecoveryAction::ReviewManualSnapshot,
+            action: RecoveryAction::IntegrateWithConsent,
             consent_files: Some(vec!["hello.txt".into()]),
             freshness_token: token,
             message: None,
@@ -738,8 +773,13 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
 
     assert_eq!(resp.status, "approved");
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "from worker\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user edit\n",
+        "consent recovery preserves the user's checkout"
     );
 
     // Wait for the cascade: w2 was unblocked to queued, runs, and completes
@@ -758,16 +798,21 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     let plan = propose(&core, &conversation, "write_chain");
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["waiting", "queued"]);
-    let tasks = core.store.plan(&plan).unwrap();
-    let w1_id = &tasks
-        .iter()
+    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
+    let mut task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
-        .id;
-    let branch = format!("antislop/{}", w1_id);
+        .clone();
+    let w1_id = task.id.clone();
+    task.status = "needs_user".into();
+    core.store.update_task(&task).unwrap();
+    let branch = format!("antislop/{w1_id}");
     let token = core
-        .task_freshness_token(&conversation, &plan, w1_id)
+        .task_freshness_token(&conversation, &plan, &w1_id)
         .unwrap();
 
     // Recover with KeepOnBranch
@@ -795,9 +840,10 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
         "from worker"
     );
 
-    // DAG cascades and w2 completes
+    // This recovery preserves the task branch without rolling back an already
+    // completed dependent task on the session integration line.
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
+    assert_eq!(statuses(&core, &plan), ["needs_user", "approved"]);
 }
 
 #[test]

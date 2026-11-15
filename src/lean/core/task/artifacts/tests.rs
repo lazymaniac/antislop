@@ -18,7 +18,7 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
     std::fs::create_dir(&project).unwrap();
     assert!(
         std::process::Command::new("git")
-            .args(["init", "-q"])
+            .args(["init", "-q", "-b", "main"])
             .current_dir(&project)
             .status()
             .unwrap()
@@ -30,11 +30,7 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
     let head = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
     let config = Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
     let core = Core::open(&directory.path().join("state"), config).unwrap();
-    let conversation = core
-        .store
-        .create_conversation(project.to_str().unwrap())
-        .unwrap()
-        .id;
+    let conversation = core.start(&project).unwrap().id;
     let values = [
         json!({"id":"report","title":"Report","goal":"Write report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output]}),
         json!({"id":"correction","title":"Correction","goal":"Correct report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output],"depends_on":["report"]}),
@@ -344,6 +340,10 @@ fn continuation_keeps_integrated_work_and_new_upstream_changes() {
         .unwrap();
     assert_eq!(
         std::fs::read_to_string(path.join("source")).unwrap(),
+        "user source"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.project.join("source")).unwrap(),
         "new upstream content"
     );
     assert_eq!(

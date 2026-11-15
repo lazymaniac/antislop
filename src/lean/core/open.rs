@@ -106,6 +106,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
 }
 
 fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()> {
+    core.restore_session_branches()?;
     core.store.interrupt_revision_jobs()?;
     if let Err(error) =
         crate::lean::core::worktree::paths::release_settled_views(&core.store, &core.state)

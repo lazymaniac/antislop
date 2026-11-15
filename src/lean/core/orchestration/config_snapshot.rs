@@ -32,21 +32,26 @@ impl Core {
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
+        let _lifecycle = self
+            .locks
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
         let project = project.canonicalize()?;
+        Self::validate_session_project(&project)?;
         self.store.record_project_identity(
             &project.to_string_lossy(),
             &paths::project_identity(&project)?,
         )?;
         let conversation = self.store.create_conversation(&project.to_string_lossy())?;
-        if let Ok(branch) = git::session_branch(&project) {
-            self.store.append_event(
-                &conversation.id,
-                None,
-                None,
-                "session_started",
-                &json!({"branch": branch}),
-            )?;
-        }
+        let branch = self.create_session_branch(&conversation.id, &project)?;
+        self.store.append_event(
+            &conversation.id,
+            None,
+            None,
+            "session_started",
+            &json!({"branch": branch}),
+        )?;
         Ok(conversation)
     }
 

@@ -177,7 +177,7 @@ pub struct Core {
     /// before it may hold instructions of an older build.
     opened_ms: i64,
     config: core::state::ConfigState,
-    /// Private state directory; writers' worktrees live under it.
+    /// Private state directory; session and writer worktrees live under it.
     state: PathBuf,
     activity: core::state::Activity,
     revisions: core::state::RevisionState,

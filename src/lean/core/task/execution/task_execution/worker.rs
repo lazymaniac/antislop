@@ -297,13 +297,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_only_continuation_observes_retained_checkpoint_and_new_project_inputs() {
+    fn read_only_continuation_keeps_checkpoint_separate_from_new_project_inputs() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("project");
         std::fs::create_dir(&project).unwrap();
         assert!(
             std::process::Command::new("git")
-                .args(["init", "-q"])
+                .args(["init", "-q", "-b", "main"])
                 .current_dir(&project)
                 .status()
                 .unwrap()
@@ -319,10 +319,7 @@ mod tests {
         let config =
             Config::from_toml(include_str!("../../../../../../examples/antislop.toml")).unwrap();
         let core = Core::open(&directory.path().join("state"), config).unwrap();
-        let conversation = core
-            .store
-            .create_conversation(project.to_str().unwrap())
-            .unwrap();
+        let conversation = core.start(&project).unwrap();
         let spec: TaskContract = serde_json::from_value(json!({
             "id":"accept-repair", "title":"Accept repair", "goal":"Inspect the existing repair",
             "change_kind": "none", "kind":"analysis"}))
@@ -342,8 +339,9 @@ mod tests {
             std::fs::read_to_string(view.join("instrument.txt")).unwrap(),
             "repaired instrument"
         );
+        assert!(!view.join("user.txt").exists());
         assert_eq!(
-            std::fs::read_to_string(view.join("user.txt")).unwrap(),
+            std::fs::read_to_string(project.join("user.txt")).unwrap(),
             "new local input"
         );
         assert_eq!(
@@ -437,12 +435,17 @@ mod tests {
             "repaired instrument"
         );
         assert_eq!(tasks[0].base, saved_base);
-        assert_eq!(tasks[0].result, saved_result);
+        assert_eq!(
+            git::tree_identity(&project, tasks[0].result.as_deref().unwrap()).unwrap(),
+            git::tree_identity(&project, saved_result.as_deref().unwrap()).unwrap()
+        );
         assert!(
-            tasks[0].feedback.as_ref().unwrap()["checkpoint_merge"]["detail"]
-                .as_str()
+            tasks[0]
+                .feedback
+                .as_ref()
                 .unwrap()
-                .contains("does not apply")
+                .get("checkpoint_merge")
+                .is_none()
         );
         assert_eq!(
             std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
@@ -458,7 +461,7 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         assert!(
             std::process::Command::new("git")
-                .args(["init", "-q"])
+                .args(["init", "-q", "-b", "main"])
                 .current_dir(&project)
                 .status()
                 .unwrap()
@@ -469,10 +472,7 @@ mod tests {
         let config =
             Config::from_toml(include_str!("../../../../../../examples/antislop.toml")).unwrap();
         let core = Core::open(&directory.path().join("state"), config).unwrap();
-        let conversation = core
-            .store
-            .create_conversation(project.to_str().unwrap())
-            .unwrap();
+        let conversation = core.start(&project).unwrap();
         let owner_spec: TaskContract = serde_json::from_value(json!({
             "id":"owner", "title":"Owner", "goal":"Implement the selected change",
             "change_kind":"code", "kind":"implementation"

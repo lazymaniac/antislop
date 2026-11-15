@@ -25,11 +25,75 @@ pub fn fixture_conversation(
     project: &std::path::Path,
 ) -> antislop::Result<antislop::lean::store::Conversation> {
     let project = project.canonicalize()?;
-    let conversation = core.store.create_conversation(&project.to_string_lossy())?;
+    let is_git_root = std::process::Command::new("git")
+        .args([
+            "-C",
+            project.to_str().unwrap_or_default(),
+            "rev-parse",
+            "--show-toplevel",
+        ])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == project.to_string_lossy()
+                && std::process::Command::new("git")
+                    .args([
+                        "-C",
+                        project.to_str().unwrap_or_default(),
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        "refs/heads/main",
+                    ])
+                    .status()
+                    .is_ok_and(|status| status.success())
+        });
+    let conversation = if is_git_root {
+        core.start(&project)?
+    } else {
+        core.store.create_conversation(&project.to_string_lossy())?
+    };
     core.store
         .interview_summary(&conversation.id, "Fixture requirements.", 0)?;
     confirm_scope(core, &conversation.id)?;
     Ok(conversation)
+}
+
+/// Locate the linked worktree for a conversation's durable integration branch.
+#[allow(dead_code)]
+pub fn session_worktree(
+    core: &antislop::lean::Core,
+    project: &std::path::Path,
+    conversation: &str,
+) -> std::path::PathBuf {
+    let branch = core
+        .store
+        .events_since(conversation, 0, 100_000)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "session_started")
+        .and_then(|event| event.payload["branch"].as_str().map(str::to_owned))
+        .expect("session_started event includes the session branch");
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            project.to_str().unwrap(),
+            "worktree",
+            "list",
+            "--porcelain",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let mut path = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(value) = line.strip_prefix("worktree ") {
+            path = Some(std::path::PathBuf::from(value));
+        } else if line == format!("branch refs/heads/{branch}") {
+            return path.expect("worktree record has a path");
+        }
+    }
+    panic!("no linked worktree for session branch {branch}");
 }
 
 /// Confirm the current requirements summary through the same structured

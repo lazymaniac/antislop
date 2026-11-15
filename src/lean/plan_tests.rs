@@ -180,11 +180,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"revision 1\n");
-    for (file, expected) in [
-        ("ui.txt", "revision 3\n"),
-        ("user.txt", "local edit\n"),
-        ("draft.txt", "untracked\n"),
-    ] {
+    for (file, expected) in [("ui.txt", "revision 3\n"), ("user.txt", "committed\n")] {
         let output = std::process::Command::new("git")
             .args(["show", &format!("{base}:{file}")])
             .current_dir(root)
@@ -193,6 +189,15 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         assert!(output.status.success());
         assert_eq!(output.stdout, expected.as_bytes());
     }
+    let output = std::process::Command::new("git")
+        .args(["cat-file", "-e", &format!("{base}:draft.txt")])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "uncommitted user files stay out of the session base"
+    );
     assert_eq!(git::head(root).unwrap(), head);
     assert_eq!(
         std::fs::read_to_string(root.join("user.txt")).unwrap(),
@@ -245,19 +250,23 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
     let base = core.writer_base(&tasks[0].plan_id, &first, root).unwrap();
     assert_eq!(base, head);
 
-    // t1 changes a.txt; its result lands, and a later change of the project
-    // edits the same line, so t1's patch no longer applies to the old base.
+    // t1 changes a.txt and lands on the session branch.
     let path = root.join(".antislop/worktrees/t1");
     git::add_worktree(root, &path, "test/t1", &base).unwrap();
     std::fs::write(path.join("a.txt"), "v1\n").unwrap();
     let result = git::commit_all(&path, git::CommitPurpose::TestFixture).unwrap();
     git::remove_worktree(root, &path, "test/t1").unwrap();
+    let session = core.session_worktree(&conversation.id, root).unwrap();
+    assert!(matches!(
+        git::integrate(&session, &base, &result, true).unwrap(),
+        git::Integration::Committed(_)
+    ));
     tasks[0].base = Some(base);
     tasks[0].result = Some(result.clone());
     tasks[0].status = status::APPROVED.into();
     core.store.update_task(&tasks[0]).unwrap();
     std::fs::write(root.join("a.txt"), "v2\n").unwrap();
-    let moved = git::commit_all(root, git::CommitPurpose::TestFixture).unwrap();
+    let moved = git::head(&session).unwrap();
     core.record_plan_landing(&tasks[0].plan_id, &tasks[0].id, &result)
         .unwrap();
 
@@ -265,9 +274,9 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
     let base = core.writer_base(&tasks[1].plan_id, &second, root).unwrap();
     assert_eq!(
         base, moved,
-        "starts from the project holding the landed result"
+        "starts from the session branch holding the landed result"
     );
-    // Until the next landing the plan keeps that base.
+    // A later edit on the user's checked-out branch does not move the session line.
     std::fs::write(root.join("a.txt"), "user edit\n").unwrap();
     assert_eq!(
         core.writer_base(&tasks[1].plan_id, &second, root).unwrap(),

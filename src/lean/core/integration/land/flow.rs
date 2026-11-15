@@ -96,7 +96,15 @@ impl<'a> Integration<'a> {
                 change,
             );
         }
-        git::integrate(self.project, base, change, self.config.policy.local_commits)
+        let session_tree = self
+            .core
+            .session_worktree(self.conversation, self.project)?;
+        git::integrate(
+            &session_tree,
+            base,
+            change,
+            self.config.policy.local_commits,
+        )
     }
 
     fn repair_conflict(
@@ -134,11 +142,14 @@ impl<'a> Integration<'a> {
         let Some((kind, files)) = conflict_with_files(outcome) else {
             return Ok(None);
         };
-        let onto = git::snapshot(self.project, git::CommitPurpose::ConflictSnapshot)?;
+        let session_tree = self
+            .core
+            .session_worktree(self.conversation, self.project)?;
+        let onto = git::snapshot(&session_tree, git::CommitPurpose::ConflictSnapshot)?;
         let basis = crate::hash(serde_json::to_vec(&(
-            git::tree_identity(self.project, self.task.base.as_deref().unwrap_or(change))?,
-            git::tree_identity(self.project, change)?,
-            git::tree_identity(self.project, &onto)?,
+            git::tree_identity(&session_tree, self.task.base.as_deref().unwrap_or(change))?,
+            git::tree_identity(&session_tree, change)?,
+            git::tree_identity(&session_tree, &onto)?,
         ))?);
         let fresh = self.core.store.db().execute(
             "INSERT OR IGNORE INTO integration_attempts(task_id,generation,basis) VALUES(?1,?2,?3)",
@@ -151,7 +162,13 @@ impl<'a> Integration<'a> {
     }
 
     fn finish_outcome(self, base: &str, change: &str, outcome: git::Integration) -> Result<()> {
-        let landed = git::changed_files(self.project, base, change).unwrap_or_default();
+        let target = if self.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+            self.project.to_path_buf()
+        } else {
+            self.core
+                .session_worktree(self.conversation, self.project)?
+        };
+        let landed = git::changed_files(&target, base, change).unwrap_or_default();
         let landing = super::landing::record(
             self.core,
             self.conversation,

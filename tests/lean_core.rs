@@ -5,6 +5,50 @@ use antislop::{
 };
 use std::time::{Duration, Instant};
 
+fn init_project(project: &std::path::Path) {
+    std::fs::create_dir_all(project).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(project.join(".session-test"), "fixture\n").unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@localhost",
+                "add",
+                "."
+            ])
+            .current_dir(project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@localhost",
+                "commit",
+                "-qm",
+                "fixture"
+            ])
+            .current_dir(project)
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+
 /// A codex-shaped CLI: records its arguments, answers with the prompt's last
 /// line, sleeps on "slow" (longer on "sleepy") and fails on "fail".
 fn fake_codex(dir: &std::path::Path) -> std::path::PathBuf {
@@ -99,6 +143,7 @@ echo '{{"type":"turn.completed"}}'
 fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
     use antislop::lean::COMMENT_ORCHESTRATOR;
     let dir = common::tempdir();
+    init_project(dir.path());
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),
@@ -269,6 +314,7 @@ fn diff_comments_are_delivered_to_the_validated_worker_once_with_location() {
 fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
     use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
     let dir = common::tempdir();
+    init_project(dir.path());
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),
@@ -455,7 +501,7 @@ fn interrupted_comment_sessions_resume_after_daemon_restart() {
 fn messages_are_accepted_at_once_and_answered_in_order() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
     let conversation = core.start(&project).unwrap();
 
@@ -518,7 +564,7 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
 fn a_session_resumed_after_a_restart_is_told_its_role_again() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let state = dir.path().join("state");
     let codex = fake_codex(dir.path());
     let core = Core::open(&state, config(&codex)).unwrap();
@@ -546,7 +592,7 @@ fn a_session_resumed_after_a_restart_is_told_its_role_again() {
 fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
     let conversation = core.start(&project).unwrap();
 
@@ -581,7 +627,7 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
 fn a_cli_that_dies_while_starting_is_started_again_and_the_turn_completes() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let real = fake_codex(dir.path());
     let wrapper = dir.path().join("flaky-codex");
     std::fs::write(
@@ -643,7 +689,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     let dir = common::tempdir();
     let dir = dir.path();
     let project = dir.join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
@@ -805,7 +851,7 @@ fn stopping_without_a_daemon_creates_no_state() {
 fn a_question_cut_off_by_a_restart_is_answered_after_it() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let state = dir.path().join("state");
     let codex = fake_codex(dir.path());
     let core = Core::open(&state, config(&codex)).unwrap();
@@ -853,7 +899,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let dir = common::tempdir();
     let dir = dir.path();
     let project = dir.join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let codex = fake_codex(dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -993,7 +1039,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
     let dir = common::tempdir();
     let dir = dir.path();
     let project = dir.join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
@@ -1030,7 +1076,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
 fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let state = dir.path().join("state");
     let codex = fake_codex(dir.path());
     let core = Core::open(&state, config(&codex)).unwrap();
@@ -1071,7 +1117,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let dir = common::tempdir();
     let dir = dir.path();
     let project = dir.join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
@@ -1250,7 +1296,7 @@ fn missing_configuration_reports_project_and_global_candidates() {
     let root = common::tempdir();
     let project = root.path().join("project");
     let global = root.path().join("user-config");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(&project)
         .env("ANTISLOP_CONFIG_DIR", &global)
@@ -1285,6 +1331,7 @@ fn configuration_snapshots_survive_live_replacement() {
 #[test]
 fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     let dir = common::tempdir();
+    init_project(dir.path());
     let codex = fake_codex(dir.path());
     let initial = config(&codex);
     let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
@@ -1322,7 +1369,7 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
 fn process_failure_does_not_persist_credentials_from_cli_files() {
     let dir = common::tempdir();
     let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
+    init_project(&project);
     let script = fake_codex(dir.path());
     let source = std::fs::read_to_string(&script).unwrap().replace(
         "login required",
@@ -1353,6 +1400,7 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
 #[test]
 fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
     let dir = common::tempdir();
+    init_project(dir.path());
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),

@@ -9,7 +9,9 @@ impl Core {
         project: &Path,
     ) -> Result<String> {
         let _integration = self.locks.integration();
-        let onto = self.plan_base(plan_id, project)?;
+        let conversation = self.store.plan_conversation(plan_id)?;
+        let session_tree = self.session_worktree(&conversation, project)?;
+        let onto = self.plan_base(plan_id, &session_tree)?;
         // A result that landed is in the project the base was taken from.
         let landed = self.plan_base_record(plan_id)?.landed;
         let changes = self.writer_dependency_changes(plan_id, spec, &landed)?;
@@ -17,7 +19,7 @@ impl Core {
             return Ok(onto);
         }
         let scratch = writer_base_scratch(&self.state, plan_id, &spec.id);
-        git::combine(project, &scratch, &onto, &changes).map_err(|error| {
+        git::combine(&session_tree, &scratch, &onto, &changes).map_err(|error| {
             Error::Invalid(format!(
                 "could not combine the results of {} for {}: {error}",
                 spec.depends_on.join(", "),

@@ -201,6 +201,17 @@ mod live_config_tests {
     #[test]
     fn configuration_requests_validate_before_writing_and_record_the_update() {
         let dir = tempfile::tempdir().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(dir.path().join("fixture.txt"), "fixture\n").unwrap();
+        crate::lean::git::commit_all(dir.path(), crate::lean::git::CommitPurpose::TestFixture)
+            .unwrap();
         let path = dir.path().join("config.toml");
         let original = include_str!("../../examples/antislop.toml");
         std::fs::write(&path, original).unwrap();

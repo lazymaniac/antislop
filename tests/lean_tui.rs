@@ -6393,6 +6393,46 @@ mod config_editor_acceptance {
         let dir = test_tempdir();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("fixture.txt"), "fixture\n").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@localhost",
+                    "add",
+                    "."
+                ])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@localhost",
+                    "commit",
+                    "-qm",
+                    "fixture"
+                ])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
         let binary = dir.path().join("fake-codex");
         let log = dir.path().join("calls.log");
         let script = format!(

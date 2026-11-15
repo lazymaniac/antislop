@@ -82,17 +82,21 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     (codex, agy)
 }
 
-/// Simulate a user editing the primary tree after the worker took its base.
+/// Simulate a concurrent edit in the session integration worktree.
 fn fake_clis_with_concurrent_edit(
     dir: &Path,
-    project: &Path,
+    _project: &Path,
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let (codex, agy) = fake_clis(dir);
     let script = std::fs::read_to_string(&agy).unwrap();
+    let session_worktree = "session_worktree = next(os.linesep.join(block.splitlines()) for block in subprocess.check_output(['git', 'worktree', 'list', '--porcelain'], text=True).split(os.linesep * 2) if any(line.startswith('branch refs/heads/antislop/session/') for line in block.splitlines()))\nsession_dir = next(line.removeprefix('worktree ') for line in session_worktree.splitlines() if line.startswith('worktree '))\n";
+    let script = script.replace(
+        "prompt = sys.argv[-1]",
+        &format!("prompt = sys.argv[-1]\nimport subprocess\n{session_worktree}"),
+    );
     let injection = format!(
-        "session = \"worker\"\n    if not os.path.exists({marker:?}):\n        open({marker:?}, \"w\").close()\n        with open({file:?}, \"w\") as primary:\n            primary.write(\"user draft\\n\")",
+        "session = \"worker\"\n    if not os.path.exists({marker:?}):\n        open({marker:?}, \"w\").close()\n        with open(os.path.join(session_dir, \"hello.txt\"), \"w\") as primary:\n            primary.write(\"user draft\\n\")",
         marker = dir.join("edited-once"),
-        file = project.join("hello.txt"),
     );
     let script = script.replace("elif \"You review\" in prompt:", "elif \"You review\" in prompt or \"account again\" in prompt:").replace("session = \"worker\"", &injection).replace(
         "answer = cover(answer)",
@@ -599,8 +603,9 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
         );
     });
     assert!(core.is_idle(&conversation));
+    let session = support::session_worktree(&core, &project, &conversation);
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "from worker\n"
     );
 }
@@ -1035,6 +1040,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
 
     let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
@@ -1042,9 +1048,10 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     assert!(task.report.as_deref().unwrap().contains("not committed"));
     // local_commits = false in the example configuration: applied, not committed.
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), base);
-    assert_eq!(git(&project, &["status", "--porcelain"]), "?? hello.txt");
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+    assert_eq!(git(&session, &["status", "--porcelain"]), "?? hello.txt");
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "from worker\n"
     );
     assert!(!git(&project, &["worktree", "list"]).contains("-review-g"));
@@ -1104,18 +1111,20 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() 
         &format!("primary.write(\"user draft\\n\")\n        with open({:?}, \"w\") as unrelated:\n            unrelated.write(\"concurrent README\\n\")", project.join("README")),
     ).replace(
         "session = \"reviewer\"",
-        &format!("session = \"reviewer\"\n    if \"You review a plan\" not in prompt and \"You audit\" not in prompt:\n        assert open({:?}).read() == \"user draft\\n\", \"unreviewed repair touched primary tree\"", project.join("hello.txt")),
+        "session = \"reviewer\"\n    if \"You review a plan\" not in prompt and \"You audit\" not in prompt:\n        assert open(os.path.join(session_dir, \"hello.txt\")).read() == \"user draft\\n\", \"unreviewed repair touched session tree\"",
     );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(task.round, 2, "a fresh reviewer round checks the repair");
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "user draft\nfrom worker\n"
     );
+    assert!(!project.join("hello.txt").exists());
     assert_eq!(
         std::fs::read_to_string(project.join("README")).unwrap(),
         "concurrent README\n"
@@ -1176,47 +1185,17 @@ fn a_writer_integrates_over_the_local_changes_it_started_with() {
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
 
     let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "from worker\n"
     );
     assert_eq!(
-        git(
-            &project,
-            &[
-                "show",
-                &format!("{}:hello.txt", task.base.as_ref().unwrap())
-            ]
-        ),
-        "user draft"
-    );
-    // The user was told before the writer started.
-    let notices: Vec<_> = core
-        .store
-        .events_since(&conversation, 0, 10_000)
-        .unwrap()
-        .into_iter()
-        .filter(|event| event.kind == "notice")
-        .filter(|event| {
-            // This configuration also has the required gates off, and the
-            // first plan is mapped to the ledger on a retry; both are told
-            // separately.
-            let text = event.payload["text"].as_str().unwrap();
-            !text.contains("required_gates is off")
-                && !text.contains("plan ledger mapping rejected")
-        })
-        .collect();
-    assert_eq!(notices.len(), 1);
-    assert!(
-        notices[0].payload["text"]
-            .as_str()
-            .unwrap()
-            .contains("uncommitted changes in hello.txt"),
-        "{:?}",
-        notices[0].payload
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\n"
     );
 }
 
@@ -1227,6 +1206,7 @@ fn resuming_preserves_an_unanswered_choice_after_conflicting_edits_are_removed()
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting");
     let calls_before = std::fs::read_to_string(dir.path().join("calls.jsonl"))
@@ -1235,14 +1215,14 @@ fn resuming_preserves_an_unanswered_choice_after_conflicting_edits_are_removed()
         .filter(|line| line.contains("--disable-slash-commands"))
         .count();
 
-    // Editing the project does not answer the resolver's pending question.
-    std::fs::remove_file(project.join("hello.txt")).unwrap();
+    // Editing the session worktree does not answer the resolver's pending question.
+    std::fs::remove_file(session.join("hello.txt")).unwrap();
     let error = core.resume_plan(&conversation, &task.plan_id).unwrap_err();
     assert!(error.to_string().contains("open questions"), "{error}");
     wait_idle(&core, &conversation);
     let waiting = core.store.task_by_id(&task.id).unwrap().unwrap();
     assert_eq!(waiting.status, "waiting");
-    assert!(!project.join("hello.txt").exists());
+    assert!(!session.join("hello.txt").exists());
     let calls_after = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
         .lines()
@@ -1480,9 +1460,10 @@ fn a_committed_change_names_its_commit_on_the_card() {
     )
     .unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
 
     let (feedback, _) = card(&core, &conversation, "t1");
-    let head = git(&project, &["rev-parse", "HEAD"]);
+    let head = git(&session, &["rev-parse", "HEAD"]);
     assert_eq!(feedback["integration"]["outcome"], "committed");
     assert_eq!(feedback["integration"]["commit"], head);
     assert_eq!(
@@ -1520,6 +1501,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
 
     let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "waiting");
@@ -1542,6 +1524,11 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
         "the raw reason reaches the card"
     );
     assert!(feedback["effect"].as_str().unwrap().contains("hello.txt"));
+    assert_eq!(
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
+        "user draft\n"
+    );
+    assert!(!project.join("hello.txt").exists());
 }
 
 #[test]
@@ -1551,14 +1538,15 @@ fn resuming_preserves_an_unanswered_choice_after_the_user_commits() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting");
 
     // The user commits their own version of the line the change also writes:
     // the approved change no longer applies cleanly.
-    std::fs::write(project.join("hello.txt"), "another user version\n").unwrap();
-    git(&project, &["add", "hello.txt"]);
-    git(&project, &["commit", "--quiet", "-m", "user version"]);
+    std::fs::write(session.join("hello.txt"), "another user version\n").unwrap();
+    git(&session, &["add", "hello.txt"]);
+    git(&session, &["commit", "--quiet", "-m", "user version"]);
     let error = core.resume_plan(&conversation, &task.plan_id).unwrap_err();
     assert!(error.to_string().contains("open questions"), "{error}");
     wait_idle(&core, &conversation);
@@ -1585,7 +1573,7 @@ fn resuming_preserves_an_unanswered_choice_after_the_user_commits() {
         "the resolver asks the user which behavior to accept"
     );
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "another user version\n",
         "the user's committed content is not overwritten by a conflict"
     );
@@ -1641,13 +1629,14 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting");
     let (blocked, _) = card(&core, &conversation, "t1");
     assert_eq!(blocked["integration"]["outcome"], "user_edits");
 
     // The user resolves the block; a retry with guidance starts a new round.
-    std::fs::remove_file(project.join("hello.txt")).unwrap();
+    std::fs::remove_file(session.join("hello.txt")).unwrap();
     core.recover_task(antislop::lean::TaskRecoveryRequest {
         conversation: conversation.clone(),
         plan: task.plan_id.clone(),
@@ -1699,6 +1688,7 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     let branch = format!("antislop/{}", task.id);
 
@@ -1718,15 +1708,16 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
     assert_eq!(feedback["integration"]["source"], "recovery");
     assert_eq!(feedback["integration"]["branch"], branch);
-    // The work is on the branch, and the user's file is untouched.
+    // The worker's repair stays on its task branch; the session edit remains separate.
     assert_eq!(
         git(&project, &["show", &format!("{branch}:hello.txt")]),
         "from worker"
     );
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "user draft\n"
     );
+    assert!(!project.join("hello.txt").exists());
 }
 
 #[test]
@@ -1858,6 +1849,7 @@ fn integration_repair_delivers_options_and_refuses_a_silent_variant_switch() {
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting", "{:?}", task.report);
     assert!(
@@ -1867,7 +1859,7 @@ fn integration_repair_delivers_options_and_refuses_a_silent_variant_switch() {
             .contains("Silent variant switch rejected")
     );
     assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
         "user draft\n"
     );
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
@@ -1997,6 +1989,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
 
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
     let tasks = original_tasks(&core, &conversation);
     assert_eq!(tasks.len(), 2);
     for task in &tasks {
@@ -2005,7 +1998,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
     }
     for name in ["first", "second"] {
         assert_eq!(
-            std::fs::read_to_string(project.join(format!("hello-{name}.txt"))).unwrap(),
+            std::fs::read_to_string(session.join(format!("hello-{name}.txt"))).unwrap(),
             "from worker\n"
         );
     }
