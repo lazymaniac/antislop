@@ -79,6 +79,12 @@ impl Card<'_> {
     }
 
     fn paint_open_comments(&mut self) {
+        let base = if self.expanded_tab.is_some() {
+            self.fill.patch(self.theme.card_header())
+        } else {
+            self.fill
+        };
+        let right = self.node.x + self.node.width - 1;
         let open = self
             .view
             .comments_on(&self.node.key)
@@ -86,18 +92,29 @@ impl Card<'_> {
             .filter(|comment| comment.status == "open")
             .count();
         if open > 0 {
-            let base = if self.expanded_tab.is_some() {
-                self.fill.patch(self.theme.card_header())
-            } else {
-                self.fill
-            };
-            let right = self.node.x + self.node.width - 1;
             self.canvas.text(
                 right - 3,
                 self.node.y,
                 &format!("✎{}", open.min(9)),
                 base.patch(self.theme.accent()),
             );
+        }
+        if matches!(self.role, Some(Role::Worker | Role::Pair))
+            && self.node.width >= 20
+            && let Some(task) = self.task
+            && self.critical_path.contains(&task.id)
+        {
+            let blocked = self.view.task_bottleneck_count(&task.id);
+            if blocked > 0 {
+                let mark = if self.theme.ascii { "!" } else { "⚡" };
+                let shift = if open > 0 { 6 } else { 3 };
+                self.canvas.text(
+                    right.saturating_sub(shift),
+                    self.node.y,
+                    &format!("{mark}{}", blocked.min(9)),
+                    base.patch(self.theme.warning().add_modifier(Modifier::BOLD)),
+                );
+            }
         }
     }
 
@@ -132,10 +149,15 @@ impl Card<'_> {
         if requirements_round(&self.node.key).is_some() {
             return describe(self.view, &self.node.key);
         }
-        self.task
+        let mut base = self
+            .task
             .map(|task| task.round)
             .filter(|round| *round > 0)
-            .map_or_else(|| "working".into(), |round| format!("round {round}"))
+            .map_or_else(|| "working".into(), |round| format!("round {round}"));
+        if let Some(clock) = self.view.agent_live_clock(&self.node.key, self.theme.ascii) {
+            base.push_str(&format!(" · {clock}"));
+        }
+        base
     }
 
     fn pair_finished(&self) -> bool {

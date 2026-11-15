@@ -1,4 +1,4 @@
-use super::super::nodes::draw_node;
+use super::super::nodes::{DrawDetails, draw_node_with_critical_path};
 use super::*;
 
 impl Graph {
@@ -59,9 +59,11 @@ impl Graph {
             .map(|node| (node.key.as_str(), node))
             .collect();
         let selected = card_key(view, selected);
-        self.render_frames(view, canvas, &selected, theme);
+        let critical_path: std::collections::HashSet<String> =
+            view.critical_path_chain().into_iter().collect();
+        self.render_frames(view, canvas, &selected, &critical_path, theme);
         self.render_edges(canvas, relations, &selected, &nodes);
-        self.render_nodes(view, canvas, selected, theme, tick);
+        self.render_nodes(view, canvas, selected, &critical_path, theme, tick);
     }
 
     fn render_edges(
@@ -81,14 +83,24 @@ impl Graph {
 
     /// Each task's frame, titled with the task and its state; the frame
     /// around the selected card stands out.
-    fn render_frames(&self, view: &View, canvas: &mut Canvas, selected: &str, theme: &Theme) {
+    fn render_frames(
+        &self,
+        view: &View,
+        canvas: &mut Canvas,
+        selected: &str,
+        critical_path: &std::collections::HashSet<String>,
+        theme: &Theme,
+    ) {
+        if !self.frames.iter().any(|frame| frame.visible) {
+            return;
+        }
         let group = self
             .nodes
             .iter()
             .find(|node| node.key == selected)
             .and_then(|node| node.group.as_deref());
         for frame in self.frames.iter().filter(|frame| frame.visible) {
-            Self::draw_frame(view, canvas, frame, group, theme);
+            Self::draw_frame(view, canvas, frame, group, critical_path, theme);
         }
     }
 
@@ -97,6 +109,7 @@ impl Graph {
         canvas: &mut Canvas,
         frame: &Frame,
         group: Option<&str>,
+        critical_path: &std::collections::HashSet<String>,
         theme: &Theme,
     ) {
         let selected = group == Some(frame.key.as_str());
@@ -105,6 +118,8 @@ impl Graph {
             frame,
             if selected {
                 theme.accent().add_modifier(Modifier::BOLD)
+            } else if critical_path.contains(&frame.task) {
+                theme.warning()
             } else {
                 theme.faint()
             },
@@ -241,6 +256,7 @@ impl Graph {
         view: &View,
         canvas: &mut Canvas,
         selected: String,
+        critical_path: &std::collections::HashSet<String>,
         theme: &Theme,
         tick: u64,
     ) {
@@ -256,12 +272,16 @@ impl Graph {
                     .filter(|n| n.visible && Some(n.key.as_str()) == expanded),
             );
         for node in ordered {
-            draw_node(
+            draw_node_with_critical_path(
                 view,
                 canvas,
                 node,
                 node.key == selected,
-                (self.expanded.as_deref() == Some(node.key.as_str())).then_some(self.expanded_tab),
+                DrawDetails {
+                    expanded_tab: (self.expanded.as_deref() == Some(node.key.as_str()))
+                        .then_some(self.expanded_tab),
+                    critical_path,
+                },
                 theme,
                 tick,
             );

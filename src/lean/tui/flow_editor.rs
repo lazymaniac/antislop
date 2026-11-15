@@ -1182,6 +1182,165 @@ fn depends_transitively(view: &View, start_id: &str, target_id: &str) -> bool {
     false
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchFileEntry {
+    pub path: String,
+    pub stats: Option<(usize, usize)>,
+    pub hunks: Vec<(String, String)>,
+}
+
+pub fn is_unfinished_task(status: &str) -> bool {
+    !matches!(status, "approved" | "skipped" | "cancelled")
+}
+
+pub fn downstream_unfinished_dependents(view: &View, task_id: &str) -> Vec<String> {
+    let Some(task) = view.tasks.iter().find(|t| t.id == task_id) else {
+        return Vec::new();
+    };
+    if !is_unfinished_task(&task.status) {
+        return Vec::new();
+    }
+    view.tasks
+        .iter()
+        .filter(|other| {
+            other.id != task_id
+                && is_unfinished_task(&other.status)
+                && depends_transitively(view, &other.id, task_id)
+        })
+        .map(|other| other.id.clone())
+        .collect()
+}
+
+pub fn critical_path_tasks(view: &View) -> Vec<String> {
+    let unfinished: Vec<&TaskRow> = view
+        .tasks
+        .iter()
+        .filter(|t| is_unfinished_task(&t.status))
+        .collect();
+    if unfinished.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut children: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::with_capacity(unfinished.len());
+    for task in &unfinished {
+        children.entry(task.id.clone()).or_default();
+    }
+    for child in &unfinished {
+        for parent in &child.depends_on {
+            if child.id != *parent
+                && let Some(parent_children) = children.get_mut(parent)
+                && !parent_children.iter().any(|id| id == &child.id)
+            {
+                parent_children.push(child.id.clone());
+            }
+        }
+    }
+
+    // Compute each task's downstream count once. Calling the general-purpose
+    // reachability helper for every candidate repeatedly rescans the graph,
+    // which makes rendering a large plan prohibitively expensive.
+    let mut downstream_counts = std::collections::HashMap::with_capacity(unfinished.len());
+    for task in &unfinished {
+        let mut seen = std::collections::HashSet::new();
+        let mut pending = children.get(&task.id).cloned().unwrap_or_default();
+        while let Some(child) = pending.pop() {
+            if child == task.id {
+                continue;
+            }
+            if seen.insert(child.clone())
+                && let Some(grandchildren) = children.get(&child)
+            {
+                pending.extend(grandchildren.iter().cloned());
+            }
+        }
+        downstream_counts.insert(task.id.clone(), seen.len());
+    }
+
+    let mut memo: std::collections::HashMap<String, (usize, Option<String>)> =
+        std::collections::HashMap::new();
+    let mut visiting: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    fn longest_from(
+        id: &str,
+        children: &std::collections::HashMap<String, Vec<String>>,
+        downstream_counts: &std::collections::HashMap<String, usize>,
+        memo: &mut std::collections::HashMap<String, (usize, Option<String>)>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> (usize, Option<String>) {
+        if let Some(res) = memo.get(id) {
+            return res.clone();
+        }
+        if !visiting.insert(id.to_owned()) {
+            return (1, None);
+        }
+        let mut best_len = 1usize;
+        let mut best_next: Option<String> = None;
+        let mut best_downstream = 0usize;
+        if let Some(children_for_id) = children.get(id) {
+            for child in children_for_id {
+                let (child_len, _) =
+                    longest_from(child, children, downstream_counts, memo, visiting);
+                let cand_len = 1 + child_len;
+                let cand_down = downstream_counts.get(child).copied().unwrap_or_default();
+                if (cand_len, cand_down) > (best_len, best_downstream) {
+                    best_len = cand_len;
+                    best_downstream = cand_down;
+                    best_next = Some(child.clone());
+                }
+            }
+        }
+        visiting.remove(id);
+        let res = (best_len, best_next);
+        memo.insert(id.to_owned(), res.clone());
+        res
+    }
+
+    let mut best_start: Option<String> = None;
+    let mut best_score = (0usize, 0usize);
+    for task in &unfinished {
+        let (len, _) = longest_from(
+            &task.id,
+            &children,
+            &downstream_counts,
+            &mut memo,
+            &mut visiting,
+        );
+        let down = downstream_counts.get(&task.id).copied().unwrap_or_default();
+        if (len, down) > best_score {
+            best_score = (len, down);
+            best_start = Some(task.id.clone());
+        }
+    }
+    if best_score.0 < 2 {
+        return Vec::new();
+    }
+    let mut chain = Vec::new();
+    let mut current = best_start;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        let next = memo.get(&id).and_then(|(_, next)| next.clone());
+        chain.push(id);
+        current = next;
+    }
+    chain
+}
+
+pub fn format_clock_mm_ss(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{hours:02}:{mins:02}:{secs:02}")
+    } else {
+        format!("{mins:02}:{secs:02}")
+    }
+}
+
 fn suggest_next_task_id(view: &View) -> String {
     for n in 1..=999 {
         let candidate = format!("t{n}");
@@ -1589,5 +1748,124 @@ mod tests {
         app.run_workflow(Command::DirectExecute);
         assert_eq!(app.input.text, "/direct ");
         assert_eq!(app.focus, Focus::Chat);
+    }
+
+    #[test]
+    fn workbench_mini_diff_file_cycling_comment_and_row_click() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let mut app = App::test_app();
+        app.view = sample_view_with_plan();
+        app.focus = Focus::Graph;
+        app.selected = "worker:t1".into();
+        app.workbench_docked = true;
+
+        let mut diff = crate::lean::tui::DiffView::new("t1".into());
+        diff.load(Ok(json!({
+            "base": "aaaa1111",
+            "head": "bbbb2222",
+            "truncated": false,
+            "files": [
+                {
+                    "path": "src/alpha.rs",
+                    "old_path": null,
+                    "status": "modified",
+                    "added": 2,
+                    "removed": 1,
+                    "binary": false,
+                    "lines": [
+                        {"kind": "add", "old": null, "new": 1, "text": "pub fn alpha() {}"}
+                    ]
+                },
+                {
+                    "path": "src/beta.rs",
+                    "old_path": null,
+                    "status": "modified",
+                    "added": 5,
+                    "removed": 0,
+                    "binary": false,
+                    "lines": [
+                        {"kind": "add", "old": null, "new": 10, "text": "pub fn beta() {}"}
+                    ]
+                }
+            ]
+        })));
+        app.workbench_diffs.insert("t1".into(), diff);
+
+        // Press `]` to select second file (`src/beta.rs`)
+        app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
+        assert_eq!(app.workbench_file_index, 1);
+
+        let mut term = Terminal::new(TestBackend::new(140, 32)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        let rendered: String = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(rendered.contains("▸ [2/2] src/beta.rs (+5/-0)"));
+        assert!(rendered.contains("+pub fn beta() {}"));
+
+        // Press `C` to open inline comment editor for the selected file (`diff:t1:src/beta.rs`)
+        app.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE));
+        let editor = app.editor.as_ref().expect("comment editor opened");
+        assert_eq!(editor.target, "diff:t1:src/beta.rs");
+        app.editor = None;
+
+        // Click on the first file row in Workbench `[3]` to select `src/alpha.rs` and open DiffView
+        let (first_row_y, first_idx) = app
+            .workbench_file_rows
+            .first()
+            .copied()
+            .expect("file rows recorded");
+        assert_eq!(first_idx, 0);
+        let wb_area = app.workbench_area.unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: wb_area.x + 3,
+            row: first_row_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.workbench_file_index, 0);
+        assert_eq!(app.diff.as_ref().map(|d| d.selected_file_index()), Some(0));
+    }
+
+    #[test]
+    fn critical_path_bottleneck_and_live_timer_render_on_graph_and_workbench() {
+        let mut app = App::test_app();
+        app.view = sample_view_with_plan();
+        app.view.tasks[0].status = "working".into();
+        app.view.tasks[0].round = 1;
+        let worker = app.view.agents.entry("worker:t1".into()).or_default();
+        worker.running = true;
+        worker.started_ms = Some(crate::lean::store::now_ms().saturating_sub(75_000));
+
+        // t1 -> t2 is a critical path of length 2 where t1 blocks 1 downstream task (t2)
+        assert_eq!(app.view.critical_path_chain(), vec!["t1", "t2"]);
+        assert!(app.view.is_critical_path_task("t1"));
+        assert_eq!(app.view.task_bottleneck_count("t1"), 1);
+        let clock = app
+            .view
+            .agent_live_clock("worker:t1", false)
+            .expect("live clock available");
+        assert!(clock.contains("01:1"));
+
+        app.focus = Focus::Graph;
+        app.selected = "worker:t1".into();
+        app.workbench_docked = true;
+        let mut term = Terminal::new(TestBackend::new(140, 32)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        let rendered: String = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(rendered.contains("CRITICAL PATH · blocks 1: t2"));
+        assert!(rendered.contains("Elapsed: ⏱ 01:1"));
+        assert!(rendered.contains("⚡1"));
     }
 }
