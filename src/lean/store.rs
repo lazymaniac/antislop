@@ -26,6 +26,9 @@ use std::sync::Mutex;
 mod agent_exchange;
 #[path = "store/artifacts.rs"]
 mod artifacts;
+#[path = "store/result_documents.rs"]
+mod result_documents;
+pub use result_documents::ResultDocument;
 #[path = "store/checkpoints.rs"]
 mod checkpoints;
 #[path = "store/continuations.rs"]

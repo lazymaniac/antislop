@@ -423,6 +423,67 @@ fn every_agent_exposes_results_and_keeps_reviewer_output_separate() {
 }
 
 #[test]
+fn result_documents_are_individually_selectable_and_readable_in_the_session() {
+    let state = tempfile::tempdir().unwrap();
+    let mut details = Details::new("orchestrator".into());
+    details.switch_tab(RESULT);
+    let mut result = super::super::document::Builder::new(state.path()).unwrap();
+    result
+        .append("Session response\n", |sink| sink("Original answer"))
+        .unwrap();
+    details
+        .documents
+        .insert("result".into(), result.finish().unwrap());
+    for (id, path, text) in [
+        ("one", "brief.md", "First output: café"),
+        ("two", "notes.txt", "Second output: 👩‍💻"),
+    ] {
+        let mut builder = super::super::document::Builder::new(state.path()).unwrap();
+        builder
+            .append(&format!("{path}\n"), |sink| sink(text))
+            .unwrap();
+        details
+            .documents
+            .insert(format!("result_document:{id}"), builder.finish().unwrap());
+    }
+    let view = View::default();
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        if screen(&terminal).contains("Original answer") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    details.change_result_document(1);
+    loop {
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let shown = screen(&terminal);
+        if shown.contains("First output: café") {
+            assert!(shown.contains("brief.md"), "{shown}");
+            assert!(!shown.contains("Original answer"), "{shown}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    details.change_result_document(1);
+    loop {
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let shown = screen(&terminal);
+        if shown.contains("Second output:") {
+            assert!(shown.contains("notes.txt"), "{shown}");
+            assert!(!shown.contains("First output:"), "{shown}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn result_tab_names_describe_the_roles_deliverable() {
     for (key, name) in [
         ("worker:t1", "Results"),

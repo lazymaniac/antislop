@@ -90,6 +90,8 @@ pub struct Details {
     pub panel_expanded: [bool; 2],
     /// Disk-backed history documents of the fetched task: result, review.
     pub documents: HashMap<String, document::Document>,
+    /// Selected output document on the Results tab; `None` selects the first.
+    pub selected_result_document: Option<String>,
     pub(super) panel_layout: [LayoutCache; 2],
     pub fetched_events: u64,
     pub fetch_in_flight: bool,

@@ -35,6 +35,24 @@ impl App {
             details.switch_role();
             return true;
         }
+        if details.tab == RESULT
+            && details
+                .documents
+                .keys()
+                .any(|key| key.starts_with("result_document:"))
+        {
+            match key.code {
+                KeyCode::Char(',') => {
+                    details.change_result_document(-1);
+                    return true;
+                }
+                KeyCode::Char('.') => {
+                    details.change_result_document(1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char(c @ '1'..='7') => {
                 if let Some(tab) = details.nth_tab((c as usize) - ('1' as usize)) {

@@ -17,6 +17,14 @@ pub enum SessionRequest {
         field: String,
         offset: u64,
     },
+    ResultDocuments {
+        conversation: String,
+    },
+    ResultDocumentContent {
+        conversation: String,
+        id: String,
+        offset: u64,
+    },
     Sessions {
         conversation: String,
     },

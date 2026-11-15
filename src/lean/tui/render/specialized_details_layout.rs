@@ -94,11 +94,32 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
         .padding(Padding::horizontal(u16::from(body.width >= 20)))
 }
 
-pub(super) fn document_key(key: &str, tab: usize) -> Option<&'static str> {
-    match tab {
-        RESULT if key.starts_with("reviewer:") => Some("reviewer_result"),
-        RESULT => Some("result"),
-        REVIEW => Some("review"),
+pub(super) fn document_key(details: &super::super::details::Details) -> Option<String> {
+    match details.tab {
+        RESULT if details.key.starts_with("reviewer:") => Some("reviewer_result".into()),
+        RESULT => details
+            .selected_result_document
+            .as_ref()
+            .filter(|key| details.documents.contains_key(*key))
+            .cloned()
+            .or_else(|| {
+                details
+                    .documents
+                    .contains_key("result")
+                    .then(|| "result".into())
+            })
+            .or_else(|| {
+                let mut keys = details
+                    .documents
+                    .keys()
+                    .filter(|key| key.starts_with("result_document:"))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                keys.sort();
+                keys.into_iter().next()
+            })
+            .or_else(|| Some("result".into())),
+        REVIEW => Some("review".into()),
         _ => None,
     }
 }

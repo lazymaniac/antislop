@@ -17,6 +17,18 @@ CREATE TABLE IF NOT EXISTS artifact_deliveries(
     conversation_id TEXT NOT NULL REFERENCES conversations(id), path TEXT NOT NULL,
     task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL, result_commit TEXT NOT NULL,
     PRIMARY KEY(conversation_id,path));
+CREATE TABLE IF NOT EXISTS session_documents (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    producer_task TEXT NOT NULL REFERENCES tasks(id),
+    path TEXT NOT NULL,
+    source_commit TEXT NOT NULL,
+    content_ref TEXT NOT NULL CHECK (json_valid(content_ref)),
+    created_ms INTEGER NOT NULL,
+    UNIQUE(producer_task, path, source_commit)
+);
+CREATE INDEX IF NOT EXISTS session_documents_by_conversation
+    ON session_documents(conversation_id, created_ms, id);
 CREATE TABLE IF NOT EXISTS task_artifact_inputs(
     task_id TEXT NOT NULL REFERENCES tasks(id), generation INTEGER NOT NULL, path TEXT NOT NULL,
     source_task TEXT REFERENCES tasks(id), source_generation INTEGER, source_commit TEXT,

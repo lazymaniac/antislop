@@ -37,6 +37,7 @@ impl Details {
         self.task_uuid = None;
         self.available_rounds.clear();
         self.documents.clear();
+        self.selected_result_document = None;
         self.resume_round = false;
         self.panel_scroll = [0; 2];
         self.panel_expanded = [false; 2];
@@ -116,6 +117,7 @@ impl Details {
             self.editing = false;
             self.task = None;
             self.documents.clear();
+            self.selected_result_document = None;
             self.resume_round = false;
             self.scroll = 0;
             self.panel_scroll = [0; 2];
@@ -142,5 +144,33 @@ impl Details {
             .get(&(self.key.clone(), self.tab))
             .cloned()
             .unwrap_or_default();
+    }
+
+    pub fn change_result_document(&mut self, direction: isize) {
+        let mut result_keys = self
+            .documents
+            .keys()
+            .filter(|key| key.starts_with("result_document:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        result_keys.sort();
+        let mut keys = Vec::with_capacity(result_keys.len() + 1);
+        if self.documents.contains_key("result") {
+            keys.push("result".to_owned());
+        }
+        keys.extend(result_keys);
+        if keys.is_empty() {
+            self.selected_result_document = None;
+            return;
+        }
+        let current = self
+            .selected_result_document
+            .as_ref()
+            .filter(|key| keys.contains(key))
+            .unwrap_or(&keys[0]);
+        let at = keys.iter().position(|key| key == current).unwrap_or(0);
+        let next = (at as isize + direction).rem_euclid(keys.len() as isize) as usize;
+        self.selected_result_document = Some(keys[next].clone());
+        self.scroll = 0;
     }
 }

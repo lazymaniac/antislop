@@ -49,6 +49,34 @@ fn decode_session_content(wire: WireRequest) -> std::result::Result<Request, Box
     }
 }
 
+fn decode_result_documents(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::ResultDocuments { conversation } => Ok(Request::Session(
+            crate::lean::daemon::SessionRequest::ResultDocuments { conversation },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn decode_result_document_content(
+    wire: WireRequest,
+) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::ResultDocumentContent {
+            conversation,
+            id,
+            offset,
+        } => Ok(Request::Session(
+            crate::lean::daemon::SessionRequest::ResultDocumentContent {
+                conversation,
+                id,
+                offset,
+            },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
 fn decode_sessions(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
         WireRequest::Sessions { conversation } => Ok(Request::Session(
@@ -73,6 +101,8 @@ pub(super) fn decode_group_all(
     decode_run_context(wire)
         .or_else(|wire| decode_session_events(*wire))
         .or_else(|wire| decode_session_content(*wire))
+        .or_else(|wire| decode_result_documents(*wire))
+        .or_else(|wire| decode_result_document_content(*wire))
         .or_else(|wire| decode_sessions(*wire))
         .or_else(|wire| decode_delete_session(*wire))
 }

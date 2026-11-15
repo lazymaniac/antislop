@@ -172,11 +172,74 @@ fn selected_run_snapshot(
         builder.append("", |sink| sink("No result submitted for this turn yet."))?;
     }
     let document = builder.finish()?;
-    let documents = std::collections::HashMap::from([
+    let mut documents = std::collections::HashMap::from([
         ("result".into(), document.clone()),
         ("review".into(), document),
     ]);
+    append_result_documents(client, conversation, &mut documents)?;
     Ok(Snapshot { task, documents })
+}
+
+fn append_result_documents(
+    client: &Client,
+    conversation: &str,
+    output: &mut std::collections::HashMap<String, document::Document>,
+) -> Result<()> {
+    let documents = client.call(&Request::Session(
+        crate::lean::daemon::SessionRequest::ResultDocuments {
+            conversation: conversation.into(),
+        },
+    ))?;
+    let documents = documents
+        .as_array()
+        .ok_or_else(|| crate::Error::Invalid("result document list is not an array".into()))?;
+    if documents.is_empty() {
+        return Ok(());
+    }
+    for document in documents {
+        let id = document["id"]
+            .as_str()
+            .ok_or_else(|| crate::Error::Invalid("result document has no id".into()))?;
+        let path = document["path"]
+            .as_str()
+            .ok_or_else(|| crate::Error::Invalid("result document has no path".into()))?;
+        let source_commit = document["source_commit"]
+            .as_str()
+            .ok_or_else(|| crate::Error::Invalid("result document has no source commit".into()))?;
+        let mut builder = document::Builder::new(client.state_dir())?;
+        append_result_document_header(&mut builder, path, source_commit)?;
+        let mut offset = 0;
+        loop {
+            let chunk = client.call(&Request::Session(
+                crate::lean::daemon::SessionRequest::ResultDocumentContent {
+                    conversation: conversation.into(),
+                    id: id.into(),
+                    offset,
+                },
+            ))?;
+            let text = chunk["text"]
+                .as_str()
+                .ok_or_else(|| crate::Error::Invalid("result document chunk has no text".into()))?;
+            builder.append("", |sink| sink(text))?;
+            if chunk["done"] == true {
+                break;
+            }
+            let next = chunk["next_offset"].as_u64().unwrap_or(0);
+            crate::require(next > offset, "result document cursor did not advance")?;
+            offset = next;
+        }
+        output.insert(format!("result_document:{id}"), builder.finish()?);
+    }
+    Ok(())
+}
+
+fn append_result_document_header(
+    builder: &mut document::Builder,
+    path: &str,
+    source_commit: &str,
+) -> Result<()> {
+    let revision = source_commit.chars().take(8).collect::<String>();
+    builder.append("", |sink| sink(&format!("{path} · {revision}\n")))
 }
 
 fn append_run_status(builder: &mut document::Builder, run: &Value) -> Result<()> {
@@ -238,6 +301,41 @@ mod tests {
         );
         assert!(
             !text.contains("Internal activity") && !text.contains("\"type\":"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn session_result_document_names_and_text_are_readable_in_the_document_view() {
+        let state = tempfile::tempdir().unwrap();
+        let mut builder = document::Builder::new(state.path()).unwrap();
+        builder.append("Result documents\n\n", |_| Ok(())).unwrap();
+        append_result_document_header(&mut builder, "brief.md", "12345678abcdef").unwrap();
+        builder.append("", |sink| sink("Plan for café")).unwrap();
+        builder.append("\n\n", |_| Ok(())).unwrap();
+        append_result_document_header(&mut builder, "notes.txt", "abcdef12345678").unwrap();
+        builder.append("", |sink| sink("Second document")).unwrap();
+        let document = builder.finish().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let page = loop {
+            if let Some(page) = document.viewport(100, 100, 0, false).unwrap() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let text = page
+            .lines
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("brief.md · 12345678\nPlan for café"),
+            "{text}"
+        );
+        assert!(
+            text.contains("notes.txt · abcdef12\nSecond document"),
             "{text}"
         );
     }

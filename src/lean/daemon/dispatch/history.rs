@@ -12,11 +12,46 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             history_content,
             history_messages,
             session_content,
+            result_documents,
+            result_document_content,
             events,
             paged_events_and_sessions,
             history_and_mail,
         ],
     )
+}
+
+fn result_documents(context: &Context<'_>, request: Request) -> Result<Route> {
+    let core = context.core;
+    let project = context.project;
+    Ok(match request {
+        Request::Session(crate::lean::daemon::SessionRequest::ResultDocuments { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                json!(core.store.result_documents(&conversation)?)
+            })
+        }
+        request => Route::Unmatched(request),
+    })
+}
+
+fn result_document_content(context: &Context<'_>, request: Request) -> Result<Route> {
+    let core = context.core;
+    let project = context.project;
+    Ok(match request {
+        Request::Session(crate::lean::daemon::SessionRequest::ResultDocumentContent {
+            conversation,
+            id,
+            offset,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            json!(
+                core.store
+                    .result_document_chunk(&conversation, &id, offset)?
+            )
+        }),
+        request => Route::Unmatched(request),
+    })
 }
 
 fn task_rounds(context: &Context<'_>, request: Request) -> Result<Route> {

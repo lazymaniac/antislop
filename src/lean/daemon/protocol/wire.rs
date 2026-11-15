@@ -95,6 +95,14 @@ pub(crate) enum WireRequest {
         field: String,
         offset: u64,
     },
+    ResultDocuments {
+        conversation: String,
+    },
+    ResultDocumentContent {
+        conversation: String,
+        id: String,
+        offset: u64,
+    },
 
     ListRuns {
         conversation: String,

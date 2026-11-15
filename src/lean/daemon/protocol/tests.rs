@@ -108,6 +108,8 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"history_content","conversation":"c","owner":{"kind":"round","task":"task","round":1,"field":"report"},"offset":0}),
         json!({"op":"history_messages","conversation":"c","scope":{"kind":"round","task":"task","round":1},"after":0,"limit":null}),
         json!({"op":"session_content","conversation":"c","event":1,"field":"prompt","offset":0}),
+        json!({"op":"result_documents","conversation":"c"}),
+        json!({"op":"result_document_content","conversation":"c","id":"e8f444f0-e3e5-4823-bc05-cd5857368f0e","offset":65536}),
         json!({"op":"list_runs","conversation":"c"}),
         json!({"op":"reject_ledger_proposal","conversation":"c","run_id":"r","proposal_id":"p","diff_hash":"h","comment":"no"}),
         json!({"op":"get_ledger_proposal","conversation":"c","run_id":"r"}),
@@ -175,7 +177,12 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
     let expected = match operation {
         "terminal_open" | "terminal_read" | "terminal_input" | "terminal_resize"
         | "terminal_detach" => "terminal",
-        "run_context" | "session_events" | "session_content" | "sessions" => "session",
+        "run_context"
+        | "session_events"
+        | "session_content"
+        | "result_documents"
+        | "result_document_content"
+        | "sessions" => "session",
         "task_rounds" | "task_round" | "history_content" | "history_messages" | "events"
         | "history" | "mail" => "history",
         "list_runs"

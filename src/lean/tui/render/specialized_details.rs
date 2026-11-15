@@ -208,10 +208,10 @@ impl Details {
         width: usize,
         theme: &Theme,
     ) -> bool {
-        let Some(key) = document_key(&self.key, self.tab) else {
+        let Some(key) = document_key(self) else {
             return false;
         };
-        let Some(document) = self.documents.get(key) else {
+        let Some(document) = self.documents.get(&key) else {
             return false;
         };
         let result = document.viewport_filtered(
@@ -222,7 +222,17 @@ impl Details {
             &self.query,
         );
         self.draw_document_result(frame, inner, result, theme);
-        let hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
+        let mut hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
+        if (self.documents.contains_key("result") as usize)
+            + self
+                .documents
+                .keys()
+                .filter(|key| key.starts_with("result_document:"))
+                .count()
+            > 1
+        {
+            hint.push_str(" · ,/. documents");
+        }
         self.draw_footer_hint(frame, footer, hint, theme);
         true
     }

@@ -168,7 +168,7 @@ impl<'a> Integration<'a> {
             self.core
                 .session_worktree(self.conversation, self.project)?
         };
-        let landed = git::changed_files(&target, base, change).unwrap_or_default();
+        let landed = git::changed_files(&target, base, change)?;
         let landing = super::landing::record(
             self.core,
             self.conversation,
@@ -177,7 +177,40 @@ impl<'a> Integration<'a> {
             &outcome,
             &landed,
         )?;
+        if landing.status == status::APPROVED {
+            self.record_result_documents(&target, change, &landed)?;
+        }
         self.complete_landing(landing)
+    }
+
+    fn record_result_documents(
+        &self,
+        target: &Path,
+        source_commit: &str,
+        landed: &[String],
+    ) -> Result<()> {
+        for path in &self.spec.outputs {
+            if !landed.iter().any(|landed_path| landed_path == path) {
+                continue;
+            }
+            let file = target.join(path);
+            let metadata = file.symlink_metadata()?;
+            if !metadata.file_type().is_file() {
+                continue;
+            }
+            let bytes = std::fs::read(file)?;
+            let Some(text) = text_document(&bytes) else {
+                continue;
+            };
+            self.core.store.record_result_document(
+                self.conversation,
+                &self.task.id,
+                path,
+                source_commit,
+                text,
+            )?;
+        }
+        Ok(())
     }
 
     fn complete_landing(self, landing: super::landing::Landing) -> Result<()> {
@@ -200,10 +233,155 @@ impl<'a> Integration<'a> {
     }
 }
 
+fn text_document(bytes: &[u8]) -> Option<&str> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    (!text.contains('\0')).then_some(text)
+}
+
 fn conflict_with_files(outcome: &git::Integration) -> Option<(Outcome, &[String])> {
     match outcome {
         git::Integration::Conflict(files) => Some((Outcome::Conflict, files)),
         git::Integration::UserEdits(files) => Some((Outcome::UserEdits, files)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_documents_accept_utf8_text_and_skip_binary_content() {
+        assert_eq!(
+            text_document("Plan for café".as_bytes()),
+            Some("Plan for café")
+        );
+        assert_eq!(text_document(b"image\0data"), None);
+        assert_eq!(text_document(&[0xff, 0xfe]), None);
+    }
+
+    #[test]
+    fn successful_output_selection_uses_only_landed_declared_text_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let state = directory.path().join("state");
+        let target = directory.path().join("landed");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&state, config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        let mut task = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[json!({
+                    "id":"writer",
+                    "title":"Write outputs",
+                    "goal":"Create the declared text file",
+                    "kind":"writing",
+                    "change_kind":"artifact",
+                    "outputs":["brief.md", "image.bin"],
+                    "reviewer":{"summary":"Check outputs"}
+                })],
+            )
+            .unwrap()
+            .remove(0);
+        let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
+        std::fs::write(target.join("brief.md"), "Deliverable café").unwrap();
+        std::fs::write(target.join("image.bin"), b"\0\xff\x01").unwrap();
+        std::fs::write(target.join("agent-report.txt"), "Internal worker report").unwrap();
+        let cancel = AtomicBool::new(false);
+        let integration = Integration {
+            core: &core,
+            conversation: &conversation.id,
+            task: &mut task,
+            spec: &spec,
+            project: &project,
+            worktree: &project,
+            config: &config,
+            cancel: &cancel,
+        };
+        integration
+            .record_result_documents(
+                &target,
+                "result-commit",
+                &[
+                    "brief.md".into(),
+                    "image.bin".into(),
+                    "agent-report.txt".into(),
+                ],
+            )
+            .unwrap();
+
+        let documents = core.store.result_documents(&conversation.id).unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].path, "brief.md");
+        assert_eq!(
+            core.store
+                .result_document_chunk(&conversation.id, &documents[0].id, 0)
+                .unwrap()
+                .text,
+            "Deliverable café"
+        );
+    }
+
+    #[test]
+    fn changed_files_error_prevents_landing_from_being_approved() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let state = directory.path().join("state");
+        std::fs::create_dir_all(&project).unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&state, config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        let mut task = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[json!({
+                    "id":"writer",
+                    "title":"Write output",
+                    "goal":"Create the declared text file",
+                    "kind":"writing",
+                    "change_kind":"artifact",
+                    "delivery":"untracked",
+                    "outputs":["brief.md"],
+                    "reviewer":{"summary":"Check output"}
+                })],
+            )
+            .unwrap()
+            .remove(0);
+        let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
+        let cancel = AtomicBool::new(false);
+        let integration = Integration {
+            core: &core,
+            conversation: &conversation.id,
+            task: &mut task,
+            spec: &spec,
+            project: &project,
+            worktree: &project,
+            config: &config,
+            cancel: &cancel,
+        };
+
+        let result = integration.finish_outcome("base", "change", git::Integration::Applied);
+
+        assert!(result.is_err());
+        assert_ne!(task.status, status::APPROVED);
+        assert!(
+            core.store
+                .result_documents(&conversation.id)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
