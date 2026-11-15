@@ -276,7 +276,17 @@ impl App {
         Option<Rect>,
         Vec<crate::lean::tui::view::ProgressEntry>,
     ) {
-        let frame_inner = self.draw_graph_frame(frame, area);
+        let mut frame_inner = self.draw_graph_frame(frame, area);
+        if self.phase_action_area.is_none()
+            && self.phase_action().is_some()
+            && frame_inner.height >= 6
+        {
+            let [banner, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame_inner);
+            let theme = Theme::from_env();
+            self.draw_phase_action(frame, banner, &theme);
+            frame_inner = rest;
+        }
         let max_rows = if frame_inner.height / 2 >= 3 {
             usize::from((frame_inner.height / 2).saturating_sub(2).min(6))
         } else {
@@ -291,17 +301,26 @@ impl App {
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect) -> Rect {
-        let border = if self.focus == Focus::Graph {
+        let border = if self.graph_link_source.is_some() {
+            Style::default().fg(theme::ayu::YELLOW)
+        } else if self.focus == Focus::Graph {
             Style::default().fg(theme::ayu::BLUE)
         } else {
             dim()
         };
-        let title = graph_title(
-            &self.relations.name(),
-            self.graph_scope.is_filtered(),
-            self.graph_grouping.name(),
-            area.width.saturating_sub(2),
-        );
+        let title = if let Some(src) = &self.graph_link_source {
+            truncate(
+                &format!(" 🔗 LINKING FROM {src} (Enter/l: toggle edge, Esc: cancel) "),
+                usize::from(area.width.saturating_sub(2)),
+            )
+        } else {
+            graph_title(
+                &self.relations.name(),
+                self.graph_scope.is_filtered(),
+                self.graph_grouping.name(),
+                area.width.saturating_sub(2),
+            )
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border)
@@ -629,6 +648,9 @@ fn graph_position_marker_glyph(above: bool, ascii: bool) -> &'static str {
 fn graph_title(relations: &str, filtered: bool, grouping: &str, width: u16) -> String {
     let cards = if filtered { "some" } else { "all" };
     [
+        format!(
+            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) · flow: e/a/S/l · wb: w "
+        ),
         format!(
             " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) "
         ),

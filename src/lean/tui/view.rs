@@ -149,11 +149,25 @@ pub struct PendingApproval {
     pub options: Vec<(String, String, String)>,
 }
 
+/// Extra contract metadata per task id used by the Flow Editor and Graph UI.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskMeta {
+    pub deferred: bool,
+    pub outputs: Vec<String>,
+    pub covers: Vec<String>,
+    pub quality_gate: bool,
+    pub options_for: Option<String>,
+}
+
 /// One runtime agent: the orchestrator, the plan reviewer, the auditor,
 /// and each task's worker and reviewer (shown together on one task card). Keys are `orchestrator`,
 /// `plan-reviewer`, `auditor`, `worker:t1`, `reviewer:t1`.
 #[derive(Debug, Default)]
 pub struct View {
+    pub team: Option<crate::lean::tasks::Team>,
+    pub team_reason: String,
+    pub plan_head_revision: i64,
+    pub task_meta: HashMap<String, TaskMeta>,
     pub workflow_phase: Option<String>,
     pub session_branch: Option<String>,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
@@ -224,6 +238,11 @@ pub fn dim() -> Style {
 impl View {
     pub fn apply(&mut self, event: &Value) {
         projection::apply(self, event);
+    }
+
+    /// Returns the active rigor/team template, defaulting to lighter rigor (`SmallChange`) in the UI.
+    pub fn active_rigor(&self) -> crate::lean::tasks::Team {
+        self.team.unwrap_or(crate::lean::tasks::Team::SmallChange)
     }
 }
 

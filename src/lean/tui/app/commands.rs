@@ -26,8 +26,203 @@ impl App {
             Command::NewConversation => self.new_conversation(),
             Command::SwitchConversation => self.open_conversation_picker(),
             Command::Projects => self.open_projects_picker(),
+            Command::SelectTeam(team) => self.apply_rigor_team(team),
+            Command::OpenRigorPicker => self.picker = Some(Picker::new(Kind::Rigor)),
+            Command::EditTask => self.open_flow_edit(),
+            Command::AddDependentTask => self.open_flow_add_dependent(),
+            Command::SplitTask => self.open_flow_split(),
+            Command::HoldTask => self.toggle_flow_hold(),
+            Command::RetireTask => self.open_flow_retire(),
+            Command::SteerAgent => self.open_live_steer(),
+            Command::ToggleWorkbench => self.toggle_workbench(),
+            Command::AcceptPlan => self.accept_plan(),
+            Command::DirectExecute => self.trigger_direct_execute(),
+            Command::LinkTask => self.toggle_flow_link(),
             _ => {}
         }
+    }
+
+    pub fn trigger_direct_execute(&mut self) {
+        let trimmed = self.input.text.trim().to_owned();
+        if trimmed.is_empty() {
+            self.input = InputBuffer::with_text("/direct ");
+            self.focus = Focus::Chat;
+            self.notice = Some("⚡ Wpisz polecenie po /direct i naciśnij Enter".into());
+        } else if trimmed.starts_with("/direct") {
+            self.submit();
+        } else {
+            self.input = InputBuffer::with_text(format!("/direct {trimmed}"));
+            self.submit();
+        }
+    }
+
+    pub fn toggle_flow_link(&mut self) {
+        let Some(target) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            return;
+        };
+        if let Some(source_id) = self.graph_link_source.take() {
+            if source_id == target.id {
+                self.notice = Some("Anulowano łączenie krawędzi (wybrano to samo zadanie).".into());
+                return;
+            }
+            match flow_editor::toggle_dependency_edge_revision(&self.view, &source_id, &target.id) {
+                Ok((revision, message)) => {
+                    self.notice = Some(format!("✓ {message}"));
+                    self.send_flow_revision(revision, false, true, target.id, target.title);
+                }
+                Err(error) => self.notice = Some(format!("✗ {error}")),
+            }
+        } else {
+            self.focus = Focus::Graph;
+            self.graph_link_source = Some(target.id.clone());
+            self.notice = Some(format!(
+                "🔗 Łączenie od {}: wybierz zadanie docelowe i wciśnij Enter/l (Esc anuluje)",
+                target.id
+            ));
+        }
+    }
+
+    pub fn apply_rigor_team(&mut self, team: crate::lean::tasks::Team) {
+        self.view.team = Some(team);
+        let name = team.name().to_owned();
+        self.send_command(Some("workflow rigor updated"), move |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::SelectTeam {
+                conversation,
+                team: name,
+                reason: "Selected by user in UI".into(),
+            })
+        });
+    }
+
+    pub fn active_graph_task(&self) -> Option<&view::TaskRow> {
+        let id = self
+            .selected
+            .split_once(':')
+            .map(|(_, id)| id)
+            .unwrap_or(&self.selected);
+        self.view
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .or_else(|| self.view.tasks.first())
+    }
+
+    pub fn open_flow_edit(&mut self) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie do edycji".into());
+            return;
+        };
+        self.flow_editor = Some(flow_editor::FlowEditor::edit_task(&self.view, &task));
+    }
+
+    pub fn open_flow_add_dependent(&mut self) {
+        if self.view.plan.is_none() && self.view.tasks.is_empty() {
+            self.notice = Some("✗ brak aktywnego planu do dodania zadania".into());
+            return;
+        };
+        let after_id = self
+            .active_graph_task()
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        self.flow_editor = Some(flow_editor::FlowEditor::add_dependent(
+            &self.view, &after_id,
+        ));
+    }
+
+    pub fn open_flow_split(&mut self) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie do podziału".into());
+            return;
+        };
+        self.flow_editor = Some(flow_editor::FlowEditor::split_task(&self.view, &task));
+    }
+
+    pub fn open_flow_retire(&mut self) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie do wycofania".into());
+            return;
+        };
+        self.flow_editor = Some(flow_editor::FlowEditor::retire_task(&task));
+    }
+
+    pub fn toggle_flow_hold(&mut self) {
+        let Some(task) = self.active_graph_task().cloned() else {
+            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            return;
+        };
+        match flow_editor::toggle_hold_revision(&self.view, &task) {
+            Ok((revision, request_ai_review)) => {
+                self.send_flow_revision(revision, request_ai_review, false, task.id, task.title);
+            }
+            Err(error) => self.notice = Some(format!("✗ {error}")),
+        }
+    }
+
+    pub fn open_live_steer(&mut self) {
+        let key = if self.selected.contains(':') || self.selected == ORCHESTRATOR {
+            self.selected.clone()
+        } else if let Some(task) = self.active_graph_task() {
+            format!("worker:{}", task.id)
+        } else {
+            ORCHESTRATOR.to_owned()
+        };
+        self.graph_expanded = None;
+        self.open_details(key);
+        if let Some(details) = &mut self.details {
+            details.editing = true;
+            let composer_key = details.composer_key();
+            details.drafts.borrow_mut().entry(composer_key).or_default();
+        }
+    }
+
+    pub fn toggle_workbench(&mut self) {
+        self.workbench_docked = !self.workbench_docked;
+        self.notice = Some(
+            if self.workbench_docked {
+                "docked task workbench enabled (w)"
+            } else {
+                "docked task workbench hidden (w)"
+            }
+            .into(),
+        );
+    }
+
+    pub fn send_flow_revision(
+        &self,
+        revision: crate::lean::store::PlanRevision,
+        request_ai_review: bool,
+        allow_uncovered: bool,
+        task_id: String,
+        task_title: String,
+    ) {
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let conversation = self.conversation.clone();
+        let generation = self.generation;
+        let rev_for_req = revision.clone();
+        std::thread::spawn(move || {
+            let reply = client
+                .call(&Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::RevisePlan {
+                        conversation: conversation.clone(),
+                        operation_id: Some(crate::id()),
+                        revision: rev_for_req,
+                        request_ai_review,
+                        allow_uncovered,
+                    },
+                ))
+                .map_err(|error| error.to_string());
+            let _ = updates.send(Update::PlanRevisionResult {
+                conversation,
+                generation,
+                revision,
+                request_ai_review,
+                task_id,
+                task_title,
+                reply,
+            });
+        });
     }
 
     fn open_interview_answer(&mut self) {

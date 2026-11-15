@@ -8,11 +8,177 @@ impl Core {
         explicit_to: Option<&str>,
     ) -> Result<serde_json::Value> {
         self.store.conversation(conversation)?;
+        if explicit_to.is_none()
+            && let Some(direct_prompt) = text.trim().strip_prefix("/direct").and_then(|rest| {
+                if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+                    Some(rest.trim())
+                } else {
+                    None
+                }
+            })
+        {
+            return self.direct_execute(conversation, direct_prompt);
+        }
         let Some((recipient, body)) = address(text, explicit_to)? else {
             return Ok(json!(self.send(conversation, text)?.seq));
         };
         require(!body.is_empty(), "the message is empty")?;
         dispatch_addressed(self, conversation, &recipient, &body)
+    }
+
+    /// Zero-ceremony 1-task execution (`/direct <prompt>`): bypasses the
+    /// orchestrator interview and plan review committee, creates a single
+    /// implementation task in an isolated worktree, and starts it immediately.
+    pub fn direct_execute(
+        self: &Arc<Self>,
+        conversation: &str,
+        prompt: &str,
+    ) -> Result<serde_json::Value> {
+        let prompt = prompt.trim();
+        require(!prompt.is_empty(), "usage: /direct <instruction>")?;
+        let _lifecycle = self
+            .locks
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        require(
+            !self.activity.plan_running(conversation),
+            "a plan is already running",
+        )?;
+        let message = self.store.add_message(conversation, "user", prompt)?;
+        let turn =
+            self.store
+                .start_turn(conversation, ORCHESTRATOR, "direct", message.seq, None)?;
+        self.store
+            .finish_turn(&turn.id, store::TurnStatus::Done, None)?;
+        self.store.add_message(
+            conversation,
+            ORCHESTRATOR,
+            "Starting direct execution in an isolated worktree.",
+        )?;
+        self.store.db().execute(
+            "UPDATE session_workflow SET phase='planning', summary=?2, upto_message=?3 WHERE conversation_id=?1",
+            rusqlite::params![conversation, prompt, message.seq as i64],
+        )?;
+        self.store.append_event(
+            conversation,
+            None,
+            None,
+            "workflow",
+            &json!({"phase": "planning", "summary": prompt, "upto_message": message.seq}),
+        )?;
+
+        let run = self.store.create_run(conversation, prompt)?;
+        let source = self
+            .store
+            .register_message_source(conversation, &run.id, message.seq)?;
+        let change = serde_json::from_value(json!({
+            "conversation": conversation,
+            "run_id": run.id,
+            "expected_spec_revision": 0,
+            "operation_id": format!("direct-{}", crate::id()),
+            "reason": "Direct execution scope",
+            "entries": [{
+                "id": "R1",
+                "source": {
+                    "source_id": source.id,
+                    "start": 0,
+                    "end": prompt.len(),
+                },
+                "interpretation": prompt,
+                "criteria": [{
+                    "id": "R1.accept",
+                    "text": prompt,
+                }]
+            }]
+        }))?;
+        self.store.apply_ledger_change(&change, &self.state, true)?;
+        self.store.bind_ledger_turn(
+            conversation,
+            &run.id,
+            &turn.id,
+            1,
+            "extraction",
+            &[source.id],
+        )?;
+        self.store
+            .accept_extraction(conversation, &run.id, 1, &turn.id)?;
+
+        let first_line = prompt.lines().next().unwrap_or(prompt).trim();
+        let title: String = unicode_segmentation::UnicodeSegmentation::graphemes(first_line, true)
+            .take(64)
+            .collect();
+        let existing_count = self.store.latest_plan(conversation)?.len();
+        let task_id = if existing_count == 0 {
+            "direct-1".to_owned()
+        } else {
+            format!("direct-{}", existing_count + 1)
+        };
+        let spec = TaskContract {
+            quality_gate: false,
+            options_for: None,
+            id: task_id.clone(),
+            requirement_ids: vec!["R1".into()],
+            criterion_ids: vec!["R1.accept".into()],
+            title: if title.is_empty() {
+                "Direct task".into()
+            } else {
+                title
+            },
+            goal: prompt.to_owned(),
+            summary: None,
+            section: None,
+            deferred: false,
+            change_kind: tasks::ChangeKind::Code,
+            outputs: Vec::new(),
+            delivery: None,
+            depends_on: Vec::new(),
+            kind: WorkKind::Implementation,
+            covers: vec!["R1.accept".into()],
+            reviewer: tasks::ReviewerSpec {
+                summary: Some("Verify that the direct change satisfies the request.".into()),
+            },
+        };
+        let specs = vec![spec];
+        let values = specs
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let added = self.store.add_plan(conversation, &values)?;
+        let plan_id = added[0].plan_id.clone();
+        self.store.link_plan_run(conversation, &plan_id, &run.id)?;
+        self.store
+            .bind_task_ledger(conversation, &run.id, &plan_id)?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(&plan_id),
+            "plan_review",
+            &json!({"plan": plan_id, "approved": true, "findings": []}),
+        )?;
+        let revision_token = self.plan_revision_token(conversation, &plan_id)?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(&plan_id),
+            "plan_proposed",
+            &json!({
+                "plan": plan_id,
+                "document": tasks::render_plan_document(prompt, &specs),
+                "parallel": [],
+                "tasks": added.iter().map(|t| t.spec.clone()).collect::<Vec<_>>(),
+                "review": {"approved": true, "findings": []},
+                "automatic": true,
+                "waiting": serde_json::Value::Null,
+                "revision_token": revision_token,
+            }),
+        )?;
+        let _ = self.activate_reviewed_plan(conversation, &plan_id)?;
+        Ok(json!({
+            "seq": message.seq,
+            "direct_plan": plan_id,
+            "task": task_id,
+        }))
     }
 }
 

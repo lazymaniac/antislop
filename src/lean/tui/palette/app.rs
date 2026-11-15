@@ -149,6 +149,11 @@ impl App {
     }
 
     fn pick_selected(&mut self) -> bool {
+        let is_slash = self
+            .picker
+            .as_ref()
+            .is_some_and(|p| p.kind == Kind::SlashCommands);
+        let fallback_query = self.picker.as_ref().map(|p| p.query.clone());
         let action = self.picker.as_ref().and_then(|picker| {
             picker
                 .items(&self.view)
@@ -157,6 +162,13 @@ impl App {
                 .map(|(_, action)| action)
         });
         self.picker = None;
+        if action.is_none()
+            && is_slash
+            && let Some(query) = fallback_query
+        {
+            self.input.insert_str(&format!("/{query}"));
+            return true;
+        }
         self.picker_action(action)
     }
 

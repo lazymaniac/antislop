@@ -68,6 +68,8 @@ impl App {
         self.plan_view = None;
         self.ledger_view = None;
         self.editor = None;
+        self.flow_editor = None;
+        self.graph_link_source = None;
     }
 
     fn reset_conversation_navigation(&mut self) {
@@ -133,7 +135,17 @@ impl App {
                 crate::lean::daemon::ControlRequest::Start,
             )) {
                 Ok(conversation) => {
-                    Update::Conversation(conversation["id"].as_str().unwrap_or_default().into())
+                    let id = conversation["id"].as_str().unwrap_or_default().to_owned();
+                    if !id.is_empty() {
+                        let _ = client.call(&Request::Conversation(
+                            crate::lean::daemon::ConversationRequest::SelectTeam {
+                                conversation: id.clone(),
+                                team: crate::lean::tasks::Team::SmallChange.name().to_owned(),
+                                reason: "Default lighter rigor for new UI conversation".into(),
+                            },
+                        ));
+                    }
+                    Update::Conversation(id)
                 }
                 Err(error) => Update::Notice(format!("✗ {error}")),
             };

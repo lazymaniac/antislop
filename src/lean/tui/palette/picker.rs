@@ -9,6 +9,229 @@ fn command_items() -> Vec<(String, Action)> {
         .collect()
 }
 
+fn extended_command_items(view: &View) -> Vec<(String, Action)> {
+    use crate::lean::tasks::Team;
+    let mut items = command_items();
+    let current = view.active_rigor().name();
+    items.extend([
+        (
+            "Direct execution: zero-ceremony 1-task run (bypass orchestrator) · /direct".into(),
+            Action::Run(Command::DirectExecute),
+        ),
+        (
+            format!("Rigor / ceremony level (current: {current}) · /rigor"),
+            Action::Run(Command::OpenRigorPicker),
+        ),
+        (
+            "Rigor: small-change · light ceremony (default, direct worker + reviewer)".into(),
+            Action::Run(Command::SelectTeam(Team::SmallChange)),
+        ),
+        (
+            "Rigor: feature · full ceremony (requirements + plan review + audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Feature)),
+        ),
+        (
+            "Rigor: refactoring · behavior-preserving change (plan review + audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Refactoring)),
+        ),
+        (
+            "Rigor: security-fix · security gate + audit".into(),
+            Action::Run(Command::SelectTeam(Team::SecurityFix)),
+        ),
+        (
+            "Rigor: research · investigation & evidence (final audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Research)),
+        ),
+        (
+            "Rigor: document · documentation & writing".into(),
+            Action::Run(Command::SelectTeam(Team::Document)),
+        ),
+        (
+            "Flow editor: edit selected task contract in-place · e".into(),
+            Action::Run(Command::EditTask),
+        ),
+        (
+            "Flow editor: add dependent task after selected · a".into(),
+            Action::Run(Command::AddDependentTask),
+        ),
+        (
+            "Flow editor: split selected task into two steps · S".into(),
+            Action::Run(Command::SplitTask),
+        ),
+        (
+            "Flow editor: hold / release selected task (fast-path) · h".into(),
+            Action::Run(Command::HoldTask),
+        ),
+        (
+            "Flow editor: retire / remove selected task · D".into(),
+            Action::Run(Command::RetireTask),
+        ),
+        (
+            "Flow editor: link / unlink dependency edge on graph · l".into(),
+            Action::Run(Command::LinkTask),
+        ),
+        (
+            "Steer selected task's agent (queue / steer / interrupt) · s".into(),
+            Action::Run(Command::SteerAgent),
+        ),
+        (
+            "Workbench: toggle 3-column docked task workbench · w".into(),
+            Action::Run(Command::ToggleWorkbench),
+        ),
+        (
+            "Plan: accept proposed plan and start execution · /accept".into(),
+            Action::Run(Command::AcceptPlan),
+        ),
+    ]);
+    items
+}
+
+fn rigor_items(view: &View) -> Vec<(String, Action)> {
+    use crate::lean::tasks::Team;
+    let current = view.active_rigor();
+    let entries = [
+        (
+            Team::SmallChange,
+            "small-change",
+            "light ceremony (default) · direct worker + reviewer, no plan review/audit",
+        ),
+        (
+            Team::Feature,
+            "feature",
+            "full ceremony · requirements + plan review + final audit",
+        ),
+        (
+            Team::Refactoring,
+            "refactoring",
+            "behavior-preserving · plan review + static analysis + test + audit",
+        ),
+        (
+            Team::SecurityFix,
+            "security-fix",
+            "security ceremony · security review + static analysis + test + audit",
+        ),
+        (
+            Team::Research,
+            "research",
+            "investigation · evidence gathering + final audit",
+        ),
+        (
+            Team::Document,
+            "document",
+            "documentation · writing + review, no code gates",
+        ),
+    ];
+    entries
+        .into_iter()
+        .map(|(team, name, desc)| {
+            let mark = if team == current { " (current)" } else { "" };
+            (
+                format!("{name}{mark} · {desc}"),
+                Action::Run(Command::SelectTeam(team)),
+            )
+        })
+        .collect()
+}
+
+fn slash_command_items(view: &View) -> Vec<(String, Action)> {
+    use crate::lean::tasks::Team;
+    let current = view.active_rigor().name();
+    vec![
+        (
+            "/direct · zero-ceremony 1-task execution (bypass orchestrator)".into(),
+            Action::Run(Command::DirectExecute),
+        ),
+        (
+            format!("/rigor · switch workflow rigor / ceremony (current: {current})"),
+            Action::Run(Command::OpenRigorPicker),
+        ),
+        (
+            "/small-change · light rigor (default: direct worker + reviewer)".into(),
+            Action::Run(Command::SelectTeam(Team::SmallChange)),
+        ),
+        (
+            "/feature · full rigor (requirements + plan review + final audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Feature)),
+        ),
+        (
+            "/refactoring · refactoring rigor (plan review + audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Refactoring)),
+        ),
+        (
+            "/security-fix · security rigor (security gate + audit)".into(),
+            Action::Run(Command::SelectTeam(Team::SecurityFix)),
+        ),
+        (
+            "/research · research rigor (evidence + audit)".into(),
+            Action::Run(Command::SelectTeam(Team::Research)),
+        ),
+        (
+            "/document · documentation rigor".into(),
+            Action::Run(Command::SelectTeam(Team::Document)),
+        ),
+        (
+            "/edit · edit selected task contract in-place (e)".into(),
+            Action::Run(Command::EditTask),
+        ),
+        (
+            "/add-task · add dependent task after selected (a)".into(),
+            Action::Run(Command::AddDependentTask),
+        ),
+        (
+            "/split-task · split selected task into two steps (S)".into(),
+            Action::Run(Command::SplitTask),
+        ),
+        (
+            "/hold · hold or release selected task via fast-path (h)".into(),
+            Action::Run(Command::HoldTask),
+        ),
+        (
+            "/retire · retire/remove selected task from flow (D)".into(),
+            Action::Run(Command::RetireTask),
+        ),
+        (
+            "/link · link or unlink dependency edge on graph (l)".into(),
+            Action::Run(Command::LinkTask),
+        ),
+        (
+            "/steer · live-steer selected task's agent (s)".into(),
+            Action::Run(Command::SteerAgent),
+        ),
+        (
+            "/workbench · toggle 3-column docked task workbench (w)".into(),
+            Action::Run(Command::ToggleWorkbench),
+        ),
+        (
+            "/plan · open current plan document (Ctrl+L)".into(),
+            Action::Run(Command::Plan),
+        ),
+        (
+            "/accept · accept proposed plan and start execution".into(),
+            Action::Run(Command::AcceptPlan),
+        ),
+        (
+            "/reject · reject proposed plan (F7)".into(),
+            Action::Run(Command::Reject),
+        ),
+        (
+            "/requirements · open requirements ledger (F2)".into(),
+            Action::Run(Command::Requirements),
+        ),
+        (
+            "/unblock · unblock or recover stopped task (F5)".into(),
+            Action::Run(Command::TaskActions),
+        ),
+        (
+            "/pause · pause or continue execution (F6)".into(),
+            Action::Run(Command::PauseOrContinue),
+        ),
+        (
+            "/approvals · answer pending CLI approval requests".into(),
+            Action::Run(Command::PendingApprovals),
+        ),
+    ]
+}
+
 fn agent_items(view: &View) -> Vec<(String, Action)> {
     Graph::new(view)
         .nodes
@@ -126,12 +349,20 @@ impl Picker {
 
     fn unfiltered_items(&self, view: &View) -> Vec<(String, Action)> {
         match self.kind {
-            Kind::Commands => command_items(),
+            Kind::Commands => {
+                if self.query.trim().is_empty() {
+                    command_items()
+                } else {
+                    extended_command_items(view)
+                }
+            }
             Kind::Agents => agent_items(view),
             Kind::History => history_items(view),
             Kind::Conversations => conversation_items(&self.conversations),
             Kind::Projects => project_items(&self.projects),
             Kind::Recipients => recipient_items(view),
+            Kind::SlashCommands => slash_command_items(view),
+            Kind::Rigor => rigor_items(view),
         }
     }
 
@@ -220,6 +451,8 @@ fn empty_message(kind: Kind, query_empty: bool) -> &'static str {
         Kind::Conversations => "No other conversations in this project.",
         Kind::Recipients => "No recipients matching query.",
         Kind::Projects => "No other projects yet: type a directory path (/…, ~/…).",
+        Kind::SlashCommands => "No slash commands matching query.",
+        Kind::Rigor => "No rigor levels matching query.",
     }
 }
 
@@ -266,6 +499,12 @@ fn picker_title(kind: Kind, width: u16) -> &'static str {
         Kind::Projects if width >= 50 => " projects · Enter open · type a path · Esc close ",
         Kind::Projects if width >= 20 => " projects · Esc ",
         Kind::Projects => " projects ",
+        Kind::SlashCommands if width >= 45 => " slash commands (/) · Enter run · Esc close ",
+        Kind::SlashCommands if width >= 20 => " slash commands · Esc ",
+        Kind::SlashCommands => " commands ",
+        Kind::Rigor if width >= 45 => " workflow rigor · Enter select · Esc close ",
+        Kind::Rigor if width >= 20 => " rigor · Esc ",
+        Kind::Rigor => " rigor ",
     }
 }
 

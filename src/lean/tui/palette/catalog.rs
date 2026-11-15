@@ -32,6 +32,18 @@ pub enum Command {
     ApprovalsAutonomous,
     PendingApprovals,
     TakeControl,
+    SelectTeam(crate::lean::tasks::Team),
+    OpenRigorPicker,
+    EditTask,
+    AddDependentTask,
+    SplitTask,
+    HoldTask,
+    RetireTask,
+    SteerAgent,
+    ToggleWorkbench,
+    AcceptPlan,
+    DirectExecute,
+    LinkTask,
 }
 
 pub(super) const COMMANDS: [(Command, &str); 5] = [
@@ -93,6 +105,8 @@ pub enum Kind {
     Conversations,
     Recipients,
     Projects,
+    SlashCommands,
+    Rigor,
 }
 
 #[derive(Debug)]

@@ -100,6 +100,25 @@ pub(super) fn on_session_started(
     view.session_branch = payload["branch"].as_str().map(clean_line);
 }
 
+pub(super) fn on_team_selected(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    if let Some(name) = payload["team"].as_str()
+        && let Ok(team) = crate::lean::tasks::Team::parse(name)
+    {
+        view.team = Some(team);
+        view.team_reason = payload["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+    }
+}
+
 pub(super) fn on_planning_progress(
     view: &mut View,
     event: &Value,

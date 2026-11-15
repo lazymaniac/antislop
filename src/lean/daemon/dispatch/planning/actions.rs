@@ -14,6 +14,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             cancel_work,
             pause,
             approvals,
+            revise_and_team,
         ],
     )
 }
@@ -205,6 +206,50 @@ fn approvals(context: &Context<'_>, request: Request) -> Result<Route> {
             validate_project_conversation(core, project, &conversation)?;
             core.answer_approval(&conversation, &request, &choice)?;
             Value::Null
+        }),
+        request => Route::Unmatched(request),
+    })
+}
+
+fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
+    let core = context.core;
+    let project = context.project;
+    Ok(match request {
+        Request::Conversation(ConversationRequest::RevisePlan {
+            conversation,
+            operation_id,
+            revision,
+            request_ai_review,
+            allow_uncovered,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &revision.plan)?;
+            let key = operation_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .map_or_else(crate::id, str::to_owned);
+            core.apply_user_revision(
+                &conversation,
+                &key,
+                revision,
+                request_ai_review,
+                allow_uncovered,
+            )?
+        }),
+        Request::Conversation(ConversationRequest::SelectTeam {
+            conversation,
+            team,
+            reason,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            let parsed = crate::lean::tasks::Team::parse(&team)?;
+            let reason = if reason.trim().is_empty() {
+                format!("User selected `{}` rigor mode in UI", parsed.name())
+            } else {
+                reason
+            };
+            core.store.select_team(&conversation, parsed, &reason)?;
+            json!({"team": parsed.name(), "reason": reason})
         }),
         request => Route::Unmatched(request),
     })

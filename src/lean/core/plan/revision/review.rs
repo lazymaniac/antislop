@@ -130,6 +130,45 @@ impl Core {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_direct_revision(
+        &self,
+        conversation: &str,
+        revision: &PlanRevision,
+        baseline: &[Task],
+        specs: &[TaskContract],
+        lease: &super::store::RevisionLease<'_>,
+        allow_uncovered: bool,
+        is_accepted: bool,
+    ) -> Result<()> {
+        let affected = affected_tasks(baseline, specs, &revision.redo);
+        let cancel = AtomicBool::new(false);
+        if is_accepted {
+            self.cancel_affected_tasks(&affected);
+            self.wait_for_affected_tasks(&affected, &cancel)?;
+        }
+        let _graph = self.locks.graph();
+        let _integration = self.locks.integration();
+        if is_accepted {
+            self.checkpoint_revision_work(&affected)?;
+        }
+        self.store.apply_plan_revision_with_options(
+            conversation,
+            revision,
+            baseline,
+            specs,
+            &affected,
+            lease,
+            allow_uncovered,
+            false,
+            is_accepted,
+        )?;
+        for id in affected {
+            self.queue_worktree_cleanup(&id);
+        }
+        Ok(())
+    }
+
     fn checkpoint_revision_work(&self, affected: &BTreeSet<String>) -> Result<()> {
         for id in affected {
             let Some(mut task) = self.store.task_by_id(id)? else {

@@ -96,6 +96,44 @@ fn decode_task(wire: WireRequest) -> std::result::Result<Request, Box<WireReques
     }
 }
 
+fn decode_revise_plan(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::RevisePlan {
+            conversation,
+            operation_id,
+            revision,
+            request_ai_review,
+            allow_uncovered,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::RevisePlan {
+                conversation,
+                operation_id,
+                revision,
+                request_ai_review,
+                allow_uncovered,
+            },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn decode_select_team(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::SelectTeam {
+            conversation,
+            team,
+            reason,
+        } => Ok(Request::Conversation(
+            crate::lean::daemon::ConversationRequest::SelectTeam {
+                conversation,
+                team,
+                reason,
+            },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn decode_group_planning(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
@@ -105,4 +143,6 @@ pub(super) fn decode_group_planning(
         .or_else(|wire| decode_review(*wire))
         .or_else(|wire| decode_task_checks(*wire))
         .or_else(|wire| decode_task(*wire))
+        .or_else(|wire| decode_revise_plan(*wire))
+        .or_else(|wire| decode_select_team(*wire))
 }

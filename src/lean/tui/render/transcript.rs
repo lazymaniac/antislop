@@ -162,7 +162,7 @@ impl App {
                     theme.title(),
                 )],
                 right: String::new(),
-                body: "Type a message in the composer below or press Ctrl+P to open the palette.",
+                body: "Type a message in the composer below, use /direct <task> for zero-ceremony execution, / for rigor & commands (Ctrl+M), w for Workbench, or Ctrl+P to open the palette.",
                 max_body: usize::MAX,
                 width,
             },

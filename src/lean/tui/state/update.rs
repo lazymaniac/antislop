@@ -28,6 +28,7 @@ impl App {
             update @ Update::InterviewResult { .. } => self.apply_interview_result(update),
             update @ Update::SendResult { .. } => self.apply_send_result(update),
             update @ Update::CommentResult { .. } => self.apply_comment_result(update),
+            update @ Update::PlanRevisionResult { .. } => self.apply_plan_revision_result(update),
         }
     }
 }

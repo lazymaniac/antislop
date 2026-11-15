@@ -77,6 +77,29 @@ impl DiffView {
         }
     }
 
+    pub fn mini_preview(&self, max_lines: usize) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for file in self.files() {
+            let adds = file.lines.iter().filter(|l| l.kind == "add").count();
+            let dels = file.lines.iter().filter(|l| l.kind == "del").count();
+            out.push(("file".into(), format!("{} (+{adds}/-{dels})", file.path)));
+            for line in file
+                .lines
+                .iter()
+                .filter(|l| matches!(l.kind.as_str(), "add" | "del"))
+                .take(2)
+            {
+                let prefix = if line.kind == "add" { "+" } else { "-" };
+                out.push((line.kind.clone(), format!("{prefix}{}", line.text)));
+            }
+            if out.len() >= max_lines {
+                out.truncate(max_lines);
+                break;
+            }
+        }
+        out
+    }
+
     fn lines_in_file(&self) -> usize {
         self.files()
             .get(self.file)

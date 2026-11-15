@@ -219,7 +219,13 @@ impl App {
 
     fn graph_action_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Esc => self.focus = Focus::Chat,
+            KeyCode::Esc => {
+                if self.graph_link_source.take().is_some() {
+                    self.notice = Some("Anulowano tryb łączenia krawędzi".into());
+                } else {
+                    self.focus = Focus::Chat;
+                }
+            }
             KeyCode::Char('q') => return false,
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
@@ -237,8 +243,19 @@ impl App {
             }
             KeyCode::Char('d') => self.set_graph_tab(3),
             KeyCode::Char('c') => self.open_graph_comment(),
+            KeyCode::Char('e') => self.open_flow_edit(),
+            KeyCode::Char('a') => self.open_flow_add_dependent(),
+            KeyCode::Char('S') => self.open_flow_split(),
+            KeyCode::Char('h') => self.toggle_flow_hold(),
+            KeyCode::Char('D') | KeyCode::Delete | KeyCode::Backspace => self.open_flow_retire(),
+            KeyCode::Char('l') => self.toggle_flow_link(),
+            KeyCode::Char('s') => self.open_live_steer(),
+            KeyCode::Char('w') => self.toggle_workbench(),
+            KeyCode::Char('R') => self.run_workflow(Command::OpenRigorPicker),
             KeyCode::Enter => {
-                if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
+                if self.graph_link_source.is_some() {
+                    self.toggle_flow_link();
+                } else if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
                     let key = self.graph_expanded.take();
                     self.graph_anim_anchor = None;
                     self.graph_anim = key

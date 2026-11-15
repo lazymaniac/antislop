@@ -57,15 +57,36 @@ impl App {
         (lines, cursor, areas)
     }
 
-    fn phase_action(&self) -> Option<(&'static str, Command)> {
+    pub(in crate::lean::tui) fn phase_action(&self) -> Option<(&'static str, Command)> {
         if self.view.requirements_approval_run.is_some() {
             Some(("Review requirements changes · F2", Command::Requirements))
+        } else if self.view.interview_question.is_some() && !self.interview_visible() {
+            Some(("Answer scope question · F3", Command::InterviewQuestion))
+        } else if self.view.plan_proposed() {
+            Some(("Review & accept proposed plan · Ctrl+L", Command::Plan))
+        } else if self
+            .view
+            .tasks
+            .iter()
+            .any(|t| matches!(t.status.as_str(), "failed" | "needs_user"))
+        {
+            Some(("Unblock stopped task · F5 / u", Command::TaskActions))
+        } else if !self.view.approvals.is_empty() && self.approval.is_none() {
+            Some((
+                "Answer pending CLI approval · Ctrl+P",
+                Command::PendingApprovals,
+            ))
         } else {
             None
         }
     }
 
-    fn draw_phase_action(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub(in crate::lean::tui) fn draw_phase_action(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+    ) {
         let Some((label, command)) = self.phase_action() else {
             return;
         };
@@ -165,6 +186,18 @@ impl App {
             theme.faint()
         };
         paint_input_background(frame, input, fill, accent, focused, theme);
+        if input.height > 0 && input.width >= 28 {
+            let hint = truncate(
+                &format!(
+                    "· {} (Ctrl+M) · / commands ",
+                    self.view.active_rigor().name()
+                ),
+                usize::from(input.width.saturating_sub(11)),
+            );
+            frame
+                .buffer_mut()
+                .set_string(input.x + 10, input.y, hint, fill.patch(theme.dim()));
+        }
         paint_input_lines(frame, input, lines, fill, theme);
     }
 

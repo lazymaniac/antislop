@@ -3,7 +3,7 @@ use super::*;
 use crate::lean::tasks::{TaskContract, order_graph};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanRevision {
     pub plan: String,

@@ -124,6 +124,15 @@ pub struct App {
     pub(super) approval_hidden: std::collections::HashSet<String>,
     /// The graph filter menu, while it is open.
     pub(super) graph_filters: Option<super::graph_filters::FilterMenu>,
+    /// Direct DAG flow editor for in-place task contract and dependency edits.
+    pub flow_editor: Option<super::flow_editor::FlowEditor>,
+    /// Whether the 3-column docked task workbench (`Zone C`) is active on wide screens.
+    pub workbench_docked: bool,
+    /// Source task id when interactive visual edge linking (`l`) is active on the graph.
+    pub graph_link_source: Option<String>,
+    /// Last rendered area of the docked workbench and its 3 interactive sections.
+    pub workbench_area: Option<Rect>,
+    pub workbench_sections: [Rect; 3],
     /// The projects the screen is connected to; the active one's client is
     /// `client`.
     pub projects: Vec<workspace::ProjectConn>,
@@ -222,6 +231,11 @@ macro_rules! initial_app {
             approval: None,
             approval_hidden: std::collections::HashSet::new(),
             graph_filters: None,
+            flow_editor: None,
+            workbench_docked: false,
+            graph_link_source: None,
+            workbench_area: None,
+            workbench_sections: [Rect::default(); 3],
             projects: Vec::new(),
             active_project: 0,
         }

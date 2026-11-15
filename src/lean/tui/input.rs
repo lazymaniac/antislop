@@ -157,6 +157,9 @@ impl App {
             KeyCode::Char('@') if !control && self.input.is_empty() => {
                 self.picker = Some(Picker::new(Kind::Recipients));
             }
+            KeyCode::Char('/') if !control && self.input.is_empty() => {
+                self.picker = Some(Picker::new(Kind::SlashCommands));
+            }
             _ => self.input.edit_key(key),
         }
         true

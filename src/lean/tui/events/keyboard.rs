@@ -118,6 +118,8 @@ impl App {
         self.interview_visible()
             || self.graph_filters.is_some()
             || self.editor.is_some()
+            || self.flow_editor.is_some()
+            || self.graph_link_source.is_some()
             || self.picker.is_some()
             || self
                 .details
@@ -142,10 +144,37 @@ impl App {
         if let Some(handled) = self.route_approval(key) {
             return Some(handled);
         }
+        if let Some(handled) = self.route_flow_editor(key) {
+            return Some(handled);
+        }
         if let Some(handled) = self.route_graph_filters(key) {
             return Some(handled);
         }
         self.route_unblock(key)
+    }
+
+    fn route_flow_editor(&mut self, key: KeyEvent) -> Option<bool> {
+        let editor = self.flow_editor.as_mut()?;
+        let task_id = editor.id_input.text.clone();
+        let task_title = editor.title_input.text.clone();
+        match editor.key(key, &self.view) {
+            flow_editor::FlowEditorOutcome::None => {}
+            flow_editor::FlowEditorOutcome::Close => self.flow_editor = None,
+            flow_editor::FlowEditorOutcome::Submit {
+                revision,
+                request_ai_review,
+                allow_uncovered,
+            } => {
+                self.send_flow_revision(
+                    revision,
+                    request_ai_review,
+                    allow_uncovered,
+                    task_id,
+                    task_title,
+                );
+            }
+        }
+        Some(true)
     }
 
     fn route_graph_filters(&mut self, key: KeyEvent) -> Option<bool> {

@@ -117,17 +117,21 @@ impl Core {
             TurnResult::Plan { keep, .. } => keep.clone(),
             _ => Vec::new(),
         };
-        let team = match args["team"].as_str() {
-            Some(name) => crate::lean::tasks::Team::parse(name)?,
-            None => crate::lean::tasks::Team::default(),
+        let (team, explicit_team) = match args["team"].as_str() {
+            Some(name) => (crate::lean::tasks::Team::parse(name)?, true),
+            None => (self.store.team(conversation)?, false),
         };
         let reason = args["team_reason"].as_str().unwrap_or_default().trim();
-        require(
-            team == crate::lean::tasks::Team::default() || !reason.is_empty(),
-            "team_reason is required with a team other than `feature`: say why this work needs no more gates",
-        )?;
+        if explicit_team {
+            require(
+                team == crate::lean::tasks::Team::default() || !reason.is_empty(),
+                "team_reason is required with a team other than `feature`: say why this work needs no more gates",
+            )?;
+        }
         self.check_submitted_plan(conversation, tasks, &keep, team)?;
-        self.store.select_team(conversation, team, reason)?;
+        if explicit_team {
+            self.store.select_team(conversation, team, reason)?;
+        }
         self.record_result(turn, result)
     }
 

@@ -122,6 +122,20 @@ pub enum ConversationRequest {
         plan: String,
         id: String,
     },
+    /// User-initiated plan revision (Fast-Path skips AI review unless requested).
+    RevisePlan {
+        conversation: String,
+        operation_id: Option<String>,
+        revision: crate::lean::store::PlanRevision,
+        request_ai_review: bool,
+        allow_uncovered: bool,
+    },
+    /// Selects the team template (rigor level) for a conversation.
+    SelectTeam {
+        conversation: String,
+        team: String,
+        reason: String,
+    },
 }
 
 impl ConversationRequest {
@@ -163,6 +177,11 @@ impl ConversationRequest {
                 operation_id,
                 ..
             } => (conversation, operation_id, "answer_approval"),
+            Self::RevisePlan {
+                conversation,
+                operation_id,
+                ..
+            } => (conversation, operation_id, "revise_plan"),
             _ => return None,
         };
         Some((conversation, operation_id.as_deref()?, kind))

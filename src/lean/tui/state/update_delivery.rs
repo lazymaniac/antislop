@@ -212,6 +212,62 @@ impl App {
             Err(_) => preserve_background_comment(state, conversation, plan, editor),
         }
     }
+
+    pub(super) fn apply_plan_revision_result(&mut self, update: Update) {
+        let Update::PlanRevisionResult {
+            conversation,
+            revision,
+            request_ai_review,
+            task_id,
+            task_title,
+            reply,
+            ..
+        } = update
+        else {
+            unreachable!("update routed to wrong handler");
+        };
+        if conversation != self.conversation {
+            return;
+        }
+        match reply {
+            Ok(val) if val["status"].as_str() == Some("coverage_warning") => {
+                let warning = val["warning"]
+                    .as_str()
+                    .unwrap_or("Mandatory requirement criteria are uncovered.")
+                    .to_owned();
+                if let Some(editor) = &mut self.flow_editor {
+                    editor.sending = false;
+                    editor.coverage_warning = Some(warning);
+                    editor.pending_revision = Some(revision);
+                    editor.pending_ai_review = request_ai_review;
+                } else {
+                    self.flow_editor = Some(flow_editor::FlowEditor::coverage_warning_modal(
+                        task_id,
+                        task_title,
+                        revision,
+                        request_ai_review,
+                        warning,
+                    ));
+                }
+            }
+            Ok(val) => {
+                self.flow_editor = None;
+                self.notice = Some(if val["status"].as_str() == Some("review_started") {
+                    "plan revision sent for AI review".into()
+                } else {
+                    "flow updated (fast-path)".into()
+                });
+            }
+            Err(error) => {
+                if let Some(editor) = &mut self.flow_editor {
+                    editor.sending = false;
+                    editor.error = Some(error);
+                } else {
+                    self.notice = Some(format!("✗ {error}"));
+                }
+            }
+        }
+    }
 }
 
 fn clear_comment_failure(

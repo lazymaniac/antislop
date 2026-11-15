@@ -25,6 +25,39 @@ pub(super) struct View {
     dimensions: (u16, u16),
     identity: String,
 }
+
+impl View {
+    pub(in crate::lean::tui) fn recent_lines(&self, max_lines: usize) -> Vec<String> {
+        let Some(screen) = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|snapshot| snapshot.screen.clone())
+        else {
+            return Vec::new();
+        };
+        let mut rows: std::collections::BTreeMap<u16, Vec<(u16, String)>> =
+            std::collections::BTreeMap::new();
+        for cell in screen.cells {
+            if !cell.text.is_empty() {
+                rows.entry(cell.y).or_default().push((cell.x, cell.text));
+            }
+        }
+        let mut lines: Vec<String> = rows
+            .into_values()
+            .filter_map(|mut row_cells| {
+                row_cells.sort_by_key(|(x, _)| *x);
+                let line: String = row_cells.into_iter().map(|(_, text)| text).collect();
+                let trimmed = line.trim_end().to_owned();
+                (!trimmed.trim().is_empty()).then_some(trimmed)
+            })
+            .collect();
+        if lines.len() > max_lines {
+            lines.drain(..lines.len() - max_lines);
+        }
+        lines
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::session::call_input;

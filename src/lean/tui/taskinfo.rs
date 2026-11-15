@@ -211,6 +211,14 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
     if mail > 0 {
         parts.push(format!("M{mail}"));
     }
+    if let Some(meta) = view.task_meta.get(&row.id) {
+        if meta.deferred {
+            parts.push("⏸ HELD".into());
+        }
+        if !meta.covers.is_empty() {
+            parts.push(format!("R:{}", meta.covers.join("+")));
+        }
+    }
     while parts.len() > 1 && UnicodeWidthStr::width(parts.join(" · ").as_str()) > width {
         parts.pop();
     }

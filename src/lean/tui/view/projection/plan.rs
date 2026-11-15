@@ -21,8 +21,10 @@ pub(super) fn on_plan_proposed(
         (false, "Plan received.".into())
     });
     view.plan = payload["plan"].as_str().map(str::to_owned);
+    view.plan_head_revision = 0;
     view.plan_doc = payload["document"].as_str().unwrap_or_default().to_owned();
     view.tasks = proposed_tasks(payload);
+    view.task_meta = proposed_task_meta(payload);
     fill_parallel_fallback(view, payload);
     reset_plan_agents(view);
     append_plan_review(view, payload);
@@ -37,6 +39,39 @@ fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
         .map(|task| {
             let id = task["id"].as_str().unwrap_or_default();
             proposed_task(task, &payload["parallel"][id])
+        })
+        .collect()
+}
+
+pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
+    let mut covers = strings(&task["covers"]);
+    for req in strings(&task["requirement_ids"]) {
+        if !covers.contains(&req) {
+            covers.push(req);
+        }
+    }
+    for crit in strings(&task["criterion_ids"]) {
+        if !covers.contains(&crit) {
+            covers.push(crit);
+        }
+    }
+    TaskMeta {
+        deferred: task["deferred"].as_bool().unwrap_or(false),
+        outputs: strings(&task["outputs"]),
+        covers,
+        quality_gate: task["quality_gate"].as_bool().unwrap_or(false),
+        options_for: task["options_for"].as_str().map(clean_line),
+    }
+}
+
+fn proposed_task_meta(payload: &Value) -> HashMap<String, TaskMeta> {
+    payload["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|task| {
+            let id = clean_line(task["id"].as_str()?);
+            Some((id, extract_task_meta(task)))
         })
         .collect()
 }

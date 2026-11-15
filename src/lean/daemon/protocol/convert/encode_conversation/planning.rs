@@ -87,6 +87,40 @@ fn encode_task(request: Request) -> std::result::Result<WireRequest, Box<Request
     }
 }
 
+fn encode_revise_plan(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::RevisePlan {
+            conversation,
+            operation_id,
+            revision,
+            request_ai_review,
+            allow_uncovered,
+        }) => Ok(WireRequest::RevisePlan {
+            conversation,
+            operation_id,
+            revision,
+            request_ai_review,
+            allow_uncovered,
+        }),
+        other => Err(Box::new(other)),
+    }
+}
+
+fn encode_select_team(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    match request {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::SelectTeam {
+            conversation,
+            team,
+            reason,
+        }) => Ok(WireRequest::SelectTeam {
+            conversation,
+            team,
+            reason,
+        }),
+        other => Err(Box::new(other)),
+    }
+}
+
 pub(super) fn encode_group_planning(
     request: Request,
 ) -> std::result::Result<WireRequest, Box<Request>> {
@@ -96,4 +130,6 @@ pub(super) fn encode_group_planning(
         .or_else(|request| encode_review(*request))
         .or_else(|request| encode_task_checks(*request))
         .or_else(|request| encode_task(*request))
+        .or_else(|request| encode_revise_plan(*request))
+        .or_else(|request| encode_select_team(*request))
 }

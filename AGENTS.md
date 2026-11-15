@@ -498,7 +498,8 @@ src
     planning
      actions
       route(context,request):Result<Route> > route_pipeline
-      - send,addressed_send,reject_plan,review_recovery_and_resume,resume_plan,restart_and_cancel,cancel_work,pause,approvals
+      - send,addressed_send,reject_plan,review_recovery_and_resume,resume_plan,restart_and_cancel,cancel_work,pause,approvals,
+        revise_and_team
      mod
       route(context,request):Result<Route> > route_pipeline
      tasks
@@ -529,7 +530,7 @@ src
       messages
        decode_group_messages(wire):std::result::Result<Request,Box<WireRequest>> > decode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,take_control,cancel,pause,approvals}
       planning
-       decode_group_planning(wire):std::result::Result<Request,Box<WireRequest>> > decode_{plans,plan,diff,review,task_checks,task}
+       decode_group_planning(wire):std::result::Result<Request,Box<WireRequest>> > decode_{plans,plan,diff,review,task_checks,task,revise_plan,select_team}
      decode_conversation.rs
       decode_conversation(wire):std::result::Result<Request,Box<WireRequest>> > decode_group_{messages,comments,planning}
      decode_history
@@ -566,7 +567,7 @@ src
       messages
        encode_group_messages(request):std::result::Result<WireRequest,Box<Request>> > encode_{send_to_agent,send,reject,resume,review_comments,recover,restart_orchestrator,take_control,cancel,pause,approvals}
       planning
-       encode_group_planning(request):std::result::Result<WireRequest,Box<Request>> > encode_{plans,plan,diff,review,task_checks,task}
+       encode_group_planning(request):std::result::Result<WireRequest,Box<Request>> > encode_{plans,plan,diff,review,task_checks,task,revise_plan,select_team}
      encode_conversation.rs
       encode_conversation(request):WireRequest > encode_group_{messages,comments,planning}
      encode_history
@@ -602,8 +603,8 @@ src
      control
       ControlRequest(E{Identity,RuntimeNotice,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn})
      conversation
-      ConversationRequest(E{Recover,Comment,SendToAgent,Send,Reject,Resume,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,ReviewComments,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task})
-       operation():Option<(&str,&str,&'static str)> ~40
+      ConversationRequest(E{Recover,Comment,SendToAgent,Send,Reject,Resume,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,ReviewComments,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,RevisePlan,SelectTeam})
+       operation():Option<(&str,&str,&'static str)> ~45
      history
       HistoryRequest(E{TaskRounds,TaskRound,HistoryContent,HistoryMessages,Events,EventsPaged,History,Mail})
      ledger
@@ -616,7 +617,7 @@ src
      terminal
       TerminalRequest(E{TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach})
     wire
-     WireRequest(E{RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,Events,Sessions,DeleteSession,History,Mail})
+     WireRequest(E{RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,RevisePlan,SelectTeam,Events,Sessions,DeleteSession,History,Mail})
   daemon.rs
    build_identity(executable):Result<String>
    private_directory(path):Result<()> > require
@@ -986,7 +987,7 @@ src
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,Team.parse,check_submitted_plan,select_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,team,check_submitted_plan,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1078,7 +1079,9 @@ src
     review(&Arc<Self>,conversation,role,plan_id,project,cancel,prompt):Result<std::result::Result<Verdict,String>> > config_snapshot,last_answered,messages_by,review_setup,turn,prompt,review_{request,outcome}
     turn(setup,cancel,prompt):Result<Option<String>> > turn_inner
     review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,revision_checkpoints,graph,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
+    apply_direct_revision(conversation,revision,baseline,specs,lease,allow_uncovered,is_accepted):Result<()> > affected_tasks,{cancel,wait_for}_affected_tasks,graph,checkpoint_revision_work,apply_plan_revision_with_options,queue_worktree_cleanup
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > reserve_revision,revision_job,process_fresh_revision
+    apply_user_revision(&Arc<Self>,conversation,request_key,revision,request_ai_review,allow_uncovered):Result<serde_json::Value> ~74 > normalize_user_revision_tasks,{submit,plan}_revision,ensure_accepted_plan,revised_specs,revision_checkpoints,check_user_revision_coverage,apply_direct_revision,finish_revision_job,maybe_continue_plan,wake
     finish_blocked_plan(&Arc<Self>,conversation,tasks,cancel) > blocked_report,add_message,wake
     report_stopped_tasks(&Arc<Self>,conversation,plan_id) > stopped_report,add_message,wake
     plan_runner(&Arc<Self>,conversation,plan_id,cancel,tasks_write) > warn_of_uncommitted,run_plan_cycle,notice,clear_running_plan
@@ -1170,9 +1173,8 @@ src
     terminal_detach(conversation,role,handle):Result<()> > remove
     - revision_view,plan_base_path,refresh_delivered_tasks,{conversation,approved_plan}_status,replaced_graph,
       planner_submitted_plan,record_{comment_reply,plan_lint},{run,store}_report_audit,require_revision_review,
-      checkpoint_revision_work,{cancel,wait_for}_affected_tasks,{spawn,finish}_revision_worker,
-      prepare_{revision,revision_contents},revised_specs,ensure_revision_accepted,prepared_revision,wait_for_revision_jobs,
-      finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,
+      {spawn,finish}_revision_worker,prepare_{revision,revision_contents},ensure_revision_accepted,prepared_revision,
+      wait_for_revision_jobs,finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,
       {clear_agent,reserve,run_code}_review,unchanged_recovery_request,cleanup_{view_path,task_worktrees_with_hook},
       check_audit_scope,save_audit_{evidence,review},complete_audit,requirements_{failure,feedback},
       {analyze,apply_extracted,propose_extracted}_requirements,require_extracted_entries,append_interview_question,
@@ -1445,7 +1447,9 @@ src
     run_tasks(conversation,run_id):Result<Vec<crate::lean::store::Task>> > run,plan
     ledger_entry_tasks(conversation,run_id,entry):Result<Vec<serde_json::Value>> > run
     plan_revision(plan):Result<i64> > db
-    apply_plan_revision(conversation,revision,baseline,specs,affected,lease):Result<()> > revision_apply_context,db
+    apply_plan_revision(conversation,revision,baseline,specs,affected,lease):Result<()> > apply_plan_revision_with_options
+    apply_plan_revision_with_options(conversation,revision,baseline,specs,affected,lease,allow_uncovered,require_run,is_accepted):Result<()> > revision_apply_context,db
+    check_user_revision_coverage(conversation,plan,specs):Result<Option<String>> > plan_run,ledger_entries,validate_revision_coverage
     initialize_run_context(connection):Result<()>
     record_run_context(context):Result<()> > encode_context,db,require_running_turn,insert_context
     run_context(conversation,turn):Result<Option<RunContext>> > db
@@ -1907,19 +1911,20 @@ src
      - KindNameError,Reply,strings,field_text
      - KindNameError: custom,unknown_variant×0
    contracts
-    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport})
+    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport,flow_editor,workbench_docked})
      capture(app):Self
      restore(app) > restore_{composer,navigation,overlays,requests}
      - capture_{composer,navigation,overlays,requests}
     Editor(C{target,input})
     Focus(E{Chat,Graph})
-    Update(E{NativeInputRejected,PlanHistory,InterviewResult,AgentMessage,Ledger,Config,Events,Conversation,Notice,ProjectReady,ProjectStatus,Diff,Task,TaskFailed,{Send,Comment}Result})
+    Update(E{NativeInputRejected,PlanHistory,InterviewResult,AgentMessage,Ledger,Config,Events,Conversation,Notice,ProjectReady,ProjectStatus,Diff,Task,TaskFailed,{Send,Comment,PlanRevision}Result})
    dashboard
     hero/identity
      - identity_{id,summary,kind}
     sections
      history
       comments_and_agents(this,view,theme,width,keys):Vec<Section> > comments,agents
+      now(view,theme,width,keys):Vec<Section> > flatten,now_lines
       - comment_lines,agent_{lines,identity,usage,activity}
      review
       - check_{section,body,rank,lines},pending_line,finding_{section,body,lines,rank}
@@ -1949,7 +1954,8 @@ src
       activity_chips(view,theme):Vec<Vec<Span<'static>>> > obligation_chip,{comment,usage}_chips
       hero(view,theme):Vec<Line<'static>> > hero_key,provider_chip,{check,activity}_chips
       review_sections(view,theme,width,rows,keys):Vec<Section> > check_findings,comments_and_agents
-      sections(view,theme,width):Vec<Section> > row,session_keys,SectionContext,{append_task,filter_tab}_sections
+      agent_sections(view,theme,width,keys):Vec<Section> > now,comments_and_agents
+      sections(view,theme,width):Vec<Section> > row,session_keys,SectionContext,{append_task,agent,filter_tab}_sections
       dashboard_visible():bool > overview
       fold_of(id):Fold
       dash_move(delta) > len
@@ -2226,7 +2232,7 @@ src
      card.rs
       draw(view,canvas,node,selected,expanded_tab,theme,tick) > outside_viewport,paint,Card.new
       - Card
-      - Card: paint_tabs,status_description,pair_finished,paint_{contents,background,progress}
+      - Card: paint_{tabs,icon},status_description,pair_finished,paint_{contents,background,progress}
     nodes.rs
      draw_node(view,canvas,node,selected,expanded_tab,theme,tick) > draw
     plan
@@ -2419,9 +2425,9 @@ src
    palette
     catalog
      Action(E{Run,Select,Show,SwitchConversation,Address,OpenProject})
-     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals,TakeControl})
+     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals,TakeControl,SelectTeam,OpenRigorPicker,{Edit,AddDependent,Split,Hold,Retire}Task,SteerAgent,ToggleWorkbench,AcceptPlan})
      ConversationItem(C{id,project,title})
-     Kind(E{Commands,Agents,History,Conversations,Recipients,Projects})
+     Kind(E{Commands,Agents,History,Conversations,Recipients,Projects,SlashCommands,Rigor})
      Picker(C{kind,query,selected,conversations,projects,confirm_delete})
       new(kind):Self > Picker
       items(view):Vec<(String,Action)> > {unfiltered,matching}_items
@@ -2438,7 +2444,8 @@ src
      - help_{box_area,title},{compact,aligned}_help_line,wrap_help_description,append_help_word,
        help_{chat,graph,details,diff,comment,picker}
     picker
-     - {command,agent,history,conversation,project,recipient}_items,append_task_recipients,empty_message,append_visible_items
+     - {command,extended_command,rigor,slash_command,agent,history,conversation,project,recipient}_items,
+       append_task_recipients,empty_message,append_visible_items
     picker_layout
      PickerLayout(C{box_area,width,inner,visible_rows,start})
       new(area,item_count,selected):Option<Self>
@@ -2505,7 +2512,7 @@ src
       draw_graph_filters(app,frame)
       draw_unblock(app,frame)
     overlays.rs
-     draw_remaining(app,frame) > draw_{selection,editor,interview,picker,help,unblock,graph_filters}
+     draw_remaining(app,frame) > draw_{selection,editor},Theme.from_env,draw_{interview,picker,help,unblock,graph_filters}
     specialized_dashboard
      - DashboardRows,dashboard_order,append_dashboard_section
     specialized_dashboard_cards
@@ -2595,10 +2602,20 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,flow_editor,workbench_docked,projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
-     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker
+     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,select_team,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},toggle_workbench,accept_plan
+     select_team(team) > send_command
+     selected_task_row():Option<&view::TaskRow>
+     open_flow_edit() > selected_task_row
+     open_flow_add_dependent() > selected_task_row
+     open_flow_split() > selected_task_row
+     open_flow_retire() > selected_task_row
+     toggle_flow_hold() > selected_task_row,submit_plan_revision
+     open_live_steer() > selected_task_row,open_details
+     toggle_workbench()
+     submit_plan_revision(revision,request_ai_review,allow_uncovered,task_{id,title})
      accept_plan() > plan_proposed,send_command
      send_command(notice,request) > request
      submit() > {reject_duplicate,begin_chat}_send
@@ -2688,16 +2705,17 @@ src
      draw(frame) > sync_interview,draw_min_term_guard,sync_{native_views,approval},draw_{history_or_ledger,secondary_or_main,remaining}
      draw_graph(frame,area) ~57 > card_key,graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame) ~47 > draw_{chat,graph},approval_panel_height,draw_footer
+     draw_main(frame) ~62 > draw_{chat,graph,docked_workbench},approval_panel_height,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
-     apply_update_inner(update) > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result}
+     apply_update_inner(update) > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result,plan_revision_result}
      apply_native_input_rejected(update) > recover_native_input
      apply_agent_message(update) > apply_agent_receipt
      apply_interview_result(update)
      apply_send_result(update) > remove,finish_{active_send,background_send}
      apply_comment_result(update) > {finish_active,finish_background}_comment
+     apply_plan_revision_result(update) ~55 > as_str
      apply_task_failed(update) > {fail_active,fail_background}_task
      apply_task(update) > apply_task_snapshot,TaskSnapshotReply
      apply_diff(update)
@@ -2720,13 +2738,13 @@ src
        {checks_are,session_is}_stale,latest_round,open_comment_editor,config_save_guard,
        details_{jump_key,resume_round,retry_native,start_composer,toggle_info,native_focus_key,route_action,fetch_current_task},
        remove_search_grapheme,graph_tab_count,set_graph_tab,select_visible_graph_node,open_graph_comment,route_native_key,
-       is_editing,route_{graph_filters,unblock},embedded_diff_graph_active,route_{interview,plan_view,global_shortcut},
-       chat_{paste_enabled,down_with_text},attach_native_view,erase_picker_query,picker_action,select_picker_node,
-       show_picker_entry,close_picker_views,switch_conversation,address_recipient,open_comment,phase_action,
-       chat_input_window,paint_input,place_chat_cursor,draw_{card_details,graph_frame},repair_graph_selection,
-       fit_graph_offset,reveal_selected_node,sync_transcript_context,update_transcript_entry,transcript_card_height,
-       position_transcript_scroll,{paint_transcript,append_card}_rows,restore_active_{send,comment},clear_task_fetch,
-       task_{round_moved,reply_matches_current_round},{load_active,load_background}_task,
+       is_editing,route_{flow_editor,graph_filters,unblock},embedded_diff_graph_active,
+       route_{interview,plan_view,global_shortcut},chat_{paste_enabled,down_with_text},attach_native_view,erase_picker_query,
+       picker_action,select_picker_node,show_picker_entry,close_picker_views,switch_conversation,address_recipient,
+       open_comment,phase_action,chat_input_window,paint_input,place_chat_cursor,draw_{card_details,graph_frame},
+       repair_graph_selection,fit_graph_offset,reveal_selected_node,sync_transcript_context,update_transcript_entry,
+       transcript_card_height,position_transcript_scroll,{paint_transcript,append_card}_rows,restore_active_{send,comment},
+       clear_task_fetch,task_{round_moved,reply_matches_current_round},{load_active,load_background}_task,
        apply_{mail_delivered,mail_delivery_failed,view_events},update_ledger_approval,refresh_visible_ledger,
        open_pending_plan,install_fresh_config,record_config_error
    taskinfo/effects
@@ -2794,6 +2812,9 @@ src
       panel():Style > pick,card_style
       raised():Style > pick,card_style
       selected():Style > pick,card_style
+      card_header():Style > pick,card_style
+      tab_strip():Style > pick,card_style
+      tab_active():Style > pick,card_style
       button():Style > pick,card_style
       separator(focused):Style > pick,fg
       status(status):Style > tone,pick,fg
@@ -2906,11 +2927,12 @@ src
       on_planning_progress(view,event,payload,key,turn) > as_str
       on_scope_confirmation_requested(view,_event,payload,_key,_turn) > as_str
       on_session_started(view,event,payload,key,turn) > as_str
+      on_team_selected(view,_event,payload,_key,_turn) > as_str,Team.parse
       on_user_decision_requested(view,event,payload,key,turn) > as_str
       on_workflow(view,event,payload,key,turn) > as_str
       - update_user_message_state,append_user_message
      graph
-      on_graph_task(view,payload) > as_str,graph_task_row,insert_graph_task,refresh_parallel_tasks
+      on_graph_task(view,payload) > graph_task_row,extract_task_meta,insert_graph_task,refresh_parallel_tasks
       on_graph_updated(view,payload) > as_str,apply_graph_order,report_graph_amendment
      mail
       on_comment(view,payload) > store_comment_scope,mark_comment_queued,target_name,comment_event_text,fg
@@ -2922,11 +2944,12 @@ src
       apply(view,event) > as_str,event_is_visible
       - graph_{task,updated},task,integration,task_recovery,mail_{message,rejected},comment
      plan
+      extract_task_meta(task):TaskMeta > strings,TaskMeta,as_str
       on_plan_invalid(view,event,payload,key,turn) > as_str,report_plan_invalid
-      on_plan_proposed(view,_event,payload,_key,_turn) > as_str,proposed_tasks,fill_parallel_fallback,reset_plan_agents,append_plan_review,publish_plan_summary
+      on_plan_proposed(view,_event,payload,_key,_turn) > as_str,proposed_{tasks,task_meta},fill_parallel_fallback,reset_plan_agents,append_plan_review,publish_plan_summary
       on_plan_rejected(view,event,payload,key,turn) > as_str,fg
       on_plan_review(view,event,payload,key,turn) > as_str
-      - proposed_{task,activity},strings
+      - proposed_{task,activity}
      reviews
       on_audit(view,event,payload,key,turn) > as_str,fg
       on_code_review(view,event,payload,key,turn) > as_str,fg
@@ -2947,10 +2970,12 @@ src
     PanelFocus(E{Chat,Graph})
     PendingApproval(C{request,role,provider,summary,orchestrator,options})
     ProgressEntry(C{text,agent})
+    TaskMeta(C{deferred,outputs,covers,quality_gate,options_for})
     TaskRow(C{id,uuid,title,summary,reviewer_summary,section,kind,goal,depends_on,parallel_with,change_kind,focus,risks,status,round,activity,reason,revision_token,effect,effect_cut,obligations,integration})
     TranscriptCard(E{Message,Plan,System,Comment})
-    View(C{workflow_phase,session_branch,interview_question,scope_confirmation_summary,user_decision,requirements_{summary,approval_run,approval_event,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,agents,links,mailbox,comments,comment_progress,reviews,paused,autonomous,approvals,messages,cards,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
+    View(C{team,team_reason,plan_head_revision,task_meta,workflow_phase,session_branch,interview_question,scope_confirmation_summary,user_decision,requirements_{summary,approval_run,approval_event,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,agents,links,mailbox,comments,comment_progress,reviews,paused,autonomous,approvals,messages,cards,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
      apply(event)
+     effective_team():crate::lean::tasks::Team
     = MIN_TERM_WIDTH=12,MIN_TERM_HEIGHT=5,SIDE_BY_SIDE_BREAKPOINT=85,ORCHESTRATOR="orchestrator",
       PLAN_REVIEWER="plan-reviewer",AUDITOR="auditor"
    workspace
@@ -3137,6 +3162,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 135,361 LOC · input 1,204,881 · output 45,552 tokens · state 3ff354073692 · targets AGENTS.md
+· 136,898 LOC · input 1,218,711 · output 46,180 tokens · state 39034b9da741 · targets AGENTS.md
 ```
 <!-- hologram:end -->

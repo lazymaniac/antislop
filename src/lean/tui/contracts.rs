@@ -102,6 +102,15 @@ pub enum Update {
         editor: Editor,
         result: std::result::Result<(), String>,
     },
+    PlanRevisionResult {
+        conversation: String,
+        generation: u64,
+        revision: crate::lean::store::PlanRevision,
+        request_ai_review: bool,
+        task_id: String,
+        task_title: String,
+        reply: std::result::Result<Value, String>,
+    },
 }
 
 /// A comment being written on one element.
@@ -151,6 +160,9 @@ pub struct ConversationState {
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
+    pub flow_editor: Option<flow_editor::FlowEditor>,
+    pub workbench_docked: bool,
+    pub graph_link_source: Option<String>,
 }
 
 impl ConversationState {
@@ -196,6 +208,9 @@ impl ConversationState {
         self.diff = app.diff.clone();
         self.plan_view = app.plan_view.clone();
         self.ledger_view = app.ledger_view.clone();
+        self.flow_editor = app.flow_editor.clone();
+        self.workbench_docked = app.workbench_docked;
+        self.graph_link_source = app.graph_link_source.clone();
     }
 
     fn capture_requests(&mut self, app: &App) {
@@ -245,6 +260,9 @@ impl ConversationState {
         app.diff = self.diff.clone();
         app.plan_view = self.plan_view.clone();
         app.ledger_view = self.ledger_view.clone();
+        app.flow_editor = self.flow_editor.clone();
+        app.workbench_docked = self.workbench_docked;
+        app.graph_link_source = self.graph_link_source.clone();
     }
 
     fn restore_requests(&self, app: &mut App) {

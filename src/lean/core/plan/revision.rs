@@ -61,6 +61,182 @@ impl Core {
         self.process_fresh_revision(conversation, revision, registration)
     }
 
+    pub(in crate::lean) fn apply_user_revision(
+        self: &Arc<Self>,
+        conversation: &str,
+        request_key: &str,
+        mut revision: PlanRevision,
+        request_ai_review: bool,
+        allow_uncovered: bool,
+    ) -> Result<serde_json::Value> {
+        let baseline = self.store.plan(&revision.plan)?;
+        require(!baseline.is_empty(), "plan has no tasks")?;
+        self.normalize_user_revision_tasks(conversation, &mut revision, &baseline)?;
+        if request_ai_review {
+            return self.submit_revision(conversation, request_key, revision);
+        }
+        require(
+            self.store.plan_revision(&revision.plan)? == revision.base_revision,
+            "stale plan revision",
+        )?;
+        let is_accepted =
+            acceptance::ensure_accepted_plan(self, conversation, &revision.plan).is_ok();
+        if !is_accepted {
+            let is_latest = self
+                .store
+                .latest_plan(conversation)?
+                .first()
+                .is_some_and(|task| task.plan_id == revision.plan);
+            require(
+                is_latest,
+                "plan is no longer the active or proposed plan of this conversation",
+            )?;
+        }
+        let specs = self.revised_specs(&revision, &baseline)?;
+        self.store.revision_checkpoints(conversation, &revision)?;
+        if !allow_uncovered
+            && let Some(warning) =
+                self.store
+                    .check_user_revision_coverage(conversation, &revision.plan, &specs)?
+        {
+            return Ok(json!({
+                "status": "coverage_warning",
+                "warning": warning,
+            }));
+        }
+        let registration = self.reserve_revision(conversation, request_key, &revision)?;
+        if !registration.fresh {
+            return self.store.revision_job(&registration.request);
+        }
+        let request = registration.request.clone();
+        let requirement_revision = match self.store.plan_run(&revision.plan)? {
+            Some(run) => self.store.run(conversation, &run)?.spec_revision,
+            None => 0,
+        };
+        drop(registration);
+        let lease = crate::lean::store::RevisionLease {
+            requirement_revision,
+            request: &request,
+        };
+        if let Err(error) = self.apply_direct_revision(
+            conversation,
+            &revision,
+            &baseline,
+            &specs,
+            &lease,
+            allow_uncovered,
+            is_accepted,
+        ) {
+            let _ = self
+                .store
+                .finish_revision_job(&request, &Err(Error::Invalid(error.to_string())));
+            return Err(error);
+        }
+        if is_accepted {
+            let _ = self.maybe_continue_plan(conversation, &revision.plan);
+        }
+        self.wake(conversation);
+        Ok(json!({
+            "status": "applied",
+            "request": request,
+            "revision": revision.base_revision + 1,
+        }))
+    }
+
+    fn normalize_user_revision_tasks(
+        &self,
+        conversation: &str,
+        revision: &mut PlanRevision,
+        baseline: &[Task],
+    ) -> Result<()> {
+        let entries = match self.store.plan_run(&revision.plan)? {
+            Some(run) => self.store.ledger_entries(conversation, &run, None)?,
+            None => Vec::new(),
+        };
+        let replacements = revision.replacements.clone();
+        for spec in &mut revision.tasks {
+            if let Some(old_task) = baseline.iter().find(|old| old.spec["id"] == spec.id) {
+                let old_spec: TaskContract = serde_json::from_value(old_task.spec.clone())?;
+                if spec.covers.is_empty() && spec.requirement_ids.is_empty() {
+                    spec.requirement_ids = old_spec.requirement_ids;
+                    spec.criterion_ids = old_spec.criterion_ids;
+                    spec.covers = old_spec.covers;
+                }
+                if spec
+                    .reviewer
+                    .summary
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                    && !old_spec
+                        .reviewer
+                        .summary
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+                {
+                    spec.reviewer = old_spec.reviewer;
+                }
+                if spec.delivery.is_none() {
+                    spec.delivery = old_spec.delivery;
+                }
+                if spec.section.is_none() {
+                    spec.section = old_spec.section;
+                }
+                if spec.summary.is_none() {
+                    spec.summary = old_spec.summary;
+                }
+            } else {
+                if spec.covers.is_empty() && spec.requirement_ids.is_empty() {
+                    if let Some(replaced_id) = replacements.get(&spec.id)
+                        && let Some(old_task) =
+                            baseline.iter().find(|old| old.spec["id"] == *replaced_id)
+                        && let Ok(old_spec) =
+                            serde_json::from_value::<TaskContract>(old_task.spec.clone())
+                    {
+                        spec.requirement_ids = old_spec.requirement_ids;
+                        spec.criterion_ids = old_spec.criterion_ids;
+                    }
+                    if spec.requirement_ids.is_empty() {
+                        for dep in &spec.depends_on {
+                            if let Some(parent) = baseline.iter().find(|old| old.spec["id"] == *dep)
+                                && let Ok(parent_spec) =
+                                    serde_json::from_value::<TaskContract>(parent.spec.clone())
+                                && !parent_spec.requirement_ids.is_empty()
+                            {
+                                spec.requirement_ids = parent_spec.requirement_ids;
+                                break;
+                            }
+                        }
+                    }
+                    if spec.requirement_ids.is_empty()
+                        && let Some(active) = entries.iter().find(|entry| {
+                            entry.spec.disposition == crate::lean::ledger::Disposition::Active
+                        })
+                    {
+                        spec.requirement_ids.push(active.spec.id.clone());
+                    }
+                }
+                if spec
+                    .reviewer
+                    .summary
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                {
+                    spec.reviewer.summary = Some(format!("Verify {}", spec.title));
+                }
+            }
+            if !spec.covers.is_empty() && !entries.is_empty() {
+                crate::lean::ledger::resolve_covers(spec, &entries)?;
+            }
+        }
+        Ok(())
+    }
+
     fn process_fresh_revision(
         self: &Arc<Self>,
         conversation: &str,
@@ -519,5 +695,98 @@ mod tests {
             assert!(reason.contains("plan has no requirements"));
         }
         assert!(core.revisions.jobs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_fast_path_revision_applies_immediately_and_warns_on_uncovered_criteria() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let tasks = core
+            .store
+            .add_plan(
+                &conversation,
+                &[
+                    json!({"id":"t1","title":"Task 1","goal":"First step","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check t1"}}),
+                    json!({"id":"t2","title":"Task 2","goal":"Second step","change_kind":"none","kind":"analysis","depends_on":["t1"],"reviewer":{"summary":"Check t2"}}),
+                ],
+            )
+            .unwrap();
+        let plan = tasks[0].plan_id.clone();
+
+        let edited: TaskContract = serde_json::from_value(json!({
+            "id": "t1",
+            "title": "Updated Task 1",
+            "goal": "Refined first step",
+            "change_kind": "none",
+            "kind": "analysis",
+            "deferred": true
+        }))
+        .unwrap();
+        let revision = PlanRevision {
+            plan: plan.clone(),
+            base_revision: 0,
+            reason: "Hold and refine t1 from UI".into(),
+            tasks: vec![edited],
+            retire: vec![],
+            redo: vec![],
+            replacements: Default::default(),
+        };
+        let reply = core
+            .apply_user_revision(&conversation, "ui-edit-1", revision, false, false)
+            .unwrap();
+        assert_eq!(reply["status"], "applied");
+        assert_eq!(reply["revision"], 1);
+        let updated = core.store.plan(&plan).unwrap();
+        assert_eq!(updated[0].spec["title"], "Updated Task 1");
+        assert_eq!(updated[0].spec["deferred"], true);
+        assert_eq!(updated[0].status, "proposed");
+    }
+
+    #[test]
+    fn direct_execution_creates_bound_single_task_plan_without_orchestrator_ceremony() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config =
+            Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        for provider in config.providers.values_mut() {
+            provider.binary = std::path::PathBuf::from("/bin/sh");
+        }
+        for profile in config.profiles.values_mut() {
+            profile.binary = Some("/bin/sh".into());
+        }
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+
+        let reply = core
+            .submit_addressed(&conversation, "/direct Fix typo in README", None)
+            .unwrap();
+        let plan_id = reply["direct_plan"].as_str().unwrap();
+        assert_eq!(reply["task"], "direct-1");
+
+        // Cancel the background runner immediately so the test doesn't wait on /bin/sh
+        core.cancel(&conversation);
+
+        let tasks = core.store.plan(plan_id).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].spec["id"], "direct-1");
+        assert_eq!(tasks[0].spec["title"], "Fix typo in README");
+        assert!(
+            core.store
+                .plan_review_approved(&conversation, plan_id)
+                .unwrap()
+        );
+        assert_eq!(
+            core.store.workflow(&conversation).unwrap().phase,
+            "implementation"
+        );
     }
 }

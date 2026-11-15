@@ -58,6 +58,7 @@ const HANDLERS: &[(&str, Handler)] = &[
     ),
     ("interview_question", conversation::on_interview_question),
     ("session_started", conversation::on_session_started),
+    ("team_selected", conversation::on_team_selected),
     ("agent_final", agents::on_agent_final),
     ("planning_progress", conversation::on_planning_progress),
     ("workflow", conversation::on_workflow),

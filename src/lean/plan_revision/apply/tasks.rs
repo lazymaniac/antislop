@@ -6,15 +6,17 @@ impl RevisionApply<'_> {
         tx: &rusqlite::Transaction<'_>,
         lease: &RevisionLease<'_>,
     ) -> Result<()> {
-        let current = tx.query_row(
-            "SELECT spec_revision FROM runs WHERE id=?1",
-            [&self.run],
-            |row| row.get::<_, i64>(0),
-        )?;
-        crate::require(
-            current == lease.requirement_revision,
-            "requirements changed during revision review",
-        )?;
+        if !self.run.is_empty() {
+            let current = tx.query_row(
+                "SELECT spec_revision FROM runs WHERE id=?1",
+                [&self.run],
+                |row| row.get::<_, i64>(0),
+            )?;
+            crate::require(
+                current == lease.requirement_revision,
+                "requirements changed during revision review",
+            )?;
+        }
         let changed = tx.execute(
             "UPDATE plan_heads SET revision=revision+1 WHERE plan_id=?1 AND revision=?2",
             params![self.revision.plan, self.revision.base_revision],
@@ -75,7 +77,9 @@ impl RevisionApply<'_> {
         tx: &rusqlite::Transaction<'_>,
         lease: &RevisionLease<'_>,
     ) -> Result<()> {
-        tx.execute("UPDATE runs SET state='active' WHERE id=?1", [&self.run])?;
+        if !self.run.is_empty() {
+            tx.execute("UPDATE runs SET state='active' WHERE id=?1", [&self.run])?;
+        }
         let changed = tx.execute(
             "UPDATE plan_revision_jobs SET status='applied',error=NULL WHERE id=?1 AND status='reviewing'",
             [lease.request],
@@ -232,9 +236,14 @@ fn reset_affected_task(
             "contract or dependency changed; assess existing work first"
         },
     )?;
+    let target_status = if apply.is_accepted {
+        "queued"
+    } else {
+        "proposed"
+    };
     tx.execute(
-        "UPDATE tasks SET spec=?2,position=?3,status='queued',verdict=NULL WHERE id=?1",
-        params![id, encoded, position],
+        "UPDATE tasks SET spec=?2,position=?3,status=?4,verdict=NULL WHERE id=?1",
+        params![id, encoded, position, target_status],
     )?;
     tx.execute(
         "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
@@ -264,11 +273,18 @@ fn insert_revision_task(
     position: i64,
     encoded: &str,
 ) -> Result<()> {
-    tx.execute("INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms) VALUES(?1,?2,?3,?4,?5,'queued',?6)", params![id, apply.conversation, apply.revision.plan, position, encoded, now_ms()])?;
-    tx.execute(
-        "INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2)",
-        params![id, apply.run],
-    )?;
+    let target_status = if apply.is_accepted {
+        "queued"
+    } else {
+        "proposed"
+    };
+    tx.execute("INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![id, apply.conversation, apply.revision.plan, position, encoded, target_status, now_ms()])?;
+    if !apply.run.is_empty() {
+        tx.execute(
+            "INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2)",
+            params![id, apply.run],
+        )?;
+    }
     Ok(())
 }
 

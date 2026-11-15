@@ -8,6 +8,10 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
     if editor::draw_editor(app, frame) {
         return;
     }
+    if let Some(flow_editor) = &app.flow_editor {
+        flow_editor.draw(frame, &Theme::from_env());
+        return;
+    }
     draw_interview(app, frame);
     draw_picker(app, frame);
     draw_help(app, frame);

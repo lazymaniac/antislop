@@ -7824,3 +7824,93 @@ fn open_cards(
         .collect();
     antislop::lean::tui::graph::Graph::new_with_options(view, None, &toggled, grouping)
 }
+
+#[test]
+fn domain_cockpit_flow_editor_workbench_linking_and_direct_execution_round_trip() {
+    let dir = test_tempdir();
+    let sock_path = test_socket(dir.relative_path());
+    let listener = UnixListener::bind(&sock_path).unwrap();
+    let (tx, requests) = mpsc::channel::<Value>();
+
+    let handle = thread::spawn(move || {
+        for _ in 0..3 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
+            tx.send(parsed).unwrap();
+
+            let mut writer = stream;
+            let _ = writer.write_all(b"{\"data\":{\"status\":\"applied\"},\"error\":null}\n");
+            let _ = writer.flush();
+        }
+    });
+
+    let client = Client::at(dir.relative_path());
+    let (mut app, rx_updates) = App::test_app_with_client(client);
+    app.view.apply(&json!({
+        "seq": 1,
+        "kind": "plan_proposed",
+        "payload": {
+            "plan": "p1",
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Build parser",
+                    "goal": "Implement parser",
+                    "kind": "implementation",
+                    "change_kind": "code",
+                    "covers": ["R1.1"],
+                    "depends_on": []
+                },
+                {
+                    "id": "t2",
+                    "title": "Add CLI flags",
+                    "goal": "Wire CLI flags",
+                    "kind": "implementation",
+                    "change_kind": "code",
+                    "covers": ["R1.2"],
+                    "depends_on": ["t1"]
+                }
+            ]
+        }
+    }));
+
+    // 1. Default rigor is lighter SmallChange; switching rigor sends select_team over daemon socket
+    assert_eq!(
+        app.view.active_rigor(),
+        antislop::lean::tasks::Team::SmallChange
+    );
+    app.run_workflow(Command::SelectTeam(antislop::lean::tasks::Team::Feature));
+    let req1 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(req1["op"], "select_team");
+    assert_eq!(req1["team"], "feature");
+
+    // 2. Visual edge linking (`l` on t1, then move to t2 and press Enter) sends Fast-Path revise_plan
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    assert_eq!(app.graph_link_source.as_deref(), Some("t1"));
+    app.selected = "worker:t2".into();
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.graph_link_source.is_none());
+
+    let req2 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(req2["op"], "revise_plan");
+    assert_eq!(req2["request_ai_review"], false);
+    assert_eq!(req2["allow_uncovered"], true);
+    assert_eq!(req2["revision"]["tasks"][0]["id"], "t2");
+    assert_eq!(req2["revision"]["tasks"][0]["depends_on"], json!([]));
+    let _ = rx_updates.recv_timeout(Duration::from_secs(2));
+
+    // 3. Direct execution (`/direct`) sends `/direct ...` message over daemon socket
+    app.focus = Focus::Chat;
+    app.input = InputBuffer::with_text("Fix typo in config");
+    app.run_workflow(Command::DirectExecute);
+    let req3 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(req3["op"], "send");
+    assert_eq!(req3["text"], "/direct Fix typo in config");
+
+    handle.join().unwrap();
+}

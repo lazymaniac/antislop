@@ -287,6 +287,22 @@ pub(crate) enum WireRequest {
         plan: String,
         id: String,
     },
+    RevisePlan {
+        conversation: String,
+        #[serde(default)]
+        operation_id: Option<String>,
+        revision: crate::lean::store::PlanRevision,
+        #[serde(default)]
+        request_ai_review: bool,
+        #[serde(default)]
+        allow_uncovered: bool,
+    },
+    SelectTeam {
+        conversation: String,
+        team: String,
+        #[serde(default)]
+        reason: String,
+    },
     Events {
         conversation: String,
         after: u64,

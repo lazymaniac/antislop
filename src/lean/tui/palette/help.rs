@@ -220,6 +220,7 @@ fn help_chat() -> &'static [&'static str] {
         "Planning starts after you confirm the requirements",
         "F4 / F5          plan history / actions for a stopped task",
         "F7 / F8          reject proposed plan / configuration",
+        "/                slash commands (/direct, /rigor, /edit, /workbench, /accept)",
         "text             always sent as chat; actions use keys or Ctrl+P",
         "Esc              back/clear draft (daemon runs)",
         "Ctrl+C / q       quit (q when not editing text)",
@@ -248,6 +249,9 @@ fn help_graph() -> &'static [&'static str] {
         "F1 / ? / [?]     help",
         "Tab, Esc         chat",
         "q                quit (work continues in daemon)",
+        "e / a / S        flow editor: edit task / add dependent / split",
+        "h / D / l        flow editor: hold / retire / link-unlink edge",
+        "s / w / R        steer agent / docked workbench / workflow rigor",
     ]
 }
 

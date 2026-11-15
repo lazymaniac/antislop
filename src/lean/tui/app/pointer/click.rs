@@ -9,7 +9,7 @@ impl App {
         if self.click_plan_view(col, row) || self.dialog_open() {
             return;
         }
-        if self.click_phase_action(col, row) {
+        if self.click_phase_action(col, row) || self.click_workbench(col, row) {
             return;
         }
         let area = self.terminal_area;
@@ -50,7 +50,44 @@ impl App {
             return false;
         }
         if let Some(command) = self.phase_action_command {
-            self.run_workflow(command);
+            if command == Command::TaskActions
+                && let Some(stopped) = self
+                    .view
+                    .tasks
+                    .iter()
+                    .find(|t| matches!(t.status.as_str(), "failed" | "needs_user"))
+                    .map(|t| t.id.clone())
+            {
+                self.selected = format!("worker:{stopped}");
+                self.open_unblock(Some(stopped));
+            } else {
+                self.run_workflow(command);
+            }
+        }
+        true
+    }
+
+    fn click_workbench(&mut self, col: u16, row: u16) -> bool {
+        if !self
+            .workbench_area
+            .is_some_and(|area| area.contains((col, row).into()))
+        {
+            return false;
+        }
+        let Some(task) = self.active_graph_task().cloned() else {
+            return true;
+        };
+        let key = format!("worker:{}", task.id);
+        let pos = (col, row).into();
+        if self.workbench_sections[0].contains(pos) {
+            self.open_details(key);
+        } else if self.workbench_sections[1].contains(pos) {
+            self.selected = key.clone();
+            self.graph_expanded = Some(key.clone());
+            self.graph_tab = 1;
+            self.open_details(key);
+        } else if self.workbench_sections[2].contains(pos) {
+            self.open_diff(&key);
         }
         true
     }
@@ -92,6 +129,9 @@ impl App {
                 && y < node.y.saturating_add(node.height)
         }) {
             self.select_node(node.key.clone());
+            if self.graph_link_source.is_some() {
+                self.toggle_flow_link();
+            }
         }
         self.focus = Focus::Graph;
         true

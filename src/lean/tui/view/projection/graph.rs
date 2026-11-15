@@ -10,6 +10,8 @@ pub(super) fn on_graph_task(view: &mut View, payload: &Value) {
     };
     row.status = payload["status"].as_str().unwrap_or_default().to_owned();
     row.round = payload["round"].as_u64().unwrap_or(0);
+    view.task_meta
+        .insert(row.id.clone(), plan::extract_task_meta(&payload["spec"]));
     insert_graph_task(view, row);
     refresh_parallel_tasks(view);
 }
@@ -72,6 +74,9 @@ pub(super) fn on_graph_updated(view: &mut View, payload: &Value) {
         return;
     }
     apply_graph_order(view, &payload["order"]);
+    if let Some(revision) = payload["revision"].as_i64() {
+        view.plan_head_revision = revision;
+    }
     view.plan_revision_token = payload["revision_token"].as_str().map(str::to_owned);
     view.conversation_revision_token = view.plan_revision_token.clone();
     report_graph_amendment(view, payload["text"].as_str().unwrap_or_default());
@@ -88,6 +93,8 @@ fn apply_graph_order(view: &mut View, order: &Value) {
         .collect();
     view.tasks
         .retain(|task| positions.contains_key(task.id.as_str()));
+    view.task_meta
+        .retain(|id, _| positions.contains_key(id.as_str()));
     view.tasks.sort_by_key(|task| {
         positions
             .get(task.id.as_str())

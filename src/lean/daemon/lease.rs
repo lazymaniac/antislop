@@ -51,7 +51,9 @@ pub(super) fn scope(request: &Request) -> Option<(&str, Access)> {
             | C::AnswerApproval { conversation, .. }
             | C::ReviewComments { conversation, .. }
             | C::CommentStatus { conversation, .. }
-            | C::Review { conversation, .. },
+            | C::Review { conversation, .. }
+            | C::RevisePlan { conversation, .. }
+            | C::SelectTeam { conversation, .. },
         )
         | Request::Terminal(T::TerminalInput { conversation, .. }) => {
             (conversation, Access::Change)

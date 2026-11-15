@@ -313,6 +313,7 @@ impl App {
         self.picker = None;
         self.unblock = None;
         self.approval = None;
+        self.flow_editor = None;
     }
 
     fn preserve_comment_editor(&mut self) {
