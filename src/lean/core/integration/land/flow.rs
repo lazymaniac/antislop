@@ -265,15 +265,25 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("project");
         let state = directory.path().join("state");
-        let target = directory.path().join("landed");
         std::fs::create_dir_all(&project).unwrap();
-        std::fs::create_dir_all(&target).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("source.txt"), "base").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
         let config =
             Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
         let core = Core::open(&state, config.clone()).unwrap();
         let conversation = core
             .store
             .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        core.create_session_branch(&conversation.id, &project)
             .unwrap();
         let mut task = core
             .store
@@ -292,35 +302,47 @@ mod tests {
             .unwrap()
             .remove(0);
         let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
-        std::fs::write(target.join("brief.md"), "Deliverable café").unwrap();
-        std::fs::write(target.join("image.bin"), b"\0\xff\x01").unwrap();
-        std::fs::write(target.join("agent-report.txt"), "Internal worker report").unwrap();
-        let cancel = AtomicBool::new(false);
-        let integration = Integration {
-            core: &core,
-            conversation: &conversation.id,
-            task: &mut task,
-            spec: &spec,
-            project: &project,
-            worktree: &project,
-            config: &config,
-            cancel: &cancel,
-        };
-        integration
-            .record_result_documents(
-                &target,
-                "result-commit",
-                &[
-                    "brief.md".into(),
-                    "image.bin".into(),
-                    "agent-report.txt".into(),
-                ],
+        let worktree = directory.path().join("writer");
+        git::add_worktree(&project, &worktree, "test-writer", &base).unwrap();
+        std::fs::write(worktree.join("brief.md"), "Deliverable café").unwrap();
+        std::fs::write(worktree.join("image.bin"), b"\0\xff\x01").unwrap();
+        std::fs::write(worktree.join("agent-report.txt"), "Internal worker report").unwrap();
+        let change = git::commit_all(&worktree, git::CommitPurpose::TestFixture).unwrap();
+        let session_tree = core.session_worktree(&conversation.id, &project).unwrap();
+        assert!(matches!(
+            git::integrate(
+                &session_tree,
+                &git::head(&session_tree).unwrap(),
+                &change,
+                false
             )
-            .unwrap();
+            .unwrap(),
+            git::Integration::Applied | git::Integration::Committed(_)
+        ));
+        task.base = Some(base);
+        task.result = Some(change.clone());
+        let cancel = AtomicBool::new(false);
+        Integration::new(
+            &core,
+            &conversation.id,
+            &mut task,
+            &spec,
+            &project,
+            &worktree,
+            &config,
+            &cancel,
+        )
+        .finish_outcome(
+            &git::head(&project).unwrap(),
+            &change,
+            git::Integration::Applied,
+        )
+        .unwrap();
 
         let documents = core.store.result_documents(&conversation.id).unwrap();
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].path, "brief.md");
+        assert_eq!(documents[0].source_commit, task.result.clone().unwrap());
         assert_eq!(
             core.store
                 .result_document_chunk(&conversation.id, &documents[0].id, 0)

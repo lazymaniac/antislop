@@ -484,6 +484,70 @@ fn result_documents_are_individually_selectable_and_readable_in_the_session() {
 }
 
 #[test]
+fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
+    use serde_json::json;
+    use std::os::unix::net::UnixListener;
+
+    let state = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        while !seen.contains(&"result_document_content".to_owned()) {
+            let (mut stream, _) = listener.accept().unwrap();
+            let envelope: serde_json::Value =
+                crate::transport::read(&mut std::io::BufReader::new(stream.try_clone().unwrap()))
+                    .unwrap()
+                    .unwrap();
+            let request = &envelope["request"];
+            let op = request["op"].as_str().unwrap().to_owned();
+            seen.push(op.clone());
+            let data = match op.as_str() {
+                "sessions" => {
+                    json!([{"turn_id":"turn-1","role":"orchestrator","status":"completed"}])
+                }
+                "session_events" => json!({"events":[],"has_more":false}),
+                "result_documents" => {
+                    json!([{"id":"doc-1","path":"brief.md","source_commit":"abcdef123456"}])
+                }
+                "result_document_content" => {
+                    assert_eq!(request["id"], "doc-1");
+                    json!({"text":"Deliverable loaded through the session API: café 👩‍💻","next_offset":45,"done":true})
+                }
+                other => panic!("unexpected session request {other}"),
+            };
+            crate::transport::write(&mut stream, &json!({"data":data,"error":null})).unwrap();
+        }
+        seen
+    });
+
+    let client = crate::lean::daemon::Client::at(state.path());
+    let snapshot =
+        crate::lean::tui::inspection::run_snapshot(&client, "conversation-1", "orchestrator", None)
+            .unwrap();
+    let seen = server.join().unwrap();
+    assert!(seen.contains(&"result_documents".to_owned()));
+    assert!(seen.contains(&"result_document_content".to_owned()));
+
+    let mut details = Details::new("orchestrator".into());
+    details.documents = snapshot.documents;
+    details.switch_tab(RESULT);
+    details.change_result_document(1);
+    let view = View::default();
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let shown = screen(&terminal);
+        if shown.contains("Deliverable loaded through the session API: café") {
+            assert!(shown.contains("brief.md"), "{shown}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{shown}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn result_tab_names_describe_the_roles_deliverable() {
     for (key, name) in [
         ("worker:t1", "Results"),
