@@ -12,6 +12,7 @@ pub struct ResultDocument {
 
 impl Store {
     /// Retain a textual declared output after it has successfully landed.
+    #[cfg(test)]
     pub(in crate::lean) fn record_result_document(
         &self,
         conversation: &str,
@@ -20,29 +21,41 @@ impl Store {
         source_commit: &str,
         text: &str,
     ) -> Result<()> {
+        let Some(prepared) = self.content.prepare_text(text.as_bytes())? else {
+            return Ok(());
+        };
+        self.publish_result_document(conversation, producer, path, source_commit, prepared)
+    }
+
+    pub(in crate::lean) fn prepare_result_document(
+        &self,
+        reader: impl std::io::Read,
+    ) -> Result<Option<crate::lean::content::PreparedContent>> {
+        self.content.prepare_text(reader)
+    }
+
+    pub(in crate::lean) fn publish_result_document(
+        &self,
+        conversation: &str,
+        producer: &str,
+        path: &str,
+        source_commit: &str,
+        prepared: crate::lean::content::PreparedContent,
+    ) -> Result<()> {
         let _guard = self.content_write.lock().expect("content write mutex");
-        crate::require(
-            self.db().query_row(
-                "SELECT EXISTS(SELECT 1 FROM tasks t, json_each(t.spec,'$.outputs') o WHERE t.id=?1 AND t.conversation_id=?2 AND o.value=?3)",
-                params![producer, conversation, path],
-                |row| row.get::<_, bool>(0),
-            )?,
-            "result document must be a declared output of a task in this conversation",
-        )?;
-        let already_recorded: bool = self.db().query_row(
-            "SELECT EXISTS(SELECT 1 FROM session_documents WHERE producer_task=?1 AND path=?2 AND source_commit=?3)",
-            params![producer, path, source_commit],
-            |row| row.get(0),
-        )?;
-        if already_recorded {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        crate::require(tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks t, json_each(t.spec,'$.outputs') o WHERE t.id=?1 AND t.conversation_id=?2 AND o.value=?3)",params![producer,conversation,path],|r|r.get::<_,bool>(0))?,
+            "result document must be a declared output of a task in this conversation")?;
+        let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM session_documents WHERE producer_task=?1 AND path=?2 AND source_commit=?3)",params![producer,path,source_commit],|r|r.get(0))?;
+        if exists {
             return Ok(());
         }
-        let reference = self.content.write(text)?;
-        let id = uuid::Uuid::new_v4().to_string();
-        self.db().execute(
-            "INSERT INTO session_documents(id,conversation_id,producer_task,path,source_commit,content_ref,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![id, conversation, producer, path, source_commit, serde_json::to_string(&reference)?, now_ms()],
-        )?;
+        // A crash or SQL failure after this rename leaves only an orphan that
+        // normal GC may collect. Deletion cannot race the reference commit.
+        let reference = self.content.publish(prepared)?;
+        tx.execute("INSERT INTO session_documents(id,conversation_id,producer_task,path,source_commit,content_ref,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![crate::id(),conversation,producer,path,source_commit,serde_json::to_string(&reference)?,now_ms()])?;
+        tx.commit()?;
         Ok(())
     }
 

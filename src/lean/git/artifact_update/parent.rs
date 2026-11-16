@@ -1,7 +1,6 @@
 //! Directory-fd operations keep publication away from raced symlinks.
 use super::super::*;
 use std::fs::{File, OpenOptions};
-use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -151,18 +150,12 @@ impl Parent {
         )?;
         Ok(file)
     }
-    pub(super) fn matches(&self, name: &str, expected: &[u8]) -> Result<bool> {
+    pub(super) fn matches(&self, name: &str, expected: &File) -> Result<bool> {
         let file = match self.read(name) {
-            Ok(f) => f,
+            Ok(file) => file,
             Err(_) => return Ok(false),
         };
-        if file.metadata()?.len() != expected.len() as u64 {
-            return Ok(false);
-        }
-        let mut bytes = Vec::new();
-        file.take(expected.len() as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        Ok(bytes == expected)
+        super::same_files(&file, expected)
     }
     pub(crate) fn rename(&self, from: &str, to: &Self, name: &str) -> Result<()> {
         let (from, name) = (cstring(from)?, cstring(name)?);

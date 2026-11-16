@@ -1,7 +1,8 @@
 use super::*;
+use std::io::Write;
 
 #[test]
-fn artifact_bytes_reads_the_landed_blob_instead_of_following_worktree_symlinks() {
+fn artifact_file_reads_the_landed_blob_instead_of_following_worktree_symlinks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     ok(root, &["init", "-q"]).unwrap();
@@ -14,7 +15,15 @@ fn artifact_bytes_reads_the_landed_blob_instead_of_following_worktree_symlinks()
     std::os::unix::fs::symlink(&outside, root.join("docs/brief.md")).unwrap();
 
     assert_eq!(
-        artifact_bytes(root, &commit, "docs/brief.md").unwrap(),
+        {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            artifact_file(root, &commit, "docs/brief.md")
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        },
         b"landed text"
     );
 }

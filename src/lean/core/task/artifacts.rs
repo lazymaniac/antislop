@@ -100,8 +100,10 @@ impl Core {
         let inputs = self.artifact_inputs(task, spec)?;
         let original = self.artifact_commits(task, spec)?;
         let mut expected = BTreeMap::new();
+        let mut observed = BTreeMap::new();
         for (path, input) in &inputs {
             let current = self.store.artifact_receipt(&conversation, path)?;
+            observed.insert(path.clone(), current.clone());
             let replay = current
                 .as_ref()
                 .is_some_and(|r| r.task == task.id && r.generation == task.input_generation);
@@ -116,8 +118,9 @@ impl Core {
                 expected.insert(path.clone(), receipt.commit.clone());
             }
         }
-        spec.validate_change_paths(&git::changed_files(project, base, change)?)?;
-        let outcome = git::deliver_owned_artifacts(
+        let paths = git::changed_files(project, base, change)?;
+        spec.validate_change_paths(&paths)?;
+        let prepared = git::prepare_owned_artifacts(
             project,
             base,
             change,
@@ -125,8 +128,20 @@ impl Core {
             &expected,
             &self.state.join("artifact-backups"),
         )?;
+        let _integration = self.locks.integration();
+        let current:bool=self.store.db().query_row("SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN task_inputs i ON i.task_id=t.id WHERE t.id=?1 AND coalesce(i.generation,0)=?2 AND t.status NOT IN ('cancelled','stale','superseded'))",rusqlite::params![task.id,task.input_generation],|r|r.get(0))?;
+        require(
+            current,
+            "artifact task inputs changed or task was cancelled during preparation",
+        )?;
+        for (path, receipt) in observed {
+            if self.store.artifact_receipt(&conversation, &path)? != receipt {
+                return Ok(git::Integration::UserEdits(vec![path]));
+            }
+        }
+        let outcome = prepared.publish(project)?;
         if outcome == git::Integration::Applied {
-            for path in git::changed_files(project, base, change)? {
+            for path in paths {
                 self.store.record_artifact_delivery(
                     &conversation,
                     &path,

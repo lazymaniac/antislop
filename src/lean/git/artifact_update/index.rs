@@ -9,14 +9,11 @@ pub(super) struct Lease {
     path: PathBuf,
 }
 impl Lease {
+    #[cfg(test)]
     pub(super) fn acquire(project: &Path) -> Result<Self> {
-        let path = PathBuf::from(ok(project, &["rev-parse", "--git-path", "index"])?);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            project.join(path)
-        };
-        let path = path.with_file_name("index.lock");
+        Self::acquire_at(index_path(project)?)
+    }
+    pub(super) fn acquire_at(path: PathBuf) -> Result<Self> {
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -40,4 +37,15 @@ impl Drop for Lease {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+pub(super) fn index_path(project: &Path) -> Result<PathBuf> {
+    let path = PathBuf::from(ok(project, &["rev-parse", "--git-path", "index"])?);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        project.join(path)
+    };
+    let path = path.with_file_name("index.lock");
+    Ok(path)
 }

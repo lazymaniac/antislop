@@ -17,9 +17,11 @@ impl Store {
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
+        let content = crate::lean::content::Content::new(path);
+        content.cleanup_staging()?;
         Ok(Self {
             connection: Mutex::new(connection),
-            content: crate::lean::content::Content::new(path),
+            content,
             content_write: Mutex::new(()),
             operations: Mutex::new(()),
         })
