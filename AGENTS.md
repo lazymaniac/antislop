@@ -3221,6 +3221,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 141,858 LOC · input 1,264,976 · output 47,535 tokens · state 92b3c580264f · targets AGENTS.md
+· 141,951 LOC · input 1,266,427 · output 47,535 tokens · state 66b6c861cc18 · targets AGENTS.md
 ```
 <!-- hologram:end -->

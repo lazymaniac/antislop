@@ -1178,6 +1178,99 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() 
 }
 
 #[test]
+fn a_rejected_conflict_repair_stays_off_the_session_branch_until_reworked_and_approved() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
+    let planner = std::fs::read_to_string(&codex).unwrap().replace(
+        r#"plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+    "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
+        r#"plan = {"tasks": [
+    {"id": "t1", "title": "Add accepted file", "goal": "Create accepted.txt",
+     "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}},
+    {"id": "t2", "title": "Add greeting", "goal": "Create hello.txt", "depends_on": ["t1"],
+     "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
+    );
+    std::fs::write(&codex, planner).unwrap();
+
+    let rejected_marker = dir.path().join("repair-was-rejected");
+    let rework_marker = dir.path().join("writer-ran-after-rejection");
+    let edit_marker = dir.path().join("edited-once");
+    let mut script = std::fs::read_to_string(&agy).unwrap();
+    script = script.replace(
+        r#"answer = "```verdict\n" + json.dumps({"approved": "git diff" in prompt, "findings": []}) + "\n```"#,
+        r#"answer = "```verdict\n" + json.dumps({"approved": "git diff" in prompt and "Review the conflict resolution independently" not in prompt, "findings": [] if "Review the conflict resolution independently" not in prompt else [{"severity": "medium", "issue": "Replace the rejected repair marker.", "where": "hello.txt:1"}]}) + "\n```"#,
+    );
+    script = script.replace(
+        "if \"Automatic integration conflict\" in prompt:\n    answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"\n",
+        "",
+    );
+    script = script.replace(
+        &format!(
+            "    if not os.path.exists({edit_marker:?}):\n        open({edit_marker:?}, \"w\").close()\n        with open(os.path.join(session_dir, \"hello.txt\"), \"w\") as primary:\n            primary.write(\"user draft\\n\")",
+            edit_marker = edit_marker,
+        ),
+        &format!(
+            "    if \"Create hello.txt\" in prompt and not os.path.exists({edit_marker:?}):\n        open({edit_marker:?}, \"w\").close()\n        with open(os.path.join(session_dir, \"hello.txt\"), \"w\") as primary:\n            primary.write(\"user draft\\n\")",
+            edit_marker = edit_marker,
+        ),
+    );
+    script = script.replace(
+        "    with open(\"hello.txt\", \"w\") as f:\n        f.write(\"from worker\\n\")\n    answer = \"wrote hello.txt\"",
+        &format!(
+            "    if \"Create accepted.txt\" in prompt:\n        with open(\"accepted.txt\", \"w\") as f:\n            f.write(\"accepted before conflict\\n\")\n        answer = \"wrote accepted.txt\"\n    elif \"Automatic integration conflict\" in prompt:\n        with open(\"hello.txt\", \"w\") as f:\n            f.write(\"user draft\\nrejected repair marker\\n\")\n        open({rejected_marker:?}, \"w\").close()\n        answer = \"Resolved the conflict with a candidate patch.\"\n    else:\n        if os.path.exists({rejected_marker:?}):\n            with open(os.path.join(session_dir, \"hello.txt\")) as session_file:\n                assert session_file.read() == \"user draft\\n\", \"rejected repair leaked onto the session branch\"\n            open({rework_marker:?}, \"w\").close()\n        with open(\"hello.txt\", \"w\") as f:\n            f.write(\"user draft\\naccepted after rejection\\n\")\n        answer = \"Reworked the rejected repair.\"",
+            rejected_marker = rejected_marker,
+            rework_marker = rework_marker,
+        ),
+    );
+    std::fs::write(&agy, script).unwrap();
+
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let session = support::session_worktree(&core, &project, &conversation);
+    let tasks = original_tasks(&core, &conversation);
+    let accepted = tasks.iter().find(|task| task.spec["id"] == "t1").unwrap();
+    let repaired = tasks.iter().find(|task| task.spec["id"] == "t2").unwrap();
+
+    assert_eq!(accepted.status, "approved", "{:?}", accepted.report);
+    assert_eq!(
+        std::fs::read_to_string(session.join("accepted.txt")).unwrap(),
+        "accepted before conflict\n"
+    );
+    assert_eq!(repaired.status, "approved", "{:?}", repaired.report);
+    assert!(
+        repaired.round >= 3,
+        "rejection must cause another worker/reviewer cycle: {repaired:?}"
+    );
+    assert!(
+        rejected_marker.is_file(),
+        "repair work ran before its review"
+    );
+    assert!(
+        rework_marker.is_file(),
+        "writer was not rerun after rejection"
+    );
+    let hello = std::fs::read_to_string(session.join("hello.txt")).unwrap();
+    assert_eq!(hello, "user draft\naccepted after rejection\n");
+    assert!(!hello.contains("rejected repair marker"));
+    assert!(!project.join("accepted.txt").exists());
+    assert!(!project.join("hello.txt").exists());
+
+    let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
+    assert!(calls.contains("Replace the rejected repair marker."));
+    let logged: Vec<Value> = calls
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let independent_review = logged
+        .iter()
+        .filter_map(|call| call["args"].as_array()?.last()?.as_str())
+        .find(|prompt| prompt.contains("Review the conflict resolution independently"))
+        .unwrap();
+    assert!(independent_review.contains("Round: 2"));
+}
+
+#[test]
 fn a_writer_integrates_over_the_local_changes_it_started_with() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
