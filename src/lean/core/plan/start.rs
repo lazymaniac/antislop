@@ -11,6 +11,10 @@ impl Core {
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
         self.ensure_plan_can_start(conversation)?;
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        if git::is_repository(&project) {
+            self.create_session_branch(conversation, &project)?;
+        }
         let mut plans = self.activity.plans.lock().expect("plans mutex");
         require(
             !plans.contains_key(conversation),

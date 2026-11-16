@@ -497,6 +497,7 @@ mod send_deletion_tests {
             &core,
             &session.id,
             "Keep this accepted request",
+            || Ok(()),
         )
         .unwrap();
         drop(lifecycle);

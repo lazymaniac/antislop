@@ -195,9 +195,11 @@ fn record_message_and_wake_locked(
     core: &Arc<Core>,
     conversation: &str,
     text: &str,
+    before_wake: impl FnOnce() -> Result<()>,
 ) -> Result<Message> {
     core.store.conversation(conversation)?;
     let message = core.store.add_message(conversation, "user", text)?;
+    before_wake()?;
     wake_locked(core, conversation);
     Ok(message)
 }

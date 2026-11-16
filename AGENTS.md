@@ -710,7 +710,7 @@ src
     require_added_files(project,base,change,expected):Result<()> > changed_files
     require_new_outputs(project,outputs):Result<()>
    worktree
-    add_worktree(project,path,branch,base):Result<()> > require_worktree_branch,git
+    add_worktree(project,path,branch,base):Result<()> > worktree_project,require_worktree_branch,git
     branches(project,prefix):Result<Vec<String>>
     combine(project,scratch,onto,changes):Result<String> > combine_or_conflict
     combine_or_conflict(project,scratch,onto,changes):Result<CombineResult> > {remove,add}_worktree,apply_changes
@@ -1018,7 +1018,7 @@ src
     writer_base(plan_id,spec,project):Result<String> > plan_conversation,session_worktree,plan_{base,base_record},writer_{dependency_changes,base_scratch}
     record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > direct_execute,address,dispatch_addressed
-    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~147 > add_message,{start,finish}_turn,create_run,register_message_source,apply_ledger_change,bind_ledger_turn,accept_extraction,len,TaskContract,add_plan,link_plan_run,bind_task_ledger,plan_revision_token,activate_reviewed_plan
+    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~147 > add_message,{start,finish}_turn,create_run,register_message_source,apply_ledger_change,bind_ledger_turn,accept_extraction,TaskContract,add_plan,link_plan_run,bind_task_ledger,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute,finish.finish
     settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,as_str,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
@@ -1041,8 +1041,8 @@ src
     task_freshness_token(conversation,{plan,task}_id):Result<String> > task_unscoped,freshness_for_task
     config_snapshot():Arc<Config>
     replace_config(config)
-    send(&Arc<Self>,conversation,text):Result<Message>
-    start(project):Result<Conversation> > {record_project,project}_identity,create_{conversation,session_branch}
+    send(&Arc<Self>,conversation,text):Result<Message> > create_session_branch
+    start(project):Result<Conversation> > {record_project,project}_identity,create_conversation
     submit(&Arc<Self>,conversation,text):Result<serde_json::Value> > submit_addressed
     send_to_agent(&Arc<Self>,message):Result<serde_json::Value> > enqueue_and_refresh,steer,resume_after_delivery
     conversation_revision_token(conversation):Result<String> > latest_event_seq,paused,is_idle
@@ -1090,16 +1090,16 @@ src
     warn_of_uncommitted(conversation,writes) > uncommitted_notice
     wake(&Arc<Self>,conversation)
     orchestrate(&Arc<Self>,conversation,cancel) > next_orchestration_{upto,turn},stop_orchestrator
-    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,require,validate_plan_inputs,ensure_profiles_launch,db,remove,announce_plan_tasks,drop,spawn_plan_runner
+    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > ensure_plan_can_start,create_session_branch,validate_plan_inputs,ensure_profiles_launch,remove,announce_plan_tasks,drop,spawn_plan_runner
     resume_agent_reviews(&Arc<Self>,conversation):Result<()> > register_agent_review,spawn_agent_review_worker
     review_change(&Arc<Self>,conversation,plan,id):Result<()> > prepare_code_review,remove
     open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
     activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
     reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     validate_session_project(project):Result<String> > require,ok,local_main
-    create_session_branch(conversation,project):Result<String> > local_main,session_branch_name,SessionBranch,save_session_branch
-    session_worktree(conversation,project):Result<PathBuf> > load_session_branch,require,session_{branch_name,worktree_path},ok
-    restore_session_branches():Result<()> > conversations,session_{branch_path,worktree},ensure_session_started_event,SessionBranch,save_session_branch
+    create_session_branch(conversation,project):Result<String> ~131 > turn,session_branch_{name,path},load_session_branch,workflow,conversation_goal,named_session_branch,SessionBranch,validate_session_record,ok,local_main,save_session_branch,ensure_session_started_event
+    session_worktree(conversation,project):Result<PathBuf> > create_session_branch,session_worktree_path
+    restore_session_branches():Result<()> > conversations,session_branch_path,load_session_branch,ensure_session_started_event,notice
     artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
     artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
     prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
@@ -1921,7 +1921,7 @@ src
      - KindNameError,Reply,strings,field_text
      - KindNameError: custom,unknown_variant×0
    contracts
-    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport,flow_editor,workbench_docked,graph_link_source,workbench_{file_index,diffs}})
+    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport,flow_editor,workbench_docked,graph_link_source})
      capture(app):Self
      restore(app) > restore_{composer,navigation,overlays,requests}
      - capture_{composer,navigation,overlays,requests}
@@ -1956,7 +1956,7 @@ src
     model
      Composer(C{input,sending,operation,error,sent_text,mail,delivery,delivery_{receipts,failure},address,mode})
      DetailRecord(C{lines,search_text})
-     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
+     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,selected_result_document,panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
       hero_key():String > session_keys
       identity_line(view,theme,key):Line<'static> > row,identity_{status,title}
       provider_chip(view,theme,key):Vec<Vec<Span<'static>>>
@@ -1989,6 +1989,8 @@ src
       change_round(view,direction) > task_id
       save_current_tab()
       restore_current_tab() > overview
+      change_result_document(direction) > visible_result_keys
+      visible_result_keys():Vec<String> > len
       records(view):Vec<Rc<DetailRecord>> > overview,comments.comments,checks,results
       fetch_failed(error):bool
       load_task(task) > as_str
@@ -2108,7 +2110,7 @@ src
    flow_editor
     change_kind_label(kind):&'static str
     contract_from_view(view,row):TaskContract > TaskContract,parse_work_kind,ReviewerSpec
-    critical_path_tasks(view):Vec<String> ~73 > len,downstream_unfinished_dependents
+    critical_path_tasks(view):Vec<String> ~117 > is_unfinished_task
     downstream_unfinished_dependents(view,task_id):Vec<String> > is_unfinished_task,depends_transitively
     format_clock_mm_ss(ms):String
     is_unfinished_task(status):bool
@@ -2270,11 +2272,13 @@ src
        card_title(name,inner,collapsed):String
        status_style(theme,health):(String,Style) > status,glyphs,Theme.error,warning,Theme.dim
      card.rs
-      draw(view,canvas,node,selected,expanded_tab,theme,tick) > outside_viewport,paint,Card.new
+      draw(view,canvas,node,selected,details,theme,tick) > outside_viewport,paint,Card.new
       - Card
       - Card: paint_{tabs,icon},status_description,pair_finished,paint_{contents,background,progress}
     nodes.rs
-     draw_node(view,canvas,node,selected,expanded_tab,theme,tick) > draw
+     draw_node(view,canvas,node,selected,expanded_tab,theme,tick) > draw_node_with_critical_path,DrawDetails
+     draw_node_with_critical_path(view,canvas,node,selected,details,theme,tick) > draw
+     DrawDetails(C{expanded_tab,critical_path})
     plan
      PlanGraph(C{nodes,width,height})
       new(tasks,viewport_width):Self ~80 > as_str
@@ -2466,7 +2470,7 @@ src
    palette
     catalog
      Action(E{Run,Select,Show,SwitchConversation,Address,OpenProject})
-     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals,TakeControl,SelectTeam,OpenRigorPicker,{Edit,AddDependent,Split,Hold,Retire}Task,SteerAgent,ToggleWorkbench,AcceptPlan,DirectExecute,LinkTask,CommentSelectedFile})
+     Command(E{InterviewQuestion,Requirements,Config,Reject,Plan,Plans,Resume,Cancel,Pause,Continue,PauseOrContinue,{New,Switch}Conversation,Find,Search,Details,Diff,Comment,Filter,Help,Quit,AddressMessage,ConversationDetails,Projects,TaskActions,ApprovalsSupervised,ApprovalsAutonomous,PendingApprovals,TakeControl,SelectTeam,OpenRigorPicker,{Edit,AddDependent,Split,Hold,Retire}Task,SteerAgent,ToggleWorkbench,AcceptPlan,DirectExecute,LinkTask})
      ConversationItem(C{id,project,title})
      Kind(E{Commands,Agents,History,Conversations,Recipients,Projects,SlashCommands,Rigor})
      Picker(C{kind,query,selected,conversations,projects,confirm_delete})
@@ -2564,7 +2568,7 @@ src
      dashboard_hint(searching,query,width):String > fit_hint
      detail_areas(area,overview,summary_len):DetailAreas > DetailAreas
      detail_block(details,body,theme):Block<'static> > Details.overview,borders,title,style,faint
-     document_key(key,tab):Option<&'static str>
+     document_key(details):Option<String>
      draw_document_scrollbar(frame,area,total,scroll,theme) > draw_scrollbar
      draw_record_scrollbar(frame,area,total,scroll,theme) > draw_scrollbar
      draw_scrollbar(frame,area,total,scroll,theme) > glyphs,faint,Theme.dim
@@ -2646,7 +2650,7 @@ src
     App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,flow_editor,workbench_docked,graph_link_source,workbench_{area,sections,file_index,file_rows,diffs},projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
-     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,apply_rigor_team,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},toggle_workbench,accept_plan,trigger_direct_execute,toggle_flow_link,comment_workbench_file
+     run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,apply_rigor_team,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},toggle_workbench,accept_plan,trigger_direct_execute,toggle_flow_link
      trigger_direct_execute() > with_text,submit
      toggle_flow_link() > active_graph_task,{toggle_dependency_edge,send_flow}_revision
      apply_rigor_team(team) > send_command
@@ -2658,7 +2662,7 @@ src
      toggle_flow_hold() > active_graph_task,{toggle_hold,send_flow}_revision
      open_live_steer() > active_graph_task,open_details
      toggle_workbench()
-     workbench_files_for_task(task):Vec<flow_editor::WorkbenchFileEntry>
+     workbench_files_for_task(task):Vec<flow_editor::WorkbenchFileEntry> > flatten
      cycle_workbench_file(next) > {active_graph,workbench_files_for}_task
      comment_workbench_file() > {active_graph,workbench_files_for}_task,get_comment_draft,Editor
      send_flow_revision(revision,request_ai_review,allow_uncovered,task_{id,title})
@@ -3217,6 +3221,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 141,061 LOC · input 1,257,280 · output 47,449 tokens · state 0da6436c0065 · targets AGENTS.md
+· 141,858 LOC · input 1,264,976 · output 47,535 tokens · state 92b3c580264f · targets AGENTS.md
 ```
 <!-- hologram:end -->

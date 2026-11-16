@@ -28,7 +28,13 @@ impl Core {
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
-        crate::lean::record_message_and_wake_locked(self, conversation, text)
+        crate::lean::record_message_and_wake_locked(self, conversation, text, || {
+            let project = PathBuf::from(self.store.conversation(conversation)?.project);
+            if git::is_repository(&project) {
+                self.create_session_branch(conversation, &project)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
@@ -43,16 +49,7 @@ impl Core {
             &project.to_string_lossy(),
             &paths::project_identity(&project)?,
         )?;
-        let conversation = self.store.create_conversation(&project.to_string_lossy())?;
-        let branch = self.create_session_branch(&conversation.id, &project)?;
-        self.store.append_event(
-            &conversation.id,
-            None,
-            None,
-            "session_started",
-            &json!({"branch": branch}),
-        )?;
-        Ok(conversation)
+        self.store.create_conversation(&project.to_string_lossy())
     }
 
     /// Sends an addressed or broadcast message after validating recipient, plan, and delivery.
