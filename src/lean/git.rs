@@ -717,6 +717,75 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn source_staging_updates_tracked_ignored_files_without_adding_ignored_outputs() {
+        let dir = repo();
+        let path = dir.path();
+        std::fs::create_dir(path.join("target")).unwrap();
+        let tracked = "target/tracked[1]\n.txt";
+        let deleted = "target/deleted.txt";
+        std::fs::write(path.join(tracked), "before\n").unwrap();
+        std::fs::write(path.join(deleted), "delete me\n").unwrap();
+        ok(
+            path,
+            &[
+                "--literal-pathspecs",
+                "add",
+                "--force",
+                "--",
+                tracked,
+                deleted,
+            ],
+        )
+        .unwrap();
+        super::worktree::commit_staged(path, "chore: prepare tracked ignored files").unwrap();
+        let base = head(path).unwrap();
+
+        std::fs::write(path.join(tracked), "after\n").unwrap();
+        std::fs::remove_file(path.join(deleted)).unwrap();
+        std::fs::write(path.join("target/cache.log"), "ignored build output\n").unwrap();
+        std::fs::write(path.join("new.txt"), "new source\n").unwrap();
+        let index = std::fs::read(path.join(".git/index")).unwrap();
+
+        let snapshot = snapshot(path, CommitPurpose::TestFixture).unwrap();
+        assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
+        let mut files = changed_files(path, &base, &snapshot).unwrap();
+        files.sort();
+        assert_eq!(files, ["new.txt", deleted, tracked]);
+        assert_eq!(
+            ok(path, &["show", &format!("{snapshot}:{tracked}")]).unwrap(),
+            "after"
+        );
+
+        let checkpoint = commit_all(path, CommitPurpose::Checkpoint).unwrap();
+        assert_eq!(
+            tree_identity(path, &checkpoint).unwrap(),
+            tree_identity(path, &snapshot).unwrap()
+        );
+        assert!(path.join("target/cache.log").exists());
+        assert!(ok(path, &["status", "--porcelain"]).unwrap().is_empty());
+
+        std::fs::write(path.join(tracked), "landed\n").unwrap();
+        std::fs::write(path.join("b.txt"), "user staged edit\n").unwrap();
+        ok(path, &["add", "b.txt"]).unwrap();
+        let landed = commit_paths(path, &[tracked.into()], CommitPurpose::Integration).unwrap();
+        assert_eq!(
+            changed_files(path, &checkpoint, &landed).unwrap(),
+            [tracked]
+        );
+        assert_eq!(ok(path, &["status", "--porcelain"]).unwrap(), "M  b.txt");
+        let ignored = commit_paths(
+            path,
+            &["target/cache.log".into()],
+            CommitPurpose::Integration,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(ignored.contains("paths are ignored"), "{ignored}");
+        assert_eq!(head(path).unwrap(), landed);
+        assert_eq!(ok(path, &["status", "--porcelain"]).unwrap(), "M  b.txt");
+    }
+
+    #[test]
     fn a_snapshot_records_the_working_tree_and_leaves_it_alone() {
         let dir = repo();
         let path = dir.path();

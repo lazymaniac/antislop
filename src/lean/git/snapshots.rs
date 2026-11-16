@@ -99,9 +99,31 @@ pub(crate) fn commit_paths_with_message(
     files: &[String],
     message: &str,
 ) -> Result<String> {
-    let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
-    add.extend(files.iter().map(String::as_str));
-    ok(dir, &add)?;
+    let mut listed = vec!["--literal-pathspecs", "ls-files", "--cached", "-z", "--"];
+    listed.extend(files.iter().map(String::as_str));
+    let tracked = git(dir, &listed)?;
+    crate::require(
+        tracked.status.success(),
+        &String::from_utf8_lossy(&tracked.stderr),
+    )?;
+    let tracked = tracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .collect::<std::collections::HashSet<_>>();
+    // Updating tracked paths respects ignore rules for new files without
+    // rejecting tracked files beneath ignored directories.
+    for (flag, indexed) in [("--update", true), ("--all", false)] {
+        let mut add = vec!["--literal-pathspecs", "add", flag, "--"];
+        add.extend(
+            files
+                .iter()
+                .filter(|path| tracked.contains(path.as_bytes()) == indexed)
+                .map(String::as_str),
+        );
+        if add.len() > 4 {
+            ok(dir, &add)?;
+        }
+    }
     commit_staged_paths(dir, files, message)
 }
 
@@ -232,7 +254,8 @@ pub(crate) fn base_with_artifacts(
     result
 }
 
-// NUL path lists preserve literal filenames without OS argument limits.
+// Update tracked files even beneath ignored directories. Enumerate only new
+// files: NUL path lists preserve literal filenames without OS argument limits.
 // Explicit artifacts are staged after this runtime exclusion.
 pub(super) fn stage_source(dir: &Path, index: Option<&Path>) -> Result<()> {
     use std::io::Write;
@@ -267,13 +290,39 @@ pub(super) fn stage_source(dir: &Path, index: Option<&Path>) -> Result<()> {
         output.status.success(),
         &String::from_utf8_lossy(&output.stderr),
     )?;
-    let paths = command()
+    // Explicit tracked filenames can make `add --all` reject an ignored
+    // ancestor directory. `--update` handles tracked edits and deletions
+    // without re-adding ignored paths or recursing into new ignored files.
+    let tracked = command()
         .args([
             "ls-files",
             "--cached",
+            "-z",
+            "--",
+            ".",
+            ":(top,exclude).antislop",
+        ])
+        .output()?;
+    crate::require(
+        tracked.status.success(),
+        &String::from_utf8_lossy(&tracked.stderr),
+    )?;
+    // With no tracked paths (including an unborn repository), a scoped
+    // `add --update` fails instead of doing nothing.
+    if !tracked.stdout.is_empty() {
+        let output = command()
+            .args(["add", "--update", "--", ".", ":(top,exclude).antislop"])
+            .output()?;
+        crate::require(
+            output.status.success(),
+            &crate::lean::agent::clip_tail(&String::from_utf8_lossy(&output.stderr), 8000),
+        )?;
+    }
+    let paths = command()
+        .args([
+            "ls-files",
             "--others",
             "--exclude-standard",
-            "--deduplicate",
             "-z",
             "--",
             ".",
