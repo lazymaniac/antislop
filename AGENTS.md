@@ -2988,7 +2988,6 @@ src
     projection
      agents
       on_agent_final(view,event,payload,key,turn) > as_str,TurnResult.decode
-      on_agent_tool_rejected(view,event,payload,key,turn) > as_str,fg
       on_turn_finished(view,event,payload,key,turn) > as_str,finish_orchestrator,report_planner_failure,finish_agent_turn
       on_turn_started(view,event,payload,key,turn) > as_str,start_role_activity,record_agent_start
       - finish_comment_turn,report_orchestrator_failure,turn_outcome
@@ -3249,6 +3248,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 144,233 LOC · input 1,287,342 · output 48,200 tokens · state 56df3b0489a9 · targets AGENTS.md
+· 144,349 LOC · input 1,288,516 · output 48,183 tokens · state 9fd5ae36318a · targets AGENTS.md
 ```
 <!-- hologram:end -->
