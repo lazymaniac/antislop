@@ -39,6 +39,7 @@ impl Details {
         self.documents.clear();
         self.selected_result_document = None;
         self.result_index.clear();
+        self.result_index_membership.clear();
         self.result_metadata.clear();
         self.result_metadata_source = serde_json::Value::Null;
         self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
@@ -80,6 +81,8 @@ impl Details {
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
+        self.result_loading = None;
+        self.result_error = None;
         self.show_info = false;
         self.active_panel = 0;
         self.panel_scroll = [0; 2];
@@ -125,6 +128,7 @@ impl Details {
             self.documents.clear();
             self.selected_result_document = None;
             self.result_index.clear();
+            self.result_index_membership.clear();
             self.result_metadata.clear();
             self.result_metadata_source = serde_json::Value::Null;
             self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
@@ -182,6 +186,10 @@ impl Details {
         &self.result_index
     }
 
+    pub(in crate::lean::tui) fn has_result_key(&self, key: &str) -> bool {
+        self.result_index_membership.contains(key)
+    }
+
     /// Rebuild once per metadata update; rendering only borrows this cached order.
     pub(in crate::lean::tui) fn rebuild_result_index(&mut self) {
         let metadata = self
@@ -195,11 +203,17 @@ impl Details {
         if self.documents.contains_key("result") {
             keys.push("result".to_owned());
         }
+        let mut membership = keys
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
         let mut artifacts = Vec::new();
         for item in &metadata {
             if let Some(id) = item["id"].as_str() {
                 let key = format!("result_document:{id}");
-                artifacts.push(key.clone());
+                if membership.insert(key.clone()) {
+                    artifacts.push(key.clone());
+                }
                 records.insert(key, item.clone());
             }
         }
@@ -208,19 +222,20 @@ impl Details {
         let mut cached = self
             .documents
             .keys()
-            .filter(|key| key.starts_with("result_document:") && !keys.contains(key))
+            .filter(|key| key.starts_with("result_document:") && membership.insert((*key).clone()))
             .cloned()
             .collect::<Vec<_>>();
         cached.sort();
         keys.extend(cached);
         let source = serde_json::Value::Array(metadata);
         self.result_index = keys;
+        self.result_index_membership = membership;
         self.result_metadata = records;
         self.result_metadata_source = source;
         if self
             .selected_result_document
             .as_ref()
-            .is_some_and(|key| !self.result_index.contains(key))
+            .is_some_and(|key| !self.result_index_membership.contains(key))
         {
             self.selected_result_document = None;
             self.result_selection_generation = self.result_selection_generation.wrapping_add(1);

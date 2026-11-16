@@ -23,17 +23,29 @@ impl App {
                 if conversation == self.conversation
                     && generation == self.generation
                     && let Some(details) = self.details.as_mut().filter(|details| {
-                        details.key == key
-                            && details.result_selection_generation == selection
-                            && details.selected_result_document.as_deref() == Some(&id)
+                        details.key == key && details.result_metadata.contains_key(&id)
                     })
                 {
-                    details.result_loading = None;
+                    if details.result_loading.as_ref().is_some_and(
+                        |(loading_id, loading_selection, loading_generation)| {
+                            loading_id == &id
+                                && *loading_selection == selection
+                                && *loading_generation == generation
+                        },
+                    ) {
+                        details.result_loading = None;
+                    }
                     match result {
                         Ok(document) => {
                             details.documents.insert(id, document);
                         }
-                        Err(error) => details.result_error = Some((id, error)),
+                        Err(error)
+                            if details.result_selection_generation == selection
+                                && details.selected_result_document.as_deref() == Some(&id) =>
+                        {
+                            details.result_error = Some((id, error));
+                        }
+                        Err(_) => {}
                     }
                 }
             }

@@ -14,7 +14,7 @@ mod app {
     mod picker;
     mod pointer;
     mod projects;
-    mod requests;
+    pub(super) mod requests;
     mod workflow;
 }
 #[cfg(test)]

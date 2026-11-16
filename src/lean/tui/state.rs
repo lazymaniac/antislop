@@ -36,6 +36,7 @@ pub struct App {
     pub found: Option<usize>,
     pub notice: Option<String>,
     pub updates: UpdateSender,
+    pub(super) result_fetch: app::requests::ResultFetchCoordinator,
     pub focus: Focus,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
@@ -174,6 +175,7 @@ macro_rules! initial_app {
             found: None,
             notice: None,
             updates: $updates,
+            result_fetch: app::requests::ResultFetchCoordinator::new(),
             focus: Focus::Chat,
             selected: ORCHESTRATOR.into(),
             relations: graph::Relations::default(),

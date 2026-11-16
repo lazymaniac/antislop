@@ -115,7 +115,6 @@ impl App {
         if reply.conversation == self.conversation {
             if self.task_reply_matches_current_round(&reply) {
                 self.load_active_task(reply);
-                self.schedule_output_document_fetch();
             }
         } else {
             self.load_background_task(reply);
@@ -199,6 +198,7 @@ impl App {
         };
         details.load_task(reply.task);
         details.load_task_documents(reply.documents);
+        self.schedule_output_document_fetch();
     }
 
     fn load_background_task(&mut self, reply: TaskSnapshotReply) {
@@ -257,5 +257,102 @@ impl App {
             }
             _ => unreachable!("update routed to wrong handler"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+
+    #[test]
+    fn task_refresh_cancels_removed_result_before_the_next_chunk() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let first = crate::transport::read::<serde_json::Value>(&mut reader)
+                .unwrap()
+                .unwrap();
+            assert_eq!(first["request"]["id"], "A");
+            assert_eq!(first["request"]["offset"], 0);
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            crate::transport::write(
+                reader.get_mut(),
+                &json!({"data":{"text":"partial A","next_offset":9,"done":false},"error":null}),
+            )
+            .unwrap();
+            assert!(
+                crate::transport::read::<serde_json::Value>(&mut reader)
+                    .unwrap()
+                    .is_none()
+            );
+            drop(reader);
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let replacement = crate::transport::read::<serde_json::Value>(&mut reader)
+                .unwrap()
+                .unwrap();
+            assert_eq!(replacement["request"]["id"], "B");
+            assert_eq!(replacement["request"]["offset"], 0);
+            crate::transport::write(
+                reader.get_mut(),
+                &json!({"data":{"text":"complete B","next_offset":9,"done":true},"error":null}),
+            )
+            .unwrap();
+        });
+
+        let client = Client::at(state.path());
+        let (mut app, updates) = crate::lean::tui::App::test_app_with_client(client);
+        let mut details = crate::lean::tui::details::Details::new(ORCHESTRATOR.into());
+        details.tab = crate::lean::tui::details::RESULT;
+        details.load_task(
+            json!({"_result_documents":[{"id":"A","path":"a.md","source_commit":"12345678"}]}),
+        );
+        app.details = Some(details);
+        app.schedule_output_document_fetch();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+
+        app.load_active_task(TaskSnapshotReply {
+            conversation: app.conversation.clone(),
+            plan: app.view.plan.clone(),
+            generation: app.generation,
+            request_id: app.task_request_id,
+            key: ORCHESTRATOR.into(),
+            round: 1,
+            task: json!({"round":1,"_result_documents":[{"id":"B","path":"b.md","source_commit":"87654321"}]}),
+            documents: Default::default(),
+        });
+        assert_eq!(
+            app.details
+                .as_ref()
+                .unwrap()
+                .selected_result_document
+                .as_deref(),
+            Some("result_document:B")
+        );
+        release_tx.send(()).unwrap();
+        let update = updates
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            matches!(update, Update::ResultDocument { id, result: Ok(_), .. } if id == "result_document:B")
+        );
+        server.join().unwrap();
+        assert_eq!(
+            std::fs::read_dir(state.path().join("inspection-cache"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 }

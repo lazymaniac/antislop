@@ -117,9 +117,13 @@ impl Details {
             .as_ref()
             .and_then(|task| task["_result_documents"].as_array());
         if let Some(valid) = valid {
+            let valid_ids = valid
+                .iter()
+                .filter_map(|item| item["id"].as_str().map(str::to_owned))
+                .collect::<std::collections::HashSet<_>>();
             self.documents.retain(|key, _| {
                 key.strip_prefix("result_document:")
-                    .is_none_or(|id| valid.iter().any(|item| item["id"] == id))
+                    .is_none_or(|id| valid_ids.contains(id))
             });
         } else {
             self.documents

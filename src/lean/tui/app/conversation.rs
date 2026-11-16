@@ -12,9 +12,14 @@ impl App {
     }
 
     pub fn open(&mut self, conversation: String) {
+        self.result_fetch.cancel_document_fetch();
+        if let Some(details) = self.details.as_mut() {
+            details.result_loading = None;
+        }
         self.save_active_conversation();
         self.activate_conversation(conversation.clone());
         self.restore_conversation(&conversation);
+        self.schedule_output_document_fetch();
         self.reset_history_recall();
         self.start_poller();
     }

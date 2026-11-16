@@ -239,6 +239,7 @@ fn test_conversations_structured_summary() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -276,6 +277,7 @@ fn test_history_and_events_pagination_and_unavailable_flag() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -376,6 +378,7 @@ fn test_message_addressing_validation_and_mail_queue() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -489,6 +492,7 @@ fn test_sessions_structured_data() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -563,6 +567,7 @@ fn test_revision_token_review_and_stale_revision_rejection() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -663,6 +668,7 @@ fn grouped_requests_reach_each_daemon_dispatch_domain() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -754,6 +760,7 @@ fn test_wire_request_deny_unknown_fields_and_defaults() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -792,6 +799,7 @@ fn test_stale_revision_forced_change_between_read_and_execution_has_no_side_effe
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -886,6 +894,7 @@ fn test_task_scoped_query_includes_freshness_token() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     // Initialize git repo in project so git commands succeed
     let _ = std::process::Command::new("git")
         .args(["init"])
@@ -983,6 +992,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -1105,6 +1115,7 @@ fn unattended_start_uses_global_state_without_a_trust_registry() {
     let root = dir.path().canonicalize().unwrap();
     let project = root.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&root);
     let agy = fake_agy(&root);
     let config = write_config(&root, &codex, &agy);
@@ -1180,6 +1191,7 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
     let temp = tempfile::tempdir().unwrap();
     let canonical = temp.path().canonicalize().unwrap();
     let project = canonical.as_path();
+    common::initialize_git_project(project);
     let codex = fake_codex(project);
     let agy = fake_agy(project);
     let config = write_config(project, &codex, &agy);
@@ -1282,6 +1294,7 @@ fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(dir.path());
     let agy = fake_agy(dir.path());
     let config = write_config(dir.path(), &codex, &agy);
@@ -1380,6 +1393,7 @@ fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let config = write_config(dir.path(), &fake_codex(dir.path()), &fake_agy(dir.path()));
     let daemon = DaemonGuard::start(&project, &config, &dir.path().join("state"));
     let conversation = daemon
@@ -1433,6 +1447,7 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
     let project = dir.path().join("project");
     let state = dir.path().join("state");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     std::fs::create_dir(&state).unwrap();
     let project = project.canonicalize().unwrap();
     let store = Store::open(&state.join("core.db")).unwrap();
@@ -1604,6 +1619,7 @@ fn retried_operations_act_once_and_return_their_first_result() {
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
@@ -1645,6 +1661,7 @@ fn one_named_frontend_steers_a_conversation_and_the_others_watch_until_they_take
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);

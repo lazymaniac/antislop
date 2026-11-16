@@ -93,6 +93,7 @@ pub struct Details {
     /// Selected output document on the Results tab; `None` selects the first.
     pub selected_result_document: Option<String>,
     pub(in crate::lean::tui) result_index: Vec<String>,
+    pub(in crate::lean::tui) result_index_membership: std::collections::HashSet<String>,
     pub(in crate::lean::tui) result_metadata: HashMap<String, Value>,
     pub(in crate::lean::tui) result_metadata_source: Value,
     pub(in crate::lean::tui) result_selection_generation: u64,

@@ -499,6 +499,54 @@ fn result_document_loading_state_keeps_document_navigation_visible() {
 }
 
 #[test]
+fn result_index_membership_scales_across_metadata_and_cached_documents() {
+    let state = tempfile::tempdir().unwrap();
+    let mut builder = super::super::document::Builder::new(state.path()).unwrap();
+    builder.append("cached", |_| Ok(())).unwrap();
+    let document = builder.finish().unwrap();
+    let mut details = Details::new("orchestrator".into());
+    details.task = Some(serde_json::json!({
+        "_result_documents": (0..3_000).map(|index| serde_json::json!({
+            "id": format!("metadata-{index:04}"), "path": "result.md"
+        })).collect::<Vec<_>>(),
+    }));
+    for index in 0..3_000 {
+        details.documents.insert(
+            format!("result_document:cached-{index:04}"),
+            document.clone(),
+        );
+    }
+    details.rebuild_result_index();
+    assert_eq!(details.visible_result_keys().len(), 6_000);
+    assert!(details.has_result_key("result_document:metadata-2999"));
+    assert!(details.has_result_key("result_document:cached-2999"));
+    assert!(!details.has_result_key("result_document:missing"));
+}
+
+#[test]
+fn task_refresh_keeps_open_documents_still_present_in_metadata() {
+    let state = tempfile::tempdir().unwrap();
+    let mut builder = super::super::document::Builder::new(state.path()).unwrap();
+    builder.append("cached", |_| Ok(())).unwrap();
+    let cached = builder.finish().unwrap();
+    let mut details = Details::new("orchestrator".into());
+    details.documents.insert("result".into(), cached.clone());
+    details
+        .documents
+        .insert("result_document:kept".into(), cached.clone());
+    details
+        .documents
+        .insert("result_document:removed".into(), cached);
+    details.load_task(serde_json::json!({
+        "_result_documents": [{"id":"kept","path":"kept.md"},{"id":"new","path":"new.md"}],
+    }));
+    assert!(details.documents.contains_key("result"));
+    assert!(details.documents.contains_key("result_document:kept"));
+    assert!(!details.documents.contains_key("result_document:removed"));
+    assert!(details.has_result_key("result_document:new"));
+}
+
+#[test]
 fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
     use serde_json::json;
     use std::os::unix::net::UnixListener;
@@ -624,6 +672,10 @@ fn result_document_replies_are_scoped_to_the_current_conversation_and_selection(
     details.selected_result_document = Some("result_document:doc-current".into());
     details.result_selection_generation = 3;
     details.result_loading = Some(("result_document:doc-current".into(), 3, 4));
+    details.result_metadata.insert(
+        "result_document:doc-current".into(),
+        serde_json::json!({"id":"doc-current","path":"current.md"}),
+    );
     app.details = Some(details);
 
     app.apply_update(crate::lean::tui::Update::ResultDocument {
@@ -644,11 +696,16 @@ fn result_document_replies_are_scoped_to_the_current_conversation_and_selection(
     });
     let details = app.details.as_ref().unwrap();
     assert!(
-        !details
+        details
             .documents
             .contains_key("result_document:doc-current")
     );
     assert_eq!(details.result_loading.as_ref().unwrap().1, 3);
+    app.details
+        .as_mut()
+        .unwrap()
+        .documents
+        .remove("result_document:doc-current");
 
     app.apply_update(crate::lean::tui::Update::ResultDocument {
         conversation: "current-conversation".into(),

@@ -458,6 +458,9 @@ src
      stop(state,force):Result<bool> > stop_client,send_stop
      connect(project,config,state,executable):Result<Self> > prepare_client,reuse_existing,clear_stopped,{spawn,wait_for}_daemon
      call(request):Result<Value> > call_once,lost
+     open_reusable_connection():Result<SessionConnection> > SessionConnection
+    SessionConnection(C{reader,identity})
+     call(request):Result<Value> > require
     - daemon_missing,same_{origin,daemon_context},reuse_busy_daemon,busy_notice,wait_unlocked
    config_write
     atomic_config_write(path,text):Result<()> > PreparedConfigWrite.prepare
@@ -1851,7 +1854,11 @@ src
     projects
      - {project,remembered_project}_item
     requests/fetch
-     - {Task,Run}Fetch,mark_run_fetch,task_fetch_update
+     ResultFetchCoordinator(C{shared}) : Drop
+      new():Self > result_fetch_worker
+      cancel_document_fetch() > select
+      - drop
+     - ResultFetchState,ResultFetchShared,{Task,Run}Fetch,mark_run_fetch,task_fetch_update
    approval
     approval_panel_height(summary,width,options,max_summary_lines,chrome_rows,available):u16 > card_summary_rows
     card_summary_rows(text,width,max_lines):usize > len,bounded_summary
@@ -1966,7 +1973,7 @@ src
     model
      Composer(C{input,sending,operation,error,sent_text,mail,delivery,delivery_{receipts,failure},address,mode})
      DetailRecord(C{lines,search_text})
-     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,selected_result_document,result_{index,metadata,metadata_source,selection_generation,loading,error},panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
+     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,selected_result_document,result_{index,index_membership,metadata,metadata_source,selection_generation,loading,error},panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
       hero_key():String > session_keys
       identity_line(view,theme,key):Line<'static> > row,identity_{status,title}
       provider_chip(view,theme,key):Vec<Vec<Span<'static>>>
@@ -2001,10 +2008,11 @@ src
       restore_current_tab() > overview
       change_result_document(direction) > visible_result_keys
       visible_result_keys():&[String]
-      rebuild_result_index() ~52 > as_str
+      has_result_key(key):bool
+      rebuild_result_index() ~59 > as_str
       records(view):Vec<Rc<DetailRecord>> > overview,comments.comments,checks,results
       fetch_failed(error):bool
-      load_task(task) ~48 > rebuild_result_index
+      load_task(task) ~52 > rebuild_result_index
       load_task_documents(documents) > rebuild_result_index
       new(key):Self > Details,tabs_for
       comments(view):Vec<&'a super::view::Comment> > as_str
@@ -2343,7 +2351,7 @@ src
        append_{history_notice,round_fields,field_content},read_content
     session
      append_answers(client,conversation,turn,builder):Result<bool> > session_page,append_final_events,next_event_cursor
-     result_document(client,conversation,metadata):Result<document::Document> > as_str,state_dir,append_result_document_header,Client.call
+     result_document(client,conversation,metadata,is_current):Result<Option<document::Document>> ~41 > as_str,state_dir,append_result_document_header,open_reusable_connection
      run_snapshot(client,conversation,role,selected):Result<Snapshot> > session_runs,selected_run_index,session_metadata,selected_run_snapshot
      - append_{final_event,session_content,result_documents,run_status}
    inspection.rs
@@ -2660,7 +2668,7 @@ src
     update_records
      - clear_background_ledger_review,{save,apply_saved}_config
    state.rs
-    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,flow_editor,workbench_docked,graph_link_source,workbench_{area,sections,file_index,file_rows,diffs},projects,active_project})
+    App(C{native_views,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,result_fetch,focus,selected,relations,offset,details,diff,{plan,ledger}_view,editor,picker,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_{send,comment},{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_states,graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,card_scroll,card_area},details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,graph_viewport,unblock,approval,approval_hidden,graph_filters,flow_editor,workbench_docked,graph_link_source,workbench_{area,sections,file_index,file_rows,diffs},projects,active_project})
      open_unblock(named) > targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) > open_{ledger,interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,apply_rigor_team,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},toggle_workbench,accept_plan,trigger_direct_execute,toggle_flow_link
@@ -2687,7 +2695,7 @@ src
      return_to_main() > hide_ledger,remember_details,close_overlays,{preserve_comment,hide_config}_editor
      apply_update(update) > apply_update_inner,return_to_main,{invalidate,selection}_context
      help_max_scroll():usize
-     open(conversation) > {save_active,activate,restore}_conversation,reset_history_recall,start_poller
+     open(conversation) > {save_active,activate,restore}_conversation,schedule_output_document_fetch,reset_history_recall,start_poller
      new_conversation() > as_str
      open_diff(key) > DiffView.new,fetch_diff
      fetch_diff()
@@ -2716,10 +2724,10 @@ src
      switch_project(index,conversation) > latest_or_new,restore_project_history,switch_config_workspace,open
      open_project(path) > expand_home,switch_project,frontend_binary,workspace.connect
      open_projects_picker() > open_project_items,append_remembered_projects,Picker.new
-     schedule_output_document_fetch() ~56
+     schedule_output_document_fetch() ~66 > cancel_document_fetch,ResultFetchRequest,ResultFetchIdentity
      fetch_task() > prepare_task_fetch,fetch_run,run_task_fetch
      fetch_run() > {prepare,run}_run_fetch
-     open_details(key) > restore_details,{resolve_details,fetch}_task
+     open_details(key) > cancel_document_fetch,restore_details,{resolve_details,fetch}_task
      request(request,done)
      task_row_round(key):Option<u64>
      refetch_stale_details() > details_are_stale,fetch_task
@@ -2730,7 +2738,7 @@ src
      config_key(key):bool > {reload,save}_config
      open_config() > config_request
      details_dashboard_key(key,plain):bool
-     details_tab_key(key):bool ~47 > schedule_output_document_fetch
+     details_tab_key(key):bool ~42 > schedule_output_document_fetch
      details_content_key(key,plain):bool > details_{check_comment_key,round_key,control_scroll_key,scroll_key}
      details_primary_key(key,plain):bool ~46 > details_close_or_search,run_workflow,details_overview_key,show_help,details_{open_comment,comment_status}
      details_key(key) > details_{edit_key,search_key,screen_key}
@@ -2776,7 +2784,7 @@ src
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
-     apply_update_inner(update) ~46 > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result,plan_revision_result}
+     apply_update_inner(update) ~58 > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result,plan_revision_result}
      apply_native_input_rejected(update) > recover_native_input
      apply_agent_message(update) > apply_agent_receipt
      apply_interview_result(update)
@@ -3227,7 +3235,7 @@ src
   lean_workflow:*idle,plan_proposed
   lean_writer:*fake_clis,config,git,project,wait_idle,card
   common
-   mod:*tempdir,assert_test_socket,runtime_environment,install_probe_cli
+   mod:*tempdir,assert_test_socket,initialize_git_project,runtime_environment,install_probe_cli
    options_cli.py
    record_options_checks.py:*digest,inputs,execute,main
   support
@@ -3235,6 +3243,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 143,013 LOC · input 1,276,040 · output 47,953 tokens · state 00fcfb81ef9b · targets AGENTS.md
+· 143,587 LOC · input 1,281,378 · output 48,096 tokens · state 91281035bd27 · targets AGENTS.md
 ```
 <!-- hologram:end -->

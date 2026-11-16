@@ -195,7 +195,8 @@ pub(in crate::lean::tui) fn result_document(
     client: &Client,
     conversation: &str,
     metadata: &Value,
-) -> Result<document::Document> {
+    is_current: impl Fn() -> bool,
+) -> Result<Option<document::Document>> {
     let id = metadata["id"]
         .as_str()
         .ok_or_else(|| crate::Error::Invalid("result document has no id".into()))?;
@@ -207,15 +208,22 @@ pub(in crate::lean::tui) fn result_document(
         .ok_or_else(|| crate::Error::Invalid("result document has no source commit".into()))?;
     let mut builder = document::Builder::new(client.state_dir())?;
     append_result_document_header(&mut builder, path, source_commit)?;
+    let mut connection = client.open_reusable_connection()?;
     let mut offset = 0;
     loop {
-        let chunk = client.call(&Request::Session(
+        if !is_current() {
+            return Ok(None);
+        }
+        let chunk = connection.call(&Request::Session(
             crate::lean::daemon::SessionRequest::ResultDocumentContent {
                 conversation: conversation.into(),
                 id: id.into(),
                 offset,
             },
         ))?;
+        if !is_current() {
+            return Ok(None);
+        }
         let text = chunk["text"]
             .as_str()
             .ok_or_else(|| crate::Error::Invalid("result document chunk has no text".into()))?;
@@ -227,7 +235,7 @@ pub(in crate::lean::tui) fn result_document(
         crate::require(next > offset, "result document cursor did not advance")?;
         offset = next;
     }
-    builder.finish()
+    builder.finish().map(Some)
 }
 
 fn append_result_document_header(
@@ -256,6 +264,8 @@ fn append_run_status(builder: &mut document::Builder, run: &Value) -> Result<()>
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn session_results_are_formatted_and_selected_turns_keep_their_identity() {
@@ -335,5 +345,47 @@ mod tests {
             text.contains("notes.txt · abcdef12\nSecond document"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn result_document_cancellation_at_a_chunk_boundary_releases_its_cache_files() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let request = crate::transport::read::<Value>(&mut reader)
+                .unwrap()
+                .unwrap();
+            assert_eq!(request["request"]["op"], "result_document_content");
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            crate::transport::write(
+                reader.get_mut(),
+                &json!({"data":{"text":"partial","next_offset":7,"done":false},"error":null}),
+            )
+            .unwrap();
+        });
+        let client = Client::at(state.path());
+        let active = std::sync::Arc::new(AtomicBool::new(true));
+        let fetch_active = std::sync::Arc::clone(&active);
+        let metadata = json!({"id":"doc-1","path":"result.md","source_commit":"12345678"});
+        let fetch_client = client.clone();
+        let fetch = std::thread::spawn(move || {
+            result_document(&fetch_client, "conversation", &metadata, || {
+                fetch_active.load(Ordering::SeqCst)
+            })
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        active.store(false, Ordering::SeqCst);
+        release_tx.send(()).unwrap();
+        assert!(fetch.join().unwrap().unwrap().is_none());
+        server.join().unwrap();
+        let cache = state.path().join("inspection-cache");
+        assert_eq!(std::fs::read_dir(cache).unwrap().count(), 0);
     }
 }

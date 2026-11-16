@@ -1,6 +1,7 @@
 use super::super::*;
 
-mod fetch;
+pub(super) mod fetch;
+pub(in crate::lean::tui) use fetch::ResultFetchCoordinator;
 
 impl App {
     /// Runs a daemon request off the draw loop; its error becomes a notice.

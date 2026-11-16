@@ -91,19 +91,29 @@ fn accept_connections(listener: UnixListener, runtime: Runtime) {
     }
 }
 
-fn serve_connection(mut stream: UnixStream, runtime: Runtime) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let response = match read_request(&stream) {
-        Ok(Some((request, client))) => handle(&runtime, request, client.as_deref()),
-        Ok(None) => error_response(Error::Invalid("empty request".into())),
-        Err(error) => error_response(error),
-    };
-    let shutdown = response.shutdown;
+fn serve_connection(stream: UnixStream, runtime: Runtime) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-    let _ = crate::transport::write(&mut stream, &response.response);
-    if shutdown && response.response.error.is_none() {
-        let _ = std::fs::remove_file(&runtime.socket);
-        std::process::exit(0);
+    let mut reader = BufReader::new(stream);
+    loop {
+        let response = match read_request(&mut reader) {
+            Ok(Some((request, client))) => handle(&runtime, request, client.as_deref()),
+            Ok(None) => return,
+            Err(error) => {
+                let response = error_response(error);
+                let _ = crate::transport::write(reader.get_mut(), &response.response);
+                return;
+            }
+        };
+        let shutdown = response.shutdown;
+        let successful_shutdown = shutdown && response.response.error.is_none();
+        if crate::transport::write(reader.get_mut(), &response.response).is_err() {
+            return;
+        }
+        if successful_shutdown {
+            let _ = std::fs::remove_file(&runtime.socket);
+            std::process::exit(0);
+        }
     }
 }
 
@@ -112,8 +122,8 @@ struct ConnectionResponse {
     shutdown: bool,
 }
 
-fn read_request(stream: &UnixStream) -> Result<Option<(Request, Option<String>)>> {
-    let envelope = crate::transport::read::<RequestEnvelope>(&mut BufReader::new(stream))?;
+fn read_request(reader: &mut BufReader<UnixStream>) -> Result<Option<(Request, Option<String>)>> {
+    let envelope = crate::transport::read::<RequestEnvelope>(reader)?;
     envelope
         .map(|wire| {
             require(
@@ -158,5 +168,68 @@ fn error_response(error: Error) -> ConnectionResponse {
             error: Some(error.to_string()),
         },
         shutdown: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lean::daemon::{Client, Request, SessionRequest};
+
+    #[test]
+    fn daemon_serves_sequential_session_requests_on_one_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet", "--initial-branch=main"])
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let commit = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "initialize",
+            ])
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(commit.success());
+        let project = project.canonicalize().unwrap();
+        let state = temp.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/antislop.toml");
+        let (runtime, listener) = start(&project, &config, &state).unwrap();
+        let conversation = runtime
+            .core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap()
+            .id;
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, runtime);
+        });
+        let mut connection = Client::at(&state).open_reusable_connection().unwrap();
+        for _ in 0..2 {
+            let documents = connection
+                .call(&Request::Session(SessionRequest::ResultDocuments {
+                    conversation: conversation.clone(),
+                }))
+                .unwrap();
+            assert_eq!(documents, serde_json::json!([]));
+        }
+        drop(connection);
+        server.join().unwrap();
     }
 }

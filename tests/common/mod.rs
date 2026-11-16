@@ -30,6 +30,40 @@ pub fn assert_test_socket(state: &Path, process_cwd: &Path) {
     );
 }
 
+/// Creates the local `main` ref required before a session branch can start.
+pub fn initialize_git_project(project: &Path) {
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--initial-branch=main"])
+        .current_dir(project)
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Antislop Test",
+            "-c",
+            "user.email=antislop-test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initialize test project",
+        ])
+        .current_dir(project)
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "initial Git commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+}
+
 /// Isolates user configuration and global runtime for this test process.
 pub fn runtime_environment(_project: &Path) {
     static ONCE: Once = Once::new();
