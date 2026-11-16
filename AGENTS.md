@@ -1105,8 +1105,8 @@ src
     activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
     reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     validate_session_project(project):Result<String> > require,ok,local_main
-    create_session_branch(conversation,project):Result<String> ~131 > turn,session_branch_{name,path},load_session_branch,workflow,conversation_goal,named_session_branch,SessionBranch,validate_session_record,ok,local_main,save_session_branch,ensure_session_started_event
-    session_worktree(conversation,project):Result<PathBuf> > create_session_branch,session_worktree_path
+    create_session_branch(conversation,project):Result<String> ~149 > {plan,review}_running,session_branch_path,load_session_branch,session_worktree_path,turn,session_branch_name,workflow,conversation_goal,named_session_branch,SessionBranch,validate_session_record,ok,local_main,save_session_branch,ensure_session_started_event
+    session_worktree(conversation,project):Result<PathBuf> > create_session_branch,ensure_session_worktree
     restore_session_branches():Result<()> > conversations,session_branch_path,load_session_branch,ensure_session_started_event,notice
     artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
     artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
@@ -1136,7 +1136,7 @@ src
     check_comments(conversation,plan,spec_id):String
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
-    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > plan_running,start_plan_with_scope_lock
+    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > start_plan_with_scope_lock
     lease_worktree(path):WorktreeLease<'_> > lock,wait,WorktreeLease
     wait_for_worktree_available(paths,cancel):bool > lock,all
     try_lease_worktree(path):Option<WorktreeLease<'_>> > lock,WorktreeLease
@@ -1931,7 +1931,7 @@ src
      - KindNameError,Reply,strings,field_text
      - KindNameError: custom,unknown_variant×0
    contracts
-    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport,flow_editor,workbench_docked,graph_link_source})
+    ConversationState(C{input,editor,sending,pending_send,send_request_id,failed_send,{sending,pending}_comment,comment_request_id,failed_comment,comment_{drafts,draft_cursors},selected,relations,offset,details,diff,{plan,ledger}_view,scroll,{task,diff}_request_id,focus,graph_{scope,visibility_exception,collapsed,grouping},details_{scroll_memory,query_memory},graph_viewport,flow_editor,workbench_docked,graph_link_source,workbench_{file_index,diffs}})
      capture(app):Self
      restore(app) > restore_{composer,navigation,overlays,requests}
      - capture_{composer,navigation,overlays,requests}
@@ -1999,7 +1999,7 @@ src
       change_round(view,direction) > task_id
       save_current_tab()
       restore_current_tab() > overview
-      change_result_document(direction)
+      change_result_document(direction) > visible_result_keys
       visible_result_keys():&[String]
       rebuild_result_index() ~52 > as_str
       records(view):Vec<Rc<DetailRecord>> > overview,comments.comments,checks,results
@@ -3235,6 +3235,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 142,799 LOC · input 1,274,037 · output 47,921 tokens · state df970cda698e · targets AGENTS.md
+· 142,977 LOC · input 1,275,725 · output 47,945 tokens · state 0a3fb15ac0ef · targets AGENTS.md
 ```
 <!-- hologram:end -->

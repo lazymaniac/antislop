@@ -171,6 +171,8 @@ pub struct ConversationState {
     pub flow_editor: Option<flow_editor::FlowEditor>,
     pub workbench_docked: bool,
     pub graph_link_source: Option<String>,
+    pub workbench_file_index: usize,
+    pub workbench_diffs: std::collections::HashMap<String, DiffView>,
 }
 
 impl ConversationState {
@@ -219,6 +221,8 @@ impl ConversationState {
         self.flow_editor = app.flow_editor.clone();
         self.workbench_docked = app.workbench_docked;
         self.graph_link_source = app.graph_link_source.clone();
+        self.workbench_file_index = app.workbench_file_index;
+        self.workbench_diffs = app.workbench_diffs.clone();
     }
 
     fn capture_requests(&mut self, app: &App) {
@@ -271,6 +275,8 @@ impl ConversationState {
         app.flow_editor = self.flow_editor.clone();
         app.workbench_docked = self.workbench_docked;
         app.graph_link_source = self.graph_link_source.clone();
+        app.workbench_file_index = self.workbench_file_index;
+        app.workbench_diffs = self.workbench_diffs.clone();
     }
 
     fn restore_requests(&self, app: &mut App) {
