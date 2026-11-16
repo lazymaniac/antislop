@@ -3233,8 +3233,8 @@ src
   support
    fixture_cli:*interactive
    ledger_cli.py:*_ledger_{emit,block}
-   mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
+   mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 142,977 LOC · input 1,275,725 · output 47,945 tokens · state 0a3fb15ac0ef · targets AGENTS.md
+· 143,013 LOC · input 1,276,040 · output 47,953 tokens · state 00fcfb81ef9b · targets AGENTS.md
 ```
 <!-- hologram:end -->

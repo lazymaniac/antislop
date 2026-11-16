@@ -89,7 +89,7 @@ fn fake_clis_with_concurrent_edit(
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let (codex, agy) = fake_clis(dir);
     let script = std::fs::read_to_string(&agy).unwrap();
-    let session_worktree = "session_worktree = next(os.linesep.join(block.splitlines()) for block in subprocess.check_output(['git', 'worktree', 'list', '--porcelain'], text=True).split(os.linesep * 2) if any(line.startswith('branch refs/heads/antislop/session/') for line in block.splitlines()))\nsession_dir = next(line.removeprefix('worktree ') for line in session_worktree.splitlines() if line.startswith('worktree '))\n";
+    let session_worktree = "session_worktree = next((os.linesep.join(block.splitlines()) for block in subprocess.check_output(['git', 'worktree', 'list', '--porcelain'], text=True).split(os.linesep * 2) if any(line.startswith('branch refs/heads/antislop/session/') for line in block.splitlines())), None)\nsession_dir = next((line.removeprefix('worktree ') for line in session_worktree.splitlines() if line.startswith('worktree ')), None) if session_worktree else None\n";
     let script = script.replace(
         "prompt = sys.argv[-1]",
         &format!("prompt = sys.argv[-1]\nimport subprocess\n{session_worktree}"),
@@ -234,7 +234,12 @@ fn project(dir: &Path) -> std::path::PathBuf {
 }
 
 fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
-    let conversation = support::fixture_conversation(core, project).unwrap();
+    let conversation = support::fixture_conversation_with_requirements(
+        core,
+        project,
+        "Add a greeting by creating hello.txt.",
+    )
+    .unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     let plan = loop {
@@ -247,7 +252,27 @@ fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
         {
             break task.plan_id.clone();
         }
-        assert!(Instant::now() < deadline, "reviewed plan was not proposed");
+        if Instant::now() >= deadline {
+            let events = core
+                .store
+                .events_since(&conversation.id, 0, 10_000)
+                .unwrap();
+            let tail: Vec<_> = events
+                .iter()
+                .rev()
+                .take(12)
+                .map(|event| format!("{} {}", event.kind, event.payload))
+                .collect();
+            let calls = project
+                .parent()
+                .map(|parent| parent.join("calls.jsonl"))
+                .filter(|path| path.is_file())
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            panic!(
+                "reviewed plan was not proposed; latest events: {tail:#?}; fake CLI calls: {calls}"
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     };
     core.resume_plan(&conversation.id, &plan).unwrap();
