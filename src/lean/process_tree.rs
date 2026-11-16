@@ -12,6 +12,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// The environment variable that tags an agent CLI and its descendants.
 pub(crate) const MARKER: &str = "ANTISLOP_AGENT";
 
+pub(crate) const VALIDATOR_MARKER: &str = "ANTISLOP_VALIDATOR";
+
+/// Validators have a separate durable ownership marker and receive SIGTERM
+/// only. They never enter the ordinary agent cleanup's SIGKILL path.
+pub(crate) fn validator_marker(state: &Path, operation: &str) -> String {
+    format!(
+        "{}#{}",
+        crate::hash(state.to_string_lossy().as_bytes()),
+        crate::hash(operation)
+    )
+}
+
+pub(crate) fn terminate_validation_leftovers(state: &Path) {
+    let prefix = format!(
+        "{VALIDATOR_MARKER}={}#",
+        crate::hash(state.to_string_lossy().as_bytes())
+    );
+    let table = processes();
+    for pid in tagged(&table, &prefix) {
+        if pid <= 1 || pid == std::process::id() as i32 {
+            continue;
+        }
+        // SAFETY: this process carries the private runtime's validator marker.
+        unsafe {
+            if libc::getpgid(pid) == pid && libc::getpgid(0) != pid {
+                libc::kill(-pid, libc::SIGTERM);
+            }
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A marker unique to one CLI of the daemon owning `state`.

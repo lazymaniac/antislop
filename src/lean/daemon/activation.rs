@@ -265,6 +265,7 @@ pub(super) fn replacement_path(
         &operation,
         state,
         &std::sync::atomic::AtomicBool::new(false),
+        None,
     )?;
     Ok(path)
 }
@@ -422,6 +423,7 @@ fn finish(
 }
 
 pub(in crate::lean) fn recover(core: &Arc<Core>) -> Result<()> {
+    validation::recover_processes(core)?;
     for operation in storage::import(core)? {
         release_task(
             core,
@@ -843,6 +845,69 @@ mod operation_tests {
     }
 
     #[test]
+    fn restart_ends_the_recorded_validator_and_interrupts_its_operation() {
+        let (dir, core, config, binary) = fixture();
+        std::fs::write(dir.path().join("hold"), []).unwrap();
+        request(
+            &core,
+            dir.path(),
+            &config,
+            &binary,
+            None,
+            None,
+            None,
+            Some("restart"),
+        )
+        .unwrap();
+        wait_for(|| dir.path().join("started").exists());
+        assert!(core.busy());
+        let recorded: i64 = core
+            .store
+            .db()
+            .query_row(
+                "SELECT count(*) FROM runtime_validation_processes WHERE operation='restart'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, 1);
+        validation::recover_processes(&core).unwrap();
+        wait_for(|| core.runtime_activation_cancels.lock().unwrap().is_empty());
+        // A real restart has no old worker thread racing the recovery write.
+        let mut operation = storage::load(&core.store.db(), Some("restart"), false)
+            .unwrap()
+            .unwrap();
+        operation.state = ActivationState::Validating;
+        save(&core, &operation).unwrap();
+        recover(&core).unwrap();
+        assert_eq!(
+            status(&core.state, Some("restart")).unwrap()["state"],
+            "interrupted"
+        );
+        assert!(!core.busy());
+        // Explicit shutdown cancellation also covers unscoped operations.
+        std::fs::remove_file(dir.path().join("started")).unwrap();
+        request(
+            &core,
+            dir.path(),
+            &config,
+            &binary,
+            None,
+            None,
+            None,
+            Some("shutdown"),
+        )
+        .unwrap();
+        wait_for(|| dir.path().join("started").exists());
+        cancel_all(&core).unwrap();
+        wait_for(|| core.runtime_activation_cancels.lock().unwrap().is_empty());
+        assert_eq!(
+            status(&core.state, Some("shutdown")).unwrap()["state"],
+            "cancelled"
+        );
+    }
+
+    #[test]
     fn old_version_and_missing_capability_never_reach_an_internal_command() {
         for metadata in [
             "antislop 0.1.0",
@@ -915,4 +980,21 @@ mod operation_tests {
             );
         }
     }
+}
+
+pub(in crate::lean) fn cancel_all(core: &Core) -> Result<()> {
+    for flag in core
+        .runtime_activation_cancels
+        .lock()
+        .expect("activation cancellations")
+        .values()
+    {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    if let Some(operation) = active(core)?
+        && operation.state != ActivationState::Switching
+    {
+        cancel_operation(core, &operation.id)?;
+    }
+    Ok(())
 }

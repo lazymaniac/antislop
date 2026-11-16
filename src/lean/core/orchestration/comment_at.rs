@@ -252,11 +252,16 @@ impl Core {
     /// Whether any conversation has an agent or a plan running.
     pub fn busy(&self) -> bool {
         !self
-            .activity
-            .agent_reviews
+            .runtime_activation_cancels
             .lock()
-            .expect("agent reviews mutex")
+            .expect("activation cancellations")
             .is_empty()
+            || !self
+                .activity
+                .agent_reviews
+                .lock()
+                .expect("agent reviews mutex")
+                .is_empty()
             || !self
                 .revisions
                 .jobs

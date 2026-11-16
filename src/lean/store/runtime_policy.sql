@@ -90,3 +90,8 @@ CREATE TABLE IF NOT EXISTS session_titles(
 CREATE TABLE IF NOT EXISTS message_classifications(
  message INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
  kind TEXT NOT NULL, reason TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS runtime_validation_processes(
+ operation TEXT NOT NULL REFERENCES runtime_activations(id) ON DELETE CASCADE,
+ phase TEXT NOT NULL, pid INTEGER NOT NULL, started_ms INTEGER NOT NULL, executable TEXT NOT NULL,
+ PRIMARY KEY(operation,phase));

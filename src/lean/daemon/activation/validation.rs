@@ -31,6 +31,24 @@ pub(super) fn check_inputs(core: &Core, operation: &Activation) -> Result<()> {
     Ok(())
 }
 
+struct ChildOwner {
+    child: std::process::Child,
+    exited: bool,
+}
+impl Drop for ChildOwner {
+    fn drop(&mut self) {
+        if !self.exited {
+            // A post-spawn failure still owns the live validator. Never detach
+            // it or escalate beyond SIGTERM; keep its worker until it exits.
+            // SAFETY: this unreaped child owns the group allocated at spawn.
+            unsafe {
+                libc::kill(-(self.child.id() as i32), libc::SIGTERM);
+            }
+            let _ = self.child.wait();
+        }
+    }
+}
+
 fn tail(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let len = file.metadata()?.len();
@@ -47,6 +65,7 @@ fn execute(
     args: &[&std::ffi::OsStr],
     label: &str,
     cancel: &AtomicBool,
+    core: Option<&Core>,
 ) -> Result<Value> {
     use std::os::unix::process::CommandExt;
     let logs = state.join("activation-logs");
@@ -57,30 +76,48 @@ fn execute(
     let stderr = logs.join(format!("{stem}.stderr"));
     let output = std::fs::File::create(&stdout)?;
     let errors = std::fs::File::create(&stderr)?;
-    let mut child = std::process::Command::new(&operation.executable)
+    let child = std::process::Command::new(&operation.executable)
         .args(args)
         .current_dir(&operation.project)
         .env("PATH", &operation.path)
+        .env(
+            crate::lean::process_tree::VALIDATOR_MARKER,
+            crate::lean::process_tree::validator_marker(state, &operation.id),
+        )
         .stdin(std::process::Stdio::null())
         .stdout(output)
         .stderr(errors)
         .process_group(0)
         .spawn()?;
+    let mut child = ChildOwner {
+        child,
+        exited: false,
+    };
+    if let Some(core) = core {
+        core.store.db().execute("INSERT OR REPLACE INTO runtime_validation_processes(operation,phase,pid,started_ms,executable) VALUES(?1,?2,?3,?4,?5)",rusqlite::params![operation.id,label,child.child.id(),crate::lean::store::now_ms(),operation.executable.to_string_lossy()])?;
+    }
     let mut signalled = false;
     let result = loop {
         if cancel.load(Ordering::SeqCst) && !signalled {
             // A manual cancellation terminates this validator's whole group.
             // SAFETY: the live child owns the process group just allocated above.
             unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGTERM);
+                libc::kill(-(child.child.id() as i32), libc::SIGTERM);
             }
             signalled = true;
         }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.child.try_wait()? {
+            child.exited = true;
             break status;
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    if let Some(core) = core {
+        core.store.db().execute(
+            "DELETE FROM runtime_validation_processes WHERE operation=?1 AND phase=?2",
+            rusqlite::params![operation.id, label],
+        )?;
+    }
     require(
         !cancel.load(Ordering::SeqCst),
         "runtime activation cancelled",
@@ -112,6 +149,7 @@ pub(super) fn check_target(
     operation: &Activation,
     state: &Path,
     cancel: &AtomicBool,
+    core: Option<&Core>,
 ) -> Result<()> {
     // --version is understood by old binaries; never probe an internal command
     // until the explicit capability handshake succeeds.
@@ -121,6 +159,7 @@ pub(super) fn check_target(
         &["--version".as_ref(), "--json".as_ref()],
         "version",
         cancel,
+        core,
     )?;
     require(
         info["name"] == "antislop"
@@ -142,6 +181,7 @@ pub(super) fn check_target(
         ],
         "preflight",
         cancel,
+        core,
     )?;
     require(
         checked["build"] == operation.build
@@ -159,7 +199,7 @@ pub(super) fn run(core: Arc<Core>, mut operation: Activation, cancel: Arc<Atomic
             .to_string_lossy()
             .into_owned(),
     );
-    let result = check_target(&operation, &core.state, &cancel)
+    let result = check_target(&operation, &core.state, &cancel, Some(&core))
         .and_then(|()| check_inputs(&core, &operation));
     let result = (|| -> Result<()> {
         let _guard = core
@@ -198,4 +238,27 @@ pub(super) fn run(core: Arc<Core>, mut operation: Activation, cancel: Arc<Atomic
         .lock()
         .expect("activation cancellations")
         .remove(&operation.id);
+}
+
+pub(super) fn recover_processes(core: &Core) -> Result<()> {
+    let recorded = {
+        let db = core.store.db();
+        db.prepare("SELECT pid,started_ms,executable FROM runtime_validation_processes")?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, u32>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for (pid, started, executable) in recorded {
+        crate::lean::agent::terminate_validator(pid, started, &executable);
+    }
+    crate::lean::process_tree::terminate_validation_leftovers(&core.state);
+    core.store
+        .db()
+        .execute("DELETE FROM runtime_validation_processes", [])?;
+    Ok(())
 }

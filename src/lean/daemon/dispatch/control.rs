@@ -91,6 +91,7 @@ fn shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
                 !core.busy(),
                 "the daemon is executing work; use antislop stop --force to cancel it",
             )?;
+            super::super::activation::cancel_all(core)?;
             std::fs::write(core.state.join("stopped"), [])?;
             core.native.shutdown()?;
             Value::Null
@@ -103,6 +104,7 @@ fn force_shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     Ok(match request {
         Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown) => Route::Handled({
+            super::super::activation::cancel_all(core)?;
             std::fs::write(core.state.join("stopped"), [])?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while core.busy() && Instant::now() < deadline {

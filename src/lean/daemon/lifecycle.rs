@@ -81,7 +81,11 @@ fn spawn_idle_cleanup(runtime: &Runtime, state: &Path) {
             if let Err(error) = super::activation::apply_when_idle(&core) {
                 eprintln!("runtime activation failed: {error}");
             }
-            if (stopped.exists() || !(database.exists() && socket.exists())) && !core.busy() {
+            let stopping = stopped.exists() || !(database.exists() && socket.exists());
+            if stopping {
+                let _ = super::activation::cancel_all(&core);
+            }
+            if stopping && !core.busy() {
                 let _ = core.native.shutdown();
                 std::process::exit(0);
             }
@@ -106,7 +110,7 @@ fn serve_connection(mut stream: UnixStream, runtime: Runtime) {
     let shutdown = response.shutdown;
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
     let _ = crate::transport::write(&mut stream, &response.response);
-    if shutdown && response.response.error.is_none() {
+    if shutdown && response.response.error.is_none() && !runtime.core.busy() {
         let _ = std::fs::remove_file(&runtime.socket);
         std::process::exit(0);
     }
