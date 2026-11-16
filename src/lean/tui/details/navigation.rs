@@ -159,7 +159,7 @@ impl Details {
     }
 
     pub fn change_result_document(&mut self, direction: isize) {
-        let keys = &self.result_index;
+        let keys = self.visible_result_keys();
         if keys.is_empty() {
             self.selected_result_document = None;
             return;
@@ -177,7 +177,7 @@ impl Details {
         self.scroll = 0;
     }
 
-    /// Result documents in the prepared order shown in the Results tab.
+    /// Result documents in the order shown in the Results tab.
     pub(in crate::lean::tui) fn visible_result_keys(&self) -> &[String] {
         &self.result_index
     }
