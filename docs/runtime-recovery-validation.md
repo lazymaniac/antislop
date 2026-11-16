@@ -16,6 +16,7 @@ This change implements the approved activation, control, document, UI, and sessi
 | Branches | Create after confirmed scope, before task allocation; bind title to confirmation; preserve legacy recorded names | Scope-title confirmation and session branch regressions |
 | Startup | Restore metadata first, isolate conversation failures, deduplicate repository checks | Startup Git invocation measurement and legacy session fixtures |
 | Conflict repair | Repair in the writer worktree; independent reviewer before integration; preserve user changes and pending choices | Existing `lean_writer` conflict, repair, recovery, and variant-selection fixtures |
+| Shared locks | Track preparation and recovery for handoff/deletion; serialize source operations per conversation and primary-tree publication per project; keep Git/CLI outside global guards | Source-scope cancellation, consented artifact recovery, held manual review cancellation, and independent lock-order audit |
 
 ## Checks
 
@@ -29,7 +30,7 @@ LC_ALL=en_US.UTF-8 ./cargo.sh test --lib --test lean_core --test lean_tui --test
 LC_ALL=en_US.UTF-8 ./cargo.sh test --test lean_writer
 ```
 
-The final library run passed 893 tests, with two existing ignored tests. The required integration suites passed 25 core, 19 recovery, and 112 TUI tests. All 24 additional writer tests passed. The writer suite validates the existing conflict fixtures; its session lookup now tolerates planning before a session branch exists.
+The final library run passed 896 tests, with two existing ignored tests. The required integration suites passed 25 core, 20 recovery, and 112 TUI tests. All 24 additional writer tests passed. The writer suite validates the existing conflict fixtures; its session lookup now tolerates planning before a session branch exists.
 
 The 128 MiB streaming preparation test measured 6,144,000 bytes maximum resident memory on macOS. The isolated startup test recorded three Git invocations for both one and fifty conversations sharing one repository. The session API capture makes no result-document content request during the snapshot; content requests start after explicit document selection. Rendering reads a cached document order rather than sorting document IDs on each frame.
 
@@ -46,6 +47,9 @@ The 128 MiB streaming preparation test measured 6,144,000 bytes maximum resident
 - Artifact `PreparedArtifacts.publish` preserves displaced user inodes; configuration publication atomically replaces a validated configuration. They require different publication rules.
 - Store document preparation/publication and TUI document navigation cannot share implementations.
 - Details `load_documents` installs disk-backed snapshots; Store `plan_document` reads a saved plan.
+- `OperationLease.bind_task` binds cancellation ownership to a task; renderer `on_task` projects an event.
+- `Core.operation` reserves tracked runtime work; the existing operation parser reads a CLI request.
+- `Locks.source` returns a conversation mutex; the existing source parser validates a draft.
 
 The old byte-only text classification helper was removed in favor of the shared streaming validation fixtures. Existing artifact and conflict fixtures were extended or reused rather than copied.
 

@@ -83,6 +83,7 @@ fn spawn_idle_cleanup(runtime: &Runtime, state: &Path) {
             }
             let stopping = stopped.exists() || !(database.exists() && socket.exists());
             if stopping {
+                core.cancel_operations();
                 let _ = super::activation::cancel_all(&core);
             }
             if stopping && !core.busy() {

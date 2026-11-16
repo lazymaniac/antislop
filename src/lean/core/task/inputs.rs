@@ -27,6 +27,8 @@ impl Core {
         conversation: &str,
         task: &Task,
     ) -> Result<()> {
+        let source = self.locks.source(conversation);
+        let _source = source.lock().expect("conversation source scope");
         let _graph = self.locks.graph();
         let _integration = self.locks.integration();
         self.store.assert_task_inputs(task)?;

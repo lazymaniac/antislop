@@ -95,6 +95,7 @@ impl Core {
         project: &Path,
         base: &str,
         change: &str,
+        cancel: &AtomicBool,
     ) -> Result<git::Integration> {
         let conversation = self.store.plan_conversation(&task.plan_id)?;
         let inputs = self.artifact_inputs(task, spec)?;
@@ -128,7 +129,14 @@ impl Core {
             &expected,
             &self.state.join("artifact-backups"),
         )?;
+        let primary = self.locks.primary(project)?;
+        let _primary = mail::lock_cancellable(&primary, cancel)
+            .ok_or_else(|| Error::Invalid("artifact delivery cancelled".into()))?;
         let _integration = self.locks.integration();
+        require(
+            !cancel.load(Ordering::SeqCst),
+            "artifact delivery cancelled",
+        )?;
         let current:bool=self.store.db().query_row("SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN task_inputs i ON i.task_id=t.id WHERE t.id=?1 AND coalesce(i.generation,0)=?2 AND t.status NOT IN ('cancelled','stale','superseded'))",rusqlite::params![task.id,task.input_generation],|r|r.get(0))?;
         require(
             current,

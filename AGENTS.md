@@ -321,7 +321,7 @@ src
     change
      - CodeReview,review_comments,execute_code_review,review_{turn_setup,prompt,failure},publish_{code_review,review_message}
    state
-    Activity(C{running,plans,reviews,agent_reviews,task_cancels,{task,orchestrator}_restarts,blocked_seen})
+    Activity(C{running,operations,plans,reviews,agent_reviews,task_cancels,{task,orchestrator}_restarts,blocked_seen})
      start_orchestrator(conversation):Option<Arc<AtomicBool>> > lock
      cancel_tasks(tasks) > lock
      plan_running(conversation):bool > has
@@ -333,12 +333,18 @@ src
      updating():MutexGuard<'_,()> > lock
      modified():u64
      set_modified(modified) > store
-    Locks(C{integrating,graph_updates,session_branches,turns,session_lifecycle})
+    Locks(C{integrating,graph_updates,turns,session_lifecycle})
+     primary(project):Result<Arc<Mutex<()>>> > turn
+     source(conversation):Arc<Mutex<()>> > turn
      integration():MutexGuard<'_,()> > lock
      turn(conversation,role):Arc<Mutex<()>> > lock
      graph():MutexGuard<'_,()> > lock
+    OperationLease(C{core,id,cancel}) : Drop
+     bind_task(task) > lock
+     - drop
     RevisionState(C{revising,jobs,views})
      view(conversation):Option<(String,i64)> > flatten,lock
+    ScopedOperation(C{conversation,task,cancel})
     WorktreeState(C{cleanup,cleanup_notes,leases,lease_changed})
    task
     checks/scheduler
@@ -413,7 +419,8 @@ src
       build(core,work):Result<TaskRecoveryResponse> > task_freshness_token,TaskRecoveryResponse
       interrupted(work):TaskRecoveryResponse > TaskRecoveryResponse
     recovery.rs
-     RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice})
+     RecoveryWork(C{req,actor,project,config,spec,task,token,integrated_files,preserved_branch,notice,cancel})
+     - ensure_current
     runtime
      citations(core,task,report,verdict):Result<String> > flatten,task_evidence_context,evidence_text
      directory(state,task):Result<PathBuf> > task_path_component,private_directory
@@ -472,7 +479,7 @@ src
     preflight(project,config,state):Result<Value> > check_runtime_repository,project_identity
     recover(core):Result<()> > recover_processes,import,release_task,resume,active,finish
     replacement_path(project,config,state,executable,daemon_path):Result<OsString> > merged_path,Activation,build_identity,check_target
-    request(core,project,config,executable,path,conversation,task,request_id):Result<Value> ~86 > active,activation_task,flatten,as_str,Resume,Activation,merged_path,announce,validation.run
+    request(core,project,config,executable,path,conversation,task,request_id):Result<Value> ~86 > active,activation_task,flatten,Resume,Activation,merged_path,announce,validation.run
     status(state,id):Result<Value> > storage.load,legacy
     - ActivationState
     - ActivationState: name
@@ -1033,7 +1040,7 @@ src
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
     answer_agent_tool(&Arc<Self>,conversation,turn,args):Result<Value> > defer_question_tool,answer_agent_from_turn,resume_delivered_answer
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
-    resume_delivered_answer(&Arc<Self>,conversation) > graph,accepted_plan
+    resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
     submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,team,check_submitted_plan,select_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
@@ -1062,11 +1069,11 @@ src
     validate_agent_result(conversation,role,turn,result):Result<()> > task_{role,by_id},assert_task_inputs,validate_task,agent_question
     agent_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > require_open_agent_turn,evidence_tool,read_dependency_result,{task_result,finish,interview,orchestrator,submit_plan,audit,revision}_tool
     repair_integration(&Arc<Self>,conversation,task,spec,worktree,onto,change,outcome,files,cancel):Result<()> > Repair.new
-    integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > defer_agent_work
-    writer_base(plan_id,spec,project):Result<String> > plan_conversation,session_worktree,plan_{base,base_record},writer_{dependency_changes,base_scratch}
+    integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > operation,lock_cancellable,defer_agent_work
+    writer_base(plan_id,spec,project):Result<String> > plan_conversation,operation,task_in_plan_by_id,session_worktree,plan_{base,base_record},writer_{dependency_changes,base_scratch}
     record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > direct_execute,address,dispatch_addressed
-    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~147 > add_message,{start,finish}_turn,create_run,register_message_source,apply_ledger_change,bind_ledger_turn,accept_extraction,len,TaskContract,add_plan,link_plan_run,bind_task_ledger,plan_revision_token,activate_reviewed_plan
+    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~151 > add_message,{start,finish}_turn,create_run,register_message_source,apply_ledger_change,bind_ledger_turn,accept_extraction,len,TaskContract,add_plan,link_plan_run,bind_task_ledger,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
     settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,as_str,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
@@ -1082,15 +1089,15 @@ src
     set_comment(&Arc<Self>,conversation,id,status):Result<Comment> > set_comment_status,wake
     pause(conversation,paused):Result<()>
     restart_orchestrator(&Arc<Self>,conversation):Result<()> > add_message,drop,wake
-    cancel(conversation) > cancel_conversation,notice
+    cancel(conversation) ~42 > store,cancel_conversation,notice
     is_idle(conversation):bool > lock,is_idle_with_plans
     delete_session(conversation):Result<()> > lock,require,is_idle_with_plans
     busy():bool > lock
     task_freshness_token(conversation,{plan,task}_id):Result<String> > task_unscoped,freshness_for_task
     config_snapshot():Arc<Config>
     replace_config(config)
-    send(&Arc<Self>,conversation,text):Result<Message> > lock,require,pending
-    start(project):Result<Conversation> > {record_project,project}_identity,create_conversation
+    send(&Arc<Self>,conversation,text):Result<Message> > lock,require_accepting
+    start(project):Result<Conversation> > operation,{project,record_project}_identity,create_conversation
     submit(&Arc<Self>,conversation,text):Result<serde_json::Value> > submit_addressed
     send_to_agent(&Arc<Self>,message):Result<serde_json::Value> > enqueue_and_refresh,steer,resume_after_delivery
     conversation_revision_token(conversation):Result<String> > latest_event_seq,paused,is_idle
@@ -1128,7 +1135,7 @@ src
     review(&Arc<Self>,conversation,role,plan_id,project,cancel,prompt):Result<std::result::Result<Verdict,String>> > config_snapshot,last_answered,messages_by,review_setup,turn,prompt,review_{request,outcome}
     turn(setup,cancel,prompt):Result<Option<String>> > turn_inner
     review_and_apply_revision(&Arc<Self>,context,lease):Result<()> > affected_tasks,approved_work,revision_checkpoints,graph,RevisionBarrier.new,review_revision,ReviewData,require,apply_after_review
-    apply_direct_revision(conversation,revision,baseline,specs,lease,allow_uncovered,is_accepted):Result<()> > affected_tasks,{cancel,wait_for}_affected_tasks,graph,checkpoint_revision_work,apply_plan_revision_with_options,queue_worktree_cleanup
+    apply_direct_revision(conversation,revision,baseline,specs,lease,allow_uncovered,is_accepted):Result<()> > operation,affected_tasks,graph,RevisionBarrier.new,{cancel,wait_for}_affected_tasks,checkpoint_revision_work,apply_plan_revision_with_options,queue_worktree_cleanup
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > reserve_revision,revision_job,process_fresh_revision
     apply_user_revision(&Arc<Self>,conversation,request_key,revision,request_ai_review,allow_uncovered):Result<serde_json::Value> ~74 > normalize_user_revision_tasks,{submit,plan}_revision,ensure_accepted_plan,revised_specs,revision_checkpoints,check_user_revision_coverage,apply_direct_revision,finish_revision_job,maybe_continue_plan,wake
     finish_blocked_plan(&Arc<Self>,conversation,tasks,cancel) > blocked_report,add_message,wake
@@ -1138,22 +1145,26 @@ src
     warn_of_uncommitted(conversation,writes) > uncommitted_notice
     wake(&Arc<Self>,conversation) > draining,lock
     orchestrate(&Arc<Self>,conversation,cancel) > next_orchestration_{upto,turn},stop_orchestrator
-    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > preflight_plan_start,remove,announce_plan_tasks,drop,spawn_plan_runner
+    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> ~48 > operation,plan_running,preflight_plan_start,graph,remove,announce_plan_tasks,drop,spawn_plan_runner
     preflight_plan_start(conversation,plan):Result<()> > pending,ensure_{plan_can_start,profiles_launch},validate_plan_inputs,create_session_branch
     resume_agent_reviews(&Arc<Self>,conversation):Result<()> > register_agent_review,spawn_agent_review_worker
-    review_change(&Arc<Self>,conversation,plan,id):Result<()> > lock,prepare_code_review,remove
+    review_change(&Arc<Self>,conversation,plan,id):Result<()> > lock,require_accepting,prepare_code_review,remove
     open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
     activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
     reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     validate_session_project(project):Result<String> > local_main,session_project
-    create_session_branch(conversation,project):Result<String> ~120 > session_branch_name,db,named_session_branch,session_branch_path,load_session_branch,session_{project,worktree_path},require,SessionBranch,ok,local_main,save_session_branch,ensure_session_started_event
+    create_session_branch(conversation,project):Result<String> ~119 > turn,session_branch_name,db,named_session_branch,session_branch_path,load_session_branch,session_{project,worktree_path},require,SessionBranch,ok,local_main,save_session_branch,ensure_session_started_event
     session_worktree(conversation,project):Result<PathBuf> > create_session_branch
     restore_session_branches():Result<()> > conversations,session_branch_path,load_session_branch,ensure_session_started_event,notice
+    require_accepting():Result<()> > require,pending
+    cancel_task_operations(conversation,task):usize > lock,store
+    cancel_operations() > lock,store
+    operation(conversation):Result<OperationLease<'_>> > lock,require_accepting,ScopedOperation,OperationLease
     artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
     artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
     prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
     validate_artifact_delta(task,spec,worktree):Result<()> > artifact_commits
-    deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~60 > artifact_commits,validate_change_paths,require,record_artifact_delivery,ArtifactReceipt
+    deliver_artifact_change(task,spec,project,base,change,cancel):Result<git::Integration> ~67 > artifact_commits,validate_change_paths,primary,lock_cancellable,require,record_artifact_delivery,ArtifactReceipt
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
     run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
@@ -1169,7 +1180,7 @@ src
     resume_coordinating_task(&Arc<Self>,conversation,role,turn,name,expected,resolution):Result<serde_json::Value> > resume_request,recover_task_as
     retry_failed_task(&Arc<Self>,conversation,role,turn,name,guidance):Result<serde_json::Value> > retry_request,recover_task_as
     recovery_task(conversation,role,turn,name):Result<(String,Task)> > dependency_plan,require,accepted_plan,as_str
-    recover_task_as(&Arc<Self>,req,actor):Result<TaskRecoveryResponse> > graph,prepare.load,interrupt_if_active,actions.apply,stop,response.build
+    recover_task_as(&Arc<Self>,req,actor):Result<TaskRecoveryResponse> ~115 > operation,prepare.load,graph,interrupt_if_active,cancel_task_operations,stop,lock_cancellable,primary,actions.apply,response.build
     announce_task(conversation,task,reason) > task_state_digest
     set_status(conversation,task,status):Result<()> > gate_approval
     stop(conversation,task,status,reason):Result<()> > record_stop_reason,update_task,record_stop_progress,queue_worktree_cleanup,announce_task
@@ -1177,7 +1188,7 @@ src
     check_comments(conversation,plan,spec_id):String
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
-    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > plan_running,start_plan_with_scope_lock
+    start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > start_plan_with_scope_lock
     lease_worktree(path):WorktreeLease<'_> > lock,wait,WorktreeLease
     wait_for_worktree_available(paths,cancel):bool > lock,all
     try_lease_worktree(path):Option<WorktreeLease<'_>> > lock,WorktreeLease
@@ -1201,7 +1212,7 @@ src
     submitted_extraction(conversation,args):Result<Extraction> > planning_run,source_texts,{ledger,extraction}_entries,Extraction,validate_extraction
     ledger_fingerprint(conversation):Result<String>
     ledger_query(query):Result<LedgerPage> > planning_run,ledger_fingerprint,list_ledger
-    apply_user_ledger_change(&Arc<Self>,proposal_id,diff_hash,change):Result<ChangeResult> > apply_checked_ledger_change,announce_affected_ledger_tasks,drop,has_pending_requirements_approval,wake
+    apply_user_ledger_change(&Arc<Self>,proposal_id,diff_hash,change):Result<ChangeResult> > operation,apply_checked_ledger_change,announce_affected_ledger_tasks,drop,has_pending_requirements_approval,wake
     ledger_context(conversation,run_id):Result<String>
     full_ledger_sources(conversation,run_id):Result<String> > messages_after,ledger_sources,append_{ledger_source,interview_summary}
     validate_ledger_plan(conversation,plan,run_id):Result<()> > extraction_current,{task_has_ledger,assert_task}_inputs
@@ -1272,12 +1283,12 @@ src
   native.rs
    invalid(error):Error
    recover(store,state):Result<()> > reap,kill_leftovers
-   Registry(C{sessions})
+   Registry(C{sessions,generation})
     reap_idle():Result<()> > lock
-    restore(core,conversation,role_key):Result<Arc<Session>> > graph,parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,try_pin_worktree,prepare_scoped
+    restore(core,conversation,role_key):Result<Arc<Session>> > graph,parse_role_key,recorded_turn,restored_spec,review_execution,turn_scope,try_pin_worktree,recorded_context,prepare_scoped
     retire_directory(path):Result<bool> > try_lock
     shutdown():Result<()> > lock,store
-    prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > task_by_id,session_signature
+    prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> ~55 > task_by_id,Core.operation,session_signature,store
     get(conversation,role):Result<Option<Arc<Session>>> > lock
     claimed():Vec<String> > lock
    Session(C{conversation,core,spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
@@ -2134,7 +2145,7 @@ src
      private_file(path):Result<File>
      Builder(C{files,text,ranges,offset})
       new(state):Result<Self> > private_directory,Files,private_file
-      append(header,source):Result<()> > source
+      append(header,source):Result<()>
       finish():Result<Document> > Document
      Document(C{files,ranges,owner,alive,layouts}) : PartialEq
       viewport(width,height,scroll,follow):Result<Option<Viewport>> > viewport_filtered
@@ -3283,6 +3294,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 145,216 LOC · input 1,296,139 · output 48,837 tokens · state 0798692a2e7e · targets AGENTS.md
+· 145,826 LOC · input 1,302,080 · output 49,035 tokens · state 1e133e1763f2 · targets AGENTS.md
 ```
 <!-- hologram:end -->

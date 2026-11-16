@@ -96,8 +96,6 @@ impl Core {
         let conversation = conversation.to_owned();
         std::thread::spawn(move || {
             let result = (|| -> Result<()> {
-                let _graph = core.locks.graph();
-                let _integration = core.locks.integration();
                 let upto: i64=core.store.db().query_row("SELECT coalesce(max(rowid),0) FROM agent_answer_receipts WHERE conversation=?1",[&conversation],|r|r.get(0))?;
                 if let Some(plan) = core.store.accepted_plan(&conversation)? {
                     core.maybe_continue_plan(&conversation, &plan)?;

@@ -28,27 +28,24 @@ impl Core {
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
-        require(
-            !daemon::activation::pending(self),
-            "runtime activation is switching; retry after readiness is confirmed",
-        )?;
+        self.require_accepting()?;
         crate::lean::record_message_and_wake_locked(self, conversation, text)
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
+        let _operation = self.operation("")?;
+        let project = project.canonicalize()?;
+        Self::validate_session_project(&project)?;
+        let identity = paths::project_identity(&project)?;
         let _lifecycle = self
             .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
-        let project = project.canonicalize()?;
-        Self::validate_session_project(&project)?;
-        self.store.record_project_identity(
-            &project.to_string_lossy(),
-            &paths::project_identity(&project)?,
-        )?;
-        let conversation = self.store.create_conversation(&project.to_string_lossy())?;
-        Ok(conversation)
+        self.require_accepting()?;
+        self.store
+            .record_project_identity(&project.to_string_lossy(), &identity)?;
+        self.store.create_conversation(&project.to_string_lossy())
     }
 
     /// Sends an addressed or broadcast message after validating recipient, plan, and delivery.
@@ -111,6 +108,9 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
+        let _operation = self.operation(&message.conversation)?;
+        let source = self.locks.source(&message.conversation);
+        let _source = source.lock().expect("conversation source scope");
         let graph = self.locks.graph();
         let _scope = self.locks.integration();
         let before = message
@@ -126,6 +126,10 @@ impl Core {
         self.refresh_delivered_tasks(message, &before)?;
         drop(_scope);
         drop(graph);
+        drop(_source);
+        if let Some(plan) = &message.plan {
+            self.maybe_continue_plan(&message.conversation, plan)?;
+        }
         Ok(reply)
     }
 
@@ -145,7 +149,7 @@ impl Core {
         for task in tasks {
             self.announce_task(&message.conversation, &task, None);
         }
-        self.maybe_continue_plan(&message.conversation, plan)
+        Ok(())
     }
 
     fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) -> Result<()> {

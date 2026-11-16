@@ -66,6 +66,13 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
         &agy,
         r#"#!/usr/bin/env python3
 import json, sys
+import os
+here = os.path.dirname(sys.argv[0])
+if os.path.exists(os.path.join(here, "hold-review")):
+    import time
+    open(os.path.join(here, "review-held"), "w").close()
+    while os.path.exists(os.path.join(here, "hold-review")):
+        time.sleep(0.05)
 prompt = sys.argv[-1]
 import os
 print(json.dumps({"event": "init", "conversation_id": "s"}), flush=True)
@@ -851,6 +858,78 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     // completed dependent task on the session integration line.
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["needs_user", "approved"]);
+}
+
+#[test]
+fn manual_snapshot_cancellation_preserves_snapshot_and_finishes_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "manual_fix");
+    wait_idle(&core, &conversation);
+    let mut task = core.store.plan(&plan).unwrap().remove(0);
+    task.status = "needs_user".into();
+    core.store.update_task(&task).unwrap();
+    std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
+    std::fs::write(dir.path().join("hold-review"), "").unwrap();
+    let token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let request = TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::ReviewManualSnapshot,
+        consent_files: None,
+        freshness_token: token,
+        message: None,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = core.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(worker.recover_task(request));
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !dir.path().join("review-held").exists() {
+        if let Ok(result) = rx.try_recv() {
+            panic!("manual review ended before the hold point: {result:?}");
+        }
+        assert!(Instant::now() < deadline, "manual reviewer did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let snapshot = core.task_unscoped(&plan, &task.id).unwrap().result.unwrap();
+    let token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let response = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task.id.clone(),
+            action: RecoveryAction::CancelTask,
+            consent_files: None,
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+    assert!(response.notice.contains("cancelling"));
+    assert!(
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("manual cancellation blocked")
+            .is_err()
+    );
+    let updated = core.task_unscoped(&plan, &task.id).unwrap();
+    assert_eq!(updated.status, "cancelled");
+    assert_eq!(updated.result.as_deref(), Some(snapshot.as_str()));
+    assert_eq!(
+        git(&project, &["show", &format!("{snapshot}:hello.txt")]),
+        "manual user fix"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "manual user fix\n"
+    );
 }
 
 #[test]

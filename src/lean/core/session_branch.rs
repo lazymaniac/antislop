@@ -21,11 +21,10 @@ impl Core {
         conversation: &str,
         project: &Path,
     ) -> Result<String> {
-        let _branches = self
-            .locks
-            .session_branches
-            .lock()
-            .expect("session branches mutex");
+        // Different conversations validate their own durable checkouts without
+        // sharing a process-wide branch mutex.
+        let branch_lock = self.locks.turn(conversation, "session-branch");
+        let _branches = branch_lock.lock().expect("session branch mutex");
         let project = project.canonicalize()?;
         let legacy_branch = session_branch_name(conversation, &project)?;
         let title: Option<String> = self

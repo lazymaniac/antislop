@@ -37,18 +37,14 @@ impl<'a> Integration<'a> {
     }
 
     pub(super) fn run(mut self, lock: std::sync::MutexGuard<'_, ()>) -> Result<()> {
-        // Prepare immutable revisions without holding the shared integration scope.
-        drop(lock);
+        // The keyed conversation source scope protects Git; no global lock is held.
         let base = self.task.base.clone().unwrap_or_default();
         let result = git::head(self.worktree)?;
         if result == base {
             return self.finish_no_changes();
         }
         let change = self.create_change(&base)?;
-        let artifact = self.spec.delivery == Some(tasks::DeliveryMode::Untracked);
-        let scope = (!artifact).then(|| self.core.locks.integration());
         let outcome = self.apply_change(&base, &change)?;
-        let lock = scope.unwrap_or_else(|| self.core.locks.integration());
         if matches!(
             outcome,
             git::Integration::Committed(_) | git::Integration::Applied
@@ -99,6 +95,7 @@ impl<'a> Integration<'a> {
                 self.project,
                 base,
                 change,
+                self.cancel,
             );
         }
         let session_tree = self

@@ -36,7 +36,12 @@ fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> 
     work.task.verdict = None;
     work.task.base = Some(base.clone());
     work.task.result = Some(snapshot.clone());
-    core.set_status(&work.req.conversation, &mut work.task, status::REVIEWING)?;
+    {
+        let _graph = core.locks.graph();
+        let _integration = core.locks.integration();
+        super::ensure_current(core, work)?;
+        core.set_status(&work.req.conversation, &mut work.task, status::REVIEWING)?;
+    }
     let verdict = run_reviewer(core, work, &snapshot, &changes)?;
     let obligations = tasks::obligations(&work.spec);
     let mut verdict = verdict;
@@ -61,7 +66,7 @@ fn run_reviewer(
 ) -> Result<Verdict> {
     let (setup, project) = reviewer_setup(core, work, snapshot)?;
     let upstream = core.upstream(&work.task.plan_id, &work.spec)?;
-    let cancel = AtomicBool::new(false);
+    let cancel = work.cancel.clone();
     let answer = core.turn(setup, &cancel, |fresh, _| {
         reviewer_prompt(
             &project,
@@ -72,6 +77,7 @@ fn run_reviewer(
             &upstream,
         )
     })?;
+    require(!cancel.load(Ordering::SeqCst), "manual recovery cancelled")?;
     decode_answer(core, work, &answer, &cancel)
 }
 
@@ -551,6 +557,9 @@ fn decode_answer(
 }
 
 fn failed_reviewer(core: &Core, work: &mut RecoveryWork, cancel: &AtomicBool) -> Result<Verdict> {
+    let _graph = core.locks.graph();
+    let _integration = core.locks.integration();
+    super::ensure_current(core, work)?;
     let reviewer = format!("reviewer:{}", work.task.id);
     core.stop_task(&work.req.conversation, &mut work.task, &reviewer, cancel)?;
     Err(Error::Invalid(
@@ -564,6 +573,9 @@ fn awaiting_answer(
     request: &str,
     checkpoint: String,
 ) -> Result<Verdict> {
+    let _graph = core.locks.graph();
+    let _integration = core.locks.integration();
+    super::ensure_current(core, work)?;
     work.task.report = Some(checkpoint);
     core.wait_for_question(&work.req.conversation, &mut work.task, request, true)?;
     Err(Error::Invalid(

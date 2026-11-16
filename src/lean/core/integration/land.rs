@@ -16,7 +16,15 @@ impl Core {
         config: &Config,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let lock = self.locks.integration();
+        let operation = self.operation(conversation)?;
+        operation.bind_task(&task.id);
+        let source = self.locks.source(conversation);
+        let lock = mail::lock_cancellable(&source, cancel)
+            .ok_or_else(|| Error::Invalid("integration cancelled".into()))?;
+        require(
+            !operation.cancel.load(Ordering::SeqCst) && !cancel.load(Ordering::SeqCst),
+            "integration cancelled",
+        )?;
         if self.defer_agent_work(conversation, task)? {
             return Ok(());
         }

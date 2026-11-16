@@ -181,11 +181,22 @@ impl Core {
             .activity
             .task_cancels
             .lock()
-            .expect("task cancel mutex")
+            .expect("task cancellations")
             .values()
         {
             if owner == conversation {
                 flag.store(true, Ordering::SeqCst);
+            }
+        }
+        for operation in self
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+        {
+            if operation.conversation == conversation {
+                operation.cancel.store(true, Ordering::SeqCst);
             }
         }
         for flags in [
@@ -237,7 +248,14 @@ impl Core {
         plans: &HashMap<String, Arc<AtomicBool>>,
     ) -> bool {
         let running = self.activity.running.lock().expect("running mutex");
-        !self.activity.agent_review_running(conversation)
+        !self
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+            .any(|operation| operation.conversation == conversation)
+            && !self.activity.agent_review_running(conversation)
             && !self
                 .revisions
                 .jobs
@@ -252,10 +270,16 @@ impl Core {
     /// Whether any conversation has an agent or a plan running.
     pub fn busy(&self) -> bool {
         !self
-            .runtime_activation_cancels
+            .activity
+            .operations
             .lock()
-            .expect("activation cancellations")
+            .expect("operation leases")
             .is_empty()
+            || !self
+                .runtime_activation_cancels
+                .lock()
+                .expect("activation cancellations")
+                .is_empty()
             || !self
                 .activity
                 .agent_reviews

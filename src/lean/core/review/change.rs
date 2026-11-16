@@ -14,6 +14,7 @@ impl Core {
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
+        self.require_accepting()?;
         let work = self.prepare_code_review(conversation, plan, id)?;
         if let Err(error) = self.store.append_event(
             conversation,

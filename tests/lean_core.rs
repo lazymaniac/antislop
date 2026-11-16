@@ -950,7 +950,23 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     );
     let deadline = Instant::now() + Duration::from_secs(120);
     let daemon = loop {
-        if let Some(identity) = identity().filter(|identity| identity["busy"] == true) {
+        let running_turn = rusqlite::Connection::open_with_flags(
+            state.join("core.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|db| {
+            db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM turns WHERE status='running')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(false);
+        if let Some(identity) =
+            identity().filter(|identity| identity["busy"] == true && running_turn)
+        {
             break identity["pid"].clone();
         }
         if first.try_wait().unwrap().is_some() {
@@ -994,7 +1010,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     assert!(
         error
             .to_string()
-            .contains("another project or configuration path")
+            .contains("another project or configuration path"),
+        "{error}"
     );
     assert!(!state.join("antislop.toml").exists());
     assert_eq!(identity().unwrap()["pid"], daemon);

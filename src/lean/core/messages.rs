@@ -36,15 +36,18 @@ impl Core {
     ) -> Result<serde_json::Value> {
         let prompt = prompt.trim();
         require(!prompt.is_empty(), "usage: /direct <instruction>")?;
+        let _operation = self.operation(conversation)?;
+        let source = self.locks.source(conversation);
+        let _source = source.lock().expect("conversation source scope");
+        require(
+            !self.activity.plan_running(conversation),
+            "a plan is already running",
+        )?;
         let _lifecycle = self
             .locks
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
-        require(
-            !self.activity.plan_running(conversation),
-            "a plan is already running",
-        )?;
         let message = self.store.add_message(conversation, "user", prompt)?;
         let turn =
             self.store
@@ -173,6 +176,7 @@ impl Core {
                 "revision_token": revision_token,
             }),
         )?;
+        drop(_lifecycle);
         let _ = self.activate_reviewed_plan(conversation, &plan_id)?;
         Ok(json!({
             "seq": message.seq,

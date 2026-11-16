@@ -53,6 +53,9 @@ impl Core {
         change: &LedgerChange,
     ) -> Result<ChangeResult> {
         // The same mutex protects both scope publication and the last check before Git integration.
+        let _operation = self.operation(&change.conversation)?;
+        let source = self.locks.source(&change.conversation);
+        let _source = source.lock().expect("conversation source scope");
         let integration = self.locks.integration();
         let result = self.apply_checked_ledger_change(proposal_id, diff_hash, change)?;
         self.announce_affected_ledger_tasks(change, &result)?;

@@ -189,14 +189,14 @@ pub(super) fn request(
         .transpose()?
         .flatten();
     let mut resume = Vec::new();
+    // Recording all durable conversation links avoids acquiring activity maps
+    // under the activation mutex. Paused/cancelled links remain explicit.
     for item in core.store.conversations()? {
-        if !core.is_idle(&item.id) || conversation == Some(item.id.as_str()) {
-            resume.push(Resume {
-                plan: core.store.accepted_plan(&item.id)?,
-                conversation: item.id,
-                cancelled: false,
-            });
-        }
+        resume.push(Resume {
+            plan: core.store.accepted_plan(&item.id)?,
+            conversation: item.id,
+            cancelled: false,
+        });
     }
     let log = core
         .state
@@ -285,7 +285,7 @@ fn activation_task(
         .store
         .accepted_plan(conversation)?
         .ok_or_else(|| Error::Invalid("no accepted plan".into()))?;
-    let task = core.task(&plan, task)?;
+    let task = core.task_unscoped(&plan, task)?;
     let spec: TaskContract = serde_json::from_value(task.spec)?;
     require(
         !spec.change_kind.has_delivery(),
@@ -502,8 +502,6 @@ fn resume(core: &Arc<Core>, operation: Activation) -> Result<()> {
             continue;
         }
         {
-            let _graph = core.locks.graph();
-            let _integration = core.locks.integration();
             if let Some(plan) = item.plan
                 && core.store.accepted_plan(&item.conversation)?.as_deref() == Some(&plan)
                 && core.has_runnable_dependents(&plan)?

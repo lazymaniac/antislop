@@ -107,8 +107,9 @@ impl Core {
     ) -> Result<()> {
         self.cancel_affected_tasks(&affected);
         self.wait_for_affected_tasks(&affected, context.cancel)?;
-        let _graph = self.locks.graph();
-        let _integration = self.locks.integration();
+        let source = self.locks.source(context.conversation);
+        let _source = source.lock().expect("conversation source scope");
+        require(!context.cancel.load(Ordering::SeqCst), "revision cancelled")?;
         require(
             self.store
                 .revision_checkpoints(context.conversation, context.revision)?
@@ -116,6 +117,9 @@ impl Core {
             "checkpoint source changed during revision review; review the new source before adoption",
         )?;
         self.checkpoint_revision_work(&affected)?;
+        let _graph = self.locks.graph();
+        let _integration = self.locks.integration();
+        require(!context.cancel.load(Ordering::SeqCst), "revision cancelled")?;
         self.store.apply_plan_revision(
             context.conversation,
             context.revision,
@@ -141,17 +145,26 @@ impl Core {
         allow_uncovered: bool,
         is_accepted: bool,
     ) -> Result<()> {
+        let operation = self.operation(conversation)?;
         let affected = affected_tasks(baseline, specs, &revision.redo);
-        let cancel = AtomicBool::new(false);
+        let cancel = &operation.cancel;
+        let _barrier = {
+            let _graph = self.locks.graph();
+            RevisionBarrier::new(self, affected.clone())
+        };
         if is_accepted {
             self.cancel_affected_tasks(&affected);
-            self.wait_for_affected_tasks(&affected, &cancel)?;
+            self.wait_for_affected_tasks(&affected, cancel)?;
         }
-        let _graph = self.locks.graph();
-        let _integration = self.locks.integration();
+        let source = self.locks.source(conversation);
+        let _source = source.lock().expect("conversation source scope");
+        require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
         if is_accepted {
             self.checkpoint_revision_work(&affected)?;
         }
+        let _graph = self.locks.graph();
+        let _integration = self.locks.integration();
+        require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
         self.store.apply_plan_revision_with_options(
             conversation,
             revision,
@@ -214,7 +227,6 @@ impl Core {
         affected: &BTreeSet<String>,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while self
             .activity
             .task_cancels
@@ -224,10 +236,6 @@ impl Core {
             .any(|id| affected.contains(id))
         {
             require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
-            require(
-                std::time::Instant::now() < deadline,
-                "affected task did not stop; revision was not applied",
-            )?;
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         Ok(())

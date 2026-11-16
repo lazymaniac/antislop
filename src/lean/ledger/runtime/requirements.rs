@@ -22,7 +22,6 @@ impl Core {
                 && let Some(plan) = self.store.accepted_plan(conversation)?
                 && self.store.plan_run(&plan)?.as_deref() == Some(run.id.as_str())
             {
-                let _scope = self.locks.integration();
                 self.maybe_continue_plan(conversation, &plan)?;
             }
         }
@@ -203,6 +202,8 @@ impl Core {
                 "requirements proposal awaits user approval".into(),
             ));
         }
+        let source = self.locks.source(conversation);
+        let _source = source.lock().expect("conversation source scope");
         let _integration = self.locks.integration();
         self.store
             .apply_analyst_ledger_change(change, &self.state, producer)?;

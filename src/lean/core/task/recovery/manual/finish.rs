@@ -6,6 +6,7 @@ pub(super) fn approve(
     review: &ManualReview,
     fixed: &[String],
 ) -> Result<()> {
+    super::super::ensure_current(core, work)?;
     work.task.result = Some(review.snapshot.clone());
     work.task.status = status::APPROVED.into();
     let (outcome, commit) = commit_manual_fixes(work, fixed)?;
@@ -59,6 +60,7 @@ pub(super) fn reject(
     review: &ManualReview,
     fixed: &[String],
 ) -> Result<()> {
+    super::super::ensure_current(core, work)?;
     work.task.status = status::NEEDS_USER.into();
     let findings = tasks::findings_text(&review.verdict.findings);
     let notice = format!("manual fix review found open issues:\n{findings}");
@@ -91,6 +93,9 @@ fn persist_manual(
     snapshot: &str,
     findings: Option<&str>,
 ) -> Result<()> {
+    let _graph = core.locks.graph();
+    let _integration = core.locks.integration();
+    super::super::ensure_current(core, work)?;
     core.store.update_task(&work.task)?;
     core.announce_task(&work.req.conversation, &work.task, findings);
     manual_event(core, work, notice, snapshot, findings)?;

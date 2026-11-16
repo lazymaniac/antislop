@@ -81,7 +81,6 @@ impl Core {
             !self.activity.plan_running(conversation),
             "a plan is already running; revise the active plan instead",
         )?;
-        let _integration = self.locks.integration();
         self.start_plan_with_scope_lock(conversation, plan_id, queue)
     }
 }

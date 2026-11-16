@@ -205,7 +205,7 @@ fn record_message_and_wake_locked(
 }
 
 fn wake_locked(core: &Arc<Core>, conversation: &str) {
-    if daemon::activation::pending(core) {
+    if daemon::activation::pending(core) || core.state.join("stopped").exists() {
         return;
     }
     let Some(cancel) = core.activity.start_orchestrator(conversation) else {

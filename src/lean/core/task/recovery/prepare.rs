@@ -33,6 +33,7 @@ pub(super) fn load(core: &Core, req: TaskRecoveryRequest, actor: &str) -> Result
         integrated_files: Vec::new(),
         preserved_branch: None,
         notice: None,
+        cancel: Arc::new(AtomicBool::new(false)),
     })
 }
 
