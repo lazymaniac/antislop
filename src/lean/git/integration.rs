@@ -192,16 +192,7 @@ fn cherry_pick(
     if commit {
         ok(
             project,
-            &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
-                "cherry-pick",
-                "--no-commit",
-                "--allow-empty",
-                change,
-            ],
+            &["cherry-pick", "--no-commit", "--allow-empty", change],
         )?;
         let message = integration_message(project, change)?;
         return Ok(Integration::Committed(commit_paths_with_message(

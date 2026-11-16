@@ -219,6 +219,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn task_history_uses_the_configured_git_identity() {
+        for user_edit in [false, true] {
+            let project = repo();
+            let path = project.path();
+            ok(path, &["config", "user.name", "Configured Author"]).unwrap();
+            ok(path, &["config", "user.email", "author@example.test"]).unwrap();
+            let base = head(path).unwrap();
+            let trees = tempfile::tempdir().unwrap();
+            let worker = trees.path().join("worker");
+            add_worktree(path, &worker, "antislop/identity", &base).unwrap();
+
+            std::fs::write(worker.join("a.txt"), "checkpoint\n").unwrap();
+            let checkpoint = commit_all(&worker, CommitPurpose::Checkpoint).unwrap();
+            std::fs::write(worker.join("a.txt"), "result\n").unwrap();
+            let scoped =
+                commit_paths(&worker, &["a.txt".into()], CommitPurpose::TaskResult).unwrap();
+            std::fs::write(worker.join("report.md"), "artifact input\n").unwrap();
+            let result = commit_all_with_message(&worker, "feat: deliver task result").unwrap();
+            let snapshot = snapshot(&worker, CommitPurpose::WorkspaceSnapshot).unwrap();
+            let change = squash(&worker, &base, CommitPurpose::TaskResult).unwrap();
+            let inputs = base_with_artifacts(
+                path,
+                &base,
+                &std::collections::BTreeMap::from([("report.md".into(), result.clone())]),
+            )
+            .unwrap();
+            if user_edit {
+                std::fs::write(path.join("b.txt"), "user edit\n").unwrap();
+            }
+            let Integration::Committed(landed) = integrate(path, &base, &change, true).unwrap()
+            else {
+                panic!("expected the task to be committed");
+            };
+
+            for (kind, revision) in [
+                ("checkpoint", checkpoint),
+                ("scoped result", scoped),
+                ("worker result", result),
+                ("snapshot", snapshot),
+                ("squashed result", change),
+                ("artifact inputs", inputs),
+                ("integration", landed),
+            ] {
+                assert_eq!(
+                    ok(
+                        path,
+                        &["show", "-s", "--format=%an%n%ae%n%cn%n%ce", &revision]
+                    )
+                    .unwrap(),
+                    "Configured Author\nauthor@example.test\nConfigured Author\nauthor@example.test",
+                    "{kind}, user_edit={user_edit}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn generated_commit_subjects_are_fixed_english() {
         let repo = repo();
         let path = repo.path();

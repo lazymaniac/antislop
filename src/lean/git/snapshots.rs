@@ -53,21 +53,7 @@ fn write_snapshot(
         with_index(dir, scratch, &args)?;
     }
     let tree = with_index(dir, scratch, &["write-tree"])?;
-    ok(
-        dir,
-        &[
-            "-c",
-            "user.name=antislop",
-            "-c",
-            "user.email=antislop@localhost",
-            "commit-tree",
-            &tree,
-            "-p",
-            "HEAD",
-            "-m",
-            message,
-        ],
-    )
+    ok(dir, &["commit-tree", &tree, "-p", "HEAD", "-m", message])
 }
 
 fn with_index(dir: &Path, index: &Path, args: &[&str]) -> Result<String> {
@@ -151,10 +137,6 @@ fn staged_paths_clean(dir: &Path, files: &[String]) -> Result<bool> {
 fn commit_only_paths(dir: &Path, files: &[String], message: &str) -> Result<()> {
     let mut commit = vec![
         "--literal-pathspecs",
-        "-c",
-        "user.name=antislop",
-        "-c",
-        "user.email=antislop@localhost",
         "commit",
         "--quiet",
         "--only",
@@ -237,10 +219,6 @@ pub(crate) fn base_with_artifacts(
         ok(
             dir,
             &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
                 "commit-tree",
                 &tree,
                 "-p",

@@ -12,4 +12,8 @@ jobs:
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Configure Git identity for test repositories
+        run: |
+          git config --global user.name "Fixture Author"
+          git config --global user.email "fixtures@example.invalid"
       - run: cargo test --locked --all-targets
