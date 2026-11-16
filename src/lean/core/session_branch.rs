@@ -31,9 +31,28 @@ impl Core {
     ) -> Result<String> {
         use rusqlite::OptionalExtension;
 
+        let project = project.canonicalize()?;
+        let orchestrator_active = self
+            .activity
+            .running
+            .lock()
+            .expect("running mutex")
+            .contains_key(conversation);
+        let work_is_active = orchestrator_active
+            || self.activity.plan_running(conversation)
+            || self.activity.review_running(conversation);
+        let branch_path = self.session_branch_path(conversation);
+        if work_is_active && branch_path.try_exists()? {
+            let record = self.load_session_branch(conversation)?;
+            require(
+                Path::new(&record.project) == project
+                    && record.worktree == self.session_worktree_path(conversation),
+                "persisted session integration branch belongs to a different project",
+            )?;
+            return Ok(record.branch);
+        }
         let branch_lock = self.locks.turn(conversation, "session-branch");
         let _branches = branch_lock.lock().expect("session branch mutex");
-        let project = project.canonicalize()?;
         let legacy_branch = session_branch_name(conversation, &project)?;
         let branch_path = self.session_branch_path(conversation);
         let persisted = if branch_path.try_exists()? {
@@ -115,43 +134,42 @@ impl Core {
             worktree: worktree.clone(),
         });
         self.validate_session_record(conversation, &project, &record)?;
-        if worktree.exists() {
-            require(
-                git::worktree_project(&worktree)?.canonicalize()?
-                    == git::worktree_project(&project)?.canonicalize()?,
-                "session integration worktree belongs to a different project",
+        let reference = format!("refs/heads/{}", record.branch);
+        let found = git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?;
+        require(
+            found.status.success() || found.status.code() == Some(1),
+            &format!(
+                "cannot inspect session integration branch: {}",
+                String::from_utf8_lossy(&found.stderr).trim()
+            ),
+        )?;
+        if found.status.success() {
+            git::ok(
+                &project,
+                &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
             )?;
-            require(
-                git::worktree_branch(&worktree)? == record.branch,
-                "session integration worktree is on an unexpected branch",
-            )?;
-            git::head(&worktree)?;
         } else {
-            let reference = format!("refs/heads/{}", record.branch);
-            let found = git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?;
+            if worktree.exists() {
+                require(
+                    git::worktree_project(&worktree)?.canonicalize()?
+                        == git::worktree_project(&project)?.canonicalize()?,
+                    "session integration worktree belongs to a different project",
+                )?;
+                require(
+                    git::worktree_branch(&worktree)? == record.branch,
+                    "session integration worktree is on an unexpected branch",
+                )?;
+                git::head(&worktree)?;
+            }
             require(
-                found.status.success() || found.status.code() == Some(1),
+                !has_durable_name,
                 &format!(
-                    "cannot inspect session integration branch: {}",
-                    String::from_utf8_lossy(&found.stderr).trim()
+                    "persisted session integration branch {} is missing; restore its Git ref before retrying",
+                    record.branch
                 ),
             )?;
-            let base = if found.status.success() {
-                git::ok(
-                    &project,
-                    &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
-                )?
-            } else {
-                require(
-                    !has_durable_name,
-                    &format!(
-                        "persisted session integration branch {} is missing; restore its Git ref before retrying",
-                        record.branch
-                    ),
-                )?;
-                local_main(&project)?
-            };
-            git::add_worktree(&project, &worktree, &record.branch, &base)?;
+            let base = local_main(&project)?;
+            git::ok(&project, &["branch", &record.branch, &base])?;
         }
         if !had_record {
             self.save_session_branch(conversation, &record)?;
@@ -167,7 +185,48 @@ impl Core {
         project: &Path,
     ) -> Result<PathBuf> {
         self.create_session_branch(conversation, project)?;
-        Ok(self.session_worktree_path(conversation))
+        let project = project.canonicalize()?;
+        let record = self.load_session_branch(conversation)?;
+        self.ensure_session_worktree(conversation, &project, &record)?;
+        Ok(record.worktree)
+    }
+
+    fn ensure_session_worktree(
+        &self,
+        conversation: &str,
+        project: &Path,
+        record: &SessionBranch,
+    ) -> Result<()> {
+        self.validate_session_record(conversation, project, record)?;
+        let worktree = &record.worktree;
+        if worktree.exists() {
+            require(
+                git::worktree_project(worktree)?.canonicalize()?
+                    == git::worktree_project(project)?.canonicalize()?,
+                "session integration worktree belongs to a different project",
+            )?;
+            require(
+                git::worktree_branch(worktree)? == record.branch,
+                "session integration worktree is on an unexpected branch",
+            )?;
+            git::head(worktree)?;
+            return Ok(());
+        }
+
+        let reference = format!("refs/heads/{}", record.branch);
+        let found = git::git(project, &["show-ref", "--verify", "--quiet", &reference])?;
+        require(
+            found.status.success(),
+            &format!(
+                "persisted session integration branch {} is missing; restore its Git ref before retrying",
+                record.branch
+            ),
+        )?;
+        let base = git::ok(
+            project,
+            &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+        )?;
+        git::add_worktree(project, worktree, &record.branch, &base)
     }
 
     fn validate_session_record(
@@ -397,9 +456,20 @@ mod tests {
                 .starts_with("antislop/session/session-branch-recovery-and-verification-")
         );
         assert_eq!(
-            git::worktree_branch(&record.worktree).unwrap(),
-            record.branch
+            git::ok(
+                &project,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/heads/{}", record.branch)
+                ]
+            )
+            .unwrap(),
+            git::ok(&project, &["rev-parse", "refs/heads/main"]).unwrap()
         );
+        assert!(!record.worktree.exists());
+        let worktree = core.session_worktree(&conversation.id, &project).unwrap();
+        assert_eq!(git::worktree_branch(&worktree).unwrap(), record.branch);
         assert_eq!(
             core.store.messages_after(&conversation.id, 0).unwrap()[0].text,
             ""
