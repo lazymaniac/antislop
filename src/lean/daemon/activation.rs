@@ -514,6 +514,12 @@ fn resume(core: &Arc<Core>, operation: Activation) -> Result<()> {
             }
         }
         core.wake(&item.conversation);
+        if let Err(error) = core.resume_agent_reviews(&item.conversation) {
+            core.notice(
+                &item.conversation,
+                &format!("runtime activation settled; pending reviews could not resume: {error}"),
+            );
+        }
     }
     Ok(())
 }
@@ -977,6 +983,69 @@ mod operation_tests {
                 "interrupted"
             );
         }
+        // Pending mail must survive startup without registering a review
+        // worker before the successor has settled its readiness fence.
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store.db().execute(
+            "INSERT INTO mail(conversation_id,sender,recipient,kind,text,created_ms) VALUES(?1,'orchestrator','worker:retained','guidance','Retained guidance',0)",
+            [&conversation],
+        ).unwrap();
+        let mut operation = active(&core).unwrap().unwrap_or_else(|| {
+            storage::load(&core.store.db(), Some("changed"), false)
+                .unwrap()
+                .unwrap()
+        });
+        operation.state = ActivationState::Switching;
+        operation.resume.push(Resume {
+            conversation: conversation.clone(),
+            plan: None,
+            cancelled: false,
+        });
+        save(&core, &operation).unwrap();
+        wait_for(|| core.runtime_activation_cancels.lock().unwrap().is_empty());
+        let state = core.state.clone();
+        drop(core);
+        let restored = Core::open(&state, Config::load(&config).unwrap()).unwrap();
+        assert!(pending(&restored));
+        assert!(!restored.busy());
+        assert_eq!(
+            restored
+                .store
+                .pending_mail(&conversation, "worker:retained")
+                .unwrap()
+                .len(),
+            1
+        );
+        // The fixture executable differs from this running test executable:
+        // confirmation must settle that failure before resuming mail work.
+        confirm(&restored, dir.path(), &config).unwrap();
+        assert!(!pending(&restored));
+        assert_eq!(status(&state, Some("changed")).unwrap()["state"], "failed");
+        wait_for(|| !restored.activity.agent_review_running(&conversation));
+        assert_eq!(
+            restored
+                .store
+                .pending_mail(&conversation, "worker:retained")
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(restored);
+        std::fs::write(state.join("stopped"), []).unwrap();
+        let stopped = Core::open(&state, Config::load(&config).unwrap()).unwrap();
+        assert!(!stopped.busy());
+        assert_eq!(
+            stopped
+                .store
+                .pending_mail(&conversation, "worker:retained")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
 

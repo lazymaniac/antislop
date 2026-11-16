@@ -120,12 +120,14 @@ fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()>
     restore_conversations(core)?;
     // Confirm a runtime handoff before registering any plan runner. Otherwise
     // a runner can exit on the pending marker just as confirmation resumes it.
-    if !crate::lean::daemon::activation::pending(core) {
+    let accepting =
+        !crate::lean::daemon::activation::pending(core) && !core.state.join("stopped").exists();
+    if accepting {
         resume_cut_off(core, &interrupted.0);
         resume_interrupted(core, &interrupted.1);
     }
-    answer_pending_mail(core)?;
-    if !crate::lean::daemon::activation::pending(core) {
+    if accepting {
+        answer_pending_mail(core)?;
         core.replay_delivered_answers()?;
     }
     Ok(())

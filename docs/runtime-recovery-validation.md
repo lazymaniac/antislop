@@ -17,6 +17,7 @@ This change implements the approved activation, control, document, UI, and sessi
 | Startup | Restore metadata first, isolate conversation failures, deduplicate repository checks | Startup Git invocation measurement and legacy session fixtures |
 | Conflict repair | Repair in the writer worktree; independent reviewer before integration; preserve user changes and pending choices | Existing `lean_writer` conflict, repair, recovery, and variant-selection fixtures |
 | Shared locks | Track preparation and recovery for handoff/deletion; serialize source operations per conversation and primary-tree publication per project; keep Git/CLI outside global guards | Source-scope cancellation, consented artifact recovery, held manual review cancellation, and independent lock-order audit |
+| Successor startup | Preserve pending mail while switching or stopped; resume review queues only after activation settles | Restart fixture with retained mail and switching/stopped admission fences; live handoff follow-up |
 
 ## Checks
 
