@@ -27,33 +27,90 @@ struct Activation {
     task: Option<String>,
     conversation: Option<String>,
     resume: Vec<Resume>,
-    state: String,
+    state: ActivationState,
+    #[serde(default)]
+    signature: String,
+    #[serde(default)]
+    generation: Option<i64>,
+    #[serde(default)]
+    config_revision: String,
+    #[serde(default)]
+    log: Option<String>,
+    #[serde(default)]
+    diagnostic_tail: Option<String>,
     error: Option<String>,
 }
 
-pub(in crate::lean) fn pending(core: &Core) -> bool {
-    core.state.join(PENDING).exists()
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ActivationState {
+    #[serde(alias = "pending")]
+    Validating,
+    WaitingForIdle,
+    Switching,
+    Applied,
+    Failed,
+    Cancelled,
+    Interrupted,
 }
-
-fn load(path: &Path) -> Result<Option<Activation>> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+impl ActivationState {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Validating => "validating",
+            Self::WaitingForIdle => "waiting_for_idle",
+            Self::Switching => "switching",
+            Self::Applied => "applied",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+        }
     }
 }
+mod storage;
+mod validation;
+use storage::save;
 
-fn save(state: &Path, name: &str, operation: &Activation) -> Result<()> {
-    super::config_write::atomic_config_write(&state.join(name), &serde_json::to_string(operation)?)
+fn active(core: &Core) -> Result<Option<Activation>> {
+    storage::load(&core.store.db(), None, true)
 }
 
-pub(in crate::lean) fn status(state: &Path) -> Result<Value> {
-    Ok(
-        match load(&state.join(PENDING))?.or(load(&state.join(LAST))?) {
-            Some(operation) => serde_json::to_value(operation)?,
-            None => json!({"state":"none"}),
-        },
-    )
+// Validation leaves ordinary scheduling and supervision available. Only the
+// final handoff closes admission, after the daemon has become idle.
+pub(in crate::lean) fn pending(core: &Core) -> bool {
+    active(core).map_or(true, |op| {
+        op.is_some_and(|op| op.state == ActivationState::Switching)
+    })
+}
+
+pub(in crate::lean) fn draining(core: &Core) -> bool {
+    active(core).is_ok_and(|op| {
+        op.is_some_and(|op| {
+            op.state == ActivationState::WaitingForIdle || op.state == ActivationState::Switching
+        })
+    })
+}
+
+pub(in crate::lean) fn status(state: &Path, id: Option<&str>) -> Result<Value> {
+    let database = state.join("core.db");
+    let operation = if database.try_exists()? {
+        let db = rusqlite::Connection::open_with_flags(
+            &database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        storage::load(&db, id, false)?
+    } else {
+        None
+    };
+    let operation = if operation.is_none() && id.is_none() {
+        storage::legacy(&state.join(PENDING))?.or(storage::legacy(&state.join(LAST))?)
+    } else {
+        operation
+    };
+    match operation {
+        Some(op) => Ok(serde_json::to_value(op)?),
+        None if id.is_some() => Err(Error::Invalid("unknown activation request ID".into())),
+        None => Ok(json!({"state":"none"})),
+    }
 }
 
 fn merged_path(current: Option<OsString>, requested: Option<&str>) -> Result<OsString> {
@@ -81,36 +138,6 @@ pub fn preflight(project: &Path, config: &Path, state: &Path) -> Result<Value> {
     Ok(json!({"build":build(),"project":project.canonicalize()?,"config":config.canonicalize()?}))
 }
 
-fn check_target(operation: &Activation, state: &Path) -> Result<()> {
-    require(
-        build_identity(&operation.executable)? == operation.build,
-        "activation executable changed; request activation again",
-    )?;
-    let output = std::process::Command::new(&operation.executable)
-        .arg("__runtime_preflight")
-        .arg(&operation.project)
-        .arg(&operation.config)
-        .arg(state)
-        .current_dir(&operation.project)
-        .env("PATH", &operation.path)
-        .stdin(std::process::Stdio::null())
-        .output()?;
-    require(
-        output.status.success(),
-        &format!(
-            "runtime activation preflight failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-    )?;
-    let checked: Value = serde_json::from_slice(&output.stdout)?;
-    require(
-        checked["build"] == operation.build
-            && checked["project"] == operation.project.to_string_lossy().as_ref()
-            && checked["config"] == operation.config.to_string_lossy().as_ref(),
-        "runtime activation preflight returned a different build or context",
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn request(
     core: &Arc<Core>,
@@ -120,23 +147,47 @@ pub(super) fn request(
     path: Option<&str>,
     conversation: Option<&str>,
     task: Option<&str>,
+    request_id: Option<&str>,
 ) -> Result<Value> {
-    let _graph = core.locks.graph();
-    let _integration = core.locks.integration();
+    let id = request_id.map(str::to_owned).unwrap_or_else(crate::id);
+    require(
+        !id.is_empty() && id.len() <= 128,
+        "request_id must contain 1–128 bytes",
+    )?;
+    // The retry signature describes the request, including the requested PATH.
+    let signature = crate::hash(serde_json::to_vec(&json!([
+        executable,
+        project,
+        config,
+        path,
+        conversation,
+        task
+    ]))?);
     let _activation = core
         .runtime_activation_lock
         .lock()
         .expect("runtime activation mutex");
-    let executable = executable.canonicalize()?;
-    let expected = build_identity(&executable)?;
-    let task = activation_task(core, conversation, task)?;
-    if let Some(existing) = load(&core.state.join(PENDING))? {
+    if let Some(existing) = storage::load(&core.store.db(), Some(&id), false)? {
         require(
-            existing.build == expected && existing.task == task,
-            "another runtime activation is pending",
+            existing.signature == signature,
+            "activation request_id conflicts with different parameters",
         )?;
         return Ok(serde_json::to_value(existing)?);
     }
+    require(
+        active(core)?.is_none(),
+        "another runtime activation is pending",
+    )?;
+    let task = activation_task(core, conversation, task)?;
+    let generation = task
+        .as_deref()
+        .map(|id| {
+            core.store
+                .task_by_id(id)
+                .map(|t| t.map(|t| t.input_generation))
+        })
+        .transpose()?
+        .flatten();
     let mut resume = Vec::new();
     for item in core.store.conversations()? {
         if !core.is_idle(&item.id) || conversation == Some(item.id.as_str()) {
@@ -147,36 +198,41 @@ pub(super) fn request(
             });
         }
     }
-    let mut operation = Activation {
-        id: crate::id(),
-        executable,
-        build: expected,
+    let log = core
+        .state
+        .join("activation-logs")
+        .join(format!("{}-preflight.stderr", crate::hash(&id)))
+        .to_string_lossy()
+        .into_owned();
+    let operation = Activation {
+        id,
+        signature,
+        executable: executable.canonicalize()?,
+        build: build_identity(executable)?,
         project: project.canonicalize()?,
         config: config.canonicalize()?,
         path: merged_path(std::env::var_os("PATH"), path)?,
         task,
         conversation: conversation.map(str::to_owned),
         resume,
-        state: "pending".into(),
+        state: ActivationState::Validating,
         error: None,
+        generation,
+        config_revision: crate::hash(std::fs::read(config)?),
+        log: Some(log),
+        diagnostic_tail: None,
     };
-    if let Err(error) = check_target(&operation, &core.state) {
-        operation.state = "failed".into();
-        operation.error = Some(error.to_string());
-        save(&core.state, LAST, &operation)?;
-        announce(core, &operation)?;
-        return Err(error);
-    }
-    if operation.build == build() && crate::lean::doctor::preflight(&core.config_snapshot()).is_ok()
-    {
-        // A matching build is ready only when its actual launch environment works.
-        operation.state = "applied".into();
-        save(&core.state, LAST, &operation)?;
-    } else {
-        save(&core.state, PENDING, &operation)?;
-    }
+    save(core, &operation)?;
     announce(core, &operation)?;
-    Ok(serde_json::to_value(operation)?)
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    core.runtime_activation_cancels
+        .lock()
+        .expect("activation cancellations")
+        .insert(operation.id.clone(), cancel.clone());
+    let reply = serde_json::to_value(&operation)?;
+    let worker = core.clone();
+    std::thread::spawn(move || validation::run(worker, operation, cancel));
+    Ok(reply)
 }
 
 pub(super) fn replacement_path(
@@ -197,10 +253,19 @@ pub(super) fn replacement_path(
         task: None,
         conversation: None,
         resume: Vec::new(),
-        state: "pending".into(),
+        state: ActivationState::Validating,
+        signature: String::new(),
+        generation: None,
+        config_revision: crate::hash(std::fs::read(config)?),
+        log: None,
+        diagnostic_tail: None,
         error: None,
     };
-    check_target(&operation, state)?;
+    validation::check_target(
+        &operation,
+        state,
+        &std::sync::atomic::AtomicBool::new(false),
+    )?;
     Ok(path)
 }
 
@@ -244,7 +309,7 @@ fn announce(core: &Core, operation: &Activation) -> Result<()> {
             "runtime_activation",
             &json!({"id":operation.id,"state":operation.state,"build":operation.build,
                 "task":operation.task,"error":operation.error,
-                "text":format!("Runtime activation {}{}", operation.state,
+                "text":format!("Runtime activation {}{}", operation.state.name(),
                     operation.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default())}),
         )?;
     }
@@ -256,11 +321,35 @@ pub(in crate::lean) fn gate_approval(
     core: &Core,
     task: &mut crate::lean::store::Task,
 ) -> Result<bool> {
-    let Some(operation) = load(&core.state.join(PENDING))? else {
+    let Some(operation) = storage::for_task(core, task)? else {
         return Ok(false);
     };
-    if operation.task.as_deref() != Some(&task.id) {
-        return Ok(false);
+    match operation.state {
+        ActivationState::Applied => return Ok(false),
+        ActivationState::Failed | ActivationState::Interrupted => {
+            let conversation = core.store.plan_conversation(&task.plan_id)?;
+            core.stop(
+                &conversation,
+                task,
+                task_status::FAILED,
+                operation
+                    .error
+                    .as_deref()
+                    .or(Some("runtime activation did not confirm readiness")),
+            )?;
+            return Ok(true);
+        }
+        ActivationState::Cancelled => {
+            let conversation = core.store.plan_conversation(&task.plan_id)?;
+            core.stop(
+                &conversation,
+                task,
+                task_status::CANCELLED,
+                Some("runtime activation cancelled"),
+            )?;
+            return Ok(true);
+        }
+        _ => {}
     }
     task.feedback.get_or_insert_with(|| json!({}))["runtime_activation"] = json!(operation.id);
     let conversation = core.store.plan_conversation(&task.plan_id)?;
@@ -285,6 +374,9 @@ fn release_task(
     let Some(mut task) = core.store.task_by_id(id)? else {
         return Ok(());
     };
+    if operation.generation != Some(task.input_generation) {
+        return Ok(());
+    }
     if task.status == task_status::CANCELLED {
         return Ok(());
     }
@@ -309,7 +401,7 @@ fn release_task(
     } else if task.status == task_status::WAITING {
         let feedback = task.feedback.get_or_insert_with(|| json!({}));
         feedback["resume_role"] = json!("reviewer");
-        feedback["reason"] = Value::Null;
+        feedback["current_reason"] = Value::Null;
         core.set_status(&conversation, &mut task, task_status::QUEUED)?;
     }
     Ok(())
@@ -318,37 +410,87 @@ fn release_task(
 fn finish(
     core: &Core,
     mut operation: Activation,
-    state: &str,
+    state: ActivationState,
     error: Option<String>,
 ) -> Result<Activation> {
-    operation.state = state.into();
+    operation.state = state;
     operation.error = error;
-    release_task(core, &operation, state, operation.error.as_deref())?;
-    save(&core.state, LAST, &operation)?;
+    release_task(core, &operation, state.name(), operation.error.as_deref())?;
+    save(core, &operation)?;
     announce(core, &operation)?;
-    std::fs::remove_file(core.state.join(PENDING))?;
-    std::fs::File::open(&core.state)?.sync_all()?;
     Ok(operation)
+}
+
+pub(in crate::lean) fn recover(core: &Arc<Core>) -> Result<()> {
+    for operation in storage::import(core)? {
+        release_task(
+            core,
+            &operation,
+            operation.state.name(),
+            operation.error.as_deref(),
+        )?;
+        resume(core, operation)?;
+    }
+    if let Some(operation) = active(core)?
+        && operation.state != ActivationState::Switching
+    {
+        finish(
+            core,
+            operation,
+            ActivationState::Interrupted,
+            Some("runtime restarted during activation validation; request activation again".into()),
+        )?;
+    }
+    Ok(())
 }
 
 /// Startup confirmation happens before work is allowed to resume.
 pub(super) fn confirm(core: &Arc<Core>, project: &Path, config: &Path) -> Result<()> {
-    let Some(operation) = load(&core.state.join(PENDING))? else {
+    let Some(mut operation) = active(core)? else {
         return Ok(());
     };
-    if operation.state == "cancelled" {
-        let operation = finish(core, operation, "cancelled", None)?;
+    if operation.state != ActivationState::Switching {
+        let operation = finish(
+            core,
+            operation,
+            ActivationState::Interrupted,
+            Some("runtime restarted before handoff; request activation again".into()),
+        )?;
         return resume(core, operation);
     }
-    if operation.build != build() {
-        return Ok(());
+    let result = (|| {
+        require(
+            operation.build == build(),
+            "successor build did not match the pending activation",
+        )?;
+        require(
+            operation.project == project && operation.config == config,
+            "pending runtime activation belongs to another project or configuration",
+        )?;
+        validation::check_inputs(core, &operation)?;
+        crate::lean::doctor::preflight(&core.config_snapshot())
+    })();
+    let (state, error) = match result {
+        Ok(()) => (ActivationState::Applied, None),
+        Err(e) => (ActivationState::Failed, Some(e.to_string())),
+    };
+    // Requests admitted just before the switch can commit after the handoff
+    // snapshot. Reconcile durable conversations before enabling successor work.
+    for conversation in core.store.conversations()? {
+        if !operation
+            .resume
+            .iter()
+            .any(|item| item.conversation == conversation.id)
+        {
+            operation.resume.push(Resume {
+                plan: core.store.accepted_plan(&conversation.id)?,
+                conversation: conversation.id,
+                cancelled: false,
+            });
+        }
     }
-    require(
-        operation.project == project && operation.config == config,
-        "pending runtime activation belongs to another project or configuration",
-    )?;
-    crate::lean::doctor::preflight(&core.config_snapshot())?;
-    let operation = finish(core, operation, "applied", None)?;
+    let operation = finish(core, operation, state, error)?;
+    core.replay_delivered_answers()?;
     resume(core, operation)
 }
 
@@ -381,32 +523,34 @@ pub(super) fn apply_when_idle(core: &Arc<Core>) -> Result<()> {
     if core.busy() || core.state.join("stopped").exists() {
         return Ok(());
     }
-    let _graph = core.locks.graph();
-    let _integration = core.locks.integration();
-    // A send accepted just before activation may still be recording its text.
-    // Serialize its commit/wake with the final durable handoff snapshot.
-    let _session = core
+    let graph = core.locks.graph();
+    let integration = core.locks.integration();
+    let session = core
         .locks
         .session_lifecycle
         .lock()
         .expect("session lifecycle mutex");
-    let _activation = core
+    let activation = core
         .runtime_activation_lock
         .lock()
         .expect("runtime activation mutex");
-    if core.busy() || core.state.join("stopped").exists() {
-        return Ok(());
-    }
-    let Some(mut operation) = load(&core.state.join(PENDING))? else {
+    let Some(mut operation) = active(core)? else {
         return Ok(());
     };
-    if operation.state == "cancelled" {
-        let operation = finish(core, operation, "cancelled", None)?;
-        drop(_activation);
-        drop(_session);
-        drop(_integration);
-        drop(_graph);
-        return resume(core, operation);
+    if operation.state != ActivationState::WaitingForIdle
+        || core.busy()
+        || core.state.join("stopped").exists()
+    {
+        return Ok(());
+    }
+    if let Err(e) = validation::check_inputs(core, &operation) {
+        finish(
+            core,
+            operation,
+            ActivationState::Failed,
+            Some(e.to_string()),
+        )?;
+        return Ok(());
     }
     for conversation in core.store.conversations()? {
         if !operation
@@ -422,9 +566,14 @@ pub(super) fn apply_when_idle(core: &Arc<Core>) -> Result<()> {
             });
         }
     }
-    save(&core.state, PENDING, &operation)?;
+    operation.state = ActivationState::Switching;
+    save(core, &operation)?;
+    drop(activation);
+    drop(session);
+    drop(integration);
+    drop(graph);
+    // All process operations, including shutdown, happen outside global locks.
     let result = (|| -> Result<()> {
-        check_target(&operation, &core.state)?;
         core.native.shutdown()?;
         use std::os::unix::process::CommandExt;
         let error = std::process::Command::new(&operation.executable)
@@ -438,34 +587,59 @@ pub(super) fn apply_when_idle(core: &Arc<Core>) -> Result<()> {
         Err(error.into())
     })();
     if let Err(error) = result {
-        let operation = finish(core, operation, "failed", Some(error.to_string()))?;
-        drop(_activation);
-        drop(_session);
-        drop(_integration);
-        drop(_graph);
+        let operation = finish(
+            core,
+            operation,
+            ActivationState::Failed,
+            Some(error.to_string()),
+        )?;
         resume(core, operation)?;
         return Err(error);
     }
     Ok(())
 }
 
-pub(in crate::lean) fn cancel_conversation(core: &Core, conversation: &str) -> Result<()> {
-    let _activation = core
+pub(in crate::lean) fn cancel_operation(core: &Core, id: &str) -> Result<Value> {
+    // Signal before taking the operation mutex, even while a validator exits.
+    if let Some(flag) = core
+        .runtime_activation_cancels
+        .lock()
+        .expect("activation cancellations")
+        .get(id)
+    {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    let _guard = core
         .runtime_activation_lock
         .lock()
         .expect("runtime activation mutex");
-    let Some(mut operation) = load(&core.state.join(PENDING))? else {
+    let operation = storage::load(&core.store.db(), Some(id), false)?
+        .ok_or_else(|| Error::Invalid("unknown activation request ID".into()))?;
+    require(
+        operation.state != ActivationState::Switching,
+        "runtime handoff has started; inspect successor status",
+    )?;
+    let operation = if matches!(
+        operation.state,
+        ActivationState::Validating | ActivationState::WaitingForIdle
+    ) {
+        finish(core, operation, ActivationState::Cancelled, None)?
+    } else {
+        operation
+    };
+    Ok(serde_json::to_value(operation)?)
+}
+
+pub(in crate::lean) fn cancel_conversation(core: &Core, conversation: &str) -> Result<()> {
+    let Some(operation) = active(core)? else {
         return Ok(());
     };
-    for item in &mut operation.resume {
-        if item.conversation == conversation {
-            item.cancelled = true;
-        }
-    }
     if operation.conversation.as_deref() == Some(conversation) {
-        operation.state = "cancelled".into();
+        cancel_operation(core, &operation.id)?;
+    } else {
+        core.store.db().execute("UPDATE runtime_activation_conversations SET cancelled=1 WHERE operation=?1 AND conversation=?2",rusqlite::params![operation.id,conversation])?;
     }
-    save(&core.state, PENDING, &operation)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -509,10 +683,15 @@ mod tests {
                     plan: Some(task.plan_id.clone()),
                     cancelled: false,
                 }],
-                state: "pending".into(),
+                state: ActivationState::WaitingForIdle,
+                signature: String::new(),
+                generation: Some(task.input_generation),
+                config_revision: String::new(),
+                log: None,
+                diagnostic_tail: None,
                 error: None,
             };
-            save(&core.state, PENDING, &operation).unwrap();
+            save(&core, &operation).unwrap();
             core.set_status(&conversation, &mut task, task_status::APPROVED)
                 .unwrap();
             assert_eq!(task.status, task_status::WAITING);
@@ -531,16 +710,20 @@ mod tests {
                 finish(
                     &core,
                     operation,
-                    if error.is_some() { "failed" } else { "applied" },
+                    if error.is_some() {
+                        ActivationState::Failed
+                    } else {
+                        ActivationState::Applied
+                    },
                     error.map(str::to_owned),
                 )
                 .unwrap();
             }
             let mut restored = core.task(&task.plan_id, &task.id).unwrap();
             assert_eq!(restored.report, task.report);
-            assert!(!pending(&core));
+            assert!(active(&core).unwrap().is_none());
             assert_eq!(
-                status(&core.state).unwrap()["state"],
+                status(&core.state, None).unwrap()["state"],
                 if cancelled {
                     "cancelled"
                 } else if error.is_some() {
@@ -549,6 +732,15 @@ mod tests {
                     "applied"
                 }
             );
+            if error.is_some() || cancelled {
+                let expected = restored.status.clone();
+                core.set_status(&conversation, &mut restored, task_status::APPROVED)
+                    .unwrap();
+                assert_eq!(
+                    restored.status, expected,
+                    "terminal activation cannot earn approval"
+                );
+            }
             if cancelled {
                 assert_eq!(restored.status, task_status::CANCELLED);
             } else if let Some(error) = error {
@@ -568,6 +760,159 @@ mod tests {
                     .unwrap();
                 assert!(core.has_runnable_dependents(&task.plan_id).unwrap());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod operation_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fixture() -> (tempfile::TempDir, Arc<Core>, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("antislop.toml");
+        std::fs::write(&config, include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), Config::load(&config).unwrap()).unwrap();
+        let binary = dir.path().join("successor");
+        std::fs::write(&binary,"#!/bin/sh\nif [ \"$1\" = --version ]; then cat version.json; exit; fi\nif [ \"$1\" = __runtime_preflight ]; then touch started; while [ -e hold ]; do sleep 0.02; done; cat preflight.json; exit; fi\necho UNEXPECTED >> unexpected\nexit 1\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let build = build_identity(&binary).unwrap();
+        std::fs::write(dir.path().join("version.json"),json!({"name":"antislop","build":build,"protocol":PROTOCOL_VERSION,"capabilities":["runtime_preflight"]}).to_string()).unwrap();
+        std::fs::write(dir.path().join("preflight.json"),json!({"build":build,"project":dir.path().canonicalize().unwrap(),"config":config.canonicalize().unwrap()}).to_string()).unwrap();
+        (dir, core, config, binary)
+    }
+
+    fn wait_for(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "activation worker did not progress"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn held_preflight_keeps_status_retries_and_manual_cancellation_responsive() {
+        let (dir, core, config, binary) = fixture();
+        std::fs::write(dir.path().join("hold"), []).unwrap();
+        let send = |id, path| {
+            request(
+                &core,
+                dir.path(),
+                &config,
+                &binary,
+                path,
+                None,
+                None,
+                Some(id),
+            )
+        };
+        assert_eq!(send("held", None).unwrap()["state"], "validating");
+        wait_for(|| dir.path().join("started").exists());
+        assert_eq!(
+            status(&core.state, Some("held")).unwrap()["state"],
+            "validating"
+        );
+        assert!(!pending(&core));
+        assert!(!draining(&core));
+        assert_eq!(send("held", None).unwrap()["id"], "held");
+        assert!(
+            send("held", Some("/different"))
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts")
+        );
+        assert_eq!(
+            cancel_operation(&core, "held").unwrap()["state"],
+            "cancelled"
+        );
+        wait_for(|| core.runtime_activation_cancels.lock().unwrap().is_empty());
+        assert_eq!(
+            status(&core.state, Some("held")).unwrap()["state"],
+            "cancelled"
+        );
+        assert!(!dir.path().join("unexpected").exists());
+        // Read-only status is available without a daemon and creates no tables.
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(status(&empty, None).unwrap()["state"], "none");
+        assert!(!empty.join("core.db").exists());
+    }
+
+    #[test]
+    fn old_version_and_missing_capability_never_reach_an_internal_command() {
+        for metadata in [
+            "antislop 0.1.0",
+            "{\"name\":\"antislop\",\"capabilities\":[]}",
+        ] {
+            let (dir, core, config, binary) = fixture();
+            std::fs::write(dir.path().join("version.json"), metadata).unwrap();
+            request(
+                &core,
+                dir.path(),
+                &config,
+                &binary,
+                None,
+                None,
+                None,
+                Some("old"),
+            )
+            .unwrap();
+            wait_for(|| status(&core.state, Some("old")).unwrap()["state"] == "failed");
+            assert!(!dir.path().join("started").exists());
+            assert!(!dir.path().join("unexpected").exists());
+            assert!(
+                status(&core.state, Some("old")).unwrap()["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rebuild")
+            );
+        }
+    }
+
+    #[test]
+    fn changed_validation_inputs_and_restart_cannot_earn_readiness() {
+        let (dir, core, config, binary) = fixture();
+        std::fs::write(dir.path().join("hold"), []).unwrap();
+        request(
+            &core,
+            dir.path(),
+            &config,
+            &binary,
+            None,
+            None,
+            None,
+            Some("changed"),
+        )
+        .unwrap();
+        wait_for(|| dir.path().join("started").exists());
+        std::fs::write(
+            &config,
+            format!("{}\n# changed\n", std::fs::read_to_string(&config).unwrap()),
+        )
+        .unwrap();
+        std::fs::remove_file(dir.path().join("hold")).unwrap();
+        wait_for(|| status(&core.state, Some("changed")).unwrap()["state"] == "failed");
+        assert!(
+            status(&core.state, Some("changed")).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("configuration changed")
+        );
+        for state in [ActivationState::Validating, ActivationState::WaitingForIdle] {
+            let mut operation = storage::load(&core.store.db(), Some("changed"), false)
+                .unwrap()
+                .unwrap();
+            operation.state = state;
+            save(&core, &operation).unwrap();
+            recover(&core).unwrap();
+            assert_eq!(
+                status(&core.state, Some("changed")).unwrap()["state"],
+                "interrupted"
+            );
         }
     }
 }

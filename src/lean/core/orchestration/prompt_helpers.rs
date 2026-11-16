@@ -45,7 +45,7 @@ fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
                 "task": task.spec["id"],
                 "status": task.status,
                 "deferred": task.spec["deferred"] == true,
-                "reason": task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
+                "reason": task.current_reason().map(|text| tasks::bound(text, 2000)),
                 "waiting_request": task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
                 "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")).map(|value| tasks::bound(&value.to_string(), 4000)),
             })

@@ -77,7 +77,7 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
         .unwrap_or_default();
     let states = graph.iter().map(|task| json!({
         "task":task.spec["id"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
-        "reason":task.feedback.as_ref().and_then(|feedback| feedback.get("reason")).and_then(serde_json::Value::as_str).map(|text| tasks::bound(text, 2000)),
+        "reason":task.current_reason().map(|text| tasks::bound(text, 2000)),
         "recovery":if task.spec["deferred"] == true { "deliberate scheduling hold; release by reviewed revision when its prerequisite is resolved" } else { match task.status.as_str() {
             status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
             status::COORDINATING => "resume_task with current round/input_generation for a resolved blocker or independent authorized work; keep unresolved steps held; revise_plan for contract/dependency changes",

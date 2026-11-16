@@ -177,13 +177,6 @@ impl Core {
     }
 
     pub fn cancel(&self, conversation: &str) {
-        if let Err(error) = crate::lean::daemon::activation::cancel_conversation(self, conversation)
-        {
-            self.notice(
-                conversation,
-                &format!("could not cancel pending runtime activation: {error}"),
-            );
-        }
         for (owner, flag) in self
             .activity
             .task_cancels
@@ -205,6 +198,13 @@ impl Core {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
             }
+        }
+        if let Err(error) = crate::lean::daemon::activation::cancel_conversation(self, conversation)
+        {
+            self.notice(
+                conversation,
+                &format!("could not cancel pending runtime activation: {error}"),
+            );
         }
     }
 

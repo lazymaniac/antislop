@@ -260,6 +260,19 @@ pub struct Task {
     pub checks: Option<Value>,
 }
 
+impl Task {
+    pub(in crate::lean) fn current_reason(&self) -> Option<&str> {
+        self.feedback
+            .as_ref()
+            .and_then(|feedback| {
+                feedback
+                    .get("current_reason")
+                    .or_else(|| feedback.get("reason"))
+            })
+            .and_then(Value::as_str)
+    }
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

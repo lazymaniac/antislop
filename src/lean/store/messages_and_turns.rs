@@ -4,10 +4,47 @@ use super::*;
 mod session;
 
 impl Store {
+    /// Preserve the original transcript while excluding a verified preflight
+    /// fallback from future interpretation as a user instruction.
+    pub(in crate::lean) fn classify_preflight_failure(
+        &self,
+        conversation: &str,
+        message: u64,
+        reason: &str,
+    ) -> Result<Value> {
+        crate::require(
+            message <= i64::MAX as u64,
+            "message sequence is out of range",
+        )?;
+        crate::require(
+            !reason.trim().is_empty() && reason.len() <= 8192,
+            "classification requires a bounded failure reason",
+        )?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let (author, text): (String, String) = tx.query_row(
+            "SELECT author,text FROM messages WHERE seq=?1 AND conversation_id=?2",
+            params![message as i64, conversation],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let text = self.content.decode(&text)?;
+        crate::require(
+            author == "user" && text.starts_with("__runtime_preflight "),
+            "message is not an internal preflight command accidentally submitted to chat",
+        )?;
+        let changed=tx.execute("INSERT INTO message_classifications(message,kind,reason) VALUES(?1,'runtime_failure_artifact',?2) ON CONFLICT(message) DO NOTHING",params![message as i64,reason])?;
+        let result = serde_json::json!({"message":message,"kind":"runtime_failure_artifact","reason":reason});
+        if changed == 1 {
+            tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'message_classified',?2,?3)",params![conversation,result.to_string(),now_ms()])?;
+        }
+        tx.commit()?;
+        Ok(result)
+    }
+
     pub fn messages_after(&self, conversation: &str, after: u64) -> Result<Vec<Message>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT seq,author,text FROM messages WHERE conversation_id=?1 AND seq>?2 ORDER BY seq",
+            "SELECT seq,author,text FROM messages WHERE conversation_id=?1 AND seq>?2 AND seq NOT IN (SELECT message FROM message_classifications) ORDER BY seq",
         )?;
         let rows = statement.query_map(params![conversation, after as i64], |row| {
             Ok(Message {
@@ -27,7 +64,7 @@ impl Store {
     ) -> Result<Vec<Message>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT seq,author,text FROM messages WHERE conversation_id=?1 AND seq<=?2 ORDER BY seq DESC LIMIT 32",
+            "SELECT seq,author,text FROM messages WHERE conversation_id=?1 AND seq<=?2 AND seq NOT IN (SELECT message FROM message_classifications) ORDER BY seq DESC LIMIT 32",
         )?;
         let rows = statement.query_map(params![conversation, through as i64], |row| {
             Ok(Message {
@@ -51,7 +88,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT seq,author,text FROM messages
-             WHERE conversation_id=?1 AND author=?2 AND seq>?3 ORDER BY seq",
+             WHERE conversation_id=?1 AND author=?2 AND seq>?3 AND seq NOT IN (SELECT message FROM message_classifications) ORDER BY seq",
         )?;
         let rows = statement.query_map(params![conversation, author, after as i64], |row| {
             Ok(Message {

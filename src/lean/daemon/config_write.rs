@@ -237,6 +237,7 @@ impl Drop for PreparedConfigWrite {
     }
 }
 
+#[cfg(test)]
 pub(super) fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
     let prepared = PreparedConfigWrite::prepare(path, text)?;
     prepared.publish()?;

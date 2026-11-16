@@ -1525,6 +1525,13 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
     };
     let original = wait_for(&|_| true);
     assert!(
+        original["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "runtime_activation_async_v1")
+    );
+    assert!(
         original["launch_error"]
             .as_str()
             .unwrap()
@@ -1541,22 +1548,27 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
     let target = antislop::lean::daemon::build_identity(&successor).unwrap();
     let request = |path| {
         Request::Control(ControlRequest::ActivateRuntime {
+            request_id: None,
             executable: successor.to_string_lossy().into_owned(),
             path,
             conversation: Some(conversation.clone()),
             task: None,
         })
     };
-    let error = client.call(&request(None)).unwrap_err().to_string();
-    assert!(
-        error.contains("not an executable file or on PATH"),
-        "{error}"
-    );
+    let operation = client.call(&request(None)).unwrap();
+    assert_eq!(operation["state"], "validating");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let failed = loop {
+        let result = client
+            .call(&Request::Control(ControlRequest::RuntimeActivationStatus))
+            .unwrap();
+        if result["state"] == "failed" {
+            break result;
+        }
+        assert!(Instant::now() < deadline, "{result}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert_eq!(identity().unwrap()["build"], original["build"]);
-    let failed = client
-        .call(&Request::Control(ControlRequest::RuntimeActivationStatus))
-        .unwrap();
-    assert_eq!(failed["state"], "failed");
     assert!(
         failed["error"]
             .as_str()
@@ -1566,7 +1578,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
     let launch_path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
     assert_eq!(
         client.call(&request(Some(launch_path.clone()))).unwrap()["state"],
-        "pending"
+        "validating"
     );
     let applied = wait_for(&|v| v["build"] == target && v["launch_error"].is_null());
     assert_eq!(
@@ -1599,27 +1611,27 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
     std::fs::copy(executable, &second).unwrap();
     let second_build = antislop::lean::daemon::build_identity(&second).unwrap();
     let request = Request::Control(ControlRequest::ActivateRuntime {
+        request_id: None,
         executable: second.to_string_lossy().into_owned(),
         path: Some(launch_path),
         conversation: Some(conversation.clone()),
         task: None,
     });
-    assert_eq!(client.call(&request).unwrap()["state"], "pending");
+    assert_eq!(client.call(&request).unwrap()["state"], "validating");
     assert_eq!(
         identity().unwrap()["build"],
         target,
         "active turn must finish before handoff"
     );
-    let held = client
+    let accepted = client
         .call(&Request::Conversation(ConversationRequest::Send {
             conversation: conversation.clone(),
             operation_id: None,
-            text: "new work waits for activation".into(),
+            text: "new work accepted while validation runs".into(),
             to: None,
         }))
-        .unwrap_err()
-        .to_string();
-    assert!(held.contains("runtime activation is pending"), "{held}");
+        .unwrap();
+    assert!(!accepted.is_null());
     client
         .call(&Request::Conversation(ConversationRequest::Pause {
             conversation: conversation.clone(),

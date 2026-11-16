@@ -4,11 +4,13 @@ fn encode_activation(request: Request) -> std::result::Result<WireRequest, Box<R
     use crate::lean::daemon::ControlRequest;
     match request {
         Request::Control(ControlRequest::ActivateRuntime {
+            request_id,
             executable,
             path,
             conversation,
             task,
         }) => Ok(WireRequest::ActivateRuntime {
+            request_id,
             executable,
             path,
             conversation,
@@ -17,6 +19,21 @@ fn encode_activation(request: Request) -> std::result::Result<WireRequest, Box<R
         Request::Control(ControlRequest::RuntimeActivationStatus) => {
             Ok(WireRequest::RuntimeActivationStatus)
         }
+        Request::Control(ControlRequest::RuntimeActivationOperation { request_id }) => {
+            Ok(WireRequest::RuntimeActivationOperation { request_id })
+        }
+        Request::Control(ControlRequest::CancelRuntimeActivation { request_id }) => {
+            Ok(WireRequest::CancelRuntimeActivation { request_id })
+        }
+        Request::Control(ControlRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        }) => Ok(WireRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        }),
         other => Err(Box::new(other)),
     }
 }

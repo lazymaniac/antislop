@@ -120,6 +120,7 @@ impl Core {
         feedback["waiting_request"] = json!(request);
         feedback["resume_role"] = json!(if reviewer { "reviewer" } else { "worker" });
         feedback["reason"] = json!("awaiting orchestrator or user answer");
+        feedback["current_reason"] = feedback["reason"].clone();
         self.store.update_task(task)?;
         task.status = self.store.park_task_for_question(task, request)?;
         self.announce_task(

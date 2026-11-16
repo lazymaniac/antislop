@@ -128,6 +128,13 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     lifecycle::serve(project, config_path, state)
 }
 
+/// Capabilities are also safe to probe on builds predating internal commands.
+pub fn version_info() -> Value {
+    json!({"name":"antislop","version":env!("CARGO_PKG_VERSION"),
+        "build":build(),"protocol":PROTOCOL_VERSION,
+        "capabilities":["runtime_preflight","runtime_activation_async_v1"]})
+}
+
 pub fn runtime_preflight(project: &Path, config: &Path, state: &Path) -> Result<Value> {
     activation::preflight(project, config, state)
 }

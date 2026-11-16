@@ -14,7 +14,7 @@ impl Core {
             "only the orchestrator may use this control tool",
         )?;
         match tool {
-            "answer_agent" => self.answer_agent_tool(conversation, args),
+            "answer_agent" => self.answer_agent_tool(conversation, turn, args),
             "defer_to_user" => self.defer_question_tool(conversation, args),
             "decide_approval" => self.decide_approval_tool(conversation, args),
             "retry_task" => self.retry_failed_task(
@@ -46,13 +46,12 @@ impl Core {
     pub(super) fn answer_agent_tool(
         self: &Arc<Self>,
         conversation: &str,
+        turn: &str,
         args: &Value,
     ) -> Result<Value> {
         if args["disposition"] == "escalate_to_user" {
             return self.defer_question_tool(conversation, &json!({"request":required_text(args,"request")?,"explanation":required_text(args,"answer")?}));
         }
-        let _graph = self.locks.graph();
-        let _integration = self.locks.integration();
         let request = required_text(args, "request")?;
         let answer = required_text(args, "answer")?;
         let disposition = match args.get("disposition").filter(|value| !value.is_null()) {
@@ -64,17 +63,58 @@ impl Core {
                 .store
                 .defer_question_to_user(conversation, &request, &answer);
         }
-        let reply = self.store.answer_agent_with_disposition(
+        let reply = self.store.answer_agent_from_turn(
             conversation,
             &request,
             &answer,
             disposition,
             args["target"].as_str().unwrap_or_default(),
+            Some(turn),
         )?;
-        if let Some(task) = self.store.latest_plan(conversation)?.first() {
-            self.maybe_continue_plan(conversation, &task.plan_id)?;
-        }
+        self.resume_delivered_answer(conversation);
+
         Ok(reply)
+    }
+
+    pub(in crate::lean) fn replay_delivered_answers(self: &Arc<Self>) -> Result<()> {
+        let conversations = {
+            let db = self.store.db();
+            db.prepare(
+                "SELECT DISTINCT conversation FROM agent_answer_receipts WHERE resume_pending=1",
+            )?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for conversation in conversations {
+            self.resume_delivered_answer(&conversation);
+        }
+        Ok(())
+    }
+
+    pub(in crate::lean) fn resume_delivered_answer(self: &Arc<Self>, conversation: &str) {
+        let core = self.clone();
+        let conversation = conversation.to_owned();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let _graph = core.locks.graph();
+                let _integration = core.locks.integration();
+                let upto: i64=core.store.db().query_row("SELECT coalesce(max(rowid),0) FROM agent_answer_receipts WHERE conversation=?1",[&conversation],|r|r.get(0))?;
+                if let Some(plan) = core.store.accepted_plan(&conversation)? {
+                    core.maybe_continue_plan(&conversation, &plan)?;
+                }
+                core.store.db().execute(
+                    "UPDATE agent_answer_receipts SET resume_pending=0 WHERE conversation=?1 AND rowid<=?2",
+                    rusqlite::params![conversation,upto],
+                )?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                core.notice(
+                    &conversation,
+                    &format!("answer delivered; scheduler resume pending: {error}"),
+                );
+            }
+        });
     }
 
     pub(super) fn defer_question_tool(&self, conversation: &str, args: &Value) -> Result<Value> {

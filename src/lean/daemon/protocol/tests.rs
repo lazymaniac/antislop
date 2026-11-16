@@ -9,6 +9,7 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
     let cases = [
         (
             Request::Control(ControlRequest::ActivateRuntime {
+                request_id: None,
                 executable: "/runtime/antislop".into(),
                 path: Some("/tools:/usr/bin".into()),
                 conversation: Some("c".into()),

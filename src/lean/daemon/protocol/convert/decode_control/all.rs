@@ -4,11 +4,13 @@ fn decode_activation(wire: WireRequest) -> std::result::Result<Request, Box<Wire
     use crate::lean::daemon::ControlRequest;
     match wire {
         WireRequest::ActivateRuntime {
+            request_id,
             executable,
             path,
             conversation,
             task,
         } => Ok(Request::Control(ControlRequest::ActivateRuntime {
+            request_id,
             executable,
             path,
             conversation,
@@ -17,6 +19,23 @@ fn decode_activation(wire: WireRequest) -> std::result::Result<Request, Box<Wire
         WireRequest::RuntimeActivationStatus => {
             Ok(Request::Control(ControlRequest::RuntimeActivationStatus))
         }
+        WireRequest::RuntimeActivationOperation { request_id } => Ok(Request::Control(
+            ControlRequest::RuntimeActivationOperation { request_id },
+        )),
+        WireRequest::CancelRuntimeActivation { request_id } => {
+            Ok(Request::Control(ControlRequest::CancelRuntimeActivation {
+                request_id,
+            }))
+        }
+        WireRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        } => Ok(Request::Control(ControlRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        })),
         other => Err(Box::new(other)),
     }
 }

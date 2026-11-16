@@ -180,6 +180,7 @@ pub struct Core {
     /// Private state directory; session and writer worktrees live under it.
     state: PathBuf,
     runtime_activation_lock: Mutex<()>,
+    runtime_activation_cancels: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
     activity: core::state::Activity,
     revisions: core::state::RevisionState,
     worktrees: core::state::WorktreeState,
