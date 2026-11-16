@@ -474,6 +474,112 @@ mod tests {
     }
 
     #[test]
+    fn options_card_pty_follows_worker_reviewer_transitions() {
+        use crossterm::event::KeyEvent;
+
+        let mut app = App::test_app();
+        app.focus = Focus::Graph;
+        app.graph_viewport = Some((120, 48));
+        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
+            id: "options".into(),
+            kind: "options".into(),
+            round: 1,
+            ..Default::default()
+        }];
+        app.selected = "worker:options".into();
+        app.graph_expanded = Some(app.selected.clone());
+        app.graph_tab = 1;
+        let mut details = Details::new(app.selected.clone());
+        details.task_uuid = Some("task-uuid".into());
+        details.task = Some(json!({
+            "round": 1,
+            "native_sessions": [
+                {"role": "worker:task-uuid", "session_id": "worker-session"},
+                {"role": "reviewer:task-uuid", "session_id": "reviewer-session"}
+            ]
+        }));
+        details.native_areas[0] = Rect::new(1, 1, 40, 10);
+        app.details = Some(details);
+        let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
+        let mut previous: Option<Arc<AtomicBool>> = None;
+
+        for (phase, role) in [
+            ("working", "worker"),
+            ("reviewing", "reviewer"),
+            ("working", "worker"),
+        ] {
+            app.view.tasks[0].status = phase.into();
+            app.details.as_mut().unwrap().native_focus = true;
+            let (commands, received) = mpsc::sync_channel(8);
+            let stopped = Arc::new(AtomicBool::new(false));
+            let marker = format!("{role}-pty");
+            let key = format!("{}:{role}:task-uuid", app.conversation);
+            app.native_views.insert(
+                key.clone(),
+                View {
+                    state: Arc::new(std::sync::Mutex::new(Snapshot {
+                        screen: Some(screen(&marker)),
+                        error: None,
+                    })),
+                    commands,
+                    stop: stopped.clone(),
+                    dimensions: (40, 10),
+                    identity: format!("{role}-session:1"),
+                },
+            );
+
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(rendered.contains(&marker), "{phase}: {rendered}");
+            assert_eq!(app.native_views.len(), 1);
+            assert!(app.native_views.contains_key(&key));
+            assert_eq!(app.graph_expanded.as_deref(), Some("worker:options"));
+            if let Some(previous) = previous {
+                assert!(previous.load(Ordering::SeqCst));
+                assert!(!app.native_focused(), "role changes must leave typing mode");
+            }
+            previous = Some(stopped);
+            // The snapshot stays under the card's key, while commands use
+            // the selected agent's UUID and its own session identity.
+            assert!(
+                app.details
+                    .as_ref()
+                    .unwrap()
+                    .native
+                    .contains_key("worker:options")
+            );
+            while received.try_recv().is_ok() {}
+            if !app.native_focused() {
+                app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+            }
+            assert!(app.native_focused());
+            app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(matches!(
+                received.try_recv(),
+                Ok(Command::Input(Input::Key { event })) if event.code == KeyCode::Enter
+            ));
+            app.paste("answer");
+            assert!(matches!(
+                received.try_recv(),
+                Ok(Command::Input(Input::Paste { text })) if text == "answer"
+            ));
+            app.scroll_console(2);
+            assert!(matches!(
+                received.try_recv(),
+                Ok(Command::Input(Input::Scroll { lines: 2 }))
+            ));
+            app.native_retry();
+            assert!(matches!(received.try_recv(), Ok(Command::Retry)));
+        }
+    }
+
+    #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
         std::fs::create_dir_all(".antislop/tmp").unwrap();
         let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
