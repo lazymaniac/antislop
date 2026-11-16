@@ -124,6 +124,8 @@ fn release_settled_view_checkouts(
         .conversations()?
         .into_iter()
         .map(|conversation| PathBuf::from(conversation.project))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .filter(|project| git::is_repository(project))
         .collect();
     if let Ok(entries) = std::fs::read_dir(state.join("worktrees")) {

@@ -1,6 +1,14 @@
 use super::*;
 
 pub enum Update {
+    ResultDocument {
+        conversation: String,
+        generation: u64,
+        key: String,
+        selection: u64,
+        id: String,
+        result: std::result::Result<document::Document, String>,
+    },
     NativeInputRejected {
         conversation: String,
         role: String,

@@ -172,65 +172,66 @@ fn selected_run_snapshot(
         builder.append("", |sink| sink("No result submitted for this turn yet."))?;
     }
     let document = builder.finish()?;
-    let mut documents = std::collections::HashMap::from([
+    let documents = std::collections::HashMap::from([
         ("result".into(), document.clone()),
         ("review".into(), document),
     ]);
-    append_result_documents(client, conversation, &mut documents)?;
+    append_result_documents(client, conversation, &mut task)?;
     Ok(Snapshot { task, documents })
 }
 
-fn append_result_documents(
+pub(super) fn append_result_documents(
     client: &Client,
     conversation: &str,
-    output: &mut std::collections::HashMap<String, document::Document>,
+    task: &mut Value,
 ) -> Result<()> {
     let documents = client.call(&Request::Session(
         crate::lean::daemon::SessionRequest::ResultDocuments {
             conversation: conversation.into(),
         },
     ))?;
-    let documents = documents
-        .as_array()
-        .ok_or_else(|| crate::Error::Invalid("result document list is not an array".into()))?;
-    if documents.is_empty() {
-        return Ok(());
-    }
-    for document in documents {
-        let id = document["id"]
-            .as_str()
-            .ok_or_else(|| crate::Error::Invalid("result document has no id".into()))?;
-        let path = document["path"]
-            .as_str()
-            .ok_or_else(|| crate::Error::Invalid("result document has no path".into()))?;
-        let source_commit = document["source_commit"]
-            .as_str()
-            .ok_or_else(|| crate::Error::Invalid("result document has no source commit".into()))?;
-        let mut builder = document::Builder::new(client.state_dir())?;
-        append_result_document_header(&mut builder, path, source_commit)?;
-        let mut offset = 0;
-        loop {
-            let chunk = client.call(&Request::Session(
-                crate::lean::daemon::SessionRequest::ResultDocumentContent {
-                    conversation: conversation.into(),
-                    id: id.into(),
-                    offset,
-                },
-            ))?;
-            let text = chunk["text"]
-                .as_str()
-                .ok_or_else(|| crate::Error::Invalid("result document chunk has no text".into()))?;
-            builder.append("", |sink| sink(text))?;
-            if chunk["done"] == true {
-                break;
-            }
-            let next = chunk["next_offset"].as_u64().unwrap_or(0);
-            crate::require(next > offset, "result document cursor did not advance")?;
-            offset = next;
-        }
-        output.insert(format!("result_document:{id}"), builder.finish()?);
-    }
+    crate::require(documents.is_array(), "result document list is not an array")?;
+    task["_result_documents"] = documents;
     Ok(())
+}
+
+pub(in crate::lean::tui) fn result_document(
+    client: &Client,
+    conversation: &str,
+    metadata: &Value,
+) -> Result<document::Document> {
+    let id = metadata["id"]
+        .as_str()
+        .ok_or_else(|| crate::Error::Invalid("result document has no id".into()))?;
+    let path = metadata["path"]
+        .as_str()
+        .ok_or_else(|| crate::Error::Invalid("result document has no path".into()))?;
+    let source = metadata["source_commit"]
+        .as_str()
+        .ok_or_else(|| crate::Error::Invalid("result document has no source commit".into()))?;
+    let mut builder = document::Builder::new(client.state_dir())?;
+    append_result_document_header(&mut builder, path, source)?;
+    let mut offset = 0;
+    loop {
+        let chunk = client.call(&Request::Session(
+            crate::lean::daemon::SessionRequest::ResultDocumentContent {
+                conversation: conversation.into(),
+                id: id.into(),
+                offset,
+            },
+        ))?;
+        let text = chunk["text"]
+            .as_str()
+            .ok_or_else(|| crate::Error::Invalid("result document chunk has no text".into()))?;
+        builder.append("", |sink| sink(text))?;
+        if chunk["done"] == true {
+            break;
+        }
+        let next = chunk["next_offset"].as_u64().unwrap_or(0);
+        crate::require(next > offset, "result document cursor did not advance")?;
+        offset = next;
+    }
+    builder.finish()
 }
 
 fn append_result_document_header(

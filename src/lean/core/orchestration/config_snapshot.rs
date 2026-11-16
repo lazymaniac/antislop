@@ -28,6 +28,10 @@ impl Core {
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
+        require(
+            !daemon::activation::pending(self),
+            "runtime activation is switching; retry after readiness is confirmed",
+        )?;
         crate::lean::record_message_and_wake_locked(self, conversation, text)
     }
 
@@ -44,7 +48,6 @@ impl Core {
             &paths::project_identity(&project)?,
         )?;
         let conversation = self.store.create_conversation(&project.to_string_lossy())?;
-        self.create_session_branch(&conversation.id, &project)?;
         Ok(conversation)
     }
 

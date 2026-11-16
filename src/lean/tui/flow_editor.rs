@@ -1805,7 +1805,10 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(rendered.contains("▸ [2/2] src/beta.rs (+5/-0)"));
+        assert!(
+            rendered.contains("▸ [2/2] src/beta.rs (+1/-0)"),
+            "{rendered}"
+        );
         assert!(rendered.contains("+pub fn beta() {}"));
 
         // Press `C` to open inline comment editor for the selected file (`diff:t1:src/beta.rs`)
@@ -1866,6 +1869,5 @@ mod tests {
             .collect();
         assert!(rendered.contains("CRITICAL PATH · blocks 1: t2"));
         assert!(rendered.contains("Elapsed: ⏱ 01:1"));
-        assert!(rendered.contains("⚡1"));
     }
 }

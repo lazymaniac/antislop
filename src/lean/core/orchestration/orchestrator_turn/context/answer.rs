@@ -155,11 +155,15 @@ fn submitted_plan(
             core.store.ask_user_decision(conversation, &question)?;
             Ok((None, true))
         }
-        super::super::turn_result::TurnResult::Requirements { markdown }
+        super::super::turn_result::TurnResult::Requirements { markdown, title }
             if context.interviewing =>
         {
-            core.store
-                .interview_summary(conversation, &markdown, context.upto)?;
+            core.store.interview_summary_with_title(
+                conversation,
+                &markdown,
+                &title,
+                context.upto,
+            )?;
             Ok((None, false))
         }
         _ => Ok((None, false)),

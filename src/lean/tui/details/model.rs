@@ -92,6 +92,12 @@ pub struct Details {
     pub documents: HashMap<String, document::Document>,
     /// Selected output document on the Results tab; `None` selects the first.
     pub selected_result_document: Option<String>,
+    pub(in crate::lean::tui) result_index: Vec<String>,
+    pub(in crate::lean::tui) result_metadata: HashMap<String, Value>,
+    pub(in crate::lean::tui) result_metadata_source: Value,
+    pub(in crate::lean::tui) result_selection_generation: u64,
+    pub(in crate::lean::tui) result_loading: Option<(String, u64, u64)>,
+    pub(in crate::lean::tui) result_error: Option<(String, String)>,
     pub(super) panel_layout: [LayoutCache; 2],
     pub fetched_events: u64,
     pub fetch_in_flight: bool,

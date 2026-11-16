@@ -2488,3 +2488,55 @@ fn a_window_another_frontend_steers_says_it_only_watches() {
     follow(&mut app, false);
     assert!(!app.header_status().contains("observer"));
 }
+
+#[test]
+fn late_document_fetches_cannot_replace_selection_or_discard_a_draft() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("Keep my draft 👩‍💻");
+    let mut details = Details::new("orchestrator".into());
+    details.switch_tab(details::RESULT);
+    details.query = "café".into();
+    details.selected_result_document = Some("result_document:new".into());
+    details.result_selection_generation = 2;
+    app.details = Some(details);
+    for (conversation, generation, selection, id) in [
+        ("other".to_owned(), app.generation, 2, "result_document:new"),
+        (
+            app.conversation.clone(),
+            app.generation + 1,
+            2,
+            "result_document:new",
+        ),
+        (
+            app.conversation.clone(),
+            app.generation,
+            1,
+            "result_document:old",
+        ),
+    ] {
+        app.apply_update_inner(Update::ResultDocument {
+            conversation,
+            generation,
+            key: "orchestrator".into(),
+            selection,
+            id: id.into(),
+            result: Err("late error".into()),
+        });
+        assert!(app.details.as_ref().unwrap().result_error.is_none());
+    }
+    app.apply_update_inner(Update::ResultDocument {
+        conversation: app.conversation.clone(),
+        generation: app.generation,
+        key: "orchestrator".into(),
+        selection: 2,
+        id: "result_document:new".into(),
+        result: Err("content file was removed".into()),
+    });
+    let details = app.details.as_ref().unwrap();
+    assert_eq!(
+        details.result_error.as_ref().unwrap().1,
+        "content file was removed"
+    );
+    assert_eq!(details.query, "café");
+    assert_eq!(app.input.text, "Keep my draft 👩‍💻");
+}

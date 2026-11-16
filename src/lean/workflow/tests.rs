@@ -361,3 +361,50 @@ fn only_the_newest_unanswered_decision_is_open() {
         Some(None)
     );
 }
+
+#[test]
+fn changing_only_the_scope_title_requires_a_new_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap().id;
+    let message = store
+        .add_message(&conversation, "user", "Repair the runtime")
+        .unwrap();
+    store
+        .interview_summary_with_title(
+            &conversation,
+            "Repair the runtime",
+            "Original title",
+            message.seq,
+        )
+        .unwrap();
+    assert!(!store.finish_interview(&conversation).unwrap());
+    let original = store
+        .events_since(&conversation, 0, 100)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "scope_confirmation_requested")
+        .unwrap();
+    store
+        .interview_summary_with_title(
+            &conversation,
+            "Repair the runtime",
+            "Changed title",
+            message.seq,
+        )
+        .unwrap();
+    assert!(!store.finish_interview(&conversation).unwrap());
+    let events = store.events_since(&conversation, 0, 100).unwrap();
+    let requests = events
+        .iter()
+        .filter(|e| e.kind == "scope_confirmation_requested")
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 2);
+    assert_ne!(
+        requests[1].payload["question"]["id"],
+        original.payload["question"]["id"]
+    );
+    assert_eq!(requests[1].payload["title"], "Changed title");
+    store.confirm_scope_for_test(&conversation);
+    assert_eq!(store.workflow(&conversation).unwrap().phase, "planning");
+}

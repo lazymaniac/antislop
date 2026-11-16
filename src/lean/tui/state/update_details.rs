@@ -197,7 +197,7 @@ impl App {
             return;
         };
         details.load_task(reply.task);
-        details.documents = reply.documents;
+        details.load_documents(reply.documents);
     }
 
     fn load_background_task(&mut self, reply: TaskSnapshotReply) {
@@ -222,7 +222,7 @@ impl App {
             return;
         };
         details.load_task(reply.task);
-        details.documents = reply.documents;
+        details.load_documents(reply.documents);
     }
 
     pub(super) fn apply_diff(&mut self, update: Update) {

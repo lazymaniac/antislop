@@ -212,6 +212,16 @@ impl Details {
             return false;
         };
         let Some(document) = self.documents.get(&key) else {
+            if key.starts_with("result_document:") {
+                let text = self
+                    .result_error
+                    .as_ref()
+                    .filter(|(id, _)| id == &key)
+                    .map(|(_, error)| format!("Could not load document: {error}"))
+                    .unwrap_or_else(|| "Loading document…".into());
+                frame.render_widget(Paragraph::new(theme.clean(&text)).style(theme.dim()), inner);
+                return true;
+            }
             return false;
         };
         let result = document.viewport_filtered(

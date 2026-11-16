@@ -31,6 +31,8 @@ pub enum TurnResult {
     /// The interview's requirements summary from `submit_requirements`.
     Requirements {
         markdown: String,
+        #[serde(default)]
+        title: String,
     },
     Completed {
         summary: String,

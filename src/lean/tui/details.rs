@@ -111,7 +111,8 @@ impl Details {
         if self.available_rounds.iter().any(|round| *round > 0) {
             self.available_rounds.retain(|round| *round > 0);
         }
-        self.documents.clear();
+        self.documents
+            .retain(|key, _| key.starts_with("result_document:"));
         self.task = Some(task);
     }
 

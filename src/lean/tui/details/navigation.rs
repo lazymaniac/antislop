@@ -38,6 +38,11 @@ impl Details {
         self.available_rounds.clear();
         self.documents.clear();
         self.selected_result_document = None;
+        self.result_index.clear();
+        self.result_metadata.clear();
+        self.result_selection_generation += 1;
+        self.result_loading = None;
+        self.result_error = None;
         self.resume_round = false;
         self.panel_scroll = [0; 2];
         self.panel_expanded = [false; 2];
@@ -118,6 +123,11 @@ impl Details {
             self.task = None;
             self.documents.clear();
             self.selected_result_document = None;
+            self.result_index.clear();
+            self.result_metadata.clear();
+            self.result_selection_generation += 1;
+            self.result_loading = None;
+            self.result_error = None;
             self.resume_round = false;
             self.scroll = 0;
             self.panel_scroll = [0; 2];
@@ -147,36 +157,99 @@ impl Details {
     }
 
     pub fn change_result_document(&mut self, direction: isize) {
-        let keys = self.visible_result_keys();
+        let keys = &self.result_index;
         if keys.is_empty() {
             self.selected_result_document = None;
             return;
         }
-        let current = self
+        let at = self
             .selected_result_document
             .as_ref()
-            .filter(|key| keys.contains(key))
-            .unwrap_or(&keys[0]);
-        let at = keys.iter().position(|key| key == current).unwrap_or(0);
+            .and_then(|key| keys.iter().position(|item| item == key))
+            .unwrap_or(0);
         let next = (at as isize + direction).rem_euclid(keys.len() as isize) as usize;
         self.selected_result_document = Some(keys[next].clone());
+        self.result_selection_generation += 1;
+        self.result_loading = None;
+        self.result_error = None;
         self.scroll = 0;
     }
 
-    /// Result documents in the order shown in the Results tab.
-    pub(in crate::lean::tui) fn visible_result_keys(&self) -> Vec<String> {
-        let mut keys = Vec::with_capacity(self.documents.len());
+    /// Rebuild once per metadata update; drawing only borrows the cached order.
+    pub(in crate::lean::tui) fn rebuild_result_index(&mut self) {
+        let metadata = self
+            .task
+            .as_ref()
+            .and_then(|task| task["_result_documents"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut index = Vec::new();
+        let mut records = std::collections::HashMap::new();
         if self.documents.contains_key("result") {
-            keys.push("result".to_owned());
+            index.push("result".into());
         }
-        let mut artifacts = self
+        for item in metadata {
+            if let Some(id) = item["id"].as_str() {
+                let key = format!("result_document:{id}");
+                index.push(key.clone());
+                records.insert(key, item);
+            }
+        }
+        // Loaded-only documents support retained snapshots and existing callers.
+        let mut loaded = self
             .documents
             .keys()
-            .filter(|key| key.starts_with("result_document:"))
+            .filter(|key| key.starts_with("result_document:") && !index.contains(key))
             .cloned()
             .collect::<Vec<_>>();
-        artifacts.sort();
-        keys.extend(artifacts);
-        keys
+        loaded.sort();
+        index.extend(loaded);
+        self.result_index = index;
+        self.result_metadata = records;
+        self.result_metadata_source = self
+            .task
+            .as_ref()
+            .map(|task| task["_result_documents"].clone())
+            .unwrap_or_default();
+        if self
+            .selected_result_document
+            .as_ref()
+            .is_some_and(|key| !self.result_index.contains(key))
+        {
+            self.selected_result_document = None;
+            self.result_selection_generation += 1;
+            self.result_loading = None;
+            self.result_error = None;
+        }
+    }
+
+    pub(in crate::lean::tui) fn load_documents(
+        &mut self,
+        documents: std::collections::HashMap<String, super::super::document::Document>,
+    ) {
+        self.documents.extend(documents);
+        // An immutable document can stay cached across refreshed snapshots.
+        let valid = self
+            .task
+            .as_ref()
+            .and_then(|task| task["_result_documents"].as_array());
+        if let Some(valid) = valid {
+            self.documents.retain(|key, _| {
+                key.strip_prefix("result_document:")
+                    .is_none_or(|id| valid.iter().any(|item| item["id"] == id))
+            });
+        }
+        let source = self.task.as_ref().map(|task| &task["_result_documents"]);
+        let result_present = self.documents.contains_key("result");
+        if source != Some(&self.result_metadata_source)
+            || result_present != self.result_index.first().is_some_and(|key| key == "result")
+            || self.result_index.is_empty()
+        {
+            self.rebuild_result_index();
+        }
+    }
+
+    pub(in crate::lean::tui) fn visible_result_keys(&self) -> &[String] {
+        &self.result_index
     }
 }

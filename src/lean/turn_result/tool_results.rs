@@ -62,6 +62,7 @@ pub fn tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResult> {
         "submit_plan" => plan_tool(args),
         "ask_user" => question_tool(args),
         "submit_requirements" => Ok(TurnResult::Requirements {
+            title: args["title"].as_str().unwrap_or_default().trim().to_owned(),
             markdown: required_text(args, "markdown")?,
         }),
         _ => task_tool_result(tool, args),

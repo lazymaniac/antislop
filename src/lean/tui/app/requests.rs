@@ -31,6 +31,7 @@ impl App {
     /// Refetches an open details panel once its task has moved on to a new
     /// round, so the stored report it shows never belongs to a past round.
     pub(in crate::lean::tui) fn refetch_stale_details(&mut self) {
+        self.fetch_selected_document();
         let stale = self
             .details
             .as_ref()

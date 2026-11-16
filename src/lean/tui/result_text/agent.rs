@@ -8,7 +8,7 @@ pub(in crate::lean::tui) fn agent_result(raw: &str) -> String {
     };
     match result {
         TurnResult::Report { text, .. } => text,
-        TurnResult::Requirements { markdown } => markdown,
+        TurnResult::Requirements { markdown, .. } => markdown,
         TurnResult::Question { question } => question.transcript(),
         TurnResult::Completed { .. } => worker_report(raw),
         TurnResult::Plan {

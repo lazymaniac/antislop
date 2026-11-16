@@ -446,6 +446,7 @@ fn result_documents_are_individually_selectable_and_readable_in_the_session() {
             .documents
             .insert(format!("result_document:{id}"), builder.finish().unwrap());
     }
+    details.rebuild_result_index();
     let view = View::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -524,12 +525,21 @@ fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
     let snapshot =
         crate::lean::tui::inspection::run_snapshot(&client, "conversation-1", "orchestrator", None)
             .unwrap();
+    assert!(!snapshot.documents.contains_key("result_document:doc-1"));
+    let metadata = snapshot.task["_result_documents"][0].clone();
+    let document =
+        crate::lean::tui::inspection::result_document(&client, "conversation-1", &metadata)
+            .unwrap();
     let seen = server.join().unwrap();
     assert!(seen.contains(&"result_documents".to_owned()));
     assert!(seen.contains(&"result_document_content".to_owned()));
 
     let mut details = Details::new("orchestrator".into());
-    details.documents = snapshot.documents;
+    details.load_task(snapshot.task);
+    details.load_documents(snapshot.documents);
+    details
+        .documents
+        .insert("result_document:doc-1".into(), document);
     details.switch_tab(RESULT);
     details.change_result_document(1);
     let view = View::default();

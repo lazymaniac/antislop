@@ -27,6 +27,57 @@ struct RunFetch {
 }
 
 impl App {
+    pub(in crate::lean::tui) fn fetch_selected_document(&mut self) {
+        let Some(details) = self.details.as_mut().filter(|d| d.tab == details::RESULT) else {
+            return;
+        };
+        let Some(id) = details
+            .selected_result_document
+            .clone()
+            .filter(|id| id.starts_with("result_document:"))
+        else {
+            return;
+        };
+        if details.documents.contains_key(&id)
+            || details
+                .result_loading
+                .as_ref()
+                .is_some_and(|(key, g, generation)| {
+                    key == &id
+                        && *g == details.result_selection_generation
+                        && *generation == self.generation
+                })
+            || details
+                .result_error
+                .as_ref()
+                .is_some_and(|(key, _)| key == &id)
+        {
+            return;
+        }
+        let Some(metadata) = details.result_metadata.get(&id).cloned() else {
+            return;
+        };
+        let selection = details.result_selection_generation;
+        details.result_loading = Some((id.clone(), selection, self.generation));
+        let key = details.key.clone();
+        let conversation = self.conversation.clone();
+        let generation = self.generation;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let result = inspection::result_document(&client, &conversation, &metadata)
+                .map_err(|e| e.to_string());
+            let _ = updates.send(Update::ResultDocument {
+                conversation,
+                generation,
+                key,
+                selection,
+                id,
+                result,
+            });
+        });
+    }
+
     /// Fetches the stored task behind the open details. The request carries
     /// the task id, the plan and the task's round, and replies are matched
     /// against all of them plus this conversation's generation and the
