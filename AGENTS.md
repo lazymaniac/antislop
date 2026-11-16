@@ -158,14 +158,18 @@ src
    - ParsedArgs,option_value
    - ParsedArgs: parse,apply
   content/staging
+   try_exclusive_lease(file):std::io::Result<()> > lock
    PreparedContent(C{file,reference})
-   Content: prepare_text(reader):Result<Option<PreparedContent>> ~40 > staging,private_directory,lock,PreparedContent,Reference; publish(prepared):Result<Reference> > private_directory,staging,lock; cleanup_staging():Result<usize> > staging,lock
+   PublishedContent(C{reference,_lease})
+   Content: prepare_text(reader):Result<Option<PreparedContent>> ~40 > staging,private_directory,lock,PreparedContent,Reference; publish(prepared):Result<PublishedContent> > private_directory,staging,lock,PublishedContent; cleanup_staging():Result<usize> > staging,lock
    - FailingReader
    - FailingReader: read
   content.rs
    Chunk(C{text,next_offset,done})
-   Content(C{directory})
+   Content(C{directory,directory_sync_hook})
     new(database):Self
+    sync_published_entries():Result<()> > lock
+    set_directory_sync_hook(hook) > lock
     encode(text):Result<String>
     reference(encoded):Result<Reference>
     decode(text):Result<String> > read
@@ -173,7 +177,7 @@ src
     write(text):Result<Reference> > private_directory,Reference,path
     chunk(reference,offset):Result<Chunk> > require,path,len,Chunk
     read(reference):Result<String> > chunk
-    remove_unreferenced(db):Result<usize> ~57
+    remove_unreferenced(db):Result<usize> ~72 > read,try_exclusive_lease
    Reference(C{id,bytes})
    = CHUNK_BYTES
   core
@@ -1592,7 +1596,7 @@ src
     checks(task,round):Result<Vec<Value>> > db
     record_result_document(conversation,producer,path,source_commit,text):Result<()> > prepare_text,record_spooled_document
     spool_text_content(reader):Result<Option<crate::lean::content::PreparedContent>> > prepare_text
-    record_spooled_document(conversation,producer,path,source_commit,prepared):Result<()> > db
+    record_spooled_document(conversation,producer,path,source_commit,prepared):Result<()> ~46 > db,validate_document,sync_published_entries,collect_orphan,commit_published_document,discard_after_error,remove_unreferenced
     result_documents(conversation):Result<Vec<ResultDocument>> > db,ResultDocument
     result_document_chunk(conversation,id,offset):Result<crate::lean::content::Chunk> > db,chunk
     reserve_revision_job(conversation,key,revision):Result<(String,bool)> > db,resume_revision_job,require_no_review,insert_revision_job
@@ -3191,6 +3195,8 @@ src
      verdicts_and_bounds:*verdict
    tui
     tests
+    app/requests
+     fetch_tests
     config
      tests
     details
@@ -3243,6 +3249,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 143,587 LOC · input 1,281,378 · output 48,096 tokens · state 91281035bd27 · targets AGENTS.md
+· 144,233 LOC · input 1,287,342 · output 48,200 tokens · state 56df3b0489a9 · targets AGENTS.md
 ```
 <!-- hologram:end -->

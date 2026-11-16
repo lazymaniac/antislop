@@ -8,6 +8,12 @@ pub(in crate::lean) struct PreparedContent {
     pub reference: Reference,
 }
 
+/// Keeps a renamed file from being collected until its reference is committed.
+pub(in crate::lean) struct PublishedContent {
+    pub reference: Reference,
+    _lease: std::fs::File,
+}
+
 fn lock(file: &std::fs::File, operation: i32) -> std::io::Result<()> {
     // SAFETY: the descriptor stays owned for the entire lease.
     if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
@@ -15,6 +21,10 @@ fn lock(file: &std::fs::File, operation: i32) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+pub(super) fn try_exclusive_lease(file: &std::fs::File) -> std::io::Result<()> {
+    lock(file, libc::LOCK_EX | libc::LOCK_NB)
 }
 
 impl Content {
@@ -66,17 +76,20 @@ impl Content {
         }
     }
 
-    pub(in crate::lean) fn publish(&self, prepared: PreparedContent) -> Result<Reference> {
+    pub(in crate::lean) fn publish(&self, prepared: PreparedContent) -> Result<PublishedContent> {
         super::super::daemon::private_directory(&self.directory)?;
         let directory = std::fs::File::open(self.staging())?;
         lock(&directory, libc::LOCK_EX)?;
         let destination = self.path(&prepared.reference)?;
-        prepared
+        let lease = prepared
             .file
             .persist_noclobber(destination)
             .map_err(|e| e.error)?;
-        std::fs::File::open(&self.directory)?.sync_all()?;
-        Ok(prepared.reference)
+        drop(directory);
+        Ok(PublishedContent {
+            reference: prepared.reference,
+            _lease: lease,
+        })
     }
 
     pub(in crate::lean) fn cleanup_staging(&self) -> Result<usize> {
@@ -149,7 +162,9 @@ mod tests {
         let abandoned = content.staging().join("abandoned");
         std::fs::write(&abandoned, "partial").unwrap();
         assert_eq!(content.cleanup_staging().unwrap(), 1);
-        let reference = content.publish(prepared).unwrap();
+        let published = content.publish(prepared).unwrap();
+        content.sync_published_entries().unwrap();
+        let reference = published.reference.clone();
         assert_eq!(content.read(&reference).unwrap(), text);
         for suffix in [b"\0".as_slice(), b"\xff".as_slice(), b"\xf0\x9f".as_slice()] {
             let input = std::io::Cursor::new(vec![b'a'; CHUNK_BYTES - 1]).chain(suffix);
@@ -173,7 +188,9 @@ mod scaling_tests {
             .unwrap()
             .unwrap();
         assert_eq!(prepared.reference.bytes, size);
-        let reference = content.publish(prepared).unwrap();
+        let published = content.publish(prepared).unwrap();
+        content.sync_published_entries().unwrap();
+        let reference = published.reference.clone();
         let chunk = content
             .chunk(&reference, size - CHUNK_BYTES as u64)
             .unwrap();

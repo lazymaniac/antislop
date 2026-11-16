@@ -304,7 +304,7 @@ impl Store {
         )?;
         tx.execute("DELETE FROM conversations WHERE id=?1", [conversation])?;
         tx.commit()?;
-        self.content.remove_unreferenced(&db)?;
+        self.content.remove_unreferenced(&mut db)?;
         Ok(())
     }
 
