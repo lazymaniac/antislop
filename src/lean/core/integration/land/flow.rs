@@ -37,6 +37,7 @@ impl<'a> Integration<'a> {
     }
 
     pub(super) fn run(mut self, lock: std::sync::MutexGuard<'_, ()>) -> Result<()> {
+        // The keyed conversation source scope protects Git; no global lock is held.
         let base = self.task.base.clone().unwrap_or_default();
         let result = git::head(self.worktree)?;
         if result == base {
@@ -189,20 +190,21 @@ impl<'a> Integration<'a> {
         source_commit: &str,
         landed: &[String],
     ) -> Result<()> {
+        let landed = landed.iter().collect::<std::collections::HashSet<_>>();
         for path in &self.spec.outputs {
-            if !landed.iter().any(|landed_path| landed_path == path) {
+            if !landed.contains(path) {
                 continue;
             }
-            let bytes = git::artifact_bytes(target, source_commit, path)?;
-            let Some(text) = text_document(&bytes) else {
+            let file = git::artifact_file(target, source_commit, path)?;
+            let Some(prepared) = self.core.store.spool_text_content(file)? else {
                 continue;
             };
-            self.core.store.record_result_document(
+            self.core.store.record_spooled_document(
                 self.conversation,
                 &self.task.id,
                 path,
                 source_commit,
-                text,
+                prepared,
             )?;
         }
         Ok(())
@@ -228,11 +230,6 @@ impl<'a> Integration<'a> {
     }
 }
 
-fn text_document(bytes: &[u8]) -> Option<&str> {
-    let text = std::str::from_utf8(bytes).ok()?;
-    (!text.contains('\0')).then_some(text)
-}
-
 fn conflict_with_files(outcome: &git::Integration) -> Option<(Outcome, &[String])> {
     match outcome {
         git::Integration::Conflict(files) => Some((Outcome::Conflict, files)),
@@ -244,16 +241,6 @@ fn conflict_with_files(outcome: &git::Integration) -> Option<(Outcome, &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn result_documents_accept_utf8_text_and_skip_binary_content() {
-        assert_eq!(
-            text_document("Plan for café".as_bytes()),
-            Some("Plan for café")
-        );
-        assert_eq!(text_document(b"image\0data"), None);
-        assert_eq!(text_document(&[0xff, 0xfe]), None);
-    }
 
     #[test]
     fn successful_output_selection_uses_only_landed_declared_text_files() {
@@ -278,6 +265,14 @@ mod tests {
             .store
             .create_conversation(project.to_str().unwrap())
             .unwrap();
+        let request = core
+            .store
+            .add_message(&conversation.id, "user", "Write the declared output")
+            .unwrap();
+        core.store
+            .interview_summary(&conversation.id, "Write the declared output", request.seq)
+            .unwrap();
+        core.store.confirm_scope_for_test(&conversation.id);
         core.create_session_branch(&conversation.id, &project)
             .unwrap();
         let mut task = core

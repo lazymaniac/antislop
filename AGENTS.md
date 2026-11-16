@@ -186,7 +186,7 @@ src
        new(core,conversation,task,spec,project,worktree,config,cancel):Self
        run(lock):Result<()> > finish_no_changes,{create,apply}_change,record_plan_landing,repair_conflict,finish_outcome
        - register_conflict_repair,record_result_documents,complete_landing
-      - text_document,conflict_with_files
+      - conflict_with_files
      landing
       record(core,conversation,task,spec,outcome,files):Result<Landing> > record_outcome,append_event
       Landing(C{status,text})
@@ -651,8 +651,10 @@ src
   git
    artifact_update
     index
+     lock_path(project):Result<PathBuf>
      Lease(C{file,path}) : Drop
-      acquire(project):Result<Self>
+      acquire(project):Result<Self> > lock_path
+      acquire_at(path):Result<Self>
       - drop
     parent
      Parent(C{directory})
@@ -660,16 +662,17 @@ src
       at(root,path,create):Result<(Self,String)> ~49 > cstring
       recovery_at(root,path,create):Result<(Self,String)> ~61 > cstring
       read(name):Result<File> > cstring
-      matches(name,expected):Result<bool> > read,len
+      matches(name,expected):Result<bool> > read
       rename(from,to,name):Result<()> > cstring,syscall
       restore(from,to,name):Result<()> > cstring,syscall
       unlink(name):Result<()> > cstring,syscall
       link(from,to,name):Result<()> > cstring,syscall
    artifact_update.rs
-    artifact_bytes(project,commit,path):Result<Vec<u8>> > git
-    deliver_owned_artifacts(project,base,change,original,expected,backups):Result<Integration> > Lease.acquire,require_{added_files,owned_outputs},publish
-    require_owned_outputs(project,outputs,expected):Result<()> > require_untracked,Parent.at,artifact_bytes,require_new_outputs
-    - recover
+    artifact_file(project,commit,path):Result<std::fs::File> > status,len
+    blobs_match(left,right):Result<bool> > len
+    deliver_owned_artifacts(project,base,change,original,expected,backups):Result<Integration> > land_outputs,prepare_owned_artifacts
+    require_owned_outputs(project,outputs,expected):Result<()> > require_untracked,Parent.at,artifact_file,require_new_outputs
+    - PreparedArtifacts,Publication,index_stamp,prepare_publication,publish_prepared,recover,publish
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
     commit_artifacts(worktree,outputs,purpose,require_all):Result<String> > commit_{artifact_files,subject}
@@ -706,8 +709,8 @@ src
     uncommitted(dir):Result<Vec<String>> > git
     - staged_paths_clean,commit_only_paths
    untracked
-    deliver_untracked(project,base,change):Result<Integration> ~55 > changed_files,all,git,ensure_parents
-    require_added_files(project,base,change,expected):Result<()> > changed_files
+    deliver_untracked(project,base,change):Result<Integration> ~53 > changed_files,all,artifact_file,ensure_parents
+    require_added_files(project,base,change,expected):Result<()> > changed_files,artifact_file,blobs_match
     require_new_outputs(project,outputs):Result<()>
    worktree
     add_worktree(project,path,branch,base):Result<()> > worktree_project,require_worktree_branch,git
@@ -1579,7 +1582,9 @@ src
     completed_task_result(task):Result<(String,Value)> > plan_conversation,retained_result_ref,task_by_id
     plan(plan_id):Result<Vec<Task>> > db,plan_task_rows,decode_plan_task
     checks(task,round):Result<Vec<Value>> > db
-    record_result_document(conversation,producer,path,source_commit,text):Result<()> > db
+    record_result_document(conversation,producer,path,source_commit,text):Result<()> > record_spooled_document
+    spool_text_content(reader):Result<Option<crate::lean::content::PreparedContent>>
+    record_spooled_document(conversation,producer,path,source_commit,prepared):Result<()> > db
     result_documents(conversation):Result<Vec<ResultDocument>> > db,ResultDocument
     result_document_chunk(conversation,id,offset):Result<crate::lean::content::Chunk> > db,chunk
     reserve_revision_job(conversation,key,revision):Result<(String,bool)> > db,resume_revision_job,require_no_review,insert_revision_job
@@ -3221,6 +3226,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 141,951 LOC · input 1,266,427 · output 47,535 tokens · state 66b6c861cc18 · targets AGENTS.md
+· 142,248 LOC · input 1,268,941 · output 47,643 tokens · state 343ac1771e40 · targets AGENTS.md
 ```
 <!-- hologram:end -->

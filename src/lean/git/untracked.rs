@@ -1,5 +1,4 @@
 use super::*;
-use std::io::Write;
 
 /// Check the primary checkout before launching a writer, including ignored,
 /// untracked, and tracked-but-deleted files. Delivery repeats the check.
@@ -37,15 +36,20 @@ pub(crate) fn require_added_files(
     expected: &std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
     for path in changed_files(project, base, change)? {
+        let is_new = ok(
+            project,
+            &["--literal-pathspecs", "ls-tree", base, "--", &path],
+        )?
+        .is_empty();
+        let unchanged_expected = if let Some(commit) = expected.get(&path) {
+            let expected = super::artifact_update::artifact_file(project, commit, &path)?;
+            let actual = super::artifact_update::artifact_file(project, base, &path)?;
+            super::artifact_update::blobs_match(&expected, &actual)?
+        } else {
+            false
+        };
         crate::require(
-            ok(
-                project,
-                &["--literal-pathspecs", "ls-tree", base, "--", &path],
-            )?
-            .is_empty()
-                || expected.get(&path).is_some_and(|commit| {
-                matches!((super::artifact_update::artifact_bytes(project,commit,&path),super::artifact_update::artifact_bytes(project,base,&path)),(Ok(expected),Ok(actual)) if expected==actual)
-            }),
+            is_new || unchanged_expected,
             &format!("untracked delivery cannot modify an existing file: {path}"),
         )?;
     }
@@ -78,26 +82,24 @@ pub fn deliver_untracked(project: &Path, base: &str, change: &str) -> Result<Int
             conflicts.push(path.clone());
             continue;
         }
-        let output = git(project, &["show", &format!("{change}:{path}")])?;
-        crate::require(
-            output.status.success(),
-            &String::from_utf8_lossy(&output.stderr),
-        )?;
-        blobs.push((target, output.stdout));
+        blobs.push((
+            target,
+            super::artifact_update::artifact_file(project, change, path)?,
+        ));
     }
     if !conflicts.is_empty() {
         return Ok(Integration::UserEdits(conflicts));
     }
     let mut created = Vec::new();
     let result = (|| -> Result<()> {
-        for (target, bytes) in blobs {
+        for (target, mut bytes) in blobs {
             ensure_parents(project, target.parent().unwrap())?;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&target)?;
             created.push(target);
-            file.write_all(&bytes)?;
+            std::io::copy(&mut bytes, &mut file)?;
         }
         Ok(())
     })();

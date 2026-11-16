@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+mod staging;
+pub(in crate::lean) use staging::PreparedContent;
+
 pub const CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
