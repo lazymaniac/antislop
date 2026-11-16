@@ -94,6 +94,56 @@ fn declared_text_outputs_survive_reopen_and_remain_distinct() {
             .text,
         "Second deliverable"
     );
+    // Crash window: publication succeeds but reference insertion fails. The
+    // immutable orphan is collectible and does not replace existing versions.
+    reopened.db().execute_batch("CREATE TRIGGER fail_document_reference BEFORE INSERT ON session_documents WHEN NEW.source_commit='injected-failure' BEGIN SELECT RAISE(FAIL,'reference commit failed'); END;").unwrap();
+    assert!(
+        reopened
+            .record_result_document(
+                &conversation.id,
+                &task.id,
+                "brief.md",
+                "injected-failure",
+                "orphaned publication"
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("reference commit failed")
+    );
+    assert_eq!(
+        reopened.result_documents(&conversation.id).unwrap().len(),
+        3
+    );
+    assert_eq!(
+        reopened
+            .content
+            .remove_unreferenced(&reopened.db())
+            .unwrap(),
+        1
+    );
+    // Deletion between preparation and publication cannot resurrect a document.
+    let prepared = reopened
+        .prepare_result_document("prepared after deletion".as_bytes())
+        .unwrap()
+        .unwrap();
+    reopened.delete_session(&conversation.id).unwrap();
+    assert!(
+        reopened
+            .publish_result_document(
+                &conversation.id,
+                &task.id,
+                "brief.md",
+                "deleted-session",
+                prepared
+            )
+            .is_err()
+    );
+    assert!(
+        reopened
+            .result_documents(&conversation.id)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

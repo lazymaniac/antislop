@@ -89,7 +89,9 @@ fn fake_clis_with_concurrent_edit(
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let (codex, agy) = fake_clis(dir);
     let script = std::fs::read_to_string(&agy).unwrap();
-    let session_worktree = "session_worktree = next(os.linesep.join(block.splitlines()) for block in subprocess.check_output(['git', 'worktree', 'list', '--porcelain'], text=True).split(os.linesep * 2) if any(line.startswith('branch refs/heads/antislop/session/') for line in block.splitlines()))\nsession_dir = next(line.removeprefix('worktree ') for line in session_worktree.splitlines() if line.startswith('worktree '))\n";
+    let session_worktree = r#"session_worktree = next((os.linesep.join(block.splitlines()) for block in subprocess.check_output(['git', 'worktree', 'list', '--porcelain'], text=True).split(os.linesep * 2) if any(line.startswith('branch refs/heads/antislop/session/') for line in block.splitlines())), "")
+session_dir = next((line.removeprefix('worktree ') for line in session_worktree.splitlines() if line.startswith('worktree ')), None)
+"#;
     let script = script.replace(
         "prompt = sys.argv[-1]",
         &format!("prompt = sys.argv[-1]\nimport subprocess\n{session_worktree}"),

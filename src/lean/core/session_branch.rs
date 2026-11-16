@@ -346,6 +346,71 @@ mod tests {
     }
 
     #[test]
+    fn startup_git_work_is_bounded_by_repositories_instead_of_conversations() {
+        const CHILD: &str = "ANTISLOP_TEST_STARTUP_GIT_STATE";
+        if let Some(state) = std::env::var_os(CHILD) {
+            let _core = Core::open(Path::new(&state), config()).unwrap();
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let real_git = crate::lean::doctor::find_executable(Path::new("git")).unwrap();
+        let tools = directory.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let wrapper = tools.join("git");
+        std::fs::write(&wrapper,"#!/bin/sh\nprintf 'git\\n' >> \"$ANTISLOP_TEST_GIT_LOG\"\nexec \"$ANTISLOP_TEST_REAL_GIT\" \"$@\"\n").unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut counts = Vec::new();
+        for count in [1, 50] {
+            let state = directory.path().join(format!("state-{count}"));
+            let core = Core::open(&state, config()).unwrap();
+            for _ in 0..count {
+                let conversation = core
+                    .store
+                    .create_conversation(project.to_str().unwrap())
+                    .unwrap();
+                core.save_session_branch(
+                    &conversation.id,
+                    &SessionBranch {
+                        project: project.to_string_lossy().into_owned(),
+                        branch: format!("legacy/{}", conversation.id),
+                        worktree: core.session_worktree_path(&conversation.id),
+                    },
+                )
+                .unwrap();
+            }
+            drop(core);
+            let log = directory.path().join(format!("git-{count}.log"));
+            let path = std::env::join_paths(std::iter::once(tools.clone()).chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .unwrap();
+            let output=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","lean::core::session_branch::tests::startup_git_work_is_bounded_by_repositories_instead_of_conversations"])
+                .env(CHILD,&state).env("PATH",path).env("ANTISLOP_TEST_GIT_LOG",&log).env("ANTISLOP_TEST_REAL_GIT",&real_git).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            counts.push(
+                std::fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .lines()
+                    .count(),
+            );
+        }
+        eprintln!(
+            "startup Git calls for 1 / 50 conversations: {} / {}",
+            counts[0], counts[1]
+        );
+        assert!(counts[0] > 0);
+        assert_eq!(counts[0], counts[1]);
+    }
+
+    #[test]
     fn legacy_session_without_record_or_ref_recovers_before_allocation() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("project");

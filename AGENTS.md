@@ -122,6 +122,7 @@ src
   agent.rs
    name(provider):&'static str
    reap(pid,started_ms,provider):bool > is_original_cli,terminate_group
+   terminate_validator(pid,started_ms,executable) > is_original_cli
    Outcome(C{session,text})
    Spec(C{provider,binary,args,model,effort,cwd,runtime,add_dirs,resume})
    - elapsed_seconds
@@ -135,14 +136,14 @@ src
    - revision_request_key
   cli
    activation
-    activate(args):Result<()> ~64 > option_value,ParsedArgs.parse,project_state,Client.at
+    activate(args):Result<()> ~94 > option_value,ParsedArgs.parse,project_state,Client.at
    chat
     run(args):Result<()> > connect,is_terminal,stream
     - events,send_message,read_input,poll_events,process_input,{input,plan,cancel,pause,send}_request
    presentation
     describe(event):Option<String> > describe_{message,plan},review_lines,describe_{task,status}
     latest_plan(events):Option<String> > as_str
-    print(event) > describe
+    print(event) > describe,lock
     review_lines(who,review):Vec<String> > as_str,review_findings,coverage_lines
     - value,plan_{tasks,status},describe_mail
   cli.rs
@@ -159,7 +160,10 @@ src
     latest(client):Result<Option<String>> > flatten,Client.call,as_str
    - ParsedArgs
    - ParsedArgs: apply
-  content
+  content/staging
+   PreparedContent(C{file,reference})
+   Content: prepare_text(reader):Result<Option<PreparedContent>> ~40 > staging,private_directory,lock,PreparedContent,Reference; publish(prepared):Result<Reference> > private_directory,staging,lock; cleanup_staging():Result<usize> > staging,lock
+  content.rs
    Chunk(C{text,next_offset,done})
    Content(C{directory})
     new(database):Self
@@ -188,7 +192,7 @@ src
        new(core,conversation,task,spec,project,worktree,config,cancel):Self
        run(lock):Result<()> > finish_no_changes,{create,apply}_change,record_plan_landing,repair_conflict,finish_outcome
        - register_conflict_repair,record_result_documents,complete_landing
-      - text_document,conflict_with_files
+      - conflict_with_files
      landing
       record(core,conversation,task,spec,outcome,files):Result<Landing> > record_outcome,append_event
       Landing(C{status,text})
@@ -318,23 +322,23 @@ src
      - CodeReview,review_comments,execute_code_review,review_{turn_setup,prompt,failure},publish_{code_review,review_message}
    state
     Activity(C{running,plans,reviews,agent_reviews,task_cancels,{task,orchestrator}_restarts,blocked_seen})
-     start_orchestrator(conversation):Option<Arc<AtomicBool>>
-     cancel_tasks(tasks)
+     start_orchestrator(conversation):Option<Arc<AtomicBool>> > lock
+     cancel_tasks(tasks) > lock
      plan_running(conversation):bool > has
      review_running(conversation):bool > has
      agent_review_running(key):bool > has
      task_running(task):bool > has
     ConfigState(C{current,update,modified})
      new(config):Self
-     updating():MutexGuard<'_,()>
+     updating():MutexGuard<'_,()> > lock
      modified():u64
      set_modified(modified) > store
     Locks(C{integrating,graph_updates,session_branches,turns,session_lifecycle})
-     integration():MutexGuard<'_,()>
-     turn(conversation,role):Arc<Mutex<()>>
-     graph():MutexGuard<'_,()>
+     integration():MutexGuard<'_,()> > lock
+     turn(conversation,role):Arc<Mutex<()>> > lock
+     graph():MutexGuard<'_,()> > lock
     RevisionState(C{revising,jobs,views})
-     view(conversation):Option<(String,i64)> > flatten
+     view(conversation):Option<(String,i64)> > flatten,lock
     WorktreeState(C{cleanup,cleanup_notes,leases,lease_changed})
    task
     checks/scheduler
@@ -370,7 +374,7 @@ src
        - run_worker_turn,worker_{setup,dirs},continuation
      task_execution.rs
       Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
-       run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,{review,settle}_round
+       run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,gate_approval,{review,settle}_round
        new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
        run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
        - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,
@@ -402,7 +406,7 @@ src
         materialize_snapshot,snapshot_lookup_{fixed_arg_bytes,batches},reviewer_prompt,decode_answer,failed_reviewer,
         awaiting_answer
      prepare
-      interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,queue_restart,interrupted
+      interrupt_if_active(core,work):Option<TaskRecoveryResponse> > is_running_action,lock,queue_restart,interrupted
       load(core,req,actor):Result<RecoveryWork> > accepted_plan,config_snapshot,Core.task,assert_task_inputs,task_freshness_token,validate_request,RecoveryWork
       - allowed_status
      response
@@ -442,16 +446,36 @@ src
      - view_task,settled,release_writer_checkout,writer_checkout_{id,is_clean}
   daemon
    activation
-    apply_when_idle(core):Result<()> ~71 > graph,load,finish,resume,Resume,accepted_plan,save,check_target
-    cancel_conversation(core,conversation):Result<()> > load,save
-    confirm(core,project,config):Result<()> > load,finish,resume,require,doctor.preflight
-    gate_approval(core,task):Result<bool> > load,plan_conversation,Core.stop
-    pending(core):bool
+    storage
+     for_task(core,task):Result<Option<Activation>> > db,load
+     import(core):Result<Vec<Activation>> > legacy,load,flatten,task_by_id,save
+     legacy(path):Result<Option<Activation>>
+     load(db,id,active):Result<Option<Activation>> > Resume
+     save(core,operation):Result<()> > db
+     - row
+    validation
+     check_inputs(core,operation):Result<()> > require,build_identity,task_by_id,accepted_plan
+     check_target(operation,state,cancel,core):Result<()> ~40 > execute,require
+     recover_processes(core):Result<()> > db,terminate_{validator,validation_leftovers},execute
+     run(core,operation,cancel) ~48 > check_{target,inputs},storage.load,save,remove
+     - ChildOwner,tail
+     - ChildOwner: drop
+   activation.rs
+    apply_when_idle(core):Result<()> ~79 > graph,active,check_inputs,finish,Resume,save,resume
+    cancel_all(core):Result<()> > active,cancel_operation
+    cancel_conversation(core,conversation):Result<()> > active,cancel_operation
+    cancel_operation(core,id):Result<Value> > storage.load,db,require,finish
+    confirm(core,project,config):Result<()> ~48 > active,finish,resume,check_inputs,doctor.preflight,Resume
+    draining(core):bool > active
+    gate_approval(core,task):Result<bool> ~41 > for_task,plan_conversation,Core.stop
+    pending(core):bool > active
     preflight(project,config,state):Result<Value> > check_runtime_repository,project_identity
+    recover(core):Result<()> > recover_processes,import,release_task,resume,active,finish
     replacement_path(project,config,state,executable,daemon_path):Result<OsString> > merged_path,Activation,build_identity,check_target
-    request(core,project,config,executable,path,conversation,task):Result<Value> ~58 > graph,build_identity,activation_task,load,require,as_str,Resume,accepted_plan,Activation,merged_path,check_target,save,announce,doctor.preflight
-    status(state):Result<Value> > load
-    - release_task
+    request(core,project,config,executable,path,conversation,task,request_id):Result<Value> ~86 > active,activation_task,flatten,as_str,Resume,Activation,merged_path,announce,validation.run
+    status(state,id):Result<Value> > storage.load,legacy
+    - ActivationState
+    - ActivationState: name
    client/launch
     daemon_exit_error(status,state):Error
     detach_daemon(command)
@@ -525,7 +549,7 @@ src
     scope(request):Option<(&str,Access)>
     Access(E{Follow,Change,Take})
     Leases(C{held})
-     access(conversation,client,access):Result<bool> > require
+     access(conversation,client,access):Result<bool> > lock,require
     = OBSERVER
    lifecycle
     serve(project,config_path,state):Result<()> > start,confirm,spawn_idle_cleanup,accept_connections
@@ -614,7 +638,7 @@ src
      RequestEnvelope(C{protocol,request,client})
     request
      control
-      ControlRequest(E{Identity,ActivateRuntime,RuntimeActivationStatus,RuntimeNotice,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn})
+      ControlRequest(E{Identity,ActivateRuntime,RuntimeActivationStatus,RuntimeActivationOperation,CancelRuntimeActivation,ClassifyRuntimeFailure,RuntimeNotice,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,StartIn})
      conversation
       ConversationRequest(E{Recover,Comment,SendToAgent,Send,Reject,Resume,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,ReviewComments,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,RevisePlan,SelectTeam})
        operation():Option<(&str,&str,&'static str)> ~45
@@ -630,7 +654,7 @@ src
      terminal
       TerminalRequest(E{TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach})
     wire
-     WireRequest(E{ActivateRuntime,RuntimeActivationStatus,RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ResultDocuments,ResultDocumentContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,RevisePlan,SelectTeam,Events,Sessions,DeleteSession,History,Mail})
+     WireRequest(E{ActivateRuntime,RuntimeActivationStatus,RuntimeActivationOperation,CancelRuntimeActivation,ClassifyRuntimeFailure,RuntimeNotice,TerminalOpen,TerminalRead,TerminalInput,TerminalResize,TerminalDetach,RunContext,Comment,SendToAgent,TaskRounds,TaskRound,SessionEvents,HistoryContent,HistoryMessages,SessionContent,ResultDocuments,ResultDocumentContent,ListRuns,{Reject,Get}LedgerProposal,ListRequirements,GetLedgerEntry,GetLedgerDiff,GetEvidence,{Propose,Apply}LedgerChange,CreateRun,{Add,Get}LedgerSource,Identity,{Get,Set}Config,Shutdown,ForceShutdown,Conversations,Start,Send,Reject,Resume,ReviewComments,Recover,TakeControl,RestartOrchestrator,Cancel,Pause,SetApprovalMode,AnswerApproval,Plans,Plan,Comments,CommentStatus,Diff,Review,TaskChecks,Task,RevisePlan,SelectTeam,Events,Sessions,DeleteSession,History,Mail})
   daemon.rs
    build_identity(executable):Result<String>
    private_directory(path):Result<()> > require
@@ -638,6 +662,7 @@ src
    runtime_preflight(project,config,state):Result<Value> > activation.preflight
    serve(project,config_path,state):Result<()>
    socket(state):PathBuf > len
+   version_info():Value
    - Response,handle,modified,build
   diff/parser
    parse(patch):Vec<FileDiff>
@@ -666,8 +691,10 @@ src
   git
    artifact_update
     index
+     index_path(project):Result<PathBuf>
      Lease(C{file,path}) : Drop
-      acquire(project):Result<Self>
+      acquire(project):Result<Self> > index_path
+      acquire_at(path):Result<Self>
       - drop
     parent
      Parent(C{directory})
@@ -675,16 +702,20 @@ src
       at(root,path,create):Result<(Self,String)> ~49 > cstring
       recovery_at(root,path,create):Result<(Self,String)> ~61 > cstring
       read(name):Result<File> > cstring
-      matches(name,expected):Result<bool> > read,len
+      matches(name,expected):Result<bool> > read
       rename(from,to,name):Result<()> > cstring,syscall
       restore(from,to,name):Result<()> > cstring,syscall
       unlink(name):Result<()> > cstring,syscall
       link(from,to,name):Result<()> > cstring,syscall
    artifact_update.rs
-    artifact_bytes(project,commit,path):Result<Vec<u8>> > git
-    deliver_owned_artifacts(project,base,change,original,expected,backups):Result<Integration> > Lease.acquire,require_{added_files,owned_outputs},publish
-    require_owned_outputs(project,outputs,expected):Result<()> > require_untracked,Parent.at,artifact_bytes,require_new_outputs
-    - recover
+    artifact_file(project,commit,path):Result<std::fs::File> > len
+    deliver_owned_artifacts(project,base,change,original,expected,backups):Result<Integration> > publish,prepare_owned_artifacts
+    prepare_owned_artifacts(project,base,change,original,expected,backups):Result<PreparedArtifacts> > index_{path,stamp},require_{added_files,owned_outputs},prepare_publication,PreparedArtifacts
+    require_owned_outputs(project,outputs,expected):Result<()> > require_untracked,Parent.at,artifact_file,require_new_outputs
+    same_files(left,right):Result<bool> > len
+    PreparedArtifacts(C{paths,blobs,index,index_stamp,conflict})
+     publish(project):Result<Integration> > acquire_at,index_stamp,Parent.at,publish_prepared
+    - Publication,recover
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
     commit_artifacts(worktree,outputs,purpose,require_all):Result<String> > commit_{artifact_files,subject}
@@ -721,7 +752,7 @@ src
     uncommitted(dir):Result<Vec<String>> > git
     - staged_paths_clean,commit_only_paths
    untracked
-    deliver_untracked(project,base,change):Result<Integration> ~55 > changed_files,all,git,ensure_parents
+    deliver_untracked(project,base,change):Result<Integration> ~53 > changed_files,all,artifact_file,ensure_parents
     require_added_files(project,base,change,expected):Result<()> > changed_files
     require_new_outputs(project,outputs):Result<()>
    worktree
@@ -933,7 +964,7 @@ src
    lock_cancellable(lock,cancel):Option<MutexGuard<'a,()>>
   mcp
    dispatch
-    call(shared,params):Value ~77 > scoped_tools,dispatch,is_terminal
+    call(shared,params):Value ~77 > lock,scoped_tools,dispatch,is_terminal
     dispatch(shared,params):Result<Value> > as_str,current_turn,prepare_dispatch,invoke_handler,finish_dispatch
     error(id,code,message):Value
     result(id,result):Value
@@ -953,16 +984,16 @@ src
      start():Result<Self> > Shared,spawn_listener
      url():&str
      token():&str
-     begin(turn):Result<()>
-     set_role(role):Result<()>
-     set_task_contract(contract):Result<()>
-     tool_names():Vec<&'static str> > scoped_tools
-     set_handler(handler):Result<()>
-     set_protocol_observer(observer):Result<()>
-     connected():bool
-     while_pending(turn,action):Result<bool>
-     while_open(action):Result<Option<String>>
-     session():Option<String>
+     begin(turn):Result<()> > lock
+     set_role(role):Result<()> > lock
+     set_task_contract(contract):Result<()> > lock
+     tool_names():Vec<&'static str> > lock,scoped_tools
+     set_handler(handler):Result<()> > lock
+     set_protocol_observer(observer):Result<()> > lock
+     connected():bool > lock
+     while_pending(turn,action):Result<bool> > lock
+     while_open(action):Result<Option<String>> > lock
+     session():Option<String> > lock
      wait(turn,cancel,alive):Result<Finish> > wait_loop
      - drop
     Shared(C{token,state,changed})
@@ -989,7 +1020,7 @@ src
     tool_list(role):Vec<Value> > allowed_tools,tool_json
     - {tool,turn,plan,control}_contract
    transport
-    bridge():Result<()> > forward
+    bridge():Result<()> > forward,lock
     forward(input,output,url,token,conversation):Result<()> > gateway_client,forward_line
     serve(shared,request):Result<()> > authorized,respond,{read,handle}_message
     - with_session,write_reply,initialize_result,list_tools
@@ -998,9 +1029,11 @@ src
    task_role(key):Option<(&str,bool)>
    task_state_digest(tasks):String
    ConversationSummary(C{id,goal,project,created_ms,status,active_plan,tasks_{total,done},revision_token})
-   Core(C{store,native,weak,_lock,opened_ms,config,state,runtime_activation_lock,activity,revisions,worktrees,locks}) : Drop
+   Core(C{store,native,weak,_lock,opened_ms,config,state,runtime_activation_{lock,cancels},activity,revisions,worktrees,locks}) : Drop
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task
-    answer_agent_tool(&Arc<Self>,conversation,args):Result<Value> > defer_question_tool,answer_agent_with_disposition,maybe_continue_plan
+    answer_agent_tool(&Arc<Self>,conversation,turn,args):Result<Value> > defer_question_tool,answer_agent_from_turn,resume_delivered_answer
+    replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
+    resume_delivered_answer(&Arc<Self>,conversation) > graph,accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
     submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,team,check_submitted_plan,select_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
@@ -1035,7 +1068,7 @@ src
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > direct_execute,address,dispatch_addressed
     direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~147 > add_message,{start,finish}_turn,create_run,register_message_source,apply_ledger_change,bind_ledger_turn,accept_extraction,len,TaskContract,add_plan,link_plan_run,bind_task_ledger,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
-    turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute,finish.finish
+    turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
     settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,as_str,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
     decide_approval_tool(conversation,args):Result<Value> > approval_state,escalate_approval,notice,answer_approval
     answer_approval(conversation,request,choice):Result<()>
@@ -1050,14 +1083,14 @@ src
     pause(conversation,paused):Result<()>
     restart_orchestrator(&Arc<Self>,conversation):Result<()> > add_message,drop,wake
     cancel(conversation) > cancel_conversation,notice
-    is_idle(conversation):bool > is_idle_with_plans
-    delete_session(conversation):Result<()> > require,is_idle_with_plans
-    busy():bool
+    is_idle(conversation):bool > lock,is_idle_with_plans
+    delete_session(conversation):Result<()> > lock,require,is_idle_with_plans
+    busy():bool > lock
     task_freshness_token(conversation,{plan,task}_id):Result<String> > task_unscoped,freshness_for_task
     config_snapshot():Arc<Config>
     replace_config(config)
-    send(&Arc<Self>,conversation,text):Result<Message>
-    start(project):Result<Conversation> > {record_project,project}_identity,create_{conversation,session_branch}
+    send(&Arc<Self>,conversation,text):Result<Message> > lock,require,pending
+    start(project):Result<Conversation> > {record_project,project}_identity,create_conversation
     submit(&Arc<Self>,conversation,text):Result<serde_json::Value> > submit_addressed
     send_to_agent(&Arc<Self>,message):Result<serde_json::Value> > enqueue_and_refresh,steer,resume_after_delivery
     conversation_revision_token(conversation):Result<String> > latest_event_seq,paused,is_idle
@@ -1103,24 +1136,24 @@ src
     plan_runner(&Arc<Self>,conversation,plan_id,cancel,tasks_write) > warn_of_uncommitted,run_plan_cycle,notice,clear_running_plan
     has_runnable_dependents(plan_id):Result<bool> > dependencies_approved
     warn_of_uncommitted(conversation,writes) > uncommitted_notice
-    wake(&Arc<Self>,conversation) > pending
+    wake(&Arc<Self>,conversation) > draining,lock
     orchestrate(&Arc<Self>,conversation,cancel) > next_orchestration_{upto,turn},stop_orchestrator
-    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > preflight_plan_start,db,remove,announce_plan_tasks,drop,spawn_plan_runner
+    start_plan_with_scope_lock(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > preflight_plan_start,remove,announce_plan_tasks,drop,spawn_plan_runner
     preflight_plan_start(conversation,plan):Result<()> > pending,ensure_{plan_can_start,profiles_launch},validate_plan_inputs,create_session_branch
     resume_agent_reviews(&Arc<Self>,conversation):Result<()> > register_agent_review,spawn_agent_review_worker
-    review_change(&Arc<Self>,conversation,plan,id):Result<()> > prepare_code_review,remove
+    review_change(&Arc<Self>,conversation,plan,id):Result<()> > lock,prepare_code_review,remove
     open_plan_comments(conversation,plan_id):Result<Vec<Comment>>
     activate_reviewed_plan(&Arc<Self>,conversation,plan_id):Result<Vec<Task>> > plan_review_approved,open_plan_comments,start_plan
     reject_plan(&Arc<Self>,conversation,plan_id,reason):Result<()> > set_plan_status,require,rejection_reason,announce_rejected_tasks,record_plan_rejection,wake
     validate_session_project(project):Result<String> > local_main,session_project
-    create_session_branch(conversation,project):Result<String> ~78 > session_branch_{name,path},load_session_branch,session_project,SessionBranch,session_worktree_path,require,ok,local_main,save_session_branch,ensure_session_started_event
+    create_session_branch(conversation,project):Result<String> ~120 > session_branch_name,db,named_session_branch,session_branch_path,load_session_branch,session_{project,worktree_path},require,SessionBranch,ok,local_main,save_session_branch,ensure_session_started_event
     session_worktree(conversation,project):Result<PathBuf> > create_session_branch
-    restore_session_branches():Result<()> > conversations,session_worktree,notice
+    restore_session_branches():Result<()> > conversations,session_branch_path,load_session_branch,ensure_session_started_event,notice
     artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
     artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
     prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
     validate_artifact_delta(task,spec,worktree):Result<()> > artifact_commits
-    deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~45 > artifact_commits,validate_change_paths,record_artifact_delivery,ArtifactReceipt
+    deliver_artifact_change(task,spec,project,base,change):Result<git::Integration> ~60 > artifact_commits,validate_change_paths,require,record_artifact_delivery,ArtifactReceipt
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
     run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
@@ -1145,14 +1178,14 @@ src
     notice(conversation,text)
     maybe_continue_plan(&Arc<Self>,conversation,plan_id):Result<()> > refresh_answer_waits,all,start_plan_with_scope_lock
     start_plan(&Arc<Self>,conversation,plan_id,queue):Result<Vec<Task>> > plan_running,start_plan_with_scope_lock
-    lease_worktree(path):WorktreeLease<'_> > wait,WorktreeLease
-    wait_for_worktree_available(paths,cancel):bool > all
-    try_lease_worktree(path):Option<WorktreeLease<'_>> > WorktreeLease
-    try_pin_worktree(path):Option<WorktreePin<'_>> > WorktreePin
+    lease_worktree(path):WorktreeLease<'_> > lock,wait,WorktreeLease
+    wait_for_worktree_available(paths,cancel):bool > lock,all
+    try_lease_worktree(path):Option<WorktreeLease<'_>> > lock,WorktreeLease
+    try_pin_worktree(path):Option<WorktreePin<'_>> > lock,WorktreePin
     try_task_worktree_lease(task):Result<(bool,Option<WorktreeLease<'_>>)> > task_worktree_path,try_lease_worktree
     task_worktree_lease(task):Result<Option<WorktreeLease<'_>>> > task_worktree_path,lease_worktree
     task_worktree_path(task):Result<Option<PathBuf>> > task_in_plan_by_id,worktree_path,has_delivery
-    queue_worktree_cleanup(task)
+    queue_worktree_cleanup(task) > lock
     drain_worktree_cleanup() > cleanup_task_worktrees,queue_worktree_cleanup,cleanup_notice
     release_task_views(id,keep) > release_task_views_with_hook
     compliance_audit(&Arc<Self>,conversation,plan,cancel):Result<Vec<String>> > audit_scope,{produce,review}_audit,AuditTurns,finish_audit
@@ -1187,11 +1220,11 @@ src
     stop_task(conversation,task,role,cancel):Result<()> > last_turn,failed_turn_status,record_failed_turn
     defer_agent_work(conversation,task):Result<bool> > flatten,pending_mail,set_status
     wait_for_question(conversation,task,request,reviewer):Result<()> > update_task,park_task_for_question,announce_task
-    terminal_open(conversation,role,columns,rows,retry):Result<Screen> > size
-    terminal_read(conversation,role,handle,after):Result<Option<Screen>>
-    terminal_input(conversation,role,handle,sequence,input):Result<()>
-    terminal_resize(conversation,role,handle,columns,rows):Result<()> > size,require
-    terminal_detach(conversation,role,handle):Result<()> > remove
+    terminal_open(conversation,role,columns,rows,retry):Result<Screen> > size,lock
+    terminal_read(conversation,role,handle,after):Result<Option<Screen>> > lock
+    terminal_input(conversation,role,handle,sequence,input):Result<()> > lock
+    terminal_resize(conversation,role,handle,columns,rows):Result<()> > size,lock,require
+    terminal_detach(conversation,role,handle):Result<()> > remove,lock
     - revision_view,plan_base_path,refresh_delivered_tasks,{conversation,approved_plan}_status,replaced_graph,
       planner_submitted_plan,record_{comment_reply,plan_lint},{run,store}_report_audit,require_revision_review,
       {spawn,finish}_revision_worker,prepare_{revision,revision_contents},ensure_revision_accepted,prepared_revision,
@@ -1228,7 +1261,7 @@ src
    registry.rs
     - recorded_round,validate_profile,restored_agent_spec
    session
-    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; steer(text,interrupt):Result<Option<String>> > check_alive,while_open; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
+    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String> > lock; touch() > lock; check_alive():Result<()> > diagnostic,screen_stop,approval,lock; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch; steer(text,interrupt):Result<Option<String>> > check_alive,while_open; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()> > lock; set_protocol_observer(observer):Result<()>
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
                remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
@@ -1240,13 +1273,13 @@ src
    invalid(error):Error
    recover(store,state):Result<()> > reap,kill_leftovers
    Registry(C{sessions})
-    reap_idle():Result<()>
+    reap_idle():Result<()> > lock
     restore(core,conversation,role_key):Result<Arc<Session>> > graph,parse_role_key,recorded_{turn,context},restored_spec,require,review_execution,turn_scope,try_pin_worktree,prepare_scoped
     retire_directory(path):Result<bool> > try_lock
-    shutdown():Result<()> > store
+    shutdown():Result<()> > lock,store
     prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> > task_by_id,session_signature
-    get(conversation,role):Result<Option<Arc<Session>>>
-    claimed():Vec<String>
+    get(conversation,role):Result<Option<Arc<Session>>> > lock
+    claimed():Vec<String> > lock
    Session(C{conversation,core,spec,signature,_settings,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
    = EXECUTION_FAILED,SCREEN_LINES=12,APPROVAL_LINES=40
    - turn_text
@@ -1273,7 +1306,9 @@ src
    kill_descendants(root,marker) > processes,descendants,tagged,kill
    kill_leftovers(state) > processes,kill,tagged
    marker(state):String
-   = MARKER="ANTISLOP_AGENT"
+   terminate_validation_leftovers(state) > processes,tagged
+   validator_marker(state,operation):String
+   = MARKER="ANTISLOP_AGENT",VALIDATOR_MARKER="ANTISLOP_VALIDATOR"
    - Process,listing,parse
   progress
    blocks(finding):bool
@@ -1487,7 +1522,8 @@ src
     invalidate_open_questions(turn):Result<usize> > db
     defer_question_to_user(conversation,request,explanation):Result<Value> > db
     park_task_for_question(task,request):Result<String> > db
-    answer_agent_with_disposition(conversation,request,answer,disposition,target):Result<Value> ~57 > answer_agent_question,refresh_answer_waits,agent_question
+    answer_agent_with_disposition(conversation,request,answer,disposition,target):Result<Value> > answer_agent_from_turn
+    answer_agent_from_turn(conversation,request,answer,disposition,target,caller):Result<Value> ~87 > answer_question_tx,refresh_answer_waits
     refresh_answer_waits(conversation):Result<()> > db
     approval_mode(conversation):Result<String> > db
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
@@ -1568,6 +1604,7 @@ src
     events_since(conversation,after,limit):Result<Vec<Event>> > events_since_budget
     latest_audit_event(conversation):Result<Option<Event>> > db,decode_event_row
     events_since_budget(conversation,after,limit,budget):Result<Vec<Event>> > db,collect_events
+    classify_preflight_failure(conversation,message,reason):Result<Value> > db
     messages_after(conversation,after):Result<Vec<Message>> > db,Message,sql_text
     recent_messages_through(conversation,through):Result<Vec<Message>> > db,Message,sql_text
     messages_by(conversation,author,after):Result<Vec<Message>> > db,Message,sql_text
@@ -1584,7 +1621,7 @@ src
     plan_history(conversation,plan_id):Result<PlanHistory> > conversation,plan,plan_history_{timing,status,sessions,outcomes,run},PlanHistory
     previous_plan_rejection(conversation):Result<Option<crate::lean::tasks::Verdict>> > db
     set_check(task,round,check,state,status,note):Result<bool> > {previous,merge}_check,db
-    update_task(task):Result<()> > StoredTaskContent.encode,task_snapshot,save_task_round
+    update_task(task):Result<()> > lock,StoredTaskContent.encode,task_snapshot,save_task_round
     dependency_inputs(plan,spec):Result<Vec<crate::lean::tasks::DependencyReport>> > {direct_dependency,earlier_check,selected_approach}_reports
     last_plan_that_ran(conversation,except):Result<Option<Vec<Task>>> ×0 > plan
     last_plan_with_approvals(conversation,except):Result<Vec<Task>> ×0 > plan
@@ -1595,7 +1632,9 @@ src
     completed_task_result(task):Result<(String,Value)> > plan_conversation,retained_result_ref,task_by_id
     plan(plan_id):Result<Vec<Task>> > db,plan_task_rows,decode_plan_task
     checks(task,round):Result<Vec<Value>> > db
-    record_result_document(conversation,producer,path,source_commit,text):Result<()> > db
+    record_result_document(conversation,producer,path,source_commit,text):Result<()> > prepare_text,publish_result_document
+    prepare_result_document(reader):Result<Option<crate::lean::content::PreparedContent>> > prepare_text
+    publish_result_document(conversation,producer,path,source_commit,prepared):Result<()> > db
     result_documents(conversation):Result<Vec<ResultDocument>> > db,ResultDocument
     result_document_chunk(conversation,id,offset):Result<crate::lean::content::Chunk> > db,chunk
     reserve_revision_job(conversation,key,revision):Result<(String,bool)> > db,resume_revision_job,require_no_review,insert_revision_job
@@ -1627,7 +1666,7 @@ src
     check_runtime_repository(path,identity):Result<()> > validate_database
     initialize(connection):Result<()> > initialize_{base_tables,plan_tables}
     decode_content(text):Result<String>
-    db():std::sync::MutexGuard<'_,Connection>
+    db():std::sync::MutexGuard<'_,Connection> > lock
     record_project_identity(project,identity):Result<()> > db
     repository_id(project):Result<Option<String>> > db
     create_conversation(project):Result<Conversation> > Conversation,now_ms,db,begin_interview
@@ -1647,13 +1686,15 @@ src
     open_user_decision(conversation):Result<Option<Option<crate::lean::interview::Question>>> > messages_by
     awaiting_first_plan(conversation):Result<bool> > db
     ask_interview_question(conversation,question):Result<()> > db,require
-    interview_summary(conversation,summary,upto):Result<()> > require,db
-    finish_interview(conversation):Result<bool> ~40 > db,current_interview,scope_is_confirmed,promote_current_interview,queue_planning_message,{latest,request}_scope_confirmation
-    record_scope_confirmation_answer(tx,conversation,text,seq):Result<()> ~41 > latest_scope_confirmation,current_interview
+    interview_summary(conversation,summary,upto):Result<()> > interview_summary_with_title
+    interview_summary_with_title(conversation,summary,title,upto):Result<()> > require,db
+    finish_interview(conversation):Result<bool> ~41 > db,current_interview,scope_is_confirmed,promote_current_interview,queue_planning_message,latest_scope_confirmation,scope_title,request_scope_confirmation
+    record_scope_confirmation_answer(tx,conversation,text,seq):Result<()> ~43 > latest_scope_confirmation,current_interview,scope_title
     - round_reference,{decode,current,unavailable}_round_record,load_round_messages,read_run_context,task_input_generation,
       decode_content_json,resolve_turn_plan,insert_turn,dependency_report,summarize_earlier_checks,option_task_ids,
       selected_approach_report,decode_optional_{text,json}
    Task(C{input_generation,id,plan_id,spec,status,round,report,verdict,base,result,feedback,freshness_token,checks})
+    current_reason():Option<&str>
    TaskReportInfo(C{task_{id,label},round,report})
    TaskVerdictInfo(C{task_{id,label},round,verdict})
    Turn(C{id,role,status,session_id,error,upto_message,plan_id})
@@ -1817,7 +1858,7 @@ src
      Session: attached():bool; submit(state,text):Result<()> > require; interrupt(state):Result<()>; press(state,keys):Result<()> > require; press_for_approval(state,provider,fingerprint,key):Result<bool> > with_matching_fingerprint,screen_text,detect,require; shared():Arc<Mutex<State>>; exited():Option<String> > flatten
      - Session: attach,resize
     lifecycle
-     Session: snapshot(handle,after):Result<Option<Screen>> > render_screen; input(handle,sequence,input):Result<()> ~42 > require,apply_input
+     Session: snapshot(handle,after):Result<Option<Screen>> > lock,render_screen; input(handle,sequence,input):Result<()> ~42 > require,lock,apply_input
      - render_{cells,cell},resolve_color,cell_modifiers,apply_{paste,key},terminal_key,apply_mouse,mouse_event,modifiers,
        mouse_button
      - Session: drop
@@ -1943,7 +1984,7 @@ src
      - capture_{composer,navigation,overlays,requests}
     Editor(C{target,input})
     Focus(E{Chat,Graph})
-    Update(E{NativeInputRejected,PlanHistory,InterviewResult,AgentMessage,Ledger,Config,Events,Conversation,Notice,ProjectReady,ProjectStatus,Diff,Task,TaskFailed,{Send,Comment,PlanRevision}Result})
+    Update(E{ResultDocument,NativeInputRejected,PlanHistory,InterviewResult,AgentMessage,Ledger,Config,Events,Conversation,Notice,ProjectReady,ProjectStatus,Diff,Task,TaskFailed,{Send,Comment,PlanRevision}Result})
    dashboard
     hero/identity
      - identity_{id,summary,kind}
@@ -1972,7 +2013,7 @@ src
     model
      Composer(C{input,sending,operation,error,sent_text,mail,delivery,delivery_{receipts,failure},address,mode})
      DetailRecord(C{lines,search_text})
-     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,selected_result_document,panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
+     Details(C{native,native_focus,resume_round,native_areas,text_area,selected_round,available_rounds,latest_observed,active_panel,split,{dash,panel}_scroll,panel_expanded,documents,selected_result_document,result_{index,metadata,metadata_source,selection_generation,loading,error},panel_layout,fetched_events,fetch_in_flight,task_uuid,conversation,drafts,editing,input_width,key,tab,scroll,task,fetched_{round,generation,plan},comment,check,reveal_check,fetched_checks,fetch_{failures,retry_after,error},{scroll,query}_memory,query,searching,sessions,history_unavailable,follow,show_info,dash_{fold,ids,whole,focus,reveal},pending_g,layout_cache})
       hero_key():String > session_keys
       identity_line(view,theme,key):Line<'static> > row,identity_{status,title}
       provider_chip(view,theme,key):Vec<Vec<Span<'static>>>
@@ -2005,8 +2046,10 @@ src
       change_round(view,direction) > task_id
       save_current_tab()
       restore_current_tab() > overview
-      change_result_document(direction) > visible_result_keys
-      visible_result_keys():Vec<String> > len
+      change_result_document(direction)
+      rebuild_result_index() ~46 > as_str
+      load_documents(documents) > rebuild_result_index
+      visible_result_keys():&[String]
       records(view):Vec<Rc<DetailRecord>> > overview,comments.comments,checks,results
       fetch_failed(error):bool
       load_task(task) > as_str
@@ -2347,8 +2390,10 @@ src
        append_{history_notice,round_fields,field_content},read_content
     session
      append_answers(client,conversation,turn,builder):Result<bool> > session_page,append_final_events,next_event_cursor
+     append_result_documents(client,conversation,task):Result<()> > Client.call
+     result_document(client,conversation,metadata):Result<document::Document> > as_str,state_dir,append_result_document_header,Client.call
      run_snapshot(client,conversation,role,selected):Result<Snapshot> > session_runs,selected_run_index,session_metadata,selected_run_snapshot
-     - append_{final_event,session_content,result_documents,result_document_header,run_status}
+     - append_{final_event,session_content,run_status}
    inspection.rs
     Snapshot(C{task,documents})
    interview
@@ -2482,7 +2527,7 @@ src
     Command(E{Input,Resize,Retry})
     Snapshot(C{screen,error})
     View(C{state,commands,stop,dimensions,identity})
-     recent_lines(max_lines):Vec<String>
+     recent_lines(max_lines):Vec<String> > lock
    palette
     catalog
      Action(E{Run,Select,Show,SwitchConversation,Address,OpenProject})
@@ -2719,12 +2764,13 @@ src
      switch_project(index,conversation) > latest_or_new,restore_project_history,switch_config_workspace,open
      open_project(path) > expand_home,switch_project,frontend_binary,workspace.connect
      open_projects_picker() > open_project_items,append_remembered_projects,Picker.new
+     fetch_selected_document() ~50
      fetch_task() > prepare_task_fetch,fetch_run,run_task_fetch
      fetch_run() > {prepare,run}_run_fetch
      open_details(key) > restore_details,{resolve_details,fetch}_task
      request(request,done)
      task_row_round(key):Option<u64>
-     refetch_stale_details() > details_are_stale,fetch_task
+     refetch_stale_details() > fetch_selected_document,details_are_stale,fetch_task
      handle_plan_action(action) > accept_plan,open_plan_{rejection,comment},submit_plan_review,set_comment
      header_line(width):Line<'static> > header_{project_label,status},controls,prepend_header_notice
      header_status():String > len,flatten,short,total,stage,glyphs,Theme.from_env
@@ -2778,7 +2824,7 @@ src
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
-     apply_update_inner(update) > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result,plan_revision_result}
+     apply_update_inner(update) ~46 > apply_{native_input_rejected,plan_history,agent_message,ledger,config,events,conversation,project_ready,project_status,notice,task_failed,task,diff,interview_result,send_result,comment_result,plan_revision_result}
      apply_native_input_rejected(update) > recover_native_input
      apply_agent_message(update) > apply_agent_receipt
      apply_interview_result(update)
@@ -2919,10 +2965,10 @@ src
    update_queue/queue
     update_channel(capacity):(UpdateSender,UpdateReceiver) > Shared,State,UpdateSender,UpdateReceiver
     QueueClosed,QueueEmpty,UpdateSender(C)
-     UpdateSender: send(update):Result<(),QueueClosed> > len,wait
+     UpdateSender: send(update):Result<(),QueueClosed> > lock,len,wait
     UpdateReceiver(C) : Drop
-     try_recv():Result<Update,QueueEmpty>
-     recv_timeout(timeout):Result<Update,QueueEmpty>
+     try_recv():Result<Update,QueueEmpty> > lock
+     recv_timeout(timeout):Result<Update,QueueEmpty> > lock
      - drop
    view
     comments
@@ -3237,6 +3283,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_conversation,session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 143,083 LOC · input 1,276,357 · output 47,883 tokens · state 650841a84ddf · targets AGENTS.md
+· 145,216 LOC · input 1,296,139 · output 48,837 tokens · state 0798692a2e7e · targets AGENTS.md
 ```
 <!-- hologram:end -->
