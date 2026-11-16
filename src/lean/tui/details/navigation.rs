@@ -38,6 +38,12 @@ impl Details {
         self.available_rounds.clear();
         self.documents.clear();
         self.selected_result_document = None;
+        self.result_index.clear();
+        self.result_metadata.clear();
+        self.result_metadata_source = serde_json::Value::Null;
+        self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
+        self.result_loading = None;
+        self.result_error = None;
         self.resume_round = false;
         self.panel_scroll = [0; 2];
         self.panel_expanded = [false; 2];
@@ -118,6 +124,12 @@ impl Details {
             self.task = None;
             self.documents.clear();
             self.selected_result_document = None;
+            self.result_index.clear();
+            self.result_metadata.clear();
+            self.result_metadata_source = serde_json::Value::Null;
+            self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
+            self.result_loading = None;
+            self.result_error = None;
             self.resume_round = false;
             self.scroll = 0;
             self.panel_scroll = [0; 2];
@@ -147,7 +159,7 @@ impl Details {
     }
 
     pub fn change_result_document(&mut self, direction: isize) {
-        let keys = self.visible_result_keys();
+        let keys = &self.result_index;
         if keys.is_empty() {
             self.selected_result_document = None;
             return;
@@ -155,28 +167,72 @@ impl Details {
         let current = self
             .selected_result_document
             .as_ref()
-            .filter(|key| keys.contains(key))
-            .unwrap_or(&keys[0]);
-        let at = keys.iter().position(|key| key == current).unwrap_or(0);
-        let next = (at as isize + direction).rem_euclid(keys.len() as isize) as usize;
+            .and_then(|key| keys.iter().position(|item| item == key))
+            .unwrap_or(0);
+        let next = (current as isize + direction).rem_euclid(keys.len() as isize) as usize;
         self.selected_result_document = Some(keys[next].clone());
+        self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
+        self.result_loading = None;
+        self.result_error = None;
         self.scroll = 0;
     }
 
-    /// Result documents in the order shown in the Results tab.
-    pub(in crate::lean::tui) fn visible_result_keys(&self) -> Vec<String> {
-        let mut keys = Vec::with_capacity(self.documents.len());
+    /// Result documents in the prepared order shown in the Results tab.
+    pub(in crate::lean::tui) fn visible_result_keys(&self) -> &[String] {
+        &self.result_index
+    }
+
+    /// Rebuild once per metadata update; rendering only borrows this cached order.
+    pub(in crate::lean::tui) fn rebuild_result_index(&mut self) {
+        let metadata = self
+            .task
+            .as_ref()
+            .and_then(|task| task["_result_documents"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut keys = Vec::new();
+        let mut records = std::collections::HashMap::new();
         if self.documents.contains_key("result") {
             keys.push("result".to_owned());
         }
-        let mut artifacts = self
-            .documents
-            .keys()
-            .filter(|key| key.starts_with("result_document:"))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut artifacts = Vec::new();
+        for item in &metadata {
+            if let Some(id) = item["id"].as_str() {
+                let key = format!("result_document:{id}");
+                artifacts.push(key.clone());
+                records.insert(key, item.clone());
+            }
+        }
         artifacts.sort();
         keys.extend(artifacts);
-        keys
+        let mut cached = self
+            .documents
+            .keys()
+            .filter(|key| key.starts_with("result_document:") && !keys.contains(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        cached.sort();
+        keys.extend(cached);
+        let source = serde_json::Value::Array(metadata);
+        self.result_index = keys;
+        self.result_metadata = records;
+        self.result_metadata_source = source;
+        if self
+            .selected_result_document
+            .as_ref()
+            .is_some_and(|key| !self.result_index.contains(key))
+        {
+            self.selected_result_document = None;
+            self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
+            self.result_loading = None;
+            self.result_error = None;
+        }
+        if self.selected_result_document.is_none() {
+            self.selected_result_document = self
+                .result_index
+                .iter()
+                .find(|key| key.starts_with("result_document:"))
+                .cloned();
+        }
     }
 }

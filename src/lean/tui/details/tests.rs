@@ -446,18 +446,10 @@ fn result_documents_are_individually_selectable_and_readable_in_the_session() {
             .documents
             .insert(format!("result_document:{id}"), builder.finish().unwrap());
     }
+    details.rebuild_result_index();
     let view = View::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        if screen(&terminal).contains("Original answer") {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    details.change_result_document(1);
     loop {
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
         let shown = screen(&terminal);
@@ -475,12 +467,35 @@ fn result_documents_are_individually_selectable_and_readable_in_the_session() {
         let shown = screen(&terminal);
         if shown.contains("Second output:") {
             assert!(shown.contains("notes.txt"), "{shown}");
-            assert!(!shown.contains("First output:"), "{shown}");
+            assert!(!shown.contains("Original answer"), "{shown}");
             break;
         }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+#[test]
+fn result_document_loading_state_keeps_document_navigation_visible() {
+    let mut details = Details::new("orchestrator".into());
+    details.switch_tab(RESULT);
+    details.task = Some(serde_json::json!({
+        "_result_documents": [
+            {"id": "one", "path": "brief.md"},
+            {"id": "two", "path": "notes.txt"},
+        ],
+    }));
+    details.rebuild_result_index();
+    let selected = details.selected_result_document.clone().unwrap();
+    details.result_loading = Some((selected, details.result_selection_generation, 0));
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 16)).unwrap();
+    terminal
+        .draw(|frame| details.draw(frame, &View::default()))
+        .unwrap();
+    let shown = screen(&terminal);
+    assert!(shown.contains("Loading result document"), "{shown}");
+    assert!(shown.contains(",/. documents"), "{shown}");
 }
 
 #[test]
@@ -490,9 +505,10 @@ fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
 
     let state = tempfile::tempdir().unwrap();
     let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server_seen = std::sync::Arc::clone(&seen);
     let server = std::thread::spawn(move || {
-        let mut seen = Vec::new();
-        while !seen.contains(&"result_document_content".to_owned()) {
+        loop {
             let (mut stream, _) = listener.accept().unwrap();
             let envelope: serde_json::Value =
                 crate::transport::read(&mut std::io::BufReader::new(stream.try_clone().unwrap()))
@@ -500,7 +516,7 @@ fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
                     .unwrap();
             let request = &envelope["request"];
             let op = request["op"].as_str().unwrap().to_owned();
-            seen.push(op.clone());
+            server_seen.lock().unwrap().push(op.clone());
             let data = match op.as_str() {
                 "sessions" => {
                     json!([{"turn_id":"turn-1","role":"orchestrator","status":"completed"}])
@@ -516,22 +532,67 @@ fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
                 other => panic!("unexpected session request {other}"),
             };
             crate::transport::write(&mut stream, &json!({"data":data,"error":null})).unwrap();
+            if op == "result_document_content" {
+                break;
+            }
         }
-        seen
     });
 
     let client = crate::lean::daemon::Client::at(state.path());
     let snapshot =
         crate::lean::tui::inspection::run_snapshot(&client, "conversation-1", "orchestrator", None)
             .unwrap();
-    let seen = server.join().unwrap();
+    assert_eq!(snapshot.task["_result_documents"][0]["id"], "doc-1");
+    assert_eq!(
+        snapshot.documents.len(),
+        2,
+        "snapshot contains only result/review"
+    );
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .contains(&"result_document_content".to_owned()),
+        "metadata snapshot must not request unopened artifact content"
+    );
+    let (updates, receiver) = crate::lean::tui::update_channel(8);
+    let mut app = crate::lean::tui::tests::test_app();
+    app.client = client;
+    app.conversation = "conversation-1".into();
+    app.updates = updates;
+    app.task_request_id = 1;
+    let mut details = Details::new("orchestrator".into());
+    details.switch_tab(RESULT);
+    app.details = Some(details);
+    let round = snapshot.task["round"].as_u64().unwrap_or(0);
+    app.apply_update(crate::lean::tui::Update::Task {
+        conversation: "conversation-1".into(),
+        plan: None,
+        generation: app.generation,
+        request_id: 1,
+        key: "orchestrator".into(),
+        round,
+        task: snapshot.task,
+        documents: snapshot.documents,
+    });
+    assert_eq!(
+        app.details
+            .as_ref()
+            .and_then(|details| details.selected_result_document.as_deref()),
+        Some("result_document:doc-1"),
+        "the visible artifact is selected when metadata arrives"
+    );
+    let update = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    app.apply_update(update);
+    server.join().unwrap();
+    let seen = seen.lock().unwrap();
     assert!(seen.contains(&"result_documents".to_owned()));
     assert!(seen.contains(&"result_document_content".to_owned()));
 
-    let mut details = Details::new("orchestrator".into());
-    details.documents = snapshot.documents;
-    details.switch_tab(RESULT);
-    details.change_result_document(1);
+    let details = app.details.as_mut().unwrap();
+    assert!(details.documents.contains_key("result_document:doc-1"));
     let view = View::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -545,6 +606,80 @@ fn session_snapshot_loads_result_artifact_from_session_api_for_display() {
         assert!(std::time::Instant::now() < deadline, "{shown}");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+#[test]
+fn result_document_replies_are_scoped_to_the_current_conversation_and_selection() {
+    let state = tempfile::tempdir().unwrap();
+    let mut builder = super::super::document::Builder::new(state.path()).unwrap();
+    builder
+        .append("", |sink| sink("foreign stale body"))
+        .unwrap();
+    let stale_document = builder.finish().unwrap();
+
+    let mut app = crate::lean::tui::tests::test_app();
+    app.conversation = "current-conversation".into();
+    app.generation = 4;
+    let mut details = Details::new("orchestrator".into());
+    details.selected_result_document = Some("result_document:doc-current".into());
+    details.result_selection_generation = 3;
+    details.result_loading = Some(("result_document:doc-current".into(), 3, 4));
+    app.details = Some(details);
+
+    app.apply_update(crate::lean::tui::Update::ResultDocument {
+        conversation: "previous-conversation".into(),
+        generation: 3,
+        key: "orchestrator".into(),
+        selection: 3,
+        id: "result_document:doc-current".into(),
+        result: Ok(stale_document.clone()),
+    });
+    app.apply_update(crate::lean::tui::Update::ResultDocument {
+        conversation: "current-conversation".into(),
+        generation: 4,
+        key: "orchestrator".into(),
+        selection: 2,
+        id: "result_document:doc-current".into(),
+        result: Ok(stale_document),
+    });
+    let details = app.details.as_ref().unwrap();
+    assert!(
+        !details
+            .documents
+            .contains_key("result_document:doc-current")
+    );
+    assert_eq!(details.result_loading.as_ref().unwrap().1, 3);
+
+    app.apply_update(crate::lean::tui::Update::ResultDocument {
+        conversation: "current-conversation".into(),
+        generation: 4,
+        key: "orchestrator".into(),
+        selection: 3,
+        id: "result_document:doc-current".into(),
+        result: Err("artifact was removed".into()),
+    });
+    let details = app.details.as_ref().unwrap();
+    assert!(details.result_loading.is_none());
+    assert_eq!(
+        details
+            .result_error
+            .as_ref()
+            .map(|(_, error)| error.as_str()),
+        Some("artifact was removed")
+    );
+    assert!(
+        !details
+            .documents
+            .contains_key("result_document:doc-current")
+    );
+    let mut details = app.details.take().unwrap();
+    details.switch_tab(RESULT);
+    details.result_index = vec!["result_document:doc-current".into()];
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    terminal
+        .draw(|frame| details.draw(frame, &View::default()))
+        .unwrap();
+    assert!(screen(&terminal).contains("artifact was removed"));
 }
 
 #[test]

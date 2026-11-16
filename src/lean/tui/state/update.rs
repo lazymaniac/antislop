@@ -12,6 +12,31 @@ mod records;
 impl App {
     pub(in crate::lean::tui) fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::ResultDocument {
+                conversation,
+                generation,
+                key,
+                selection,
+                id,
+                result,
+            } => {
+                if conversation == self.conversation
+                    && generation == self.generation
+                    && let Some(details) = self.details.as_mut().filter(|details| {
+                        details.key == key
+                            && details.result_selection_generation == selection
+                            && details.selected_result_document.as_deref() == Some(&id)
+                    })
+                {
+                    details.result_loading = None;
+                    match result {
+                        Ok(document) => {
+                            details.documents.insert(id, document);
+                        }
+                        Err(error) => details.result_error = Some((id, error)),
+                    }
+                }
+            }
             update @ Update::NativeInputRejected { .. } => self.apply_native_input_rejected(update),
             update @ Update::PlanHistory { .. } => self.apply_plan_history(update),
             update @ Update::AgentMessage { .. } => self.apply_agent_message(update),

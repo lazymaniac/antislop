@@ -100,9 +100,9 @@ pub(super) fn document_key(details: &super::super::details::Details) -> Option<S
         RESULT => details
             .selected_result_document
             .as_ref()
-            .filter(|key| details.documents.contains_key(*key))
+            .filter(|key| details.visible_result_keys().contains(key))
             .cloned()
-            .or_else(|| details.visible_result_keys().into_iter().next())
+            .or_else(|| details.visible_result_keys().first().cloned())
             .or_else(|| Some("result".into())),
         REVIEW => Some("review".into()),
         _ => None,

@@ -3,7 +3,7 @@ use super::*;
 mod history;
 mod session;
 pub(super) use history::task_snapshot;
-pub(super) use session::run_snapshot;
+pub(super) use session::{result_document, run_snapshot};
 
 pub(super) struct Snapshot {
     pub task: Value,

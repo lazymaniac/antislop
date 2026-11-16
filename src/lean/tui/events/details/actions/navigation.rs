@@ -44,10 +44,12 @@ impl App {
             match key.code {
                 KeyCode::Char(',') => {
                     details.change_result_document(-1);
+                    self.schedule_output_document_fetch();
                     return true;
                 }
                 KeyCode::Char('.') => {
                     details.change_result_document(1);
+                    self.schedule_output_document_fetch();
                     return true;
                 }
                 _ => {}
@@ -62,6 +64,13 @@ impl App {
             KeyCode::Tab | KeyCode::Char(']') => details.switch_tab(details.neighbour_tab(1)),
             KeyCode::BackTab | KeyCode::Char('[') => details.switch_tab(details.neighbour_tab(-1)),
             _ => return false,
+        }
+        if self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.tab == RESULT)
+        {
+            self.schedule_output_document_fetch();
         }
         true
     }
