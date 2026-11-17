@@ -268,12 +268,26 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
     store
         .select_planned_team(id, Team::Refactoring, "planner chose refactoring")
         .unwrap();
-    assert_eq!(store.user_selected_team(id).unwrap(), None);
+    assert_eq!(store.team(id).unwrap(), Team::SmallChange);
+    assert_eq!(
+        store.user_selected_team(id).unwrap(),
+        Some(Team::SmallChange)
+    );
     assert!(
         store
             .team_note(id)
             .unwrap()
-            .contains("planner chose team `refactoring`")
+            .contains("user explicitly selected")
+    );
+    store
+        .select_team(id, Team::Refactoring, "user changed their mind")
+        .unwrap();
+    assert_eq!(store.team(id).unwrap(), Team::Refactoring);
+    assert!(
+        store
+            .team_note(id)
+            .unwrap()
+            .contains("user explicitly selected team `refactoring`")
     );
     store.delete_session(id).unwrap();
     let again = store.create_conversation("project").unwrap();
@@ -281,7 +295,7 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
 }
 
 #[test]
-fn upgrading_team_state_preserves_the_known_ui_selection() {
+fn upgrading_team_state_does_not_infer_user_intent_from_legacy_reason_text() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
@@ -301,13 +315,136 @@ fn upgrading_team_state_preserves_the_known_ui_selection() {
 
     Connection::open(&path)
         .unwrap()
-        .execute_batch("ALTER TABLE teams DROP COLUMN user_selected")
+        .execute_batch(
+            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
+        )
         .unwrap();
 
     let upgraded = Store::open(&path).unwrap();
     assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
+    assert_eq!(upgraded.user_selected_team(&conversation_id).unwrap(), None);
+    assert!(
+        upgraded
+            .team_note(&conversation_id)
+            .unwrap()
+            .contains("origin unknown")
+    );
+    upgraded
+        .select_planned_team(&conversation_id, Team::Feature, "planner changed team")
+        .unwrap();
+    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
+    assert!(
+        upgraded
+            .team_note(&conversation_id)
+            .unwrap()
+            .contains("Selected by user in UI")
+    );
+    upgraded
+        .select_team(&conversation_id, Team::Refactoring, "new UI selection")
+        .unwrap();
     assert_eq!(
         upgraded.user_selected_team(&conversation_id).unwrap(),
-        Some(Team::SmallChange)
+        Some(Team::Refactoring)
+    );
+}
+
+#[test]
+fn upgrading_team_state_is_safe_when_a_previous_attempt_added_the_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation_id;
+    {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        conversation_id = conversation.id;
+        store
+            .select_planned_team(
+                &conversation_id,
+                crate::lean::tasks::Team::SmallChange,
+                "User selected `small-change` rigor mode in UI",
+            )
+            .unwrap();
+    }
+
+    let legacy = Connection::open(&path).unwrap();
+    legacy
+        .execute_batch(
+            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
+        )
+        .unwrap();
+    legacy.execute_batch(
+        "ALTER TABLE teams ADD COLUMN user_selected INTEGER NOT NULL DEFAULT 0 CHECK(user_selected IN (0,1));",
+    ).unwrap();
+    drop(legacy);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(
+        upgraded.team(&conversation_id).unwrap(),
+        crate::lean::tasks::Team::SmallChange
+    );
+    assert_eq!(upgraded.user_selected_team(&conversation_id).unwrap(), None);
+    assert!(
+        upgraded
+            .team_note(&conversation_id)
+            .unwrap()
+            .contains("origin unknown")
+    );
+}
+
+#[test]
+fn concurrent_legacy_opens_do_not_erase_a_new_user_team_choice() {
+    use crate::lean::tasks::Team;
+    use std::sync::{Arc, Barrier};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation_id;
+    {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        conversation_id = conversation.id;
+        store
+            .select_planned_team(&conversation_id, Team::SmallChange, "planner choice")
+            .unwrap();
+    }
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
+        )
+        .unwrap();
+
+    let barrier = Arc::new(Barrier::new(3));
+    let open_path = path.clone();
+    let open_barrier = Arc::clone(&barrier);
+    let opener = std::thread::spawn(move || {
+        open_barrier.wait();
+        let _store = Store::open(&open_path).unwrap();
+    });
+
+    let write_path = path.clone();
+    let write_conversation = conversation_id.clone();
+    let write_barrier = Arc::clone(&barrier);
+    let writer = std::thread::spawn(move || {
+        write_barrier.wait();
+        let store = Store::open(&write_path).unwrap();
+        store
+            .select_team(
+                &write_conversation,
+                Team::Refactoring,
+                "user selected after upgrade",
+            )
+            .unwrap();
+    });
+
+    barrier.wait();
+    opener.join().unwrap();
+    writer.join().unwrap();
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.team(&conversation_id).unwrap(), Team::Refactoring);
+    assert_eq!(
+        reopened.user_selected_team(&conversation_id).unwrap(),
+        Some(Team::Refactoring)
     );
 }

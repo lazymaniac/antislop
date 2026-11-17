@@ -156,6 +156,7 @@ impl Core {
             _ => Vec::new(),
         };
         let selected_by_user = self.store.user_selected_team(conversation)?;
+        let unknown_legacy_team = self.store.unknown_team(conversation)?;
         let (submitted_team, explicit_team) = match args["team"].as_str() {
             Some(name) => (Some(crate::lean::tasks::Team::parse(name)?), true),
             None => (None, false),
@@ -169,7 +170,7 @@ impl Core {
                 ),
             )?;
         }
-        let team = match selected_by_user.or(submitted_team) {
+        let team = match selected_by_user.or(unknown_legacy_team).or(submitted_team) {
             Some(team) => team,
             None => self.store.team(conversation)?,
         };
