@@ -167,7 +167,7 @@ fn run_scenario_with_team(
         Connection::open(project.join(".antislop/core.db"))
             .unwrap()
             .execute(
-                "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected) VALUES(?1,?2,?3,?4,0,1)",
+                "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,0,1,'user')",
                 rusqlite::params![conversation.id, team.name(), "Selected in integration fixture", tasks::TEAM_VERSION],
             )
             .unwrap();

@@ -268,7 +268,7 @@ src
       PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision,audit_response})
     planner_turn/prompt
      planner_prompt_text(context):String > format_messages,append_ledger
-     PlannerPrompt(C{project,first,requirements,team_note,asked,replaced,keepable,ledger_context})
+     PlannerPrompt(C{project,first,requirements,team_guidance,asked,replaced,keepable,ledger_context})
     planner_turn.rs
      - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
     planning_context
@@ -1050,7 +1050,7 @@ src
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
     resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> ~52 > interviewing,workflow,planned_tasks,{user_selected,unknown}_team,as_str,team,check_submitted_plan,select_planned_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> ~61 > interviewing,workflow,planned_tasks,user_selected_team,team_origin,as_str,team,check_submitted_plan,select_planned_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1127,7 +1127,7 @@ src
     require_plan_correction(conversation,turn):Result<()> > db,has_uncorrected_review_draft,require
     submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
     keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
-    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,team,planning_gaps,{team,dependency}_note,review,append_planning_gaps
+    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,team,planning_gaps,team_guidance,dependency_note,review,append_{planning_gaps,team_guidance}
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
     planning_requirements(&Arc<Self>,conversation,addressed,cancel):Result<Option<Run>> > record_addressed_comments,count_since_requirements_reset,ensure_requirements,record_requirements_failure
@@ -1363,6 +1363,10 @@ src
     answer_question_tx(tx,conversation,request,answer):Result<()> > {question,record_question}_answer
    approvals
     ApprovalRequest(C{turn,role,provider,kind,summary,options,fingerprint,decider})
+    TeamGuidance(C{team,origin,reason})
+     write_guidance_section(prompt)
+    TeamOrigin(E{User,Planner,Unknown})
+     database_value():&'static str
     = SUPERVISED="supervised",AUTONOMOUS="autonomous"
    artifacts
     ArtifactReceipt(C{task,generation,commit})
@@ -1548,8 +1552,8 @@ src
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
     team(conversation):Result<crate::lean::tasks::Team> > db,Team.parse
     user_selected_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
-    unknown_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
-    team_note(conversation):Result<String> > db
+    team_origin(conversation):Result<Option<TeamOrigin>> > db
+    team_guidance(conversation):Result<Option<TeamGuidance>> > db,Team.parse,TeamGuidance
     select_team(conversation,team,reason):Result<()> > save_team
     select_planned_team(conversation,team,reason):Result<()> > save_team
     open_approval(conversation,request):Result<String> > append_event
@@ -1684,7 +1688,7 @@ src
     set_plan_status(plan_id,from,to):Result<usize> > db
     add_plan(conversation,specs):Result<Vec<Task>> > db,now_ms,insert_proposed_tasks
     latest_plan(conversation):Result<Vec<Task>> > plan
-    open(path):Result<Self> ~48 > validate_database
+    open(path):Result<Self> ~55 > validate_database
     check_runtime_repository(path,identity):Result<()> > validate_database
     initialize(connection):Result<()> > initialize_{base_tables,plan_tables}
     decode_content(text):Result<String>
@@ -1734,7 +1738,7 @@ src
    agents.rs
     missing_gates(tasks,gates):Vec<&'static PredefinedAgent> > is_gate_kind
     missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > missing_gates
-    refresh_existing_options(tasks):Vec<TaskContract> > options_{task,goal}
+    refresh_existing_options(tasks):Vec<TaskContract> > as_str,options_{task,goal}
     resolve_gate_dependencies(tasks) > expand_gate_dependencies
     with_options(tasks):Vec<TaskContract> > options_{task,goal}
     with_required_agents(tasks):Vec<TaskContract> > with_team_gates
@@ -3313,6 +3317,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 149,471 LOC · input 1,336,279 · output 49,390 tokens · state 633e96c3a87d · targets AGENTS.md
+· 149,729 LOC · input 1,338,813 · output 49,441 tokens · state 5ccf72887185 · targets AGENTS.md
 ```
 <!-- hologram:end -->

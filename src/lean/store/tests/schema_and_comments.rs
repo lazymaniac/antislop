@@ -240,7 +240,7 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
     let conversation = store.create_conversation("project").unwrap();
     let id = &conversation.id;
     assert_eq!(store.team(id).unwrap(), Team::Feature);
-    assert_eq!(store.team_note(id).unwrap(), "");
+    assert_eq!(store.team_guidance(id).unwrap(), None);
     let selected = |store: &Store| {
         store
             .events_since(id, 0, 1000)
@@ -260,7 +260,10 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
     }
     assert_eq!(selected(&store), 2);
     assert_eq!(store.team(id).unwrap(), Team::SmallChange);
-    assert!(store.team_note(id).unwrap().contains("one-line typo fix"));
+    assert_eq!(
+        store.team_guidance(id).unwrap().unwrap().reason,
+        "one-line typo fix"
+    );
     assert_eq!(
         store.user_selected_team(id).unwrap(),
         Some(Team::SmallChange)
@@ -273,21 +276,17 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
         store.user_selected_team(id).unwrap(),
         Some(Team::SmallChange)
     );
-    assert!(
-        store
-            .team_note(id)
-            .unwrap()
-            .contains("user explicitly selected")
+    assert_eq!(
+        store.team_guidance(id).unwrap().unwrap().origin,
+        crate::lean::store::TeamOrigin::User
     );
     store
         .select_team(id, Team::Refactoring, "user changed their mind")
         .unwrap();
     assert_eq!(store.team(id).unwrap(), Team::Refactoring);
-    assert!(
-        store
-            .team_note(id)
-            .unwrap()
-            .contains("user explicitly selected team `refactoring`")
+    assert_eq!(
+        store.team_guidance(id).unwrap().unwrap().team,
+        Team::Refactoring
     );
     store.delete_session(id).unwrap();
     let again = store.create_conversation("project").unwrap();
@@ -295,7 +294,7 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
 }
 
 #[test]
-fn upgrading_team_state_does_not_infer_user_intent_from_legacy_reason_text() {
+fn migrating_legacy_team_keeps_unknown_until_a_new_explicit_choice() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
@@ -308,60 +307,7 @@ fn upgrading_team_state_does_not_infer_user_intent_from_legacy_reason_text() {
             .select_team(
                 &conversation_id,
                 Team::SmallChange,
-                "Selected by user in UI",
-            )
-            .unwrap();
-    }
-
-    Connection::open(&path)
-        .unwrap()
-        .execute_batch(
-            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
-        )
-        .unwrap();
-
-    let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
-    assert_eq!(upgraded.user_selected_team(&conversation_id).unwrap(), None);
-    assert!(
-        upgraded
-            .team_note(&conversation_id)
-            .unwrap()
-            .contains("origin unknown")
-    );
-    upgraded
-        .select_planned_team(&conversation_id, Team::Feature, "planner changed team")
-        .unwrap();
-    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
-    assert!(
-        upgraded
-            .team_note(&conversation_id)
-            .unwrap()
-            .contains("Selected by user in UI")
-    );
-    upgraded
-        .select_team(&conversation_id, Team::Refactoring, "new UI selection")
-        .unwrap();
-    assert_eq!(
-        upgraded.user_selected_team(&conversation_id).unwrap(),
-        Some(Team::Refactoring)
-    );
-}
-
-#[test]
-fn upgrading_team_state_is_safe_when_a_previous_attempt_added_the_column() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("core.db");
-    let conversation_id;
-    {
-        let store = Store::open(&path).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        conversation_id = conversation.id;
-        store
-            .select_planned_team(
-                &conversation_id,
-                crate::lean::tasks::Team::SmallChange,
-                "User selected `small-change` rigor mode in UI",
+                "User selected small-change rigor mode in UI before provenance existed",
             )
             .unwrap();
     }
@@ -369,33 +315,110 @@ fn upgrading_team_state_is_safe_when_a_previous_attempt_added_the_column() {
     let legacy = Connection::open(&path).unwrap();
     legacy
         .execute_batch(
-            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
-        )
-        .unwrap();
-    legacy.execute_batch(
-        "ALTER TABLE teams ADD COLUMN user_selected INTEGER NOT NULL DEFAULT 0 CHECK(user_selected IN (0,1));",
-    ).unwrap();
-    // The prior migration inferred this bit from a free-form reason string.
-    // Simulate that already-upgraded database: the bit is not provenance.
-    legacy
-        .execute(
-            "UPDATE teams SET user_selected=1 WHERE conversation_id=?1",
-            [&conversation_id],
+            "ALTER TABLE teams DROP COLUMN origin;
+             UPDATE teams SET user_selected=1;
+             CREATE TABLE migration_parent(id INTEGER PRIMARY KEY);
+             CREATE TABLE migration_child(parent_id INTEGER REFERENCES migration_parent(id) DEFERRABLE INITIALLY DEFERRED);
+             CREATE TRIGGER fail_team_origin_migration AFTER UPDATE OF origin ON teams
+             BEGIN INSERT INTO migration_child(parent_id) VALUES(999); END;",
         )
         .unwrap();
     drop(legacy);
 
-    let upgraded = Store::open(&path).unwrap();
+    let error = Store::open(&path).err().unwrap().to_string();
+    assert!(error.contains("FOREIGN KEY constraint failed"), "{error}");
+    let legacy = Connection::open(&path).unwrap();
+    let origin_column: i64 = legacy
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('teams') WHERE name='origin'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(origin_column, 0, "failed migration must roll back its DDL");
+    let (legacy_selected, team, reason): (i64, String, String) = legacy
+        .query_row(
+            "SELECT user_selected,team,reason FROM teams WHERE conversation_id=?1",
+            [&conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
     assert_eq!(
-        upgraded.team(&conversation_id).unwrap(),
-        crate::lean::tasks::Team::SmallChange
+        legacy_selected, 1,
+        "failed migration must roll back data updates"
     );
+    assert_eq!(team, Team::SmallChange.name());
+    assert_eq!(
+        reason,
+        "User selected small-change rigor mode in UI before provenance existed"
+    );
+    legacy
+        .execute_batch("DROP TRIGGER fail_team_origin_migration")
+        .unwrap();
+    drop(legacy);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
     assert_eq!(upgraded.user_selected_team(&conversation_id).unwrap(), None);
-    assert!(
-        upgraded
-            .team_note(&conversation_id)
-            .unwrap()
-            .contains("origin unknown")
+    assert_eq!(
+        upgraded.team_origin(&conversation_id).unwrap(),
+        Some(crate::lean::store::TeamOrigin::Unknown)
+    );
+    let guidance = upgraded.team_guidance(&conversation_id).unwrap().unwrap();
+    assert_eq!(guidance.origin, crate::lean::store::TeamOrigin::Unknown);
+    assert_eq!(guidance.team, Team::SmallChange);
+    assert_eq!(
+        guidance.reason,
+        "User selected small-change rigor mode in UI before provenance existed"
+    );
+    let row: (String, String) = upgraded
+        .db()
+        .query_row(
+            "SELECT team,reason FROM teams WHERE conversation_id=?1",
+            [&conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, Team::SmallChange.name());
+    assert_eq!(
+        row.1,
+        "User selected small-change rigor mode in UI before provenance existed"
+    );
+    drop(upgraded);
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.team(&conversation_id).unwrap(), Team::SmallChange);
+    assert_eq!(reopened.user_selected_team(&conversation_id).unwrap(), None);
+    assert_eq!(
+        reopened.team_origin(&conversation_id).unwrap(),
+        Some(crate::lean::store::TeamOrigin::Unknown)
+    );
+    let guidance = reopened.team_guidance(&conversation_id).unwrap().unwrap();
+    assert_eq!(guidance.team, Team::SmallChange);
+    assert_eq!(guidance.origin, crate::lean::store::TeamOrigin::Unknown);
+    assert_eq!(
+        guidance.reason,
+        "User selected small-change rigor mode in UI before provenance existed"
+    );
+    reopened
+        .select_team(&conversation_id, Team::Refactoring, "explicit new choice")
+        .unwrap();
+    assert_eq!(
+        reopened.user_selected_team(&conversation_id).unwrap(),
+        Some(Team::Refactoring)
+    );
+    assert_eq!(
+        reopened.team_origin(&conversation_id).unwrap(),
+        Some(crate::lean::store::TeamOrigin::User)
+    );
+    drop(reopened);
+
+    let selected_reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        selected_reopened
+            .user_selected_team(&conversation_id)
+            .unwrap(),
+        Some(Team::Refactoring)
     );
 }
 
@@ -454,5 +477,38 @@ fn concurrent_legacy_opens_do_not_erase_a_new_user_team_choice() {
     assert_eq!(
         reopened.user_selected_team(&conversation_id).unwrap(),
         Some(Team::Refactoring)
+    );
+}
+
+#[test]
+fn adding_user_selection_flag_preserves_structured_user_origin() {
+    use crate::lean::tasks::Team;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation_id;
+    {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        conversation_id = conversation.id;
+        store
+            .select_team(&conversation_id, Team::SmallChange, "explicit UI selection")
+            .unwrap();
+    }
+
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE teams DROP COLUMN user_selected")
+        .unwrap();
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
+    assert_eq!(
+        upgraded.team_origin(&conversation_id).unwrap(),
+        Some(crate::lean::store::TeamOrigin::User)
+    );
+    assert_eq!(
+        upgraded.user_selected_team(&conversation_id).unwrap(),
+        Some(Team::SmallChange)
     );
 }

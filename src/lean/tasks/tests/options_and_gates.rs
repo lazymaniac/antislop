@@ -350,24 +350,50 @@ fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_
 }
 
 #[test]
-fn revision_refreshes_options_for_each_owner_with_indexed_lookup() {
-    let first: TaskContract = serde_json::from_value(serde_json::json!({"id":"first","title":"First","goal":"First goal","change_kind":"code","kind":"implementation"})).unwrap();
-    let second: TaskContract = serde_json::from_value(serde_json::json!({"id":"second","title":"Second","goal":"Second goal","change_kind":"code","kind":"implementation"})).unwrap();
-    let original = super::super::with_options(vec![first, second]);
-    let refreshed = super::super::refresh_existing_options(original);
-    assert_eq!(
-        refreshed
-            .iter()
-            .filter(|task| task.options_for.is_some())
-            .count(),
-        2
-    );
-    for (owner, marker) in [("first", "First goal"), ("second", "Second goal")] {
-        let options = refreshed
+fn refreshing_options_keeps_each_owner_contract_and_dependency_pairing() {
+    let mut first = options_test_task("writer-a", true);
+    first.depends_on = vec!["prerequisite-a".into()];
+    let mut second = options_test_task("writer-b", true);
+    second.depends_on = vec!["prerequisite-b".into()];
+    let prerequisite_a: TaskContract = serde_json::from_value(serde_json::json!({
+        "id":"prerequisite-a",
+        "title":"Prerequisite A",
+        "goal":"Inspect prerequisite A",
+        "change_kind":"none",
+        "kind":"analysis"
+    }))
+    .unwrap();
+    let prerequisite_b: TaskContract = serde_json::from_value(serde_json::json!({
+        "id":"prerequisite-b",
+        "title":"Prerequisite B",
+        "goal":"Inspect prerequisite B",
+        "change_kind":"none",
+        "kind":"analysis"
+    }))
+    .unwrap();
+    let mut revised =
+        super::super::with_options(vec![first, second, prerequisite_a, prerequisite_b]);
+    for task in &mut revised {
+        match task.id.as_str() {
+            "writer-a" => task.goal = "Updated objective for A".into(),
+            "writer-b" => task.goal = "Updated objective for B".into(),
+            _ => {}
+        }
+    }
+    let revised = super::super::refresh_existing_options(revised);
+
+    for (owner, goal, prerequisite) in [
+        ("writer-a", "Updated objective for A", "prerequisite-a"),
+        ("writer-b", "Updated objective for B", "prerequisite-b"),
+    ] {
+        let option = revised
             .iter()
             .find(|task| task.options_for.as_deref() == Some(owner))
             .unwrap();
-        assert!(options.goal.contains(marker));
+        let writer = revised.iter().find(|task| task.id == owner).unwrap();
+        assert!(option.goal.contains(goal));
+        assert_eq!(option.depends_on, [prerequisite]);
+        assert_eq!(writer.depends_on, [prerequisite, option.id.as_str()]);
     }
 }
 
