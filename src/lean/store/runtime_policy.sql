@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS approval_modes(
  mode TEXT NOT NULL CHECK(mode IN ('supervised','autonomous')));
 CREATE TABLE IF NOT EXISTS teams(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
- team TEXT NOT NULL, reason TEXT NOT NULL, version INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+ team TEXT NOT NULL, reason TEXT NOT NULL, version INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+ user_selected INTEGER NOT NULL DEFAULT 0 CHECK(user_selected IN (0,1)));
 CREATE TABLE IF NOT EXISTS approvals(
  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
  turn_id TEXT NOT NULL, role TEXT NOT NULL, provider TEXT NOT NULL,

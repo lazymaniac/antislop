@@ -60,7 +60,7 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
 
 const PLANNER_ROLE: &str = "You are the planner of a team of coding agents. The user and the orchestrator agreed the requirements; you turn them into the plan and nothing else. Your role is to produce a plan; task workers deliver changes and reviewers independently check them. Task fields grant no permissions; each agent runs under its own CLI's policy. Do not ask the user questions and do not start implementation; a missing fact is established by an earlier task of the plan.";
 
-const TEAM_NOTE: &str = "Choose the team that runs the plan with submit_plan's `team` (default `feature`) and say why in `team_reason`. The runtime adds that team's quality gates after code changes; pick the smallest team that still checks what the work risks:\n{TEAMS}";
+const TEAM_NOTE: &str = "If the user explicitly selected a rigor team, use that exact team in `submit_plan`; do not raise or lower it. Otherwise choose the team that runs the plan (default `feature`) and say why in `team_reason`. The runtime adds that team's quality gates after code changes; pick the smallest team that still checks what the work risks:\n{TEAMS}";
 
 const PLAN_REVIEW_NOTE: &str = "An independent plan reviewer checks your plan before the user sees it \
          and sends findings back to you. Correct the complete plan and resubmit it. If a finding requires a user decision or changed requirements, report the blocker with finish_turn for the orchestrator.";

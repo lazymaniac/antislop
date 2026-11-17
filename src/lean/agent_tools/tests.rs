@@ -65,7 +65,7 @@ fn required_text_validation_preserves_shared_error_contract() {
 fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
     use crate::lean::tasks::Team;
 
-    for explicit_team in [None, Some("feature")] {
+    for explicit_team in [None, Some("feature"), Some("small-change")] {
         let (_directory, core, conversation) = core();
         core.store
             .db()
@@ -90,19 +90,107 @@ fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
         });
         if let Some(team) = explicit_team {
             args["team"] = json!(team);
+            if team != Team::default().name() {
+                args["team_reason"] = json!("The planner selected the smallest suitable gate set");
+            }
         }
 
         core.agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
             .unwrap();
 
-        assert_eq!(core.store.team(&conversation).unwrap(), Team::Feature);
+        let expected_team = explicit_team
+            .map(Team::parse)
+            .transpose()
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(core.store.team(&conversation).unwrap(), expected_team);
+        assert_eq!(core.store.user_selected_team(&conversation).unwrap(), None);
         let events = core.store.events_since(&conversation, 0, 100).unwrap();
         let selected = events
             .iter()
             .find(|event| event.kind == "team_selected")
             .expect("the default team choice is projected");
-        assert_eq!(selected.payload["team"], "feature");
+        assert_eq!(selected.payload["team"], expected_team.name());
     }
+}
+
+#[test]
+fn submit_plan_preserves_a_user_selected_small_change_team() {
+    use crate::lean::tasks::Team;
+
+    let (_directory, core, conversation) = core();
+    core.store
+        .db()
+        .execute(
+            "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1",
+            [&conversation],
+        )
+        .unwrap();
+    core.store
+        .select_team(&conversation, Team::SmallChange, "Selected by user in UI")
+        .unwrap();
+    let turn = core
+        .store
+        .start_turn(&conversation, PLANNER, "fixture", 0, None)
+        .unwrap();
+    let mut args = json!({
+        "document": "# Small fix",
+        "tasks": [{
+            "id": "writer",
+            "title": "Fix typo",
+            "goal": "Fix a contained typo.",
+            "kind": "implementation",
+            "change_kind": "code"
+        }],
+        "team": "feature",
+        "team_reason": "The planner prefers extra gates"
+    });
+
+    let error = core
+        .agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("user selected rigor `small-change`"),
+        "{error}"
+    );
+    assert_eq!(core.store.team(&conversation).unwrap(), Team::SmallChange);
+    assert_eq!(
+        core.store.user_selected_team(&conversation).unwrap(),
+        Some(Team::SmallChange)
+    );
+
+    args["team"] = json!("small-change");
+    args["team_reason"] = json!("Contained typo fix");
+    core.agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
+        .unwrap();
+    assert_eq!(core.store.team(&conversation).unwrap(), Team::SmallChange);
+    assert_eq!(
+        core.store.user_selected_team(&conversation).unwrap(),
+        Some(Team::SmallChange)
+    );
+    let authored: Vec<crate::lean::tasks::PlannedTask> =
+        serde_json::from_value(args["tasks"].clone()).unwrap();
+    let graph = crate::lean::tasks::planned_graph(authored).unwrap();
+    let finalized = crate::lean::core::plan::proposal::checked_team_plan(
+        &graph,
+        &core.config_snapshot(),
+        core.store.team(&conversation).unwrap(),
+    )
+    .unwrap();
+    let gates: Vec<_> = finalized
+        .iter()
+        .filter(|task| task.quality_gate)
+        .map(|task| task.kind)
+        .collect();
+    assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
+    let writer = finalized.iter().find(|task| task.id == "writer").unwrap();
+    let options = finalized
+        .iter()
+        .find(|task| task.options_for.as_deref() == Some("writer"))
+        .unwrap();
+    assert!(writer.depends_on.contains(&options.id));
+    assert_eq!(options.kind, WorkKind::Options);
 }
 
 #[test]

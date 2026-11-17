@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped when a template's gates or options change, so a recorded choice
 /// says which definition it meant.
-pub const TEAM_VERSION: u32 = 1;
+pub const TEAM_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Team {
-    /// A contained fix or tweak: static analysis and tests, no options, no
-    /// context scout.
+    /// A contained fix or tweak: options where policy allows them, static
+    /// analysis and tests, no context scout.
     SmallChange,
     /// New behaviour: every gate, options where policy allows them.
     #[default]
@@ -77,7 +77,7 @@ impl Team {
     /// Whether writers get option tasks (alternatives compared before the
     /// change), when policy allows them at all.
     pub fn options(self) -> bool {
-        matches!(self, Team::Feature | Team::Refactoring)
+        matches!(self, Team::SmallChange | Team::Feature | Team::Refactoring)
     }
 
     /// Whether a code change must be preceded by a context scout.
@@ -107,7 +107,11 @@ impl Team {
         format!(
             "`{}`: {use_for}; gates: {gates}; options: {}{}",
             self.name(),
-            if self.options() { "yes" } else { "no" },
+            if self.options() {
+                "when local options are enabled"
+            } else {
+                "no"
+            },
             if self.needs_context_scout() {
                 ""
             } else {

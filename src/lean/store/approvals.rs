@@ -68,30 +68,73 @@ impl Store {
         })
     }
 
-    /// The team line for the plan reviewer, empty for the default team.
-    pub(in crate::lean) fn team_note(&self, conversation: &str) -> Result<String> {
-        let row: Option<(String, String)> = self
+    /// The team the user explicitly selected, if any. Planner-selected and
+    /// default teams remain available to planning without overriding a user choice.
+    pub(in crate::lean) fn user_selected_team(
+        &self,
+        conversation: &str,
+    ) -> Result<Option<crate::lean::tasks::Team>> {
+        let name: Option<String> = self
             .db()
             .query_row(
-                "SELECT team,reason FROM teams WHERE conversation_id=?1",
+                "SELECT team FROM teams WHERE conversation_id=?1 AND user_selected=1",
                 [conversation],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
+            )
+            .optional()?;
+        name.map(|name| crate::lean::tasks::Team::parse(&name))
+            .transpose()
+    }
+
+    /// Team guidance for planning and plan review, empty for automatic feature mode.
+    pub(in crate::lean) fn team_note(&self, conversation: &str) -> Result<String> {
+        let row: Option<(String, String, bool)> = self
+            .db()
+            .query_row(
+                "SELECT team,reason,user_selected FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         Ok(match row {
-            Some((team, reason)) if team != crate::lean::tasks::Team::default().name() => format!(
-                "\n\nThe planner chose team `{team}` (fewer quality gates than `feature`): {reason}\nReject the plan if the work needs more checking than that team runs."
+            Some((team, reason, true)) => format!(
+                "\n\nThe user explicitly selected team `{team}`: {reason}. Keep this rigor choice; do not change it in `submit_plan`."
             ),
+            Some((team, reason, false)) if team != crate::lean::tasks::Team::default().name() => {
+                format!(
+                    "\n\nThe planner chose team `{team}` (fewer quality gates than `feature`): {reason}\nReject the plan if the work needs more checking than that team runs."
+                )
+            }
             _ => String::new(),
         })
     }
 
-    /// Records the planner's team choice; a change is an event with its reason.
+    /// Records the user's team choice; a change is an event with its reason.
     pub(in crate::lean) fn select_team(
         &self,
         conversation: &str,
         team: crate::lean::tasks::Team,
         reason: &str,
+    ) -> Result<()> {
+        self.save_team(conversation, team, reason, true)
+    }
+
+    /// Records a planner-selected team without changing the source of a user's choice.
+    pub(in crate::lean) fn select_planned_team(
+        &self,
+        conversation: &str,
+        team: crate::lean::tasks::Team,
+        reason: &str,
+    ) -> Result<()> {
+        self.save_team(conversation, team, reason, false)
+    }
+
+    fn save_team(
+        &self,
+        conversation: &str,
+        team: crate::lean::tasks::Team,
+        reason: &str,
+        user_selected: bool,
     ) -> Result<()> {
         let current: Option<(String, String)> = self
             .db()
@@ -101,21 +144,32 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
+        let current_user_selected: bool = self
+            .db()
+            .query_row(
+                "SELECT user_selected FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(false);
         let unchanged = current
             .as_ref()
-            .is_some_and(|(name, saved)| name == team.name() && saved == reason);
+            .is_some_and(|(name, saved)| name == team.name() && saved == reason)
+            && current_user_selected == user_selected;
         if unchanged {
             return Ok(());
         }
         self.db().execute(
-            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms) VALUES(?1,?2,?3,?4,?5)
-             ON CONFLICT(conversation_id) DO UPDATE SET team=?2,reason=?3,version=?4,updated_ms=?5",
+            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected) VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(conversation_id) DO UPDATE SET team=?2,reason=?3,version=?4,updated_ms=?5,user_selected=?6",
             params![
                 conversation,
                 team.name(),
                 reason,
                 crate::lean::tasks::TEAM_VERSION,
-                now_ms()
+                now_ms(),
+                user_selected
             ],
         )?;
         self.append_event(

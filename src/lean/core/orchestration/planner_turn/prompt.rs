@@ -7,6 +7,7 @@ pub(super) struct PlannerPrompt<'a> {
     pub(super) project: &'a Path,
     pub(super) first: bool,
     pub(super) requirements: &'a str,
+    pub(super) team_note: &'a str,
     pub(super) asked: &'a [Message],
     /// The task contracts of the plan to replace or correct.
     pub(super) replaced: Option<&'a str>,
@@ -31,6 +32,10 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         context.requirements
     ));
     prompt.push_str(&format_messages(context.asked));
+    if !context.team_note.is_empty() {
+        prompt.push_str(context.team_note);
+        prompt.push('\n');
+    }
     if let Some(contracts) = context.replaced {
         prompt.push_str(&format!(
             "\n\nThe plan to replace or correct has these task contracts; the replan reason or reviewer findings are above:\n{contracts}\nSubmit the complete replacement plan, not a patch; the runtime reviews it like any new plan.\n"
@@ -42,4 +47,25 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     append_ledger(context.ledger_context, &mut prompt);
     prompt.push_str("\nRuntime capability boundary: you are the planner. submit_plan submits a complete replacement draft, with keep for approved work. revise_plan is available ONLY to the orchestrator; request_replan does not delegate that capability. If the request requires an incremental revision of the accepted plan, report that mismatch with finish_turn so the orchestrator can call revise_plan itself. Never wait for unavailable tools or claim a revision was applied.\n");
     prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planner_prompt_includes_explicit_user_rigor_choice() {
+        let prompt = planner_prompt_text(PlannerPrompt {
+            project: Path::new("project"),
+            first: false,
+            requirements: "Fix a typo.",
+            team_note: "The user explicitly selected team `small-change`; keep this rigor choice.",
+            asked: &[],
+            replaced: None,
+            keepable: None,
+            ledger_context: None,
+        });
+        assert!(prompt.contains("user explicitly selected team `small-change`"));
+        assert!(prompt.contains("keep this rigor choice"));
+    }
 }

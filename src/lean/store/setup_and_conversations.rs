@@ -14,6 +14,19 @@ impl Store {
         }
         // Additive runtime tables; no existing session is repaired or resumed.
         connection.execute_batch(include_str!("runtime_policy.sql"))?;
+        let has_user_selected: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('teams') WHERE name='user_selected')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_user_selected {
+            connection.execute_batch(
+                "ALTER TABLE teams ADD COLUMN user_selected INTEGER NOT NULL DEFAULT 0 CHECK(user_selected IN (0,1));",
+            )?;
+            connection.execute_batch(
+                "UPDATE teams SET user_selected=1 WHERE reason='Selected by user in UI' OR reason LIKE 'User selected % rigor mode in UI';",
+            )?;
+        }
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;

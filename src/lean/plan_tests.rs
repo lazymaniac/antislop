@@ -353,6 +353,141 @@ fn explicit_quality_checks_precede_the_final_task_after_finalization() {
 }
 
 #[test]
+fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
+    assert!(
+        tasks::Team::SmallChange
+            .summary()
+            .contains("options: when local options are enabled")
+    );
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer",
+        "title": "Small fix",
+        "goal": "Make a contained code change.",
+        "change_kind": "code",
+        "kind": "implementation"
+    }))
+    .unwrap();
+
+    let finalized = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::SmallChange);
+    tasks::validate(&finalized).unwrap();
+
+    let gates: Vec<_> = finalized
+        .iter()
+        .filter(|task| task.quality_gate)
+        .map(|task| task.kind)
+        .collect();
+    assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
+    for writer in finalized.iter().filter(|task| task.changes_code()) {
+        let options = finalized
+            .iter()
+            .find(|task| task.options_for.as_deref() == Some(writer.id.as_str()))
+            .unwrap_or_else(|| panic!("missing options task for {}", writer.id));
+        assert_eq!(options.kind, WorkKind::Options);
+        assert!(
+            options
+                .reviewer
+                .summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Review the selection"))
+        );
+        assert!(writer.depends_on.contains(&options.id));
+        assert!(
+            finalized.iter().position(|task| task.id == options.id)
+                < finalized.iter().position(|task| task.id == writer.id)
+        );
+        assert!(
+            options
+                .depends_on
+                .iter()
+                .all(|dependency| writer.depends_on.contains(dependency))
+        );
+    }
+    for gate in finalized.iter().filter(|task| task.quality_gate) {
+        assert!(
+            gate.depends_on
+                .iter()
+                .any(|dependency| dependency == "writer")
+        );
+    }
+
+    let options_disabled =
+        finalize_team_plan(vec![writer.clone()], true, false, tasks::Team::SmallChange);
+    tasks::validate(&options_disabled).unwrap();
+    assert!(
+        options_disabled
+            .iter()
+            .all(|task| task.kind != WorkKind::Options)
+    );
+    assert!(
+        options_disabled
+            .iter()
+            .all(|task| task.options_for.is_none())
+    );
+    assert!(options_disabled.iter().all(|task| {
+        task.depends_on.iter().all(|dependency| {
+            options_disabled
+                .iter()
+                .any(|candidate| &candidate.id == dependency)
+        })
+    }));
+
+    let gates_disabled = finalize_team_plan(vec![writer], false, true, tasks::Team::SmallChange);
+    assert!(gates_disabled.iter().all(|task| !task.quality_gate));
+    assert!(
+        gates_disabled
+            .iter()
+            .any(|task| task.kind == WorkKind::Options)
+    );
+}
+
+#[test]
+fn small_change_adds_no_options_for_tasks_without_code_changes() {
+    let artifact: TaskContract = serde_json::from_value(json!({
+        "id": "document",
+        "title": "Update guide",
+        "goal": "Clarify the setup guide.",
+        "change_kind": "none",
+        "kind": "writing"
+    }))
+    .unwrap();
+
+    let finalized = finalize_team_plan(vec![artifact], true, true, tasks::Team::SmallChange);
+    tasks::validate(&finalized).unwrap();
+    assert!(finalized.iter().all(|task| task.kind != WorkKind::Options));
+    assert!(finalized.iter().all(|task| !task.quality_gate));
+}
+
+#[test]
+fn small_change_revision_rebuilds_feature_gates_from_the_selected_team() {
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer",
+        "title": "Small fix",
+        "goal": "Make a contained code change.",
+        "change_kind": "code",
+        "kind": "implementation"
+    }))
+    .unwrap();
+
+    // Revisions finalize the merged baseline again. A baseline may already
+    // contain generated feature gates, which must be replaced by this team's.
+    let baseline = finalize_team_plan(vec![writer], true, true, tasks::Team::Feature);
+    let revised = finalize_team_plan(baseline, true, true, tasks::Team::SmallChange);
+    tasks::validate(&revised).unwrap();
+
+    let gates: Vec<_> = revised
+        .iter()
+        .filter(|task| task.quality_gate)
+        .map(|task| task.kind)
+        .collect();
+    assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
+    assert!(
+        revised
+            .iter()
+            .any(|task| task.options_for.as_deref() == Some("writer"))
+    );
+}
+
+#[test]
 fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     let submitted = json!([
         {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},

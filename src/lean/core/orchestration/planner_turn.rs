@@ -14,6 +14,7 @@ struct PlannerTurnContext<'a> {
     answered: u64,
     asked: Vec<store::Message>,
     requirements: String,
+    team_note: String,
     ledger_context: Option<String>,
     keepable: Option<String>,
     replaced: Option<String>,
@@ -69,6 +70,7 @@ impl Core {
         let answered = self.store.last_orchestration_answered(conversation)?;
         let asked = self.asked_since(conversation, answered, upto)?;
         let requirements = self.store.workflow(conversation)?.summary;
+        let team_note = self.store.team_note(conversation)?;
         announce_planner_draft(&self.store, conversation)?;
         let ledger_context = planning_ledger_context(self, conversation)?;
         let keepable = self.keepable_tasks_note(conversation)?;
@@ -81,6 +83,7 @@ impl Core {
             answered,
             asked,
             requirements,
+            team_note,
             ledger_context,
             keepable,
             replaced,
@@ -225,6 +228,7 @@ fn planner_prompt(context: &PlannerTurnContext<'_>, first: bool) -> String {
         project: &context.project,
         first,
         requirements: &context.requirements,
+        team_note: &context.team_note,
         asked: &context.asked,
         replaced: context.replaced.as_deref(),
         keepable: context.keepable.as_deref(),

@@ -261,7 +261,53 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
     assert_eq!(selected(&store), 2);
     assert_eq!(store.team(id).unwrap(), Team::SmallChange);
     assert!(store.team_note(id).unwrap().contains("one-line typo fix"));
+    assert_eq!(
+        store.user_selected_team(id).unwrap(),
+        Some(Team::SmallChange)
+    );
+    store
+        .select_planned_team(id, Team::Refactoring, "planner chose refactoring")
+        .unwrap();
+    assert_eq!(store.user_selected_team(id).unwrap(), None);
+    assert!(
+        store
+            .team_note(id)
+            .unwrap()
+            .contains("planner chose team `refactoring`")
+    );
     store.delete_session(id).unwrap();
     let again = store.create_conversation("project").unwrap();
     assert_eq!(store.team(&again.id).unwrap(), Team::Feature);
+}
+
+#[test]
+fn upgrading_team_state_preserves_the_known_ui_selection() {
+    use crate::lean::tasks::Team;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation_id;
+    {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        conversation_id = conversation.id;
+        store
+            .select_team(
+                &conversation_id,
+                Team::SmallChange,
+                "Selected by user in UI",
+            )
+            .unwrap();
+    }
+
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE teams DROP COLUMN user_selected")
+        .unwrap();
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
+    assert_eq!(
+        upgraded.user_selected_team(&conversation_id).unwrap(),
+        Some(Team::SmallChange)
+    );
 }

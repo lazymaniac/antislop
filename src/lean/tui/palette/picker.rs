@@ -23,7 +23,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "Rigor: small-change · light ceremony (direct worker + reviewer)".into(),
+            "Rigor: small-change · options when enabled; static analysis + tests".into(),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
@@ -97,7 +97,7 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
         (
             Team::SmallChange,
             "small-change",
-            "light ceremony · direct worker + reviewer, no plan review/audit",
+            "light ceremony · options when enabled; static analysis + tests",
         ),
         (
             Team::Feature,
@@ -154,7 +154,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "/small-change · light rigor (direct worker + reviewer)".into(),
+            "/small-change · light rigor (options when enabled; static analysis + tests)".into(),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (

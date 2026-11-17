@@ -155,9 +155,23 @@ impl Core {
             TurnResult::Plan { keep, .. } => keep.clone(),
             _ => Vec::new(),
         };
-        let (team, explicit_team) = match args["team"].as_str() {
-            Some(name) => (crate::lean::tasks::Team::parse(name)?, true),
-            None => (self.store.team(conversation)?, false),
+        let selected_by_user = self.store.user_selected_team(conversation)?;
+        let (submitted_team, explicit_team) = match args["team"].as_str() {
+            Some(name) => (Some(crate::lean::tasks::Team::parse(name)?), true),
+            None => (None, false),
+        };
+        if let (Some(selected), Some(submitted)) = (selected_by_user, submitted_team) {
+            require(
+                selected == submitted,
+                &format!(
+                    "the user selected rigor `{}`; keep that team in submit_plan or ask the user to change it",
+                    selected.name()
+                ),
+            )?;
+        }
+        let team = match selected_by_user.or(submitted_team) {
+            Some(team) => team,
+            None => self.store.team(conversation)?,
         };
         let reason = args["team_reason"].as_str().unwrap_or_default().trim();
         if explicit_team {
@@ -170,8 +184,10 @@ impl Core {
         // The default is still a resolved orchestration choice. Persist it so
         // the conversation projection can show the selected mode before the
         // plan is handed off for review and execution.
-        if explicit_team || team == crate::lean::tasks::Team::default() {
-            self.store.select_team(conversation, team, reason)?;
+        if selected_by_user.is_none()
+            && (explicit_team || team == crate::lean::tasks::Team::default())
+        {
+            self.store.select_planned_team(conversation, team, reason)?;
         }
         self.record_result(turn, result)
     }

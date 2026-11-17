@@ -268,7 +268,7 @@ src
       PromptContext(C{project,first,fresh,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,ledger_context,decision,audit_response})
     planner_turn/prompt
      planner_prompt_text(context):String > format_messages,append_ledger
-     PlannerPrompt(C{project,first,requirements,asked,replaced,keepable,ledger_context})
+     PlannerPrompt(C{project,first,requirements,team_note,asked,replaced,keepable,ledger_context})
     planner_turn.rs
      - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
     planning_context
@@ -1050,7 +1050,7 @@ src
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
     resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> > interviewing,workflow,planned_tasks,as_str,team,check_submitted_plan,select_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> ~51 > interviewing,workflow,planned_tasks,user_selected_team,as_str,team,check_submitted_plan,select_planned_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1547,8 +1547,10 @@ src
     approval_mode(conversation):Result<String> > db
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
     team(conversation):Result<crate::lean::tasks::Team> > db,Team.parse
+    user_selected_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
     team_note(conversation):Result<String> > db
-    select_team(conversation,team,reason):Result<()> > append_event
+    select_team(conversation,team,reason):Result<()> > save_team
+    select_planned_team(conversation,team,reason):Result<()> > save_team
     open_approval(conversation,request):Result<String> > append_event
     approval_state(id):Result<(String,Option<String>,String)> > db
     answer_approval(conversation,id,choice,by):Result<()> ~66 > flatten,append_event
@@ -1830,7 +1832,7 @@ src
      needs_context_scout():bool
      summary():String > gates
      misfit(tasks):Option<String> > gates
-    = TEAM_VERSION=1,ALL
+    = TEAM_VERSION=2,ALL
    validation
     check_comments_text(comments):String
     obligations(task):Vec<(String,String)> > for_kind
@@ -3115,6 +3117,7 @@ src
     View(C{team,team_reason,plan_head_revision,task_meta,workflow_phase,session_branch,interview_question,scope_confirmation_summary,user_decision,requirements_{summary,approval_run,approval_event,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,agents,links,mailbox,comments,comment_progress,reviews,paused,autonomous,approvals,messages,cards,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
      apply(event)
      active_rigor():crate::lean::tasks::Team
+     rigor_label():&'static str
      task_downstream_dependents(task_id):Vec<String> > downstream_unfinished_dependents
      task_bottleneck_count(task_id):usize > len,task_downstream_dependents
      critical_path_chain():Vec<String> > critical_path_tasks
@@ -3309,6 +3312,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 148,448 LOC · input 1,327,508 · output 49,305 tokens · state a8d7f0afbcec · targets AGENTS.md
+· 148,946 LOC · input 1,331,764 · output 49,365 tokens · state 9e8eb5fa4487 · targets AGENTS.md
 ```
 <!-- hologram:end -->
