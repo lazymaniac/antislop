@@ -249,7 +249,7 @@ impl Core {
     pub(super) fn restore_session_branches(&self) -> Result<()> {
         for conversation in self.store.conversations()? {
             let path = self.session_branch_path(&conversation.id);
-            if path.exists() {
+            if path.try_exists()? {
                 let restored = self
                     .load_session_branch(&conversation.id)
                     .and_then(|record| {
@@ -259,6 +259,15 @@ impl Core {
                     self.notice(
                         &conversation.id,
                         &format!("could not restore session branch metadata: {error}"),
+                    );
+                }
+            } else {
+                let restored =
+                    self.session_worktree(&conversation.id, Path::new(&conversation.project));
+                if let Err(error) = restored {
+                    self.notice(
+                        &conversation.id,
+                        &format!("could not recover session integration branch: {error}"),
                     );
                 }
             }
@@ -588,11 +597,14 @@ mod tests {
 
         git::ok(&project, &["branch", "main", &main]).unwrap();
         let reopened = Core::open(&state, config()).unwrap();
-        let worktree = reopened
-            .session_worktree(&conversation.id, &project)
-            .unwrap();
         let record = reopened.load_session_branch(&conversation.id).unwrap();
+        let worktree = reopened.session_worktree_path(&conversation.id);
+        assert!(
+            worktree.exists(),
+            "startup must recreate the session checkout"
+        );
         assert_eq!(git::head(&worktree).unwrap(), main);
+        assert_eq!(git::worktree_branch(&worktree).unwrap(), record.branch);
         assert!(
             record
                 .branch
