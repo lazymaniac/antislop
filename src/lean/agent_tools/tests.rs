@@ -62,6 +62,50 @@ fn required_text_validation_preserves_shared_error_contract() {
 }
 
 #[test]
+fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
+    use crate::lean::tasks::Team;
+
+    for explicit_team in [None, Some("feature")] {
+        let (_directory, core, conversation) = core();
+        core.store
+            .db()
+            .execute(
+                "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1",
+                [&conversation],
+            )
+            .unwrap();
+        let turn = core
+            .store
+            .start_turn(&conversation, PLANNER, "fixture", 0, None)
+            .unwrap();
+        let mut args = json!({
+            "document": "# Plan",
+            "tasks": [{
+                "id": "analysis",
+                "title": "Analyze",
+                "goal": "Report findings",
+                "kind": "analysis",
+                "change_kind": "none"
+            }]
+        });
+        if let Some(team) = explicit_team {
+            args["team"] = json!(team);
+        }
+
+        core.agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
+            .unwrap();
+
+        assert_eq!(core.store.team(&conversation).unwrap(), Team::Feature);
+        let events = core.store.events_since(&conversation, 0, 100).unwrap();
+        let selected = events
+            .iter()
+            .find(|event| event.kind == "team_selected")
+            .expect("the default team choice is projected");
+        assert_eq!(selected.payload["team"], "feature");
+    }
+}
+
+#[test]
 fn task_tools_reject_superseded_input_generations() {
     let (_directory, core, conversation) = core();
     let task = core

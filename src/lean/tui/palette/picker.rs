@@ -12,7 +12,7 @@ fn command_items() -> Vec<(String, Action)> {
 fn extended_command_items(view: &View) -> Vec<(String, Action)> {
     use crate::lean::tasks::Team;
     let mut items = command_items();
-    let current = view.active_rigor().name();
+    let current = view.rigor_label();
     items.extend([
         (
             "Direct execution: zero-ceremony 1-task run (bypass orchestrator) · /direct".into(),
@@ -23,7 +23,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "Rigor: small-change · light ceremony (default, direct worker + reviewer)".into(),
+            "Rigor: small-change · light ceremony (direct worker + reviewer)".into(),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
@@ -92,12 +92,12 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
 
 fn rigor_items(view: &View) -> Vec<(String, Action)> {
     use crate::lean::tasks::Team;
-    let current = view.active_rigor();
+    let current = view.team;
     let entries = [
         (
             Team::SmallChange,
             "small-change",
-            "light ceremony (default) · direct worker + reviewer, no plan review/audit",
+            "light ceremony · direct worker + reviewer, no plan review/audit",
         ),
         (
             Team::Feature,
@@ -128,7 +128,11 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
     entries
         .into_iter()
         .map(|(team, name, desc)| {
-            let mark = if team == current { " (current)" } else { "" };
+            let mark = if current == Some(team) {
+                " (current)"
+            } else {
+                ""
+            };
             (
                 format!("{name}{mark} · {desc}"),
                 Action::Run(Command::SelectTeam(team)),
@@ -139,7 +143,7 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
 
 fn slash_command_items(view: &View) -> Vec<(String, Action)> {
     use crate::lean::tasks::Team;
-    let current = view.active_rigor().name();
+    let current = view.rigor_label();
     vec![
         (
             "/direct · zero-ceremony 1-task execution (bypass orchestrator)".into(),
@@ -150,7 +154,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "/small-change · light rigor (default: direct worker + reviewer)".into(),
+            "/small-change · light rigor (direct worker + reviewer)".into(),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (

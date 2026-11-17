@@ -678,6 +678,41 @@ pub fn key_ctrl(ch: char) -> event::KeyEvent {
 }
 
 #[test]
+fn ctrl_m_opens_workflow_rigor_picker_from_chat_and_graph() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("draft stays here");
+    assert!(app.key(key_ctrl('m')));
+    assert!(matches!(
+        app.picker.as_ref().map(|picker| picker.kind),
+        Some(Kind::Rigor)
+    ));
+    assert_eq!(app.input.text, "draft stays here");
+
+    app.picker = None;
+    app.focus = Focus::Graph;
+    assert!(app.key(key_ctrl('m')));
+    assert!(matches!(
+        app.picker.as_ref().map(|picker| picker.kind),
+        Some(Kind::Rigor)
+    ));
+    assert!(app.graph_expanded.is_none());
+}
+
+#[test]
+fn ctrl_enter_opens_workflow_rigor_picker_for_terminals_that_encode_ctrl_m_as_enter() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    let key = event::KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+
+    assert!(app.key(key));
+    assert!(matches!(
+        app.picker.as_ref().map(|picker| picker.kind),
+        Some(Kind::Rigor)
+    ));
+    assert!(app.graph_expanded.is_none());
+}
+
+#[test]
 fn help_and_picker_keep_ownership_when_routing_keys() {
     let mut app = test_app();
     app.input = InputBuffer::with_text("chat draft 👩‍💻");

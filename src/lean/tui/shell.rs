@@ -6,7 +6,8 @@ use super::{
 use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind,
+    Event, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::{layout::Rect, style::Style};
 use std::sync::atomic::Ordering;
@@ -65,14 +66,20 @@ fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateR
 }
 
 fn enable_capture() {
-    let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        EnableBracketedPaste,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
 }
 
 fn disable_capture() {
     let _ = crossterm::execute!(
         std::io::stdout(),
         DisableBracketedPaste,
-        DisableMouseCapture
+        DisableMouseCapture,
+        PopKeyboardEnhancementFlags
     );
 }
 

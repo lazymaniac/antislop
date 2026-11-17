@@ -233,7 +233,7 @@ fn an_operation_runs_once_and_a_failed_attempt_can_be_retried() {
 }
 
 #[test]
-fn a_team_choice_is_recorded_once_with_its_reason_and_deleted_with_the_session() {
+fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_session() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
@@ -250,13 +250,15 @@ fn a_team_choice_is_recorded_once_with_its_reason_and_deleted_with_the_session()
             .count()
     };
     store.select_team(id, Team::Feature, "").unwrap();
-    assert_eq!(selected(&store), 0);
+    assert_eq!(selected(&store), 1);
+    store.select_team(id, Team::Feature, "").unwrap();
+    assert_eq!(selected(&store), 1);
     for _ in 0..2 {
         store
             .select_team(id, Team::SmallChange, "one-line typo fix")
             .unwrap();
     }
-    assert_eq!(selected(&store), 1);
+    assert_eq!(selected(&store), 2);
     assert_eq!(store.team(id).unwrap(), Team::SmallChange);
     assert!(store.team_note(id).unwrap().contains("one-line typo fix"));
     store.delete_session(id).unwrap();

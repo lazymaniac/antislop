@@ -240,9 +240,16 @@ impl View {
         projection::apply(self, event);
     }
 
-    /// Returns the active rigor/team template, defaulting to lighter rigor (`SmallChange`) in the UI.
+    /// Returns the active rigor/team template, defaulting to the runtime's `Feature` team.
     pub fn active_rigor(&self) -> crate::lean::tasks::Team {
-        self.team.unwrap_or(crate::lean::tasks::Team::SmallChange)
+        self.team.unwrap_or_default()
+    }
+
+    /// The rigor choice shown to the user before plan execution begins.
+    pub fn rigor_label(&self) -> &'static str {
+        self.team
+            .map(crate::lean::tasks::Team::name)
+            .unwrap_or("orchestrator deciding")
     }
 
     pub fn task_downstream_dependents(&self, task_id: &str) -> Vec<String> {
@@ -294,6 +301,14 @@ impl View {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rigor_label_shows_pending_orchestrator_choice_then_selected_team() {
+        let mut view = View::default();
+        assert_eq!(view.rigor_label(), "orchestrator deciding");
+        view.team = Some(crate::lean::tasks::Team::SecurityFix);
+        assert_eq!(view.rigor_label(), "security-fix");
+    }
 
     #[test]
     fn turn_branch_is_replayed_and_cleared_when_unreported() {

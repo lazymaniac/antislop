@@ -278,6 +278,10 @@ impl App {
 
     fn route_global_shortcut(&mut self, key: KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if control && (key.code == KeyCode::Char('m') || key.code == KeyCode::Enter) {
+            self.run_workflow(Command::OpenRigorPicker);
+            return true;
+        }
         match key.code {
             KeyCode::Char('p') if control => self.picker = Some(Picker::new(Kind::Commands)),
             KeyCode::Char('f') if control => self.picker = Some(Picker::new(Kind::History)),

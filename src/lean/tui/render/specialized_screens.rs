@@ -164,7 +164,7 @@ impl App {
             return;
         }
         self.workbench_area = Some(area);
-        let rigor = self.view.active_rigor().name();
+        let rigor = self.view.rigor_label();
         let selected_task = self.active_graph_task().cloned();
         let title = match &selected_task {
             Some(task) => format!(" workbench · {} · rigor: {rigor} (w) ", task.id),

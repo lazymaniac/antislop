@@ -188,10 +188,7 @@ impl App {
         paint_input_background(frame, input, fill, accent, focused, theme);
         if input.height > 0 && input.width >= 28 {
             let hint = truncate(
-                &format!(
-                    "· {} (Ctrl+M) · / commands ",
-                    self.view.active_rigor().name()
-                ),
+                &format!("· {} (Ctrl+M) · / commands ", self.view.rigor_label()),
                 usize::from(input.width.saturating_sub(11)),
             );
             frame

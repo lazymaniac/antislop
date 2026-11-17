@@ -1425,9 +1425,10 @@ mod tests {
     }
 
     #[test]
-    fn default_effective_team_is_lighter_small_change_and_updates_on_team_selected() {
+    fn effective_team_uses_runtime_default_until_orchestrator_selects_one() {
         let mut view = View::default();
-        assert_eq!(view.active_rigor(), Team::SmallChange);
+        assert_eq!(view.active_rigor(), Team::Feature);
+        assert_eq!(view.rigor_label(), "orchestrator deciding");
         view.apply(&json!({
             "seq": 1,
             "kind": "team_selected",
@@ -1437,6 +1438,7 @@ mod tests {
             }
         }));
         assert_eq!(view.active_rigor(), Team::Feature);
+        assert_eq!(view.rigor_label(), "feature");
         assert_eq!(view.team_reason, "Full ceremony requested");
     }
 

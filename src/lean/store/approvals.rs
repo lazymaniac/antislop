@@ -101,10 +101,9 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let unchanged = match &current {
-            Some((name, saved)) => name == team.name() && saved == reason,
-            None => team == crate::lean::tasks::Team::default(),
-        };
+        let unchanged = current
+            .as_ref()
+            .is_some_and(|(name, saved)| name == team.name() && saved == reason);
         if unchanged {
             return Ok(());
         }

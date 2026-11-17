@@ -167,7 +167,10 @@ impl Core {
             )?;
         }
         self.check_submitted_plan(conversation, tasks, &keep, team)?;
-        if explicit_team {
+        // The default is still a resolved orchestration choice. Persist it so
+        // the conversation projection can show the selected mode before the
+        // plan is handed off for review and execution.
+        if explicit_team || team == crate::lean::tasks::Team::default() {
             self.store.select_team(conversation, team, reason)?;
         }
         self.record_result(turn, result)

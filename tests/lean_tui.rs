@@ -7917,11 +7917,12 @@ fn domain_cockpit_flow_editor_workbench_linking_and_direct_execution_round_trip(
         }
     }));
 
-    // 1. Default rigor is lighter SmallChange; switching rigor sends select_team over daemon socket
+    // 1. The orchestrator has not selected rigor yet; manual switching sends select_team over daemon socket
     assert_eq!(
         app.view.active_rigor(),
-        antislop::lean::tasks::Team::SmallChange
+        antislop::lean::tasks::Team::Feature
     );
+    assert_eq!(app.view.rigor_label(), "orchestrator deciding");
     app.run_workflow(Command::SelectTeam(antislop::lean::tasks::Team::Feature));
     let req1 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
     assert_eq!(req1["op"], "select_team");

@@ -56,7 +56,15 @@ impl PlanView {
         view: &View,
         theme: &Theme,
     ) -> Option<[Rect; 3]> {
-        let block = graph::panel(&format!(" Plan Document ({}) ", self.plan_id), true, theme);
+        let block = graph::panel(
+            &format!(
+                " Plan Document ({}) · rigor: {} ",
+                self.plan_id,
+                view.rigor_label()
+            ),
+            true,
+            theme,
+        );
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if inner.height < 4 || inner.width < 12 {
