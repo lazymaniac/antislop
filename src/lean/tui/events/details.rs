@@ -185,6 +185,27 @@ mod tests {
     }
 
     #[test]
+    fn entering_results_fetches_the_default_artifact_after_snapshot_arrives() {
+        let mut app = App::test_app();
+        let mut details = Details::new("orchestrator".into());
+        details.task = Some(serde_json::json!({
+            "_result_documents": [{"id": "doc-1", "path": "brief.md"}],
+        }));
+        details.rebuild_result_index();
+        app.details = Some(details);
+
+        press(&mut app, KeyCode::Char('2'));
+
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.tab, details::RESULT);
+        assert_eq!(
+            details.selected_result_document.as_deref(),
+            Some("result_document:doc-1")
+        );
+        assert!(details.result_loading.is_some());
+    }
+
+    #[test]
     fn round_navigation_fetches_the_selected_round_once() {
         let mut app = App::test_app();
         app.view.plan = Some("plan".into());

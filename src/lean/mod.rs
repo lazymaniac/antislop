@@ -193,13 +193,35 @@ impl Drop for Core {
     }
 }
 
-fn record_message_and_wake_locked(
+fn record_message_and_wake(
     core: &Arc<Core>,
     conversation: &str,
     text: &str,
+    before_wake: impl FnOnce() -> Result<()>,
 ) -> Result<Message> {
-    core.store.conversation(conversation)?;
-    let message = core.store.add_message(conversation, "user", text)?;
+    // Reserve the conversation against deletion and runtime handoff while Git
+    // prepares its branch, without holding the shared lifecycle fence.
+    let operation = core.operation(conversation)?;
+    let message = {
+        let _lifecycle = core
+            .locks
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        core.require_accepting()?;
+        core.store.conversation(conversation)?;
+        core.store.add_message(conversation, "user", text)?
+    };
+    before_wake()?;
+    let _lifecycle = core
+        .locks
+        .session_lifecycle
+        .lock()
+        .expect("session lifecycle mutex");
+    require(
+        !operation.cancel.load(Ordering::SeqCst),
+        "message wake cancelled",
+    )?;
     wake_locked(core, conversation);
     Ok(message)
 }

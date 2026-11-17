@@ -155,7 +155,7 @@ impl Parent {
             Ok(file) => file,
             Err(_) => return Ok(false),
         };
-        super::same_files(&file, expected)
+        super::blobs_match(&file, expected)
     }
     pub(crate) fn rename(&self, from: &str, to: &Self, name: &str) -> Result<()> {
         let (from, name) = (cstring(from)?, cstring(name)?);

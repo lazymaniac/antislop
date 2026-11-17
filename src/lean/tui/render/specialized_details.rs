@@ -213,13 +213,17 @@ impl Details {
         };
         let Some(document) = self.documents.get(&key) else {
             if key.starts_with("result_document:") {
-                let text = self
+                let message = self
                     .result_error
                     .as_ref()
-                    .filter(|(id, _)| id == &key)
-                    .map(|(_, error)| format!("Could not load document: {error}"))
-                    .unwrap_or_else(|| "Loading document…".into());
-                frame.render_widget(Paragraph::new(theme.clean(&text)).style(theme.dim()), inner);
+                    .filter(|(failed, _)| failed == &key)
+                    .map(|(_, error)| format!("Could not load result document: {error}"))
+                    .unwrap_or_else(|| "Loading result document…".into());
+                frame.render_widget(
+                    Paragraph::new(theme.clean(&message)).style(theme.dim()),
+                    self.text_area,
+                );
+                self.draw_result_document_footer(frame, footer, theme);
                 return true;
             }
             return false;
@@ -232,12 +236,16 @@ impl Details {
             &self.query,
         );
         self.draw_document_result(frame, inner, result, theme);
+        self.draw_result_document_footer(frame, footer, theme);
+        true
+    }
+
+    fn draw_result_document_footer(&self, frame: &mut Frame, footer: Rect, theme: &Theme) {
         let mut hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
         if self.visible_result_keys().len() > 1 {
             hint.push_str(" · ,/. documents");
         }
         self.draw_footer_hint(frame, footer, hint, theme);
-        true
     }
 
     fn draw_document_result(

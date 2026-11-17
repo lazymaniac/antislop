@@ -40,7 +40,7 @@ pub(crate) fn artifact_file(project: &Path, commit: &str, path: &str) -> Result<
     Ok(file)
 }
 
-pub(crate) fn same_files(left: &std::fs::File, right: &std::fs::File) -> Result<bool> {
+pub(super) fn blobs_match(left: &std::fs::File, right: &std::fs::File) -> Result<bool> {
     if left.metadata()?.len() != right.metadata()?.len() {
         return Ok(false);
     }
@@ -109,7 +109,7 @@ pub(crate) fn prepare_owned_artifacts(
     expected: &BTreeMap<String, String>,
     backups: &Path,
 ) -> Result<PreparedArtifacts> {
-    let index = index::index_path(project)?;
+    let index = index::lock_path(project)?;
     let before = index_stamp(&index)?;
     let paths = changed_files(project, base, change)?;
     super::untracked::require_added_files(project, base, change, original)?;
@@ -166,7 +166,7 @@ impl PreparedArtifacts {
 }
 
 #[cfg(test)]
-pub(crate) fn deliver_owned_artifacts(
+fn deliver_owned_artifacts(
     project: &Path,
     base: &str,
     change: &str,
@@ -228,7 +228,7 @@ fn publish_prepared(
     } = staged;
     let (parent, name) = Parent::at(project, path, true)?;
     if expected
-        .map(|old| same_files(old, &replacement))
+        .map(|old| blobs_match(old, &replacement))
         .transpose()?
         .unwrap_or(false)
         && parent.matches(&name, &replacement)?

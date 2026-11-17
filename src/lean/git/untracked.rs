@@ -36,15 +36,20 @@ pub(crate) fn require_added_files(
     expected: &std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
     for path in changed_files(project, base, change)? {
+        let is_new = ok(
+            project,
+            &["--literal-pathspecs", "ls-tree", base, "--", &path],
+        )?
+        .is_empty();
+        let unchanged_expected = if let Some(commit) = expected.get(&path) {
+            let expected = super::artifact_update::artifact_file(project, commit, &path)?;
+            let actual = super::artifact_update::artifact_file(project, base, &path)?;
+            super::artifact_update::blobs_match(&expected, &actual)?
+        } else {
+            false
+        };
         crate::require(
-            ok(
-                project,
-                &["--literal-pathspecs", "ls-tree", base, "--", &path],
-            )?
-            .is_empty()
-                || expected.get(&path).is_some_and(|commit| {
-                matches!((super::artifact_update::artifact_file(project,commit,&path),super::artifact_update::artifact_file(project,base,&path)),(Ok(expected),Ok(actual)) if super::artifact_update::same_files(&expected,&actual).unwrap_or(false))
-            }),
+            is_new || unchanged_expected,
             &format!("untracked delivery cannot modify an existing file: {path}"),
         )?;
     }

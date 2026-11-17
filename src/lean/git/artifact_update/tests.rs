@@ -29,6 +29,19 @@ fn artifact_file_reads_the_landed_blob_instead_of_following_worktree_symlinks() 
 }
 
 #[test]
+fn artifact_file_rejects_a_symlink_recorded_in_the_git_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    ok(root, &["init", "-q"]).unwrap();
+    std::fs::write(root.join("target.txt"), "target").unwrap();
+    std::os::unix::fs::symlink("target.txt", root.join("brief.md")).unwrap();
+    let commit = commit_all(root, CommitPurpose::TestFixture).unwrap();
+
+    let error = artifact_file(root, &commit, "brief.md").unwrap_err();
+    assert!(error.to_string().contains("not a regular recorded file"));
+}
+
+#[test]
 fn owned_update_keeps_head_index_permissions_and_the_displaced_inode() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

@@ -11,7 +11,7 @@ pub(super) struct Lease {
 impl Lease {
     #[cfg(test)]
     pub(super) fn acquire(project: &Path) -> Result<Self> {
-        Self::acquire_at(index_path(project)?)
+        Self::acquire_at(lock_path(project)?)
     }
     pub(super) fn acquire_at(path: PathBuf) -> Result<Self> {
         let file = OpenOptions::new()
@@ -39,7 +39,7 @@ impl Drop for Lease {
     }
 }
 
-pub(super) fn index_path(project: &Path) -> Result<PathBuf> {
+pub(super) fn lock_path(project: &Path) -> Result<PathBuf> {
     let path = PathBuf::from(ok(project, &["rev-parse", "--git-path", "index"])?);
     let path = if path.is_absolute() {
         path

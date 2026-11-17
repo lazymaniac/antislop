@@ -86,8 +86,7 @@ impl DiffView {
     }
 
     pub fn select_file(&mut self, index: usize) {
-        let last = self.files().len().saturating_sub(1);
-        self.file = index.min(last);
+        self.file = index.min(self.files().len().saturating_sub(1));
         self.line = 0;
         self.scroll = 0;
     }
@@ -96,12 +95,10 @@ impl DiffView {
         self.files()
             .iter()
             .map(|file| {
-                let adds = file.lines.iter().filter(|l| l.kind == "add").count();
-                let dels = file.lines.iter().filter(|l| l.kind == "del").count();
                 let hunks = file
                     .lines
                     .iter()
-                    .filter(|l| matches!(l.kind.as_str(), "add" | "del"))
+                    .filter(|line| matches!(line.kind.as_str(), "add" | "del"))
                     .take(2)
                     .map(|line| {
                         let prefix = if line.kind == "add" { "+" } else { "-" };
@@ -110,7 +107,7 @@ impl DiffView {
                     .collect();
                 super::flow_editor::WorkbenchFileEntry {
                     path: file.path.clone(),
-                    stats: Some((adds, dels)),
+                    stats: Some((file.added, file.removed)),
                     hunks,
                 }
             })

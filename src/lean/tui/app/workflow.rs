@@ -87,11 +87,7 @@ impl App {
             || self.project.clone(),
             |others| format!("{} ({others})", self.project),
         );
-        let branch = self.view.session_branch.as_ref().or_else(|| {
-            self.projects
-                .get(self.active_project)
-                .and_then(|project| project.branch.as_ref())
-        });
+        let branch = self.view.session_branch.as_ref();
         branch.map_or(project.clone(), |branch| {
             format!("{project} · branch: {branch}")
         })

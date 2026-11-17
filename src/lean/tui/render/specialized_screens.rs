@@ -363,9 +363,11 @@ impl App {
                     }
                     let prefix = if idx == selected_idx { "▸ " } else { "  " };
                     let label = match entry.stats {
-                        Some((a, d)) => {
-                            format!("{prefix}[{}/{total}] {} (+{a}/-{d})", idx + 1, entry.path)
-                        }
+                        Some((added, removed)) => format!(
+                            "{prefix}[{}/{total}] {} (+{added}/-{removed})",
+                            idx + 1,
+                            entry.path
+                        ),
                         None => format!("{prefix}[{}/{total}] {}", idx + 1, entry.path),
                     };
                     let style = if idx == selected_idx {

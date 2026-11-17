@@ -323,3 +323,97 @@ fn restart_native(
             &prepared.spec,
         ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[test]
+    fn rejected_dependency_tool_keeps_raw_diagnostic_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        let config =
+            Config::from_toml(include_str!("../../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&state, config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let tasks = core
+            .store
+            .add_plan(
+                &conversation,
+                &[
+                    json!({"id":"inventory","title":"Inventory","goal":"List inputs","change_kind":"none","kind":"analysis"}),
+                    json!({"id":"consumer","title":"Consumer","goal":"Use inventory","change_kind":"none","kind":"analysis","depends_on":["inventory"]}),
+                ],
+            )
+            .unwrap();
+        let mut inventory = tasks
+            .iter()
+            .find(|task| task.spec["id"] == "inventory")
+            .unwrap()
+            .clone();
+        inventory.status = crate::lean::tasks::status::APPROVED.into();
+        inventory.report = Some("Inventory findings".into());
+        core.store.update_task(&inventory).unwrap();
+        core.store
+            .test_completion(&inventory, inventory.report.as_deref().unwrap());
+        let consumer = tasks
+            .iter()
+            .find(|task| task.spec["id"] == "consumer")
+            .unwrap();
+        let role = format!("worker:{}", consumer.id);
+        let turn = core
+            .store
+            .start_turn(&conversation, &role, "fixture", 0, Some(&consumer.plan_id))
+            .unwrap();
+
+        let outcome = core.agent_tool(
+            &conversation,
+            &role,
+            &turn.id,
+            "read_dependency_result",
+            &json!({"dependency":"missing"}),
+        );
+        let error = outcome.as_ref().unwrap_err().to_string();
+        assert!(error.contains("inventory"), "{error}");
+        assert!(error.contains(&consumer.id), "{error}");
+        record_rejected_tool(
+            &core,
+            &conversation,
+            &turn.id,
+            "read_dependency_result",
+            &outcome,
+        )
+        .unwrap();
+
+        drop(core);
+        let reopened = Core::open(&state, config).unwrap();
+        let events = reopened.store.events_since(&conversation, 0, 100).unwrap();
+        let rejection = events
+            .iter()
+            .find(|event| event.kind == "agent_tool_rejected")
+            .expect("tool rejection remains in durable event history");
+        assert_eq!(rejection.turn_id.as_deref(), Some(turn.id.as_str()));
+        assert_eq!(rejection.payload["tool"], "read_dependency_result");
+        assert_eq!(rejection.payload["error"], error);
+
+        let mut replayed_view = crate::lean::tui::view::View::default();
+        for event in &events {
+            replayed_view.apply(&serde_json::to_value(event).unwrap());
+        }
+        assert!(replayed_view.cards.iter().all(|card| !matches!(card,
+            crate::lean::tui::view::TranscriptCard::System { title, text, .. }
+                if title == "Agent tool rejected" || text.contains(&error)
+        )));
+        assert!(
+            replayed_view
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains(&error))
+        );
+    }
+}

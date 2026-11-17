@@ -111,9 +111,49 @@ impl Details {
         if self.available_rounds.iter().any(|round| *round > 0) {
             self.available_rounds.retain(|round| *round > 0);
         }
-        self.documents
-            .retain(|key, _| key.starts_with("result_document:"));
         self.task = Some(task);
+        let valid = self
+            .task
+            .as_ref()
+            .and_then(|task| task["_result_documents"].as_array());
+        if let Some(valid) = valid {
+            let valid_ids = valid
+                .iter()
+                .filter_map(|item| item["id"].as_str().map(str::to_owned))
+                .collect::<std::collections::HashSet<_>>();
+            self.documents.retain(|key, _| {
+                key.strip_prefix("result_document:")
+                    .is_none_or(|id| valid_ids.contains(id))
+            });
+        } else {
+            self.documents
+                .retain(|key, _| !key.starts_with("result_document:"));
+        }
+        let source = self
+            .task
+            .as_ref()
+            .map(|task| task["_result_documents"].clone())
+            .unwrap_or_default();
+        if source != self.result_metadata_source || self.result_index.is_empty() {
+            self.rebuild_result_index();
+        }
+    }
+
+    pub(super) fn load_documents(
+        &mut self,
+        documents: std::collections::HashMap<String, crate::lean::tui::document::Document>,
+    ) {
+        self.documents
+            .retain(|key, _| key.starts_with("result_document:") || documents.contains_key(key));
+        self.documents.extend(documents);
+        let source = self.task.as_ref().map(|task| &task["_result_documents"]);
+        let has_result = self.documents.contains_key("result");
+        if source != Some(&self.result_metadata_source)
+            || has_result != self.result_index.first().is_some_and(|key| key == "result")
+            || self.result_index.is_empty()
+        {
+            self.rebuild_result_index();
+        }
     }
 
     pub fn new(key: String) -> Self {

@@ -21,70 +21,212 @@ impl Core {
         conversation: &str,
         project: &Path,
     ) -> Result<String> {
-        // Different conversations validate their own durable checkouts without
-        // sharing a process-wide branch mutex.
+        let project = project.canonicalize()?;
+        let orchestrator_active = self
+            .activity
+            .running
+            .lock()
+            .expect("running mutex")
+            .contains_key(conversation);
+        let work_is_active = orchestrator_active
+            || self.activity.plan_running(conversation)
+            || self.activity.review_running(conversation);
+        let branch_path = self.session_branch_path(conversation);
+        if work_is_active && branch_path.try_exists()? {
+            let record = self.load_session_branch(conversation)?;
+            require(
+                Path::new(&record.project) == project
+                    && record.worktree == self.session_worktree_path(conversation),
+                "persisted session integration branch belongs to a different project",
+            )?;
+            return Ok(record.branch);
+        }
         let branch_lock = self.locks.turn(conversation, "session-branch");
         let _branches = branch_lock.lock().expect("session branch mutex");
-        let project = project.canonicalize()?;
         let legacy_branch = session_branch_name(conversation, &project)?;
-        let title: Option<String> = self
+        let branch_path = self.session_branch_path(conversation);
+        let persisted = if branch_path.try_exists()? {
+            Some(self.load_session_branch(conversation)?)
+        } else {
+            None
+        };
+        let had_record = persisted.is_some();
+        let historical_event_branch: Option<String> = self
             .store
             .db()
             .query_row(
-                "SELECT title FROM session_titles WHERE conversation=?1",
+                "SELECT json_extract(payload,'$.branch') FROM events WHERE conversation_id=?1 AND kind='session_started' ORDER BY seq DESC LIMIT 1",
                 [conversation],
-                |r| r.get(0),
+                |row| row.get(0),
             )
             .optional()?;
-        let branch = match title {
-            Some(title) => named_session_branch(conversation, &title)?,
-            None => legacy_branch.clone(),
-        };
-        let persisted = self.session_branch_path(conversation).try_exists()?;
-        let record = if persisted {
-            self.load_session_branch(conversation)?
+        let historical_branch = historical_event_branch.filter(|branch| {
+            branch.starts_with("antislop/session/") && branch.ends_with(conversation)
+        });
+        let has_durable_name = had_record || historical_branch.is_some();
+        let worktree = self
+            .state
+            .join("session-worktrees")
+            .join(crate::hash(conversation.as_bytes()));
+        let branch = if let Some(record) = &persisted {
+            record.branch.clone()
         } else {
-            // A nested directory must never inherit a parent repository.
-            session_project(&project)?;
-            let branch = if self.session_worktree_path(conversation).try_exists()? {
+            let legacy_ref = format!("refs/heads/{legacy_branch}");
+            let legacy_exists =
+                git::git(&project, &["show-ref", "--verify", "--quiet", &legacy_ref])?;
+            require(
+                legacy_exists.status.success() || legacy_exists.status.code() == Some(1),
+                &format!(
+                    "cannot inspect legacy session branch: {}",
+                    String::from_utf8_lossy(&legacy_exists.stderr).trim()
+                ),
+            )?;
+            if let Some(branch) = historical_branch {
+                branch
+            } else if worktree.exists() {
                 require(
-                    git::worktree_project(&self.session_worktree_path(conversation))?
-                        .canonicalize()?
+                    git::worktree_project(&worktree)?.canonicalize()?
                         == git::worktree_project(&project)?.canonicalize()?,
                     "session integration worktree belongs to a different project",
                 )?;
-                let actual = git::worktree_branch(&self.session_worktree_path(conversation))?;
+                let actual = git::worktree_branch(&worktree)?;
                 require(
                     actual.starts_with("antislop/session/") && actual.ends_with(conversation),
                     "session integration worktree is on an unexpected branch",
                 )?;
                 actual
-            } else if branch != legacy_branch
-                && git::git(
-                    &project,
-                    &[
-                        "show-ref",
-                        "--verify",
-                        "--quiet",
-                        &format!("refs/heads/{legacy_branch}"),
-                    ],
-                )?
-                .status
-                .success()
-            {
+            } else if legacy_exists.status.success() {
                 legacy_branch
             } else {
-                branch
-            };
-            SessionBranch {
-                project: project.to_string_lossy().into_owned(),
-                branch,
-                worktree: self.session_worktree_path(conversation),
+                let summary = self.store.workflow(conversation)?.summary;
+                let request = if summary.trim().is_empty() {
+                    self.store.conversation_goal(conversation)?
+                } else {
+                    summary
+                };
+                let title = request
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty());
+                match title {
+                    Some(title) => named_session_branch(conversation, title)?,
+                    // Older conversations can have tasks but no retained goal
+                    // or scope summary. Keep their established naming scheme.
+                    None => legacy_branch,
+                }
             }
         };
-        // Existing durable names predate the title generator. Validate their
-        // ownership below instead of requiring a regenerated name.
-        git::ok(&project, &["check-ref-format", "--branch", &record.branch])?;
+        let record = persisted.unwrap_or(SessionBranch {
+            project: project.to_string_lossy().into_owned(),
+            branch: branch.clone(),
+            worktree: worktree.clone(),
+        });
+        self.validate_session_record(conversation, &project, &record)?;
+        let reference = format!("refs/heads/{}", record.branch);
+        let found = git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?;
+        require(
+            found.status.success() || found.status.code() == Some(1),
+            &format!(
+                "cannot inspect session integration branch: {}",
+                String::from_utf8_lossy(&found.stderr).trim()
+            ),
+        )?;
+        if found.status.success() {
+            git::ok(
+                &project,
+                &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+            )?;
+        } else {
+            if worktree.exists() {
+                require(
+                    git::worktree_project(&worktree)?.canonicalize()?
+                        == git::worktree_project(&project)?.canonicalize()?,
+                    "session integration worktree belongs to a different project",
+                )?;
+                require(
+                    git::worktree_branch(&worktree)? == record.branch,
+                    "session integration worktree is on an unexpected branch",
+                )?;
+                git::head(&worktree)?;
+            }
+            require(
+                !has_durable_name,
+                &format!(
+                    "persisted session integration branch {} is missing; restore its Git ref before retrying",
+                    record.branch
+                ),
+            )?;
+            let base = local_main(&project)?;
+            git::ok(&project, &["branch", &record.branch, &base])?;
+        }
+        if !had_record {
+            self.save_session_branch(conversation, &record)?;
+        }
+        self.ensure_session_started_event(conversation, &record.branch)?;
+        Ok(record.branch)
+    }
+
+    /// Return the session target, recreating a missing checkout at its preserved branch tip.
+    pub(in crate::lean) fn session_worktree(
+        &self,
+        conversation: &str,
+        project: &Path,
+    ) -> Result<PathBuf> {
+        self.create_session_branch(conversation, project)?;
+        let project = project.canonicalize()?;
+        let record = self.load_session_branch(conversation)?;
+        self.ensure_session_worktree(conversation, &project, &record)?;
+        Ok(record.worktree)
+    }
+
+    fn ensure_session_worktree(
+        &self,
+        conversation: &str,
+        project: &Path,
+        record: &SessionBranch,
+    ) -> Result<()> {
+        let branch_lock = self.locks.turn(conversation, "session-branch");
+        let _branches = branch_lock.lock().expect("session branch mutex");
+        self.validate_session_record(conversation, project, record)?;
+        let worktree = &record.worktree;
+        if worktree.exists() {
+            require(
+                git::worktree_project(worktree)?.canonicalize()?
+                    == git::worktree_project(project)?.canonicalize()?,
+                "session integration worktree belongs to a different project",
+            )?;
+            require(
+                git::worktree_branch(worktree)? == record.branch,
+                "session integration worktree is on an unexpected branch",
+            )?;
+            git::head(worktree)?;
+            return Ok(());
+        }
+
+        let reference = format!("refs/heads/{}", record.branch);
+        let found = git::git(project, &["show-ref", "--verify", "--quiet", &reference])?;
+        require(
+            found.status.success(),
+            &format!(
+                "persisted session integration branch {} is missing; restore its Git ref before retrying",
+                record.branch
+            ),
+        )?;
+        let base = git::ok(
+            project,
+            &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+        )?;
+        git::add_worktree(project, worktree, &record.branch, &base)
+    }
+
+    fn validate_session_record(
+        &self,
+        conversation: &str,
+        project: &Path,
+        record: &SessionBranch,
+    ) -> Result<()> {
+        git::ok(project, &["check-ref-format", "--branch", &record.branch])?;
         require(
             record.worktree == self.session_worktree_path(conversation),
             "persisted session integration worktree path is invalid",
@@ -92,90 +234,51 @@ impl Core {
         require(
             Path::new(&record.project) == project,
             "session integration branch belongs to a different project",
-        )?;
-        if record.worktree.try_exists()? {
-            require(
-                git::worktree_project(&record.worktree)?.canonicalize()?
-                    == git::worktree_project(&project)?.canonicalize()?,
-                "session integration worktree belongs to a different project",
-            )?;
-            require(
-                git::worktree_branch(&record.worktree)? == record.branch,
-                "session integration worktree is on an unexpected branch",
-            )?;
-            // A symbolic HEAD can survive deletion of its ref; do not accept an unborn checkout.
-            git::head(&record.worktree)?;
-        } else {
-            let reference = format!("refs/heads/{}", record.branch);
-            let found = git::git(&project, &["show-ref", "--verify", "--quiet", &reference])?;
-            require(
-                found.status.success() || found.status.code() == Some(1),
-                &format!(
-                    "cannot inspect session integration branch: {}",
-                    String::from_utf8_lossy(&found.stderr).trim()
-                ),
-            )?;
-            let exists = found.status.success();
-            let base = if exists {
-                git::ok(
-                    &project,
-                    &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
-                )?
-            } else {
-                require(
-                    !persisted,
-                    &format!(
-                        "persisted session integration branch {} is missing; restore its Git ref before retrying",
-                        record.branch
-                    ),
-                )?;
-                local_main(&project)?
-            };
-            git::add_worktree(&project, &record.worktree, &record.branch, &base)?;
-        }
-        if !persisted {
-            self.save_session_branch(conversation, &record)?;
-            self.ensure_session_started_event(conversation, &record.branch)?;
-        }
-        Ok(record.branch)
-    }
-
-    /// Reuses or initializes the durable target, including sessions predating session branches.
-    pub(in crate::lean) fn session_worktree(
-        &self,
-        conversation: &str,
-        project: &Path,
-    ) -> Result<PathBuf> {
-        self.create_session_branch(conversation, project)?;
-        Ok(self.session_worktree_path(conversation))
+        )
     }
 
     pub(super) fn restore_session_branches(&self) -> Result<()> {
         for conversation in self.store.conversations()? {
-            // Startup restores metadata only. Git validation and worktree repair
-            // happen when this particular session resumes or allocates a writer.
-            if !self.session_branch_path(&conversation.id).exists() {
-                continue;
-            }
-            let result = self
-                .load_session_branch(&conversation.id)
-                .and_then(|record| {
-                    self.ensure_session_started_event(&conversation.id, &record.branch)
-                });
-            if let Err(error) = result {
-                self.notice(
-                    &conversation.id,
-                    &format!("could not restore session branch metadata: {error}"),
-                );
+            let path = self.session_branch_path(&conversation.id);
+            if path.try_exists()? {
+                let restored = self
+                    .load_session_branch(&conversation.id)
+                    .and_then(|record| {
+                        self.ensure_session_started_event(&conversation.id, &record.branch)
+                    });
+                if let Err(error) = restored {
+                    self.notice(
+                        &conversation.id,
+                        &format!("could not restore session branch metadata: {error}"),
+                    );
+                }
+            } else {
+                let restored =
+                    self.session_worktree(&conversation.id, Path::new(&conversation.project));
+                if let Err(error) = restored {
+                    self.notice(
+                        &conversation.id,
+                        &format!("could not recover session integration branch: {error}"),
+                    );
+                }
             }
         }
         Ok(())
     }
 
     fn ensure_session_started_event(&self, conversation: &str, branch: &str) -> Result<()> {
-        let latest: Option<String> = self.store.db().query_row(
-            "SELECT json_extract(payload,'$.branch') FROM events WHERE conversation_id=?1 AND kind='session_started' ORDER BY seq DESC LIMIT 1",
-            [conversation], |row| row.get(0)).optional()?.flatten();
+        use rusqlite::OptionalExtension;
+
+        let latest: Option<String> = self
+            .store
+            .db()
+            .query_row(
+                "SELECT json_extract(payload,'$.branch') FROM events WHERE conversation_id=?1 AND kind='session_started' ORDER BY seq DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
         if latest.as_deref() != Some(branch) {
             self.store.append_event(
                 conversation,
@@ -225,7 +328,9 @@ impl Core {
         if path.exists() {
             let existing = self.load_session_branch(conversation)?;
             require(
-                existing == *record,
+                existing.branch == record.branch
+                    && existing.project == record.project
+                    && existing.worktree == record.worktree,
                 "session already has a different integration branch",
             )?;
             return Ok(());
@@ -284,8 +389,10 @@ fn named_session_branch(conversation: &str, label: &str) -> Result<String> {
                 '-'
             }
         })
-        .collect();
-    let label = if label.trim_matches('-').is_empty() {
+        .collect::<String>()
+        .trim_matches('-')
+        .to_owned();
+    let label = if label.is_empty() {
         "project".to_owned()
     } else {
         label
@@ -338,6 +445,58 @@ mod tests {
 
     fn config() -> Config {
         Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap()
+    }
+
+    fn started_session(core: &Core, project: &Path) -> Conversation {
+        let conversation = core.start(project).unwrap();
+        core.store
+            .interview_summary(
+                &conversation.id,
+                "Session branch recovery and verification",
+                0,
+            )
+            .unwrap();
+        conversation
+    }
+
+    #[test]
+    fn blank_ordinary_message_establishes_session_branch_before_wake() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let core = Core::open(&directory.path().join("state"), config()).unwrap();
+        let conversation = started_session(&core, &project);
+
+        // Keep the wake path from spawning an external agent; submit still
+        // exercises the same pre-wake branch creation used for a fresh session.
+        let _running = core.activity.start_orchestrator(&conversation.id).unwrap();
+        core.submit_addressed(&conversation.id, "", None).unwrap();
+
+        let record = core.load_session_branch(&conversation.id).unwrap();
+        assert!(
+            record
+                .branch
+                .starts_with("antislop/session/session-branch-recovery-and-verification-")
+        );
+        assert_eq!(
+            git::ok(
+                &project,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/heads/{}", record.branch)
+                ]
+            )
+            .unwrap(),
+            git::ok(&project, &["rev-parse", "refs/heads/main"]).unwrap()
+        );
+        assert!(!record.worktree.exists());
+        let worktree = core.session_worktree(&conversation.id, &project).unwrap();
+        assert_eq!(git::worktree_branch(&worktree).unwrap(), record.branch);
+        assert_eq!(
+            core.store.messages_after(&conversation.id, 0).unwrap()[0].text,
+            ""
+        );
     }
 
     fn git_output(path: &Path, args: &[&str]) -> String {
@@ -649,11 +808,10 @@ mod tests {
         git::ok(&project, &["checkout", "-qb", "user-work"]).unwrap();
         let state = directory.path().join("state");
         let core = Core::open(&state, config()).unwrap();
-        let conversation = core.start(&project).unwrap();
-        assert!(!core.session_branch_path(&conversation.id).exists());
+        let conversation = started_session(&core, &project);
         let tree = core.session_worktree(&conversation.id, &project).unwrap();
         let branch = core.load_session_branch(&conversation.id).unwrap().branch;
-        assert!(branch.starts_with("antislop/session/field-notes-"));
+        assert!(branch.starts_with("antislop/session/session-branch-recovery-and-verification-"));
         assert_eq!(git::head(&tree).unwrap(), main);
         assert_eq!(git::session_branch(&project).unwrap(), "user-work");
         git::remove_worktree_keep_branch(&project, &tree).unwrap();
@@ -670,6 +828,16 @@ mod tests {
                 .unwrap()
                 .branch,
             branch
+        );
+        assert_eq!(
+            reopened
+                .store
+                .events_since(&conversation.id, 0, 100)
+                .unwrap()
+                .iter()
+                .filter(|event| event.kind == "session_started")
+                .count(),
+            1
         );
         let event = reopened
             .store
@@ -699,6 +867,243 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn startup_retries_a_failed_session_branch_creation_from_local_main() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let main = git::head(&project).unwrap();
+        let state = directory.path().join("state");
+        let core = Core::open(&state, config()).unwrap();
+        // Reproduce `start`'s durable conversation write followed by a branch
+        // creation failure: local main disappears before create_session_branch.
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        core.store
+            .interview_summary(&conversation.id, "Recover a persisted session branch", 0)
+            .unwrap();
+        git::ok(&project, &["checkout", "-qb", "temporary-user-work"]).unwrap();
+        git::ok(&project, &["branch", "-D", "main"]).unwrap();
+        let error = core
+            .create_session_branch(&conversation.id, &project)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("local branch `main` does not exist"),
+            "{error}"
+        );
+        assert!(
+            core.store
+                .conversations()
+                .unwrap()
+                .iter()
+                .any(|item| item.id == conversation.id)
+        );
+        drop(core);
+
+        git::ok(&project, &["branch", "main", &main]).unwrap();
+        let reopened = Core::open(&state, config()).unwrap();
+        let record = reopened.load_session_branch(&conversation.id).unwrap();
+        let worktree = reopened.session_worktree_path(&conversation.id);
+        assert!(
+            worktree.exists(),
+            "startup must recreate the session checkout"
+        );
+        assert_eq!(git::head(&worktree).unwrap(), main);
+        assert_eq!(git::worktree_branch(&worktree).unwrap(), record.branch);
+        assert!(
+            record
+                .branch
+                .starts_with("antislop/session/recover-a-persisted-session-branch-")
+        );
+        let events = reopened
+            .store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.kind == "session_started" && event.payload["branch"] == record.branch
+        }));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "session_started")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn recorded_legacy_branch_name_is_preserved_after_scope_title_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let core = Core::open(&directory.path().join("state"), config()).unwrap();
+        let conversation = started_session(&core, &project);
+        let branch = format!("antislop/session/project-{}", conversation.id);
+        let main = git::head(&project).unwrap();
+        git::add_worktree(
+            &project,
+            &core.session_worktree_path(&conversation.id),
+            &branch,
+            &main,
+        )
+        .unwrap();
+        core.save_session_branch(
+            &conversation.id,
+            &SessionBranch {
+                project: project
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                branch: branch.clone(),
+                worktree: core.session_worktree_path(&conversation.id),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            core.create_session_branch(&conversation.id, &project)
+                .unwrap(),
+            branch
+        );
+        assert_eq!(
+            git::worktree_branch(&core.session_worktree_path(&conversation.id)).unwrap(),
+            branch
+        );
+    }
+
+    #[test]
+    fn legacy_event_binding_recovers_without_rewriting_its_branch_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let state = directory.path().join("state");
+        let core = Core::open(&state, config()).unwrap();
+        let conversation = started_session(&core, &project);
+        let branch = format!("antislop/session/project-{}", conversation.id);
+        git::ok(&project, &["branch", &branch, "main"]).unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_started",
+                &json!({"branch": branch}),
+            )
+            .unwrap();
+        drop(core);
+
+        let reopened = Core::open(&state, config()).unwrap();
+        let session = reopened
+            .session_worktree(&conversation.id, &project)
+            .unwrap();
+        assert_eq!(git::worktree_branch(&session).unwrap(), branch);
+        let events = reopened
+            .store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "session_started")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .find(|event| event.kind == "session_started")
+                .unwrap()
+                .payload["branch"],
+            branch
+        );
+    }
+
+    #[test]
+    fn legacy_repository_branch_event_is_kept_while_a_session_branch_is_added() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        repository(&project, "main");
+        let core = Core::open(&directory.path().join("state"), config()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap();
+        core.store
+            .interview_summary(
+                &conversation.id,
+                "Restore the session branch after restart",
+                0,
+            )
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_started",
+                &json!({"branch": "main"}),
+            )
+            .unwrap();
+
+        let session = core.session_worktree(&conversation.id, &project).unwrap();
+        let branch = git::worktree_branch(&session).unwrap();
+        assert!(branch.starts_with("antislop/session/restore-the-session-branch-after-restart-"));
+        assert_eq!(git::session_branch(&project).unwrap(), "main");
+        let events = core
+            .store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.kind == "session_started")
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].payload["branch"], "main");
+        assert_eq!(events[1].payload["branch"], branch);
+    }
+
+    #[test]
+    fn an_unrelated_checkout_at_the_recorded_path_is_rejected_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let foreign = directory.path().join("foreign");
+        repository(&project, "main");
+        repository(&foreign, "main");
+        let foreign_head = git::head(&foreign).unwrap();
+        let core = Core::open(&directory.path().join("state"), config()).unwrap();
+        let conversation = started_session(&core, &project);
+        let worktree = core.session_worktree_path(&conversation.id);
+        std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+        std::fs::rename(&foreign, &worktree).unwrap();
+        let branch = format!(
+            "antislop/session/session-branch-recovery-and-verification-{}",
+            conversation.id
+        );
+        core.save_session_branch(
+            &conversation.id,
+            &SessionBranch {
+                project: project
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                branch,
+                worktree: worktree.clone(),
+            },
+        )
+        .unwrap();
+
+        let error = core
+            .session_worktree(&conversation.id, &project)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("different project"), "{error}");
+        assert_eq!(git::head(&worktree).unwrap(), foreign_head);
     }
 
     #[test]
@@ -738,13 +1143,13 @@ mod tests {
         )
         .unwrap();
         let core = Core::open(&directory.path().join("state"), config()).unwrap();
-        let conversation = core.start(&project).unwrap();
+        let conversation = started_session(&core, &project);
         let session = core.session_worktree(&conversation.id, &project).unwrap();
         assert_eq!(git::head(&session).unwrap(), main);
         assert!(
             git::worktree_branch(&session)
                 .unwrap()
-                .starts_with("antislop/session/feature-checkout-")
+                .starts_with("antislop/session/session-branch-recovery-and-verification-")
         );
         assert_eq!(git::session_branch(&project).unwrap(), "user-work");
     }
@@ -755,7 +1160,7 @@ mod tests {
         let project = directory.path().join("project");
         repository(&project, "main");
         let core = Core::open(&directory.path().join("state"), config()).unwrap();
-        let conversation = core.start(&project).unwrap();
+        let conversation = started_session(&core, &project);
         let session = core.session_worktree(&conversation.id, &project).unwrap();
         let base = git::head(&session).unwrap();
 
@@ -816,7 +1221,7 @@ mod tests {
         repository(&project, "main");
         let config = config();
         let core = Core::open(&directory.path().join("state"), config.clone()).unwrap();
-        let conversation = core.start(&project).unwrap();
+        let conversation = started_session(&core, &project);
         let request = "Create a result file";
         let message = core
             .store

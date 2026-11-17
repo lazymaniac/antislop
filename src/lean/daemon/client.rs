@@ -103,6 +103,19 @@ impl Client {
         }
     }
 
+    /// Opens one authenticated connection for a sequence of bounded session
+    /// reads. Every request still carries this client's identity and is
+    /// authorized by the daemon independently.
+    pub(crate) fn open_reusable_connection(&self) -> Result<SessionConnection> {
+        let stream = UnixStream::connect(&self.socket)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        Ok(SessionConnection {
+            reader: BufReader::new(stream),
+            identity: self.identity.clone(),
+        })
+    }
+
     fn call_once(&self, request: &Request) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)?;
         let wait = match request {
@@ -119,6 +132,30 @@ impl Client {
             &json!({"protocol":PROTOCOL_VERSION,"request":request,"client":self.identity}),
         )?;
         let response: Response = crate::transport::read(&mut BufReader::new(stream))?
+            .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;
+        match response.error {
+            Some(error) => Err(Error::Invalid(error)),
+            None => Ok(response.data.unwrap_or_default()),
+        }
+    }
+}
+
+pub(crate) struct SessionConnection {
+    reader: BufReader<UnixStream>,
+    identity: Option<String>,
+}
+
+impl SessionConnection {
+    pub(crate) fn call(&mut self, request: &Request) -> Result<Value> {
+        require(
+            matches!(request, Request::Session(_)),
+            "session connection only accepts session requests",
+        )?;
+        crate::transport::write(
+            self.reader.get_mut(),
+            &json!({"protocol":PROTOCOL_VERSION,"request":request,"client":self.identity}),
+        )?;
+        let response: Response = crate::transport::read(&mut self.reader)?
             .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;
         match response.error {
             Some(error) => Err(Error::Invalid(error)),
@@ -312,4 +349,58 @@ fn wait_unlocked(state: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lean::daemon::SessionRequest;
+    use serde_json::json;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn reusable_connection_authenticates_multiple_document_chunk_requests() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(super::super::socket(state.path())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut requests = 0;
+            while let Some(request) = crate::transport::read::<Value>(&mut reader).unwrap() {
+                assert_eq!(request["client"], "fetch-test");
+                assert_eq!(request["request"]["op"], "result_document_content");
+                let offset = request["request"]["offset"].as_u64().unwrap();
+                requests += 1;
+                crate::transport::write(
+                    reader.get_mut(),
+                    &Response {
+                        data: Some(json!({
+                            "text": format!("chunk-{offset}"),
+                            "next_offset": offset + 1,
+                            "done": requests == 3,
+                        })),
+                        error: None,
+                    },
+                )
+                .unwrap();
+            }
+            requests
+        });
+
+        let mut client = Client::at(state.path());
+        client.identity = Some("fetch-test".into());
+        let mut connection = client.open_reusable_connection().unwrap();
+        for offset in 0..3 {
+            let reply = connection
+                .call(&Request::Session(SessionRequest::ResultDocumentContent {
+                    conversation: "conversation".into(),
+                    id: "document".into(),
+                    offset,
+                }))
+                .unwrap();
+            assert_eq!(reply["text"], format!("chunk-{offset}"));
+        }
+        drop(connection);
+        assert_eq!(server.join().unwrap(), 3);
+    }
 }

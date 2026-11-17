@@ -7623,7 +7623,7 @@ fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
 }
 
 #[test]
-fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators() {
+fn header_shows_persisted_session_branch_without_repository_fallback() {
     let dir = test_tempdir();
     assert!(
         std::process::Command::new("git")
@@ -7647,7 +7647,7 @@ fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators()
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(text.contains("branch: feature/repo-branch"), "{text}");
+        assert!(!text.contains("branch: feature/repo-branch"), "{text}");
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(!normalized.contains("· ·"), "{text}");
     }

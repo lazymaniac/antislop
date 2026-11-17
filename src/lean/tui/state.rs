@@ -36,6 +36,7 @@ pub struct App {
     pub found: Option<usize>,
     pub notice: Option<String>,
     pub updates: UpdateSender,
+    pub(super) result_fetch: app::requests::ResultFetchCoordinator,
     pub focus: Focus,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
@@ -133,11 +134,11 @@ pub struct App {
     /// Last rendered area of the docked workbench and its 3 interactive sections.
     pub workbench_area: Option<Rect>,
     pub workbench_sections: [Rect; 3],
-    /// Selected file index inside Workbench `[3] Gates & Mini-Diff`.
+    /// File selected in the docked workbench's diff section.
     pub workbench_file_index: usize,
-    /// Rendered `(screen_y, file_index)` rows in Workbench `[3]` for mouse clicks.
+    /// Screen rows and file indices for selecting workbench diff files by mouse.
     pub workbench_file_rows: Vec<(u16, usize)>,
-    /// Cached per-task diffs for inline Workbench preview without hijacking fullscreen diff.
+    /// Per-task diff data used by the docked workbench.
     pub workbench_diffs: std::collections::HashMap<String, DiffView>,
     /// The projects the screen is connected to; the active one's client is
     /// `client`.
@@ -174,6 +175,7 @@ macro_rules! initial_app {
             found: None,
             notice: None,
             updates: $updates,
+            result_fetch: app::requests::ResultFetchCoordinator::new(),
             focus: Focus::Chat,
             selected: ORCHESTRATOR.into(),
             relations: graph::Relations::default(),

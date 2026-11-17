@@ -1806,7 +1806,7 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(
-            rendered.contains("▸ [2/2] src/beta.rs (+1/-0)"),
+            rendered.contains("▸ [2/2] src/beta.rs (+5/-0)"),
             "{rendered}"
         );
         assert!(rendered.contains("+pub fn beta() {}"));

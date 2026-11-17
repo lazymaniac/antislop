@@ -24,6 +24,17 @@ pub fn fixture_conversation(
     core: &antislop::lean::Core,
     project: &std::path::Path,
 ) -> antislop::Result<antislop::lean::store::Conversation> {
+    fixture_conversation_with_requirements(core, project, "Fixture requirements.")
+}
+
+/// Create a settled conversation whose confirmed scope matches the next
+/// request sent by a test.
+#[allow(dead_code)]
+pub fn fixture_conversation_with_requirements(
+    core: &antislop::lean::Core,
+    project: &std::path::Path,
+    requirements: &str,
+) -> antislop::Result<antislop::lean::store::Conversation> {
     let project = project.canonicalize()?;
     let is_git_root = std::process::Command::new("git")
         .args([
@@ -54,7 +65,7 @@ pub fn fixture_conversation(
         core.store.create_conversation(&project.to_string_lossy())?
     };
     core.store
-        .interview_summary(&conversation.id, "Fixture requirements.", 0)?;
+        .interview_summary(&conversation.id, requirements, 0)?;
     confirm_scope(core, &conversation.id)?;
     Ok(conversation)
 }

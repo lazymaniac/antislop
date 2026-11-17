@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod staging;
 pub(in crate::lean) use staging::PreparedContent;
+pub(in crate::lean) use staging::PublishedContent;
 
 pub const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -23,8 +24,13 @@ pub struct Chunk {
     pub done: bool,
 }
 
+#[cfg(test)]
+type DirectorySyncHook = std::sync::Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>;
+
 pub struct Content {
     directory: PathBuf,
+    #[cfg(test)]
+    directory_sync_hook: std::sync::Mutex<Option<DirectorySyncHook>>,
 }
 
 impl Content {
@@ -34,7 +40,35 @@ impl Content {
                 .parent()
                 .unwrap_or(Path::new("."))
                 .join("session-content"),
+            #[cfg(test)]
+            directory_sync_hook: std::sync::Mutex::new(None),
         }
+    }
+
+    pub(in crate::lean) fn sync_published_entries(&self) -> Result<()> {
+        #[cfg(test)]
+        let hook = self
+            .directory_sync_hook
+            .lock()
+            .expect("directory sync hook mutex")
+            .clone();
+        #[cfg(test)]
+        if let Some(hook) = hook {
+            hook()?;
+        }
+        std::fs::File::open(&self.directory)?.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::lean) fn set_directory_sync_hook(
+        &self,
+        hook: impl Fn() -> std::io::Result<()> + Send + Sync + 'static,
+    ) {
+        *self
+            .directory_sync_hook
+            .lock()
+            .expect("directory sync hook mutex") = Some(std::sync::Arc::new(hook));
     }
 
     fn path(&self, reference: &Reference) -> Result<PathBuf> {
@@ -139,14 +173,17 @@ impl Content {
         }
     }
 
-    /// Removes content files whose UUID is no longer referenced by any stored row.
-    pub fn remove_unreferenced(&self, db: &rusqlite::Connection) -> Result<usize> {
+    /// Removes unreferenced content unless an active publisher holds its file lease.
+    pub fn remove_unreferenced(&self, db: &mut rusqlite::Connection) -> Result<usize> {
         if !self.directory.exists() {
             return Ok(0);
         }
+        // Prevent a stale reference scan from deleting content just committed
+        // by another Store after the publisher released its per-file lease.
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut referenced = std::collections::HashSet::new();
         let tables = {
-            let mut statement = db.prepare(
+            let mut statement = tx.prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
             )?;
             statement
@@ -155,7 +192,7 @@ impl Content {
         };
         for table in tables {
             let columns = {
-                let mut statement = db.prepare(&format!(
+                let mut statement = tx.prepare(&format!(
                     "PRAGMA table_info(\"{}\")",
                     table.replace('"', "\"\"")
                 ))?;
@@ -170,7 +207,7 @@ impl Content {
                     table.replace('"', "\"\""),
                     column.replace('"', "\"\"")
                 );
-                let mut statement = db.prepare(&sql)?;
+                let mut statement = tx.prepare(&sql)?;
                 let values = statement.query_map([], |row| row.get::<_, Option<String>>(0))?;
                 for value in values {
                     let Some(value) = value? else {
@@ -191,10 +228,22 @@ impl Content {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if uuid::Uuid::parse_str(&name).is_ok() && !referenced.contains(&name) {
-                std::fs::remove_file(entry.path())?;
-                removed += 1;
+                use std::os::unix::fs::OpenOptionsExt;
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(entry.path())?;
+                match staging::try_exclusive_lease(&file) {
+                    Ok(()) => {
+                        std::fs::remove_file(entry.path())?;
+                        removed += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
+        tx.commit()?;
         Ok(removed)
     }
 }

@@ -325,8 +325,20 @@ mod scope_tests {
         assert!(!core.busy());
         assert!(core.is_idle(&conversation));
         core.delete_session(&conversation).unwrap();
+        let retained = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap();
         std::fs::write(core.state.join("stopped"), []).unwrap();
         assert!(core.operation("new-operation").is_err());
+        assert!(core.send(&retained.id, "retain my draft").is_err());
+        assert!(
+            core.store
+                .messages_after(&retained.id, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(core.start(dir.path()).is_err());
     }
 
     #[test]

@@ -484,36 +484,43 @@ mod send_deletion_tests {
 
     #[test]
     fn send_registration_is_serialized_with_deletion() {
-        let directory = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let config =
             Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
-        let core = Core::open(&directory.path().join("state"), config).unwrap();
-        let session = core.store.create_conversation(".").unwrap();
-
-        // Queue deletion behind the lifecycle gate, then perform the exact
-        // write-and-wake section used by send while still holding that gate.
-        let lifecycle = core
-            .locks
-            .session_lifecycle
-            .lock()
-            .expect("session lifecycle mutex");
-        let deleting_core = core.clone();
-        let conversation = session.id.clone();
-        let deleting = std::thread::spawn(move || deleting_core.delete_session(&conversation));
-        while core.activity.plans.try_lock().is_ok() {
-            std::thread::yield_now();
-        }
-
-        super::super::record_message_and_wake_locked(
-            &core,
-            &session.id,
-            "Keep this accepted request",
-        )
-        .unwrap();
-        drop(lifecycle);
-
-        let error = deleting.join().unwrap().unwrap_err().to_string();
-        assert!(error.contains("stop this session's work"), "{error}");
-        assert_eq!(core.store.messages_after(&session.id, 0).unwrap().len(), 1);
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = core.clone();
+        let id = conversation.clone();
+        let sender = std::thread::spawn(move || {
+            crate::lean::record_message_and_wake(&worker, &id, "saved before Git", || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(core.locks.session_lifecycle.try_lock().is_ok());
+        assert!(core.locks.graph_updates.try_lock().is_ok());
+        assert!(core.locks.integrating.try_lock().is_ok());
+        assert!(core.activity.plans.try_lock().is_ok());
+        assert!(core.delete_session(&conversation).is_err());
+        drop(core.operation("another-conversation").unwrap());
+        core.cancel(&conversation);
+        release_tx.send(()).unwrap();
+        let error = sender.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("message wake cancelled"));
+        assert_eq!(
+            core.store.messages_after(&conversation, 0).unwrap()[0].text,
+            "saved before Git"
+        );
+        assert!(core.is_idle(&conversation));
     }
 }

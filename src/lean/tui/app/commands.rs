@@ -196,34 +196,27 @@ impl App {
         if let Some(diff) = self
             .diff
             .as_ref()
-            .filter(|d| d.task == task.id && d.file_count() > 0)
+            .filter(|diff| diff.task == task.id && diff.file_count() > 0)
             .or_else(|| {
                 self.workbench_diffs
                     .get(&task.id)
-                    .filter(|d| d.file_count() > 0)
+                    .filter(|diff| diff.file_count() > 0)
             })
         {
             return diff.file_summaries();
         }
-        if let Some(files) = task
-            .integration
+        task.integration
             .as_ref()
-            .and_then(|v| v["files"].as_array())
-        {
-            let entries: Vec<_> = files
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(|path| flow_editor::WorkbenchFileEntry {
-                    path: path.to_owned(),
-                    stats: None,
-                    hunks: Vec::new(),
-                })
-                .collect();
-            if !entries.is_empty() {
-                return entries;
-            }
-        }
-        Vec::new()
+            .and_then(|integration| integration["files"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|file| file.as_str())
+            .map(|path| flow_editor::WorkbenchFileEntry {
+                path: path.to_owned(),
+                stats: None,
+                hunks: Vec::new(),
+            })
+            .collect()
     }
 
     pub fn cycle_workbench_file(&mut self, next: bool) {
@@ -243,18 +236,17 @@ impl App {
         } else {
             (current + len - 1) % len
         };
-        if let Some(diff) = self.diff.as_mut().filter(|d| d.task == task.id) {
+        if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task.id) {
             diff.select_file(self.workbench_file_index);
         }
         if let Some(diff) = self.workbench_diffs.get_mut(&task.id) {
             diff.select_file(self.workbench_file_index);
         }
-        let chosen = &files[self.workbench_file_index];
         self.notice = Some(format!(
             "✓ plik [{}/{}]: {} (d: diff, C: komentarz)",
             self.workbench_file_index + 1,
             len,
-            chosen.path
+            files[self.workbench_file_index].path
         ));
     }
 
@@ -267,8 +259,8 @@ impl App {
         let target = if files.is_empty() {
             format!("task:{}", task.id)
         } else {
-            let idx = self.workbench_file_index.min(files.len().saturating_sub(1));
-            format!("diff:{}:{}", task.id, files[idx].path)
+            let index = self.workbench_file_index.min(files.len().saturating_sub(1));
+            format!("diff:{}:{}", task.id, files[index].path)
         };
         let input = self.get_comment_draft(&target);
         self.editor = Some(Editor { target, input });

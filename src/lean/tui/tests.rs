@@ -2494,6 +2494,7 @@ fn late_document_fetches_cannot_replace_selection_or_discard_a_draft() {
     let mut app = test_app();
     app.input = InputBuffer::with_text("Keep my draft 👩‍💻");
     let mut details = Details::new("orchestrator".into());
+    details.load_task(serde_json::json!({"_result_documents":[{"id":"new","path":"new.md"}]}));
     details.switch_tab(details::RESULT);
     details.query = "café".into();
     details.selected_result_document = Some("result_document:new".into());

@@ -263,34 +263,30 @@ impl View {
 
     pub fn agent_live_clock(&self, key: &str, ascii: bool) -> Option<String> {
         let prefix = if ascii { "T+" } else { "⏱ " };
-        if let Some(agent) = self.agents.get(key).filter(|a| a.running)
-            && let Some(started_ms) = agent.started_ms
-        {
-            let elapsed = crate::lean::store::now_ms()
+        let elapsed = |agent: &Agent| {
+            let started_ms = agent.started_ms?;
+            let elapsed_ms = crate::lean::store::now_ms()
                 .saturating_sub(started_ms)
-                .max(0) as u64
-                + agent.busy_ms;
-            return Some(format!(
+                .max(0) as u64;
+            Some(format!(
                 "{prefix}{}",
-                super::flow_editor::format_clock_mm_ss(elapsed)
-            ));
+                super::flow_editor::format_clock_mm_ss(elapsed_ms.saturating_add(agent.busy_ms))
+            ))
+        };
+        if let Some(agent) = self.agents.get(key).filter(|agent| agent.running)
+            && let Some(clock) = elapsed(agent)
+        {
+            return Some(clock);
         }
-        let task_id = key.split_once(':').map(|(_, id)| id).unwrap_or(key);
-        for role in [format!("worker:{task_id}"), format!("reviewer:{task_id}")] {
-            if let Some(agent) = self.agents.get(&role).filter(|a| a.running)
-                && let Some(started_ms) = agent.started_ms
-            {
-                let elapsed = crate::lean::store::now_ms()
-                    .saturating_sub(started_ms)
-                    .max(0) as u64
-                    + agent.busy_ms;
-                return Some(format!(
-                    "{prefix}{}",
-                    super::flow_editor::format_clock_mm_ss(elapsed)
-                ));
-            }
-        }
-        None
+        let task_id = key.split_once(':').map_or(key, |(_, id)| id);
+        [format!("worker:{task_id}"), format!("reviewer:{task_id}")]
+            .iter()
+            .find_map(|role| {
+                self.agents
+                    .get(role)
+                    .filter(|agent| agent.running)
+                    .and_then(elapsed)
+            })
     }
 }
 
@@ -663,31 +659,81 @@ mod tests {
     }
 
     #[test]
-    fn tool_rejections_are_visible_without_finishing_the_turn() {
-        let mut view = View::default();
-        view.apply(&event(
+    fn agent_tool_rejections_stay_out_of_live_and_replayed_chat() {
+        let technical_error =
+            "dependency \"missing\" is not an input; allowed: inventory [task id 123]";
+        let start = event(
             1,
             Some("t"),
             "turn_started",
             json!({"role":"orchestrator","provider":"codex"}),
-        ));
-        view.apply(&event(
+        );
+        let rejection = event(
             2,
             Some("t"),
             "agent_tool_rejected",
-            json!({"tool":"finish_turn","error":"request: unknown question ID"}),
-        ));
-        assert!(view.agents[ORCHESTRATOR].running);
-        assert_eq!(view.agents[ORCHESTRATOR].turns, 0);
-        assert!(view.cards.iter().any(|card| matches!(card, TranscriptCard::System { title, text, .. } if title == "Agent tool rejected" && text.contains("request: unknown question ID"))));
-        view.apply(&event(
+            json!({"tool":"read_dependency_result","error":technical_error}),
+        );
+
+        let mut live = View::default();
+        live.apply(&start);
+        live.apply(&rejection);
+        assert!(live.agents[ORCHESTRATOR].running);
+        assert_eq!(live.agents[ORCHESTRATOR].turns, 0);
+        assert!(!live.agents[ORCHESTRATOR].activity.contains(technical_error));
+        assert!(
+            live.transcript
+                .iter()
+                .all(|entry| !entry.text.contains(technical_error))
+        );
+        assert!(live.cards.iter().all(|card| !matches!(card,
+            TranscriptCard::System { title, text, .. }
+                if title == "Agent tool rejected" || text.contains(technical_error)
+        )));
+
+        // Reopening the conversation rebuilds the view by applying the same stored event stream.
+        let mut replayed = View::default();
+        replayed.apply(&start);
+        replayed.apply(&rejection);
+        assert_eq!(replayed.cards, live.cards);
+        assert!(
+            replayed
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains(technical_error))
+        );
+
+        replayed.apply(&event(
             3,
+            None,
+            "user_decision_requested",
+            json!({"id":"scope","context":"Choose a scope","question":"Proceed?","options":[{"label":"Yes"},{"label":"No"}]}),
+        ));
+        assert!(replayed.user_decision);
+        assert!(replayed.cards.iter().any(|card| matches!(card,
+            TranscriptCard::System { title, text, .. }
+                if title == "Decision required" && text.contains("Proceed?")
+        )));
+
+        replayed.apply(&event(
+            4,
+            Some("approval-turn"),
+            "approval_requested",
+            json!({"request":"approval-1","role":"worker:inventory","provider":"codex","summary":"Run a command","decider":"user","options":[{"id":"allow","label":"Allow","decision":"allow"}]}),
+        ));
+        assert_eq!(replayed.approvals.len(), 1);
+        assert_eq!(replayed.approvals[0].request, "approval-1");
+
+        replayed.apply(&event(
+            5,
             Some("t"),
             "turn_finished",
-            json!({"role":"orchestrator","status":"done"}),
+            json!({"role":"orchestrator","status":"failed","error":"CLI exited with code 1"}),
         ));
-        assert!(!view.agents[ORCHESTRATOR].running);
-        assert_eq!(view.agents[ORCHESTRATOR].turns, 1);
+        assert!(replayed.cards.iter().any(|card| matches!(card,
+            TranscriptCard::System { title, text, tone: super::super::theme::Tone::Failed, .. }
+                if title == "Orchestrator" && text.contains("CLI exited with code 1")
+        )));
     }
 
     #[test]

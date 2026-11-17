@@ -36,6 +36,7 @@ pub(super) fn apply(view: &mut View, event: &Value) {
 
 fn event_is_visible(kind: &str, payload: &Value, key: &str) -> bool {
     (kind != "agent_final" || matches!(key, crate::lean::PLANNER | ORCHESTRATOR))
+        && kind != "agent_tool_rejected"
         && (kind != "mail" || payload["kind"] != "copy")
 }
 
@@ -63,7 +64,6 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("planning_progress", conversation::on_planning_progress),
     ("workflow", conversation::on_workflow),
     ("turn_started", agents::on_turn_started),
-    ("agent_tool_rejected", agents::on_agent_tool_rejected),
     ("turn_finished", agents::on_turn_finished),
     ("graph_task", graph_task),
     ("graph_updated", graph_updated),

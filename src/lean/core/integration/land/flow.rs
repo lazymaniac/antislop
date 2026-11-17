@@ -197,10 +197,10 @@ impl<'a> Integration<'a> {
                 continue;
             }
             let file = git::artifact_file(target, source_commit, path)?;
-            let Some(prepared) = self.core.store.prepare_result_document(file)? else {
+            let Some(prepared) = self.core.store.spool_text_content(file)? else {
                 continue;
             };
-            self.core.store.publish_result_document(
+            self.core.store.record_spooled_document(
                 self.conversation,
                 &self.task.id,
                 path,
@@ -266,7 +266,45 @@ mod tests {
             .store
             .create_conversation(project.to_str().unwrap())
             .unwrap();
+        let request_text = "Write the declared output";
+        let request = core
+            .store
+            .add_message(&conversation.id, "user", request_text)
+            .unwrap();
+        core.store
+            .interview_summary(&conversation.id, request_text, request.seq)
+            .unwrap();
+        core.store.confirm_scope_for_test(&conversation.id);
         core.create_session_branch(&conversation.id, &project)
+            .unwrap();
+        let run = core
+            .store
+            .create_run(&conversation.id, request_text)
+            .unwrap();
+        let source = core
+            .store
+            .register_message_source(&conversation.id, &run.id, request.seq)
+            .unwrap();
+        let entry = serde_json::from_value(json!({
+            "id":"R1",
+            "source":{"source_id":source.id,"start":0,"end":request_text.len()},
+            "interpretation":request_text,
+            "criteria":[{"id":"R1.1","text":"Declared result is written"}]
+        }))
+        .unwrap();
+        core.store
+            .apply_ledger_change(
+                &ledger::LedgerChange {
+                    conversation: conversation.id.clone(),
+                    run_id: run.id.clone(),
+                    expected_spec_revision: 0,
+                    operation_id: crate::id(),
+                    reason: "Declare the requested output".into(),
+                    entries: vec![entry],
+                },
+                &core.state,
+                true,
+            )
             .unwrap();
         let mut task = core
             .store
@@ -278,52 +316,51 @@ mod tests {
                     "goal":"Create the declared text file",
                     "kind":"writing",
                     "change_kind":"artifact",
+                    "requirement_ids":["R1"],
+                    "criterion_ids":["R1.1"],
                     "outputs":["brief.md", "image.md"],
                     "reviewer":{"summary":"Check outputs"}
                 })],
             )
             .unwrap()
             .remove(0);
+        core.store
+            .link_plan_run(&conversation.id, &task.plan_id, &run.id)
+            .unwrap();
+        core.store
+            .bind_task_ledger(&conversation.id, &run.id, &task.plan_id)
+            .unwrap();
         let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
         let worktree = directory.path().join("writer");
         git::add_worktree(&project, &worktree, "test-writer", &base).unwrap();
         std::fs::write(worktree.join("brief.md"), "Deliverable café").unwrap();
         std::fs::write(worktree.join("image.md"), b"\0\xff\x01").unwrap();
         std::fs::write(worktree.join("agent-report.txt"), "Internal worker report").unwrap();
-        let change = git::commit_all(&worktree, git::CommitPurpose::TestFixture).unwrap();
-        let session_tree = core.session_worktree(&conversation.id, &project).unwrap();
-        assert!(matches!(
-            git::integrate(
-                &session_tree,
-                &git::head(&session_tree).unwrap(),
-                &change,
-                false
-            )
-            .unwrap(),
-            git::Integration::Applied | git::Integration::Committed(_)
-        ));
-        task.base = Some(base);
+        let change = git::commit_paths(
+            &worktree,
+            &["brief.md".into(), "image.md".into()],
+            git::CommitPurpose::TestFixture,
+        )
+        .unwrap();
+        task.status = status::WORKING.into();
+        task.base = Some(base.clone());
         task.result = Some(change.clone());
-        let cancel = AtomicBool::new(false);
-        Integration::new(
-            &core,
+        core.store.update_task(&task).unwrap();
+
+        core.integrate(
             &conversation.id,
             &mut task,
             &spec,
             &project,
             &worktree,
             &config,
-            &cancel,
-        )
-        .finish_outcome(
-            &git::head(&project).unwrap(),
-            &change,
-            git::Integration::Applied,
+            &AtomicBool::new(false),
         )
         .unwrap();
 
         let documents = core.store.result_documents(&conversation.id).unwrap();
         assert_eq!(documents.len(), 1);
+        assert_eq!(task.status, status::APPROVED);
         assert_eq!(documents[0].path, "brief.md");
         assert_eq!(documents[0].source_commit, task.result.clone().unwrap());
         assert_eq!(

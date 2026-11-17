@@ -137,6 +137,75 @@ fn route_pipeline(context: &Context<'_>, request: Request, routers: &[Router]) -
     Ok(Route::Unmatched(request))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_document_requests_list_and_read_persisted_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        let task = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[json!({
+                    "id":"writer",
+                    "title":"Write result",
+                    "goal":"Create the session result",
+                    "kind":"writing",
+                    "change_kind":"artifact",
+                    "outputs":["brief.md"],
+                    "reviewer":{"summary":"Check result"}
+                })],
+            )
+            .unwrap()
+            .remove(0);
+        let text = "Persisted result: café 👩‍💻";
+        core.store
+            .record_result_document(&conversation.id, &task.id, "brief.md", "commit-1", text)
+            .unwrap();
+
+        let listed = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Session(crate::lean::daemon::SessionRequest::ResultDocuments {
+                conversation: conversation.id.clone(),
+            }),
+            None,
+        )
+        .unwrap();
+        let documents = listed.as_array().unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0]["path"], "brief.md");
+        assert_eq!(documents[0]["source_commit"], "commit-1");
+        let id = documents[0]["id"].as_str().unwrap();
+
+        let content = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Session(crate::lean::daemon::SessionRequest::ResultDocumentContent {
+                conversation: conversation.id,
+                id: id.to_owned(),
+                offset: 0,
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(content["text"], text);
+        assert_eq!(content["done"], true);
+    }
+}
+
 pub(super) struct Context<'a> {
     pub(super) core: &'a Arc<Core>,
     pub(super) project: &'a Path,

@@ -20,16 +20,13 @@ impl Core {
 
     /// Records the message at once; the orchestrator answers in the background.
     pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
-        // Serialize the durable write and work registration with deletion.
-        // Otherwise delete_session could purge the accepted message after
-        // add_message but before wake installs the running slot.
-        let _lifecycle = self
-            .locks
-            .session_lifecycle
-            .lock()
-            .expect("session lifecycle mutex");
-        self.require_accepting()?;
-        crate::lean::record_message_and_wake_locked(self, conversation, text)
+        crate::lean::record_message_and_wake(self, conversation, text, || {
+            let project = PathBuf::from(self.store.conversation(conversation)?.project);
+            if git::is_repository(&project) {
+                self.create_session_branch(conversation, &project)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {

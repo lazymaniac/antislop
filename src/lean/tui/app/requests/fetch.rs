@@ -1,4 +1,203 @@
 use super::super::super::*;
+use std::sync::{Condvar, Mutex};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResultFetchIdentity {
+    conversation: String,
+    generation: u64,
+    key: String,
+    id: String,
+}
+
+#[derive(Clone)]
+struct ResultFetchRequest {
+    identity: ResultFetchIdentity,
+    selection: u64,
+    metadata: serde_json::Value,
+    client: Client,
+    updates: UpdateSender,
+}
+
+#[derive(Default)]
+struct ResultFetchState {
+    desired: Option<ResultFetchRequest>,
+    revision: u64,
+    closed: bool,
+    running: Option<ResultFetchIdentity>,
+    completed: Option<ResultFetchIdentity>,
+}
+
+#[derive(Default)]
+struct ResultFetchShared {
+    state: Mutex<ResultFetchState>,
+    changed: Condvar,
+}
+
+/// One worker per TUI app serializes document transfers and coalesces rapid
+/// selection changes to the latest requested artifact.
+#[derive(Default)]
+pub(in crate::lean::tui) struct ResultFetchCoordinator {
+    shared: Arc<ResultFetchShared>,
+}
+
+impl ResultFetchCoordinator {
+    pub(in crate::lean::tui) fn new() -> Self {
+        let shared = Arc::new(ResultFetchShared::default());
+        let worker = Arc::clone(&shared);
+        std::thread::spawn(move || result_fetch_worker(worker));
+        Self { shared }
+    }
+
+    fn select(&self, request: Option<ResultFetchRequest>) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous_identity = state
+            .desired
+            .as_ref()
+            .map(|request| request.identity.clone());
+        let previous_selection = state.desired.as_ref().map(|request| request.selection);
+        let next_identity = request.as_ref().map(|request| &request.identity);
+        let selected_completed =
+            next_identity.is_some_and(|identity| state.completed.as_ref() == Some(identity));
+        if !selected_completed
+            && (previous_identity.as_ref() != next_identity
+                || request.as_ref().is_some_and(|next| {
+                    previous_selection.is_some_and(|selection| {
+                        selection != next.selection
+                            && state.running.as_ref() != Some(&next.identity)
+                    })
+                }))
+        {
+            state.revision = state.revision.wrapping_add(1);
+        }
+        state.desired = request;
+        self.shared.changed.notify_one();
+    }
+
+    pub(in crate::lean::tui) fn cancel_document_fetch(&self) {
+        self.select(None);
+    }
+}
+
+impl Drop for ResultFetchCoordinator {
+    fn drop(&mut self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.closed = true;
+        state.desired = None;
+        self.shared.changed.notify_one();
+    }
+}
+
+fn result_fetch_worker(shared: Arc<ResultFetchShared>) {
+    let mut observed_revision = 0;
+    loop {
+        let (request, revision) = {
+            let mut state = shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while !state.closed {
+                let selected_completed = state
+                    .desired
+                    .as_ref()
+                    .is_some_and(|desired| state.completed.as_ref() == Some(&desired.identity));
+                if selected_completed {
+                    observed_revision = state.revision;
+                }
+                if state.desired.is_some()
+                    && state.revision != observed_revision
+                    && !selected_completed
+                {
+                    break;
+                }
+                state = shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            if state.closed {
+                return;
+            }
+            let Some(request) = state.desired.clone() else {
+                continue;
+            };
+            observed_revision = state.revision;
+            state.running = Some(request.identity.clone());
+            (request, state.revision)
+        };
+        let identity = request.identity.clone();
+        let is_current = || {
+            shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .desired
+                .as_ref()
+                .is_some_and(|desired| desired.identity == identity)
+        };
+        let result = inspection::result_document(
+            &request.client,
+            &request.identity.conversation,
+            &request.metadata,
+            is_current,
+        )
+        .map_err(|error| error.to_string());
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.running.as_ref() == Some(&identity) {
+            state.running = None;
+        }
+        let current = state
+            .desired
+            .as_ref()
+            .filter(|desired| desired.identity == identity)
+            .map(|desired| (desired.selection, desired.updates.clone()));
+        if let Some((selection, updates)) = current {
+            observed_revision = state.revision;
+            let update = match result {
+                Ok(Some(document)) => {
+                    state.completed = Some(identity.clone());
+                    Some(Update::ResultDocument {
+                        conversation: identity.conversation.clone(),
+                        generation: identity.generation,
+                        key: identity.key.clone(),
+                        selection,
+                        id: identity.id.clone(),
+                        result: Ok(document),
+                    })
+                }
+                Ok(None) => None,
+                Err(error) => Some(Update::ResultDocument {
+                    conversation: identity.conversation.clone(),
+                    generation: identity.generation,
+                    key: identity.key.clone(),
+                    selection,
+                    id: identity.id.clone(),
+                    result: Err(error),
+                }),
+            };
+            if let Some(update) = update {
+                drop(state);
+                let _ = updates.send(update);
+                continue;
+            }
+        }
+        // A changed request is picked up immediately; an unchanged request
+        // waits for another selection or a retry after an error.
+        if state.revision == revision {
+            observed_revision = revision;
+        }
+    }
+}
 use crate::lean::tui::UpdateSender;
 
 struct TaskFetch {
@@ -27,8 +226,16 @@ struct RunFetch {
 }
 
 impl App {
-    pub(in crate::lean::tui) fn fetch_selected_document(&mut self) {
-        let Some(details) = self.details.as_mut().filter(|d| d.tab == details::RESULT) else {
+    pub(in crate::lean::tui) fn schedule_output_document_fetch(&mut self) {
+        let Some(details) = self
+            .details
+            .as_mut()
+            .filter(|details| details.tab == details::RESULT)
+        else {
+            self.result_fetch.cancel_document_fetch();
+            if let Some(details) = self.details.as_mut() {
+                details.result_loading = None;
+            }
             return;
         };
         let Some(id) = details
@@ -36,17 +243,24 @@ impl App {
             .clone()
             .filter(|id| id.starts_with("result_document:"))
         else {
+            self.result_fetch.cancel_document_fetch();
+            if let Some(details) = self.details.as_mut() {
+                details.result_loading = None;
+            }
             return;
         };
-        if details.documents.contains_key(&id)
-            || details
-                .result_loading
-                .as_ref()
-                .is_some_and(|(key, g, generation)| {
-                    key == &id
-                        && *g == details.result_selection_generation
-                        && *generation == self.generation
-                })
+        if details.documents.contains_key(&id) {
+            self.result_fetch.cancel_document_fetch();
+            return;
+        }
+        if details
+            .result_loading
+            .as_ref()
+            .is_some_and(|(key, selection, generation)| {
+                key == &id
+                    && *selection == details.result_selection_generation
+                    && *generation == self.generation
+            })
             || details
                 .result_error
                 .as_ref()
@@ -55,27 +269,28 @@ impl App {
             return;
         }
         let Some(metadata) = details.result_metadata.get(&id).cloned() else {
+            self.result_fetch.cancel_document_fetch();
             return;
         };
         let selection = details.result_selection_generation;
         details.result_loading = Some((id.clone(), selection, self.generation));
-        let key = details.key.clone();
-        let conversation = self.conversation.clone();
-        let generation = self.generation;
-        let client = self.client.clone();
-        let updates = self.updates.clone();
-        std::thread::spawn(move || {
-            let result = inspection::result_document(&client, &conversation, &metadata)
-                .map_err(|e| e.to_string());
-            let _ = updates.send(Update::ResultDocument {
+        let (key, conversation, generation) = (
+            details.key.clone(),
+            self.conversation.clone(),
+            self.generation,
+        );
+        self.result_fetch.select(Some(ResultFetchRequest {
+            identity: ResultFetchIdentity {
                 conversation,
                 generation,
                 key,
-                selection,
                 id,
-                result,
-            });
-        });
+            },
+            selection,
+            metadata,
+            client: self.client.clone(),
+            updates: self.updates.clone(),
+        }));
     }
 
     /// Fetches the stored task behind the open details. The request carries
@@ -191,6 +406,7 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
+        self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);
         self.resolve_details_task();
         self.fetch_task();
@@ -222,6 +438,10 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fetch_tests.rs"]
+mod result_fetch_tests;
 
 fn mark_run_fetch(details: &mut Details, fetch: &RunFetch, latest: u64, events: u64) {
     details.fetch_in_flight = true;

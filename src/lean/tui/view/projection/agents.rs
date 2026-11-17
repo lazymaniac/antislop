@@ -77,34 +77,6 @@ fn record_agent_start(
     view.roles.insert(turn.to_owned(), key.to_owned());
 }
 
-pub(super) fn on_agent_tool_rejected(
-    view: &mut View,
-    event: &Value,
-    payload: &Value,
-    key: String,
-    turn: &str,
-) {
-    let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
-    let _ = (event, &key, turn, &text);
-    let who = if key.is_empty() { "agent" } else { &key };
-    let line = format!("{who}: {} rejected: {}", text("tool"), text("error"));
-    if let Some(agent) = view.agents.get_mut(&key) {
-        agent.activity = line.clone();
-    }
-    if let Some(row) = view.row_of(&key) {
-        row.activity = line.clone();
-    }
-    view.push(
-        Style::default().fg(crate::lean::tui::theme::ayu::RED),
-        line.clone(),
-    );
-    view.system_card(
-        "Agent tool rejected",
-        line,
-        crate::lean::tui::theme::Tone::Waiting,
-    );
-}
-
 pub(super) fn on_turn_finished(
     view: &mut View,
     event: &Value,

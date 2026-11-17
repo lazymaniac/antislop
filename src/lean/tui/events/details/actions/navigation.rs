@@ -32,6 +32,7 @@ impl App {
             return false;
         };
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
+            self.result_fetch.cancel_document_fetch();
             details.switch_role();
             return true;
         }
@@ -44,10 +45,12 @@ impl App {
             match key.code {
                 KeyCode::Char(',') => {
                     details.change_result_document(-1);
+                    self.schedule_output_document_fetch();
                     return true;
                 }
                 KeyCode::Char('.') => {
                     details.change_result_document(1);
+                    self.schedule_output_document_fetch();
                     return true;
                 }
                 _ => {}
@@ -63,6 +66,7 @@ impl App {
             KeyCode::BackTab | KeyCode::Char('[') => details.switch_tab(details.neighbour_tab(-1)),
             _ => return false,
         }
+        self.schedule_output_document_fetch();
         true
     }
 
@@ -112,6 +116,7 @@ impl App {
                 }
             }
             KeyCode::Right | KeyCode::Left => {
+                self.result_fetch.cancel_document_fetch();
                 if let Some(details) = &mut self.details {
                     details
                         .change_round(&self.view, if key.code == KeyCode::Right { 1 } else { -1 });
