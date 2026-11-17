@@ -194,6 +194,71 @@ fn submit_plan_preserves_a_user_selected_small_change_team() {
 }
 
 #[test]
+fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
+    use crate::lean::tasks::Team;
+
+    let (_directory, core, conversation) = core();
+    core.store
+        .db()
+        .execute(
+            "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1",
+            [&conversation],
+        )
+        .unwrap();
+    core.store
+        .select_planned_team(&conversation, Team::SmallChange, "legacy planner wording")
+        .unwrap();
+    core.store
+        .db()
+        .execute(
+            "UPDATE teams SET origin='unknown',user_selected=0,reason='legacy saved reason' WHERE conversation_id=?1",
+            [&conversation],
+        )
+        .unwrap();
+    let turn = core
+        .store
+        .start_turn(&conversation, PLANNER, "fixture", 0, None)
+        .unwrap();
+    let args = json!({
+        "document": "# Small fix",
+        "tasks": [{
+            "id": "writer",
+            "title": "Fix typo",
+            "goal": "Fix a contained typo.",
+            "kind": "implementation",
+            "change_kind": "code"
+        }],
+        "team": "feature",
+        "team_reason": "The planner prefers extra gates"
+    });
+
+    core.agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
+        .unwrap();
+    assert_eq!(core.store.team(&conversation).unwrap(), Team::SmallChange);
+    assert_eq!(core.store.user_selected_team(&conversation).unwrap(), None);
+    assert!(
+        core.store
+            .team_note(&conversation)
+            .unwrap()
+            .contains("origin unknown")
+    );
+    assert!(
+        core.store
+            .team_note(&conversation)
+            .unwrap()
+            .contains("legacy saved reason")
+    );
+
+    core.store
+        .select_team(&conversation, Team::Refactoring, "user reselected rigor")
+        .unwrap();
+    assert_eq!(
+        core.store.user_selected_team(&conversation).unwrap(),
+        Some(Team::Refactoring)
+    );
+}
+
+#[test]
 fn task_tools_reject_superseded_input_generations() {
     let (_directory, core, conversation) = core();
     let task = core

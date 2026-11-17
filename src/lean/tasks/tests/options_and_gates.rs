@@ -350,6 +350,28 @@ fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_
 }
 
 #[test]
+fn revision_refreshes_options_for_each_owner_with_indexed_lookup() {
+    let first: TaskContract = serde_json::from_value(serde_json::json!({"id":"first","title":"First","goal":"First goal","change_kind":"code","kind":"implementation"})).unwrap();
+    let second: TaskContract = serde_json::from_value(serde_json::json!({"id":"second","title":"Second","goal":"Second goal","change_kind":"code","kind":"implementation"})).unwrap();
+    let original = super::super::with_options(vec![first, second]);
+    let refreshed = super::super::refresh_existing_options(original);
+    assert_eq!(
+        refreshed
+            .iter()
+            .filter(|task| task.options_for.is_some())
+            .count(),
+        2
+    );
+    for (owner, marker) in [("first", "First goal"), ("second", "Second goal")] {
+        let options = refreshed
+            .iter()
+            .find(|task| task.options_for.as_deref() == Some(owner))
+            .unwrap();
+        assert!(options.goal.contains(marker));
+    }
+}
+
+#[test]
 fn refinalization_preserves_a_read_only_consumers_explicit_options_dependency() {
     for required_gates in [false, true] {
         let finish = |plan| {

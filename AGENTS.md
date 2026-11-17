@@ -1050,7 +1050,7 @@ src
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
     resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> ~51 > interviewing,workflow,planned_tasks,user_selected_team,as_str,team,check_submitted_plan,select_planned_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> ~52 > interviewing,workflow,planned_tasks,{user_selected,unknown}_team,as_str,team,check_submitted_plan,select_planned_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1548,6 +1548,7 @@ src
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
     team(conversation):Result<crate::lean::tasks::Team> > db,Team.parse
     user_selected_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
+    unknown_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
     team_note(conversation):Result<String> > db
     select_team(conversation,team,reason):Result<()> > save_team
     select_planned_team(conversation,team,reason):Result<()> > save_team
@@ -1683,7 +1684,7 @@ src
     set_plan_status(plan_id,from,to):Result<usize> > db
     add_plan(conversation,specs):Result<Vec<Task>> > db,now_ms,insert_proposed_tasks
     latest_plan(conversation):Result<Vec<Task>> > plan
-    open(path):Result<Self> > validate_database
+    open(path):Result<Self> ~48 > validate_database
     check_runtime_repository(path,identity):Result<()> > validate_database
     initialize(connection):Result<()> > initialize_{base_tables,plan_tables}
     decode_content(text):Result<String>
@@ -3312,6 +3313,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 149,237 LOC · input 1,334,244 · output 49,365 tokens · state 7afa838b0153 · targets AGENTS.md
+· 149,471 LOC · input 1,336,279 · output 49,390 tokens · state 633e96c3a87d · targets AGENTS.md
 ```
 <!-- hologram:end -->

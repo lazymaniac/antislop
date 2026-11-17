@@ -4,7 +4,7 @@
 use crate::{Error, Result, config::WorkKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[path = "tasks/agents.rs"]

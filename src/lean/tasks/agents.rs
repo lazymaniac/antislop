@@ -283,11 +283,16 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
         .filter(|t| t.options_for.is_some())
         .map(|t| t.id.clone())
         .collect::<BTreeSet<_>>();
+    let writers = tasks
+        .iter()
+        .filter(|task| task.options_for.is_none() && task.changes_code())
+        .map(|task| (task.id.as_str(), task))
+        .collect::<HashMap<_, _>>();
     let mut result = Vec::new();
     for task in &tasks {
         if let Some(owner) = &task.options_for {
-            if let Some(writer) = tasks.iter().find(|t| &t.id == owner && t.changes_code()) {
-                let owner_contract = writer.clone();
+            if let Some(writer) = writers.get(owner.as_str()) {
+                let owner_contract = (*writer).clone();
                 let mut writer = owner_contract.clone();
                 writer.depends_on.retain(|id| id != &task.id);
                 let mut updated = options_task(&writer, &mut ids);
