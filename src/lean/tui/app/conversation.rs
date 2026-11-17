@@ -75,9 +75,6 @@ impl App {
         self.editor = None;
         self.flow_editor = None;
         self.graph_link_source = None;
-        self.workbench_file_index = 0;
-        self.workbench_file_rows.clear();
-        self.workbench_diffs.clear();
     }
 
     fn reset_conversation_navigation(&mut self) {

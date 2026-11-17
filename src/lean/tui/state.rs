@@ -127,19 +127,8 @@ pub struct App {
     pub(super) graph_filters: Option<super::graph_filters::FilterMenu>,
     /// Direct DAG flow editor for in-place task contract and dependency edits.
     pub flow_editor: Option<super::flow_editor::FlowEditor>,
-    /// Whether the 3-column docked task workbench (`Zone C`) is active on wide screens.
-    pub workbench_docked: bool,
     /// Source task id when interactive visual edge linking (`l`) is active on the graph.
     pub graph_link_source: Option<String>,
-    /// Last rendered area of the docked workbench and its 3 interactive sections.
-    pub workbench_area: Option<Rect>,
-    pub workbench_sections: [Rect; 3],
-    /// File selected in the docked workbench's diff section.
-    pub workbench_file_index: usize,
-    /// Screen rows and file indices for selecting workbench diff files by mouse.
-    pub workbench_file_rows: Vec<(u16, usize)>,
-    /// Per-task diff data used by the docked workbench.
-    pub workbench_diffs: std::collections::HashMap<String, DiffView>,
     /// The projects the screen is connected to; the active one's client is
     /// `client`.
     pub projects: Vec<workspace::ProjectConn>,
@@ -240,13 +229,7 @@ macro_rules! initial_app {
             approval_hidden: std::collections::HashSet::new(),
             graph_filters: None,
             flow_editor: None,
-            workbench_docked: false,
             graph_link_source: None,
-            workbench_area: None,
-            workbench_sections: [Rect::default(); 3],
-            workbench_file_index: 0,
-            workbench_file_rows: Vec::new(),
-            workbench_diffs: std::collections::HashMap::new(),
             projects: Vec::new(),
             active_project: 0,
         }

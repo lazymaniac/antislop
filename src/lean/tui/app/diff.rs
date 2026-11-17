@@ -4,13 +4,7 @@ use crate::lean::daemon::ConversationRequest;
 impl App {
     pub fn open_diff(&mut self, key: &str) {
         if let Some((_, task)) = key.split_once(':') {
-            let mut diff = self
-                .workbench_diffs
-                .get(task)
-                .cloned()
-                .unwrap_or_else(|| DiffView::new(task.to_owned()));
-            diff.select_file(self.workbench_file_index);
-            self.diff = Some(diff);
+            self.diff = Some(DiffView::new(task.to_owned()));
             self.fetch_diff();
         }
     }

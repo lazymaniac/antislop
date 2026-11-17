@@ -38,15 +38,28 @@ mod tests {
     #[test]
     fn draw_keeps_graph_viewport_in_sync_and_guards_small_terminals() {
         let mut app = App::test_app();
-        app.focus = Focus::Graph;
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let graph_area = app.graph_area.expect("graph panel rendered");
-        assert_eq!(
-            app.graph_viewport,
-            Some((graph_area.width, graph_area.height))
-        );
-        assert_eq!(app.terminal_area, Rect::new(0, 0, 80, 24));
+        for (width, height) in [(140, 30), (100, 24), (99, 24), (85, 24), (84, 24), (12, 5)] {
+            for focus in [Focus::Chat, Focus::Graph] {
+                app.focus = focus;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                assert_eq!(app.terminal_area, Rect::new(0, 0, width, height));
+                if width >= SIDE_BY_SIDE_BREAKPOINT || focus == Focus::Graph {
+                    let graph_area = app.graph_area.expect("graph panel rendered");
+                    assert_eq!(
+                        app.graph_viewport,
+                        Some((graph_area.width, graph_area.height))
+                    );
+                    assert!(graph_area.right() >= width.saturating_sub(3));
+                    if width >= SIDE_BY_SIDE_BREAKPOINT {
+                        assert!(graph_area.x > app.chat_area.right());
+                    }
+                } else {
+                    assert!(app.graph_area.is_none());
+                    assert_eq!(app.chat_area.width, width);
+                }
+            }
+        }
 
         app.now_click_targets
             .push(Some(("stale-agent".into(), true)));

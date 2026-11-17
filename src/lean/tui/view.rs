@@ -264,10 +264,6 @@ impl View {
         super::flow_editor::critical_path_tasks(self)
     }
 
-    pub fn is_critical_path_task(&self, task_id: &str) -> bool {
-        self.critical_path_chain().iter().any(|id| id == task_id)
-    }
-
     pub fn agent_live_clock(&self, key: &str, ascii: bool) -> Option<String> {
         let prefix = if ascii { "T+" } else { "⏱ " };
         let elapsed = |agent: &Agent| {

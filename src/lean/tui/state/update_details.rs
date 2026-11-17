@@ -240,13 +240,8 @@ impl App {
                     && request_id == self.diff_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
                 {
-                    let mut cached = DiffView::new(task.clone());
-                    cached.load(reply.clone());
-                    cached.select_file(self.workbench_file_index);
-                    self.workbench_diffs.insert(task.clone(), cached);
                     if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task) {
                         diff.load(reply);
-                        diff.select_file(self.workbench_file_index);
                     }
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.diff_request_id == request_id
@@ -266,6 +261,51 @@ mod tests {
     use serde_json::json;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
+
+    #[test]
+    fn diff_refresh_preserves_file_selection_and_ignores_stale_replies() {
+        let mut app = App::test_app();
+        app.view.plan = Some("p1".into());
+        app.diff = Some(DiffView::new("t1".into()));
+        app.diff_request_id = 7;
+        let files = ["src/first.rs", "src/second.rs"].map(|path| {
+            json!({
+                "path": path, "old_path": null, "status": "modified", "binary": false,
+                "added": 1, "removed": 0,
+                "lines": [{"kind": "add", "old": null, "new": 1, "text": "new line"}]
+            })
+        });
+        let reply = json!({"files": files});
+        let update = |plan: &str, request_id, task: &str, reply| Update::Diff {
+            conversation: "test-conv".into(),
+            plan: Some(plan.into()),
+            generation: 0,
+            request_id,
+            task: task.into(),
+            reply: Ok(reply),
+        };
+        app.apply_update(update("p1", 7, "t1", reply.clone()));
+        let diff = app.diff.as_mut().unwrap();
+        diff.key(KeyCode::Char(']'));
+        assert_eq!(diff.target().as_deref(), Some("diff:t1:src/second.rs:1"));
+
+        app.apply_update(update("p1", 7, "t1", reply.clone()));
+        for (plan, request_id, task) in [("p0", 7, "t1"), ("p1", 6, "t1"), ("p1", 7, "t2")] {
+            app.apply_update(update(plan, request_id, task, json!({"files": []})));
+        }
+        assert_eq!(
+            app.diff.as_ref().unwrap().target().as_deref(),
+            Some("diff:t1:src/second.rs:1")
+        );
+
+        let mut reduced = reply;
+        reduced["files"].as_array_mut().unwrap().pop();
+        app.apply_update(update("p1", 7, "t1", reduced));
+        assert_eq!(
+            app.diff.as_ref().unwrap().target().as_deref(),
+            Some("diff:t1:src/first.rs:1")
+        );
+    }
 
     #[test]
     fn task_refresh_cancels_removed_result_before_the_next_chunk() {

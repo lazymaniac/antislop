@@ -64,26 +64,6 @@ pub fn worker_status(row: &TaskRow) -> String {
     }
 }
 
-/// The worker's state line: its round right after the state word once one
-/// has started, the concrete dependencies it waits on, and the raw cause
-/// when it stopped. It is the same reading the card splits over two lines,
-/// word for word.
-pub fn worker_state(view: &View, row: &TaskRow) -> String {
-    let status = worker_status(row);
-    let reason = match row.status.as_str() {
-        status::QUEUED => {
-            let waiting = waiting_on(view, row);
-            (!waiting.is_empty()).then(|| format!("waits for {}", waiting.join(", ")))
-        }
-        status::FAILED | status::NEEDS_USER | status::WAITING | status::SKIPPED => cause(row),
-        _ => None,
-    };
-    match reason {
-        Some(reason) => format!("{status} · {reason}"),
-        None => status,
-    }
-}
-
 /// The reviewer's state word with its round, alone, for a card's state line.
 pub fn reviewer_status(row: &TaskRow) -> String {
     let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
@@ -92,31 +72,6 @@ pub fn reviewer_status(row: &TaskRow) -> String {
         status::FAILED | status::NEEDS_USER => format!("rejected{round}"),
         status::PROPOSED | status::QUEUED | status::WORKING => format!("waits for worker{round}"),
         other => format!("{}{round}", status_label(other)),
-    }
-}
-
-/// The reviewer's state line, with the same round the worker shows.
-pub fn reviewer_state(row: &TaskRow) -> String {
-    let status = reviewer_status(row);
-    match row.status.as_str() {
-        status::FAILED | status::NEEDS_USER => match cause(row) {
-            Some(why) => format!("{status} · {why}"),
-            None => status,
-        },
-        _ => status,
-    }
-}
-
-/// The provider beside a state, in the one shape every view shows it:
-/// cards and details read the same state and add the same
-/// provider, so no two views can drift apart.
-pub fn with_provider(state: &str, provider: Option<&str>) -> String {
-    match provider
-        .map(str::trim)
-        .filter(|provider| !provider.is_empty())
-    {
-        Some(provider) => format!("{state} · {provider}"),
-        None => state.to_owned(),
     }
 }
 

@@ -40,11 +40,9 @@ pub enum Command {
     HoldTask,
     RetireTask,
     SteerAgent,
-    ToggleWorkbench,
     AcceptPlan,
     DirectExecute,
     LinkTask,
-    CommentSelectedFile,
 }
 
 pub(super) const COMMANDS: [(Command, &str); 5] = [

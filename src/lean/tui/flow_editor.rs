@@ -1182,13 +1182,6 @@ fn depends_transitively(view: &View, start_id: &str, target_id: &str) -> bool {
     false
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkbenchFileEntry {
-    pub path: String,
-    pub stats: Option<(usize, usize)>,
-    pub hunks: Vec<(String, String)>,
-}
-
 pub fn is_unfinished_task(status: &str) -> bool {
     !matches!(status, "approved" | "skipped" | "cancelled")
 }
@@ -1565,33 +1558,6 @@ mod tests {
     }
 
     #[test]
-    fn docked_workbench_and_flow_editor_render_safely_at_wide_and_tiny_sizes() {
-        let mut app = App::test_app();
-        app.view = sample_view_with_plan();
-        app.focus = Focus::Graph;
-        app.selected = "worker:t1".into();
-        app.run_workflow(Command::ToggleWorkbench);
-        assert!(app.workbench_docked);
-
-        for (w, h) in [(140, 30), (120, 24), (80, 24), (12, 5), (4, 3)] {
-            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-            term.draw(|f| app.draw(f)).unwrap();
-        }
-
-        let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
-        term.draw(|f| app.draw(f)).unwrap();
-        let rendered: String = term
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(rendered.contains("workbench · t1"));
-        assert!(rendered.contains("unlocks -> t2"));
-    }
-
-    #[test]
     fn visual_edge_linking_toggles_dependencies_and_rejects_cycles() {
         let view = sample_view_with_plan();
         // t2 currently depends on t1: toggling (t1, t2) unlinks t1 ↛ t2
@@ -1626,93 +1592,6 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.graph_link_source.is_none());
         assert_eq!(app.focus, Focus::Graph);
-    }
-
-    #[test]
-    fn workbench_shows_live_pty_and_mini_diff_and_handles_mouse_clicks() {
-        use crate::lean::terminal::{Cell, Screen};
-        use crate::lean::tui::native_view::Snapshot;
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-
-        let mut app = App::test_app();
-        app.view = sample_view_with_plan();
-        app.focus = Focus::Graph;
-        app.selected = "worker:t1".into();
-        app.workbench_docked = true;
-
-        // Populate live PTY screen in details snapshot
-        let mut details = crate::lean::tui::Details::new("worker:t1".into());
-        details.native.insert(
-            "worker:t1".into(),
-            Snapshot {
-                screen: Some(Screen {
-                    handle: "h1".into(),
-                    revision: 1,
-                    columns: 40,
-                    rows: 5,
-                    cursor: None,
-                    cells: vec![Cell {
-                        x: 0,
-                        y: 0,
-                        text: "cargo test --all-targets PASS".into(),
-                        width: 29,
-                        foreground: None,
-                        background: None,
-                        modifiers: 0,
-                    }],
-                    error: None,
-                }),
-                error: None,
-            },
-        );
-        app.details = Some(details);
-
-        // Populate DiffView for t1
-        let mut diff = crate::lean::tui::DiffView::new("t1".into());
-        diff.load(Ok(json!({
-            "base": "aaaa1111",
-            "head": "bbbb2222",
-            "truncated": false,
-            "files": [{
-                "path": "src/main.rs",
-                "old_path": null,
-                "status": "modified",
-                "added": 1,
-                "removed": 0,
-                "binary": false,
-                "lines": [
-                    {"kind": "add", "old": null, "new": 10, "text": "fn fast_path() {}"}
-                ]
-            }]
-        })));
-        app.diff = Some(diff);
-
-        // Render main screen (close modal details/diff first or test live_pty_tail_for_task + mini_preview)
-        assert_eq!(
-            app.live_pty_tail_for_task("t1", 3),
-            vec!["cargo test --all-targets PASS"]
-        );
-        let preview = app.diff.as_ref().unwrap().mini_preview(4);
-        assert_eq!(preview.len(), 2);
-        assert!(preview[0].1.contains("src/main.rs (+1/-0)"));
-        assert!(preview[1].1.contains("+fn fast_path() {}"));
-
-        // Now test mouse clicks on the 3 workbench sections when main view is drawn
-        app.details = None;
-        app.diff = None;
-        let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(app.workbench_area.is_some());
-
-        let sec1 = app.workbench_sections[1];
-        app.mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: sec1.x + 2,
-            row: sec1.y + 1,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-        assert_eq!(app.graph_tab, 1);
     }
 
     #[test]
@@ -1753,92 +1632,7 @@ mod tests {
     }
 
     #[test]
-    fn workbench_mini_diff_file_cycling_comment_and_row_click() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-
-        let mut app = App::test_app();
-        app.view = sample_view_with_plan();
-        app.focus = Focus::Graph;
-        app.selected = "worker:t1".into();
-        app.workbench_docked = true;
-
-        let mut diff = crate::lean::tui::DiffView::new("t1".into());
-        diff.load(Ok(json!({
-            "base": "aaaa1111",
-            "head": "bbbb2222",
-            "truncated": false,
-            "files": [
-                {
-                    "path": "src/alpha.rs",
-                    "old_path": null,
-                    "status": "modified",
-                    "added": 2,
-                    "removed": 1,
-                    "binary": false,
-                    "lines": [
-                        {"kind": "add", "old": null, "new": 1, "text": "pub fn alpha() {}"}
-                    ]
-                },
-                {
-                    "path": "src/beta.rs",
-                    "old_path": null,
-                    "status": "modified",
-                    "added": 5,
-                    "removed": 0,
-                    "binary": false,
-                    "lines": [
-                        {"kind": "add", "old": null, "new": 10, "text": "pub fn beta() {}"}
-                    ]
-                }
-            ]
-        })));
-        app.workbench_diffs.insert("t1".into(), diff);
-
-        // Press `]` to select second file (`src/beta.rs`)
-        app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
-        assert_eq!(app.workbench_file_index, 1);
-
-        let mut term = Terminal::new(TestBackend::new(140, 32)).unwrap();
-        term.draw(|f| app.draw(f)).unwrap();
-        let rendered: String = term
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(
-            rendered.contains("▸ [2/2] src/beta.rs (+5/-0)"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("+pub fn beta() {}"));
-
-        // Press `C` to open inline comment editor for the selected file (`diff:t1:src/beta.rs`)
-        app.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE));
-        let editor = app.editor.as_ref().expect("comment editor opened");
-        assert_eq!(editor.target, "diff:t1:src/beta.rs");
-        app.editor = None;
-
-        // Click on the first file row in Workbench `[3]` to select `src/alpha.rs` and open DiffView
-        let (first_row_y, first_idx) = app
-            .workbench_file_rows
-            .first()
-            .copied()
-            .expect("file rows recorded");
-        assert_eq!(first_idx, 0);
-        let wb_area = app.workbench_area.unwrap();
-        app.mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: wb_area.x + 3,
-            row: first_row_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.workbench_file_index, 0);
-        assert_eq!(app.diff.as_ref().map(|d| d.selected_file_index()), Some(0));
-    }
-
-    #[test]
-    fn critical_path_bottleneck_and_live_timer_render_on_graph_and_workbench() {
+    fn critical_path_bottleneck_and_live_timer_render_on_graph() {
         let mut app = App::test_app();
         app.view = sample_view_with_plan();
         app.view.tasks[0].status = "working".into();
@@ -1849,7 +1643,6 @@ mod tests {
 
         // t1 -> t2 is a critical path of length 2 where t1 blocks 1 downstream task (t2)
         assert_eq!(app.view.critical_path_chain(), vec!["t1", "t2"]);
-        assert!(app.view.is_critical_path_task("t1"));
         assert_eq!(app.view.task_bottleneck_count("t1"), 1);
         let clock = app
             .view
@@ -1859,7 +1652,6 @@ mod tests {
 
         app.focus = Focus::Graph;
         app.selected = "worker:t1".into();
-        app.workbench_docked = true;
         let mut term = Terminal::new(TestBackend::new(140, 32)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
         let rendered: String = term
@@ -1869,7 +1661,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(rendered.contains("CRITICAL PATH · blocks 1: t2"));
-        assert!(rendered.contains("Elapsed: ⏱ 01:1"));
+        assert!(rendered.contains("⚡ 1"), "{rendered}");
+        assert!(rendered.contains("round 1 · ⏱ 01:"), "{rendered}");
     }
 }

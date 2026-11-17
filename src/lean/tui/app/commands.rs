@@ -34,11 +34,9 @@ impl App {
             Command::HoldTask => self.toggle_flow_hold(),
             Command::RetireTask => self.open_flow_retire(),
             Command::SteerAgent => self.open_live_steer(),
-            Command::ToggleWorkbench => self.toggle_workbench(),
             Command::AcceptPlan => self.accept_plan(),
             Command::DirectExecute => self.trigger_direct_execute(),
             Command::LinkTask => self.toggle_flow_link(),
-            Command::CommentSelectedFile => self.comment_workbench_file(),
             _ => {}
         }
     }
@@ -175,95 +173,6 @@ impl App {
             let composer_key = details.composer_key();
             details.drafts.borrow_mut().entry(composer_key).or_default();
         }
-    }
-
-    pub fn toggle_workbench(&mut self) {
-        self.workbench_docked = !self.workbench_docked;
-        self.notice = Some(
-            if self.workbench_docked {
-                "docked task workbench enabled (w)"
-            } else {
-                "docked task workbench hidden (w)"
-            }
-            .into(),
-        );
-    }
-
-    pub fn workbench_files_for_task(
-        &self,
-        task: &view::TaskRow,
-    ) -> Vec<flow_editor::WorkbenchFileEntry> {
-        if let Some(diff) = self
-            .diff
-            .as_ref()
-            .filter(|diff| diff.task == task.id && diff.file_count() > 0)
-            .or_else(|| {
-                self.workbench_diffs
-                    .get(&task.id)
-                    .filter(|diff| diff.file_count() > 0)
-            })
-        {
-            return diff.file_summaries();
-        }
-        task.integration
-            .as_ref()
-            .and_then(|integration| integration["files"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|file| file.as_str())
-            .map(|path| flow_editor::WorkbenchFileEntry {
-                path: path.to_owned(),
-                stats: None,
-                hunks: Vec::new(),
-            })
-            .collect()
-    }
-
-    pub fn cycle_workbench_file(&mut self, next: bool) {
-        let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie".into());
-            return;
-        };
-        let files = self.workbench_files_for_task(&task);
-        if files.is_empty() {
-            self.notice = Some("✗ brak zmienionych plików w tym zadaniu".into());
-            return;
-        }
-        let len = files.len();
-        let current = self.workbench_file_index.min(len.saturating_sub(1));
-        self.workbench_file_index = if next {
-            (current + 1) % len
-        } else {
-            (current + len - 1) % len
-        };
-        if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task.id) {
-            diff.select_file(self.workbench_file_index);
-        }
-        if let Some(diff) = self.workbench_diffs.get_mut(&task.id) {
-            diff.select_file(self.workbench_file_index);
-        }
-        self.notice = Some(format!(
-            "✓ plik [{}/{}]: {} (d: diff, C: komentarz)",
-            self.workbench_file_index + 1,
-            len,
-            files[self.workbench_file_index].path
-        ));
-    }
-
-    pub fn comment_workbench_file(&mut self) {
-        let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie".into());
-            return;
-        };
-        let files = self.workbench_files_for_task(&task);
-        let target = if files.is_empty() {
-            format!("task:{}", task.id)
-        } else {
-            let index = self.workbench_file_index.min(files.len().saturating_sub(1));
-            format!("diff:{}:{}", task.id, files[index].path)
-        };
-        let input = self.get_comment_draft(&target);
-        self.editor = Some(Editor { target, input });
     }
 
     pub fn send_flow_revision(

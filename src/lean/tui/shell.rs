@@ -46,7 +46,6 @@ fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateR
     let (updates, received) = super::update_channel(256);
     let mut app = App::bootstrap(client.clone(), updates);
     app.animate_graph = true;
-    app.workbench_docked = true;
     app.project = options
         .project
         .file_name()

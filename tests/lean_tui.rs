@@ -7866,7 +7866,7 @@ fn open_cards(
 }
 
 #[test]
-fn domain_cockpit_flow_editor_workbench_linking_and_direct_execution_round_trip() {
+fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let dir = test_tempdir();
     let sock_path = test_socket(dir.relative_path());
     let listener = UnixListener::bind(&sock_path).unwrap();

@@ -16,15 +16,12 @@ fn row(status: &str, round: u64) -> TaskRow {
 fn rounds_appear_only_once_work_reached_them() {
     assert_eq!(round_shown(0), None);
     assert_eq!(round_shown(1).as_deref(), Some("r1"));
-    let worker = worker_state(&View::default(), &row("queued", 0));
+    let worker = worker_status(&row("queued", 0));
     assert_eq!(worker, "queued");
     assert!(!worker.contains('r'));
-    assert_eq!(
-        worker_state(&View::default(), &row("working", 1)),
-        "working r1"
-    );
-    assert_eq!(reviewer_state(&row("working", 1)), "waits for worker r1");
-    assert_eq!(reviewer_state(&row("proposed", 0)), "waits for worker");
+    assert_eq!(worker_status(&row("working", 1)), "working r1");
+    assert_eq!(reviewer_status(&row("working", 1)), "waits for worker r1");
+    assert_eq!(reviewer_status(&row("proposed", 0)), "waits for worker");
 }
 
 #[test]
@@ -46,12 +43,6 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         worker_activity(&view, &waiting).as_deref(),
         Some("waits for t0")
     );
-    assert_eq!(worker_state(&view, &waiting), "queued r2 · waits for t0");
-    assert_eq!(
-        with_provider(&worker_status(&waiting), Some("codex")),
-        "queued r2 · codex"
-    );
-    assert_eq!(with_provider("queued r2", Some("")), "queued r2");
     // A running worker shows its activity as its own line; the reviewer
     // never borrows it, and the state line never carries it.
     view.agents.insert(
@@ -96,8 +87,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         reviewer_activity(&view, &checking).as_deref(),
         Some("doing: checking the diff")
     );
-    // A stop puts the cause on the activity line, and the combined
-    // reading stays word-for-word what the split says.
+    // A stop puts the cause on the activity line.
     let mut failed = row("failed", 2);
     failed.reason = Some("  it conflicted\n".into());
     assert_eq!(worker_status(&failed), "failed r2");
@@ -105,7 +95,6 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
         worker_activity(&view, &failed).as_deref(),
         Some("it conflicted")
     );
-    assert_eq!(worker_state(&view, &failed), "failed r2 · it conflicted");
     assert_eq!(
         reviewer_activity(&view, &failed).as_deref(),
         Some("it conflicted")
@@ -121,7 +110,7 @@ fn the_activity_line_is_its_own_and_the_state_line_its_own() {
     let done = row("approved", 1);
     assert_eq!(worker_activity(&view, &done), None);
     assert_eq!(reviewer_activity(&view, &done), None);
-    assert_eq!(worker_state(&view, &done), "approved r1");
+    assert_eq!(worker_status(&done), "approved r1");
 }
 
 #[test]
@@ -173,17 +162,13 @@ fn stops_name_the_cause_and_never_invent_one() {
     let mut failed = row("failed", 2);
     failed.reason = Some("conflicts with the current branch in src/a.rs".into());
     assert_eq!(
-        worker_state(&View::default(), &failed),
-        "failed r2 · conflicts with the current branch in src/a.rs"
+        cause(&failed).as_deref(),
+        Some("conflicts with the current branch in src/a.rs")
     );
     let quiet = row("failed", 1);
-    assert_eq!(
-        worker_state(&View::default(), &quiet),
-        "failed r1 · cause not reported"
-    );
+    assert_eq!(cause(&quiet).as_deref(), Some("cause not reported"));
     // A queued task with no reported reason gets no invented excuse.
-    let queued = worker_state(&View::default(), &row("queued", 0));
-    assert!(!queued.contains("limit") && !queued.contains("conflict"));
+    assert_eq!(worker_activity(&View::default(), &row("queued", 0)), None);
 }
 
 #[test]

@@ -77,14 +77,6 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SteerAgent),
         ),
         (
-            "Workbench: toggle 3-column docked task workbench · w".into(),
-            Action::Run(Command::ToggleWorkbench),
-        ),
-        (
-            "Workbench: comment on selected file in mini-diff · C".into(),
-            Action::Run(Command::CommentSelectedFile),
-        ),
-        (
             "Plan: accept proposed plan and start execution · /accept".into(),
             Action::Run(Command::AcceptPlan),
         ),
@@ -204,10 +196,6 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
         (
             "/steer · live-steer selected task's agent (s)".into(),
             Action::Run(Command::SteerAgent),
-        ),
-        (
-            "/workbench · toggle 3-column docked task workbench (w)".into(),
-            Action::Run(Command::ToggleWorkbench),
         ),
         (
             "/plan · open current plan document (Ctrl+L)".into(),
