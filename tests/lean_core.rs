@@ -505,8 +505,13 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
     let conversation = core.start(&project).unwrap();
 
+    let first_started = Instant::now();
     core.send(&conversation.id, "slow: analyze the project architecture")
         .unwrap();
+    assert!(
+        first_started.elapsed() < Duration::from_millis(500),
+        "first message acceptance must not wait for the agent"
+    );
     assert_eq!(
         core.store.messages_after(&conversation.id, 0).unwrap()[0].text,
         "slow: analyze the project architecture"

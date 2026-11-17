@@ -1114,7 +1114,7 @@ src
     validate_session_project(project):Result<String> > require,ok,local_main
     create_session_branch(conversation,project):Result<String> ~149 > {plan,review}_running,session_branch_path,load_session_branch,session_worktree_path,turn,session_branch_name,workflow,conversation_goal,named_session_branch,SessionBranch,validate_session_record,ok,local_main,save_session_branch,ensure_session_started_event
     session_worktree(conversation,project):Result<PathBuf> > create_session_branch,ensure_session_worktree
-    restore_session_branches():Result<()> > conversations,session_branch_path,load_session_branch,ensure_session_started_event,notice
+    restore_session_branches():Result<()> > conversations,notice,session_worktree
     artifact_inputs(task,spec):Result<Inputs> > plan_conversation,artifact_receipt,{recover,freeze}_artifact_input
     artifact_commits(task,spec):Result<BTreeMap<String,String>> > artifact_inputs
     prepare_artifact_outputs(task,spec,project):Result<BTreeMap<String,String>> > artifact_commits
@@ -3248,6 +3248,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 144,349 LOC · input 1,288,516 · output 48,183 tokens · state 9fd5ae36318a · targets AGENTS.md
+· 144,366 LOC · input 1,288,702 · output 48,170 tokens · state 30190c9f45fc · targets AGENTS.md
 ```
 <!-- hologram:end -->
