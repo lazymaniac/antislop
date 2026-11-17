@@ -1050,7 +1050,7 @@ src
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
     resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> ~52 > interviewing,workflow,planned_tasks,{user_selected,unknown}_team,as_str,team,check_submitted_plan,select_planned_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> ~61 > interviewing,workflow,planned_tasks,user_selected_team,team_origin,team,check_submitted_plan,select_planned_team,record_result
     audit_tool(conversation,role,turn,tool,args):Result<Value> > submitted_{extraction,audit,audit_review},record_result
     revision_tool(&Arc<Self>,conversation,role,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
@@ -1363,6 +1363,8 @@ src
     answer_question_tx(tx,conversation,request,answer):Result<()> > {question,record_question}_answer
    approvals
     ApprovalRequest(C{turn,role,provider,kind,summary,options,fingerprint,decider})
+    TeamOrigin(E{User,Planner,Unknown})
+     - as_str
     = SUPERVISED="supervised",AUTONOMOUS="autonomous"
    artifacts
     ArtifactReceipt(C{task,generation,commit})
@@ -1548,7 +1550,7 @@ src
     set_approval_mode(conversation,mode):Result<()> > conversation,append_event
     team(conversation):Result<crate::lean::tasks::Team> > db,Team.parse
     user_selected_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
-    unknown_team(conversation):Result<Option<crate::lean::tasks::Team>> > db,Team.parse
+    team_origin(conversation):Result<Option<TeamOrigin>> > db
     team_note(conversation):Result<String> > db
     select_team(conversation,team,reason):Result<()> > save_team
     select_planned_team(conversation,team,reason):Result<()> > save_team
@@ -1684,7 +1686,7 @@ src
     set_plan_status(plan_id,from,to):Result<usize> > db
     add_plan(conversation,specs):Result<Vec<Task>> > db,now_ms,insert_proposed_tasks
     latest_plan(conversation):Result<Vec<Task>> > plan
-    open(path):Result<Self> ~48 > validate_database
+    open(path):Result<Self> ~54 > validate_database
     check_runtime_repository(path,identity):Result<()> > validate_database
     initialize(connection):Result<()> > initialize_{base_tables,plan_tables}
     decode_content(text):Result<String>

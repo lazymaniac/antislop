@@ -647,18 +647,22 @@ fn a_team_runs_only_its_own_gates_and_options() {
         .map(|spec| spec.kind)
         .collect();
     assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
-    let writer_options = small
+    let options: Vec<_> = small
         .iter()
-        .find(|spec| spec.options_for.as_deref() == Some("writer"))
-        .unwrap();
-    assert!(
-        small
-            .iter()
-            .find(|spec| spec.id == "writer")
-            .unwrap()
-            .depends_on
-            .contains(&writer_options.id)
-    );
+        .filter(|spec| spec.kind == WorkKind::Options)
+        .collect();
+    let code_writers: Vec<_> = small
+        .iter()
+        .filter(|spec| spec.options_for.is_none() && spec.changes_code())
+        .collect();
+    assert_eq!(options.len(), code_writers.len());
+    assert!(options.iter().all(|option| {
+        option.options_for.as_ref().is_some_and(|owner| {
+            code_writers
+                .iter()
+                .any(|writer| writer.id == *owner && writer.depends_on.contains(&option.id))
+        })
+    }));
     tasks::validate(&small).unwrap();
     assert_eq!(
         small,

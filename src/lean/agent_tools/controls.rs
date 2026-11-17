@@ -156,7 +156,7 @@ impl Core {
             _ => Vec::new(),
         };
         let selected_by_user = self.store.user_selected_team(conversation)?;
-        let unknown_legacy_team = self.store.unknown_team(conversation)?;
+        let saved_origin = self.store.team_origin(conversation)?;
         let (submitted_team, explicit_team) = match args["team"].as_str() {
             Some(name) => (Some(crate::lean::tasks::Team::parse(name)?), true),
             None => (None, false),
@@ -170,12 +170,20 @@ impl Core {
                 ),
             )?;
         }
-        let team = match selected_by_user.or(unknown_legacy_team).or(submitted_team) {
-            Some(team) => team,
-            None => self.store.team(conversation)?,
+        let team = if let Some(team) = selected_by_user {
+            team
+        } else if saved_origin == Some(crate::lean::store::TeamOrigin::Unknown) {
+            self.store.team(conversation)?
+        } else if let Some(team) = submitted_team {
+            team
+        } else {
+            self.store.team(conversation)?
         };
         let reason = args["team_reason"].as_str().unwrap_or_default().trim();
-        if explicit_team {
+        if explicit_team
+            && selected_by_user.is_none()
+            && saved_origin != Some(crate::lean::store::TeamOrigin::Unknown)
+        {
             require(
                 team == crate::lean::tasks::Team::default() || !reason.is_empty(),
                 "team_reason is required with a team other than `feature`: say why this work needs no more gates",
@@ -186,6 +194,7 @@ impl Core {
         // the conversation projection can show the selected mode before the
         // plan is handed off for review and execution.
         if selected_by_user.is_none()
+            && saved_origin != Some(crate::lean::store::TeamOrigin::Unknown)
             && (explicit_team || team == crate::lean::tasks::Team::default())
         {
             self.store.select_planned_team(conversation, team, reason)?;

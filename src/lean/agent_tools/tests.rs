@@ -236,11 +236,15 @@ fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
         .unwrap();
     assert_eq!(core.store.team(&conversation).unwrap(), Team::SmallChange);
     assert_eq!(core.store.user_selected_team(&conversation).unwrap(), None);
+    assert_eq!(
+        core.store.team_origin(&conversation).unwrap(),
+        Some(crate::lean::store::TeamOrigin::Unknown)
+    );
     assert!(
         core.store
             .team_note(&conversation)
             .unwrap()
-            .contains("origin unknown")
+            .contains("unverified legacy origin")
     );
     assert!(
         core.store
@@ -248,6 +252,16 @@ fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
             .unwrap()
             .contains("legacy saved reason")
     );
+    let saved_reason: String = core
+        .store
+        .db()
+        .query_row(
+            "SELECT reason FROM teams WHERE conversation_id=?1",
+            [&conversation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_reason, "legacy saved reason");
 
     core.store
         .select_team(&conversation, Team::Refactoring, "user reselected rigor")
@@ -255,6 +269,10 @@ fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
     assert_eq!(
         core.store.user_selected_team(&conversation).unwrap(),
         Some(Team::Refactoring)
+    );
+    assert_eq!(
+        core.store.team_origin(&conversation).unwrap(),
+        Some(crate::lean::store::TeamOrigin::User)
     );
 }
 

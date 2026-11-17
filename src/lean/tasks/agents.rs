@@ -278,6 +278,10 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
 /// Refresh runtime-owned prerequisites before validating/reviewing a merged graph.
 pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let mut ids = tasks.iter().map(|t| t.id.clone()).collect::<BTreeSet<_>>();
+    let mut contracts_by_id = std::collections::HashMap::with_capacity(tasks.len());
+    for task in &tasks {
+        contracts_by_id.entry(task.id.as_str()).or_insert(task);
+    }
     let old_ids = tasks
         .iter()
         .filter(|t| t.options_for.is_some())
@@ -286,7 +290,11 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let mut result = Vec::new();
     for task in &tasks {
         if let Some(owner) = &task.options_for {
-            if let Some(writer) = tasks.iter().find(|t| &t.id == owner && t.changes_code()) {
+            if let Some(writer) = contracts_by_id
+                .get(owner.as_str())
+                .copied()
+                .filter(|task| task.changes_code())
+            {
                 let owner_contract = writer.clone();
                 let mut writer = owner_contract.clone();
                 writer.depends_on.retain(|id| id != &task.id);

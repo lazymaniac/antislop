@@ -2,6 +2,23 @@
 //! id of one of the dialog's choices.
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::lean) enum TeamOrigin {
+    User,
+    Planner,
+    Unknown,
+}
+
+impl TeamOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Planner => "planner",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 pub(in crate::lean) const SUPERVISED: &str = "supervised";
 pub(in crate::lean) const AUTONOMOUS: &str = "autonomous";
 
@@ -77,7 +94,7 @@ impl Store {
         let name: Option<String> = self
             .db()
             .query_row(
-                "SELECT team FROM teams WHERE conversation_id=?1 AND user_selected=1",
+                "SELECT team FROM teams WHERE conversation_id=?1 AND origin='user' AND user_selected=1",
                 [conversation],
                 |row| row.get(0),
             )
@@ -86,25 +103,26 @@ impl Store {
             .transpose()
     }
 
-    /// A legacy team choice whose author cannot be established from stored data.
-    /// Keep it until the user makes a fresh choice; do not infer its source.
-    pub(in crate::lean) fn unknown_team(
-        &self,
-        conversation: &str,
-    ) -> Result<Option<crate::lean::tasks::Team>> {
-        let name: Option<String> = self
+    pub(in crate::lean) fn team_origin(&self, conversation: &str) -> Result<Option<TeamOrigin>> {
+        let origin: Option<String> = self
             .db()
             .query_row(
-                "SELECT team FROM teams WHERE conversation_id=?1 AND origin='unknown'",
+                "SELECT origin FROM teams WHERE conversation_id=?1",
                 [conversation],
                 |row| row.get(0),
             )
             .optional()?;
-        name.map(|name| crate::lean::tasks::Team::parse(&name))
+        origin
+            .map(|origin| match origin.as_str() {
+                "user" => Ok(TeamOrigin::User),
+                "planner" => Ok(TeamOrigin::Planner),
+                "unknown" => Ok(TeamOrigin::Unknown),
+                _ => Err(Error::Invalid(format!("invalid team origin `{origin}`"))),
+            })
             .transpose()
     }
 
-    /// Team guidance for planning and plan review, empty for automatic feature mode.
+    /// Team guidance for planning and plan review, empty when no saved team needs guidance.
     pub(in crate::lean) fn team_note(&self, conversation: &str) -> Result<String> {
         let row: Option<(String, String, String)> = self
             .db()
@@ -119,9 +137,11 @@ impl Store {
                 "\n\nThe user explicitly selected team `{team}`: {reason}. Keep this rigor choice; do not change it in `submit_plan`."
             ),
             Some((team, reason, origin)) if origin == "unknown" => format!(
-                "\n\nThis legacy conversation has saved team `{team}` with origin unknown: {reason}. Preserve the saved rigor team until the user selects a new one in the UI."
+                "\n\nThe saved team is `{team}` with an unverified legacy origin: {reason}. Preserve this team and reason; do not replace it in `submit_plan` without a new explicit user selection."
             ),
-            Some((team, reason, _)) if team != crate::lean::tasks::Team::default().name() => {
+            Some((team, reason, origin))
+                if origin == "planner" && team != crate::lean::tasks::Team::default().name() =>
+            {
                 format!(
                     "\n\nThe planner chose team `{team}` (fewer quality gates than `feature`): {reason}\nReject the plan if the work needs more checking than that team runs."
                 )
@@ -137,7 +157,7 @@ impl Store {
         team: crate::lean::tasks::Team,
         reason: &str,
     ) -> Result<()> {
-        self.save_team(conversation, team, reason, true)
+        self.save_team(conversation, team, reason, TeamOrigin::User)
     }
 
     /// Records a planner-selected team without changing the source of a user's choice.
@@ -147,7 +167,7 @@ impl Store {
         team: crate::lean::tasks::Team,
         reason: &str,
     ) -> Result<()> {
-        self.save_team(conversation, team, reason, false)
+        self.save_team(conversation, team, reason, TeamOrigin::Planner)
     }
 
     fn save_team(
@@ -155,11 +175,11 @@ impl Store {
         conversation: &str,
         team: crate::lean::tasks::Team,
         reason: &str,
-        user_selected: bool,
+        origin: TeamOrigin,
     ) -> Result<()> {
-        // Make the choice and its provenance one atomic write. Planner writes
-        // are conditional so a UI choice made after submit_plan's earlier read
-        // always wins, regardless of which write reaches SQLite first.
+        // Store a choice and its provenance atomically. A planner update cannot
+        // overwrite a user or unknown legacy choice that raced its earlier read.
+        let user_selected = origin == TeamOrigin::User;
         let changed = self.db().execute(
             "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(conversation_id) DO UPDATE SET team=excluded.team,reason=excluded.reason,version=excluded.version,updated_ms=excluded.updated_ms,user_selected=excluded.user_selected,origin=excluded.origin
@@ -172,7 +192,7 @@ impl Store {
                 crate::lean::tasks::TEAM_VERSION,
                 now_ms(),
                 user_selected,
-                if user_selected { "user" } else { "planner" }
+                origin.as_str()
             ],
         )?;
         if changed == 0 {

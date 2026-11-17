@@ -15,8 +15,8 @@ impl Store {
         // Additive runtime tables; no existing session is repaired or resumed.
         connection.execute_batch(include_str!("runtime_policy.sql"))?;
         // Keep schema migration and provenance initialization in one SQLite
-        // transaction. Legacy reason text cannot prove who chose a team, so
-        // its origin stays unknown and the saved choice remains intact.
+        // transaction. Legacy reason text and the old selection flag cannot
+        // prove who chose a team, so origin-less rows remain unknown.
         let migration =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let has_user_selected: bool = migration.query_row(
@@ -37,7 +37,13 @@ impl Store {
         if !has_origin {
             migration.execute_batch(
                 "ALTER TABLE teams ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown' CHECK(origin IN ('unknown','user','planner'));
-                 UPDATE teams SET origin='user' WHERE user_selected=1;",
+                 UPDATE teams SET origin='unknown',user_selected=0;",
+            )?;
+        } else if !has_user_selected {
+            // An earlier schema already had structured origin; preserve its
+            // confirmed user selections when adding the write-serialization flag.
+            migration.execute_batch(
+                "UPDATE teams SET user_selected=CASE WHEN origin='user' THEN 1 ELSE 0 END;",
             )?;
         }
         migration.commit()?;
