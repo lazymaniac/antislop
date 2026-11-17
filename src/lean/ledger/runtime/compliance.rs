@@ -128,8 +128,10 @@ impl Core {
         review: &Review,
         turns: &AuditTurns,
     ) -> Result<Vec<String>> {
-        let _integration = self.locks.integration();
+        let source = self.locks.source(conversation);
+        let _source = source.lock().expect("conversation source scope");
         self.check_audit_scope(conversation, scope)?;
+        let _integration = self.locks.integration();
         self.save_audit_evidence(conversation, scope, proposal, review, &turns.reviewer)?;
         self.save_audit_review(
             conversation,

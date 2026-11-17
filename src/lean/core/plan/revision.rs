@@ -280,6 +280,7 @@ impl Core {
             .session_lifecycle
             .lock()
             .expect("session lifecycle mutex");
+        self.require_accepting()?;
         self.store.conversation(conversation)?;
         require(
             self.store

@@ -82,6 +82,8 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         _lock: lock,
         config: core::state::ConfigState::new(config),
         state: state.canonicalize()?,
+        runtime_activation_lock: Mutex::new(()),
+        runtime_activation_cancels: Mutex::new(Default::default()),
         opened_ms: store::now_ms(),
         activity: Default::default(),
         revisions: Default::default(),
@@ -106,6 +108,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
 }
 
 fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()> {
+    crate::lean::daemon::activation::recover(core)?;
     core.restore_session_branches()?;
     core.store.interrupt_revision_jobs()?;
     if let Err(error) =
@@ -115,15 +118,29 @@ fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()>
     }
     core.store.recover_approved_requirements()?;
     restore_conversations(core)?;
-    resume_cut_off(core, &interrupted.0);
-    resume_interrupted(core, &interrupted.1);
-    answer_pending_mail(core)?;
+    // Confirm a runtime handoff before registering any plan runner. Otherwise
+    // a runner can exit on the pending marker just as confirmation resumes it.
+    let accepting =
+        !crate::lean::daemon::activation::pending(core) && !core.state.join("stopped").exists();
+    if accepting {
+        resume_cut_off(core, &interrupted.0);
+        resume_interrupted(core, &interrupted.1);
+    }
+    if accepting {
+        answer_pending_mail(core)?;
+        core.replay_delivered_answers()?;
+    }
     Ok(())
 }
 
 fn restore_conversations(core: &Arc<Core>) -> Result<()> {
     for conversation in core.store.conversations()? {
-        restore_conversation(core, &conversation.id)?;
+        if let Err(error) = restore_conversation(core, &conversation.id) {
+            core.notice(
+                &conversation.id,
+                &format!("could not restore conversation: {error}"),
+            );
+        }
     }
     Ok(())
 }

@@ -37,10 +37,14 @@ impl Registry {
         conversation: &str,
         role_key: &str,
     ) -> Result<Arc<Session>> {
+        let _operation = core.operation(conversation)?;
         let _graph = core.locks.graph();
         let (role, round) = parse_role_key(role_key)?;
         let turn_id = recorded_turn(core, conversation, role, round)?;
-        let context = recorded_context(core, conversation, &turn_id)?;
+        let context = core
+            .store
+            .run_context(conversation, &turn_id)?
+            .ok_or_else(|| invalid("this run recorded no working directory to resume in"))?;
         let (spec, signature) = restored_spec(core, &context, round)?;
         require(
             spec.resume.is_some(),
@@ -61,6 +65,7 @@ impl Registry {
             Error::Invalid("worktree cleanup is in progress; retry native restore".into())
         })?;
         drop(_graph);
+        let _context = recorded_context(core, conversation, &turn_id)?;
         self.prepare_scoped(core, conversation, role_key, &spec, &scope)
     }
 
@@ -101,11 +106,15 @@ impl Registry {
     }
 
     pub(crate) fn shutdown(&self) -> Result<()> {
-        let mut sessions = self.sessions.lock().map_err(invalid)?;
-        for session in sessions.values() {
-            session.stop.store(true, Ordering::SeqCst);
-        }
-        sessions.clear();
+        let retired = {
+            let mut sessions = self.sessions.lock().map_err(invalid)?;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            for session in sessions.values() {
+                session.stop.store(true, Ordering::SeqCst);
+            }
+            std::mem::take(&mut *sessions)
+        };
+        drop(retired);
         Ok(())
     }
 
@@ -126,20 +135,34 @@ impl Registry {
                 serde_json::from_value(task.spec.clone())?;
             contract.require_not_deferred()?;
         }
+        let operation = core.operation(conversation)?;
+        let launch_lock = core
+            .locks
+            .turn(conversation, &format!("native-launch:{role}"));
+        let _launch = launch_lock.lock().map_err(invalid)?;
         let signature = session_signature(role, spec, scope);
         let key = (conversation.to_owned(), role.to_owned());
-        let mut sessions = self.sessions.lock().map_err(invalid)?;
-        // The live CLI continues its own conversation; a turn that wants a
-        // different session (or a fresh one after a restart) needs another CLI.
-        if let Some(session) = sessions.get(&key)
+        let (existing, generation) = {
+            let sessions = self.sessions.lock().map_err(invalid)?;
+            (
+                sessions.get(&key).cloned(),
+                self.generation.load(Ordering::SeqCst),
+            )
+        };
+        if let Some(session) = existing
             && session.signature == signature
             && !session.stop.load(Ordering::SeqCst)
             && (spec.resume == session.identity() || !session.primed.load(Ordering::SeqCst))
             && session.check_alive().is_ok()
         {
-            return Ok(session.clone());
+            return Ok(session);
         }
-        sessions.remove(&key);
+        let retired = self.sessions.lock().map_err(invalid)?.remove(&key);
+        drop(retired);
+        require(
+            !operation.cancel.load(Ordering::SeqCst),
+            "native session launch cancelled",
+        )?;
         let session = Arc::new(Session::start(
             core,
             conversation.to_owned(),
@@ -147,6 +170,15 @@ impl Registry {
             signature,
             role,
         )?);
+        let mut sessions = self.sessions.lock().map_err(invalid)?;
+        if generation != self.generation.load(Ordering::SeqCst)
+            || operation.cancel.load(Ordering::SeqCst)
+        {
+            drop(sessions);
+            session.stop.store(true, Ordering::SeqCst);
+            drop(session);
+            return Err(invalid("native session launch cancelled during shutdown"));
+        }
         sessions.insert(key, session.clone());
         Ok(session)
     }

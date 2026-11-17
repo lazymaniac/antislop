@@ -2,6 +2,7 @@
 //! framed together, orthogonal edges for what relates them. The layout
 //! follows the visible content of each card and reroutes links as it changes.
 
+use super::super::tasks::status;
 use super::taskinfo;
 use super::theme::Theme;
 use super::view::{
@@ -304,6 +305,22 @@ pub fn card_key(view: &View, key: &str) -> String {
     }
     match task_card(view, key) {
         Some((task, Role::Pair)) => format!("worker:{}", task.id),
+        _ => key.to_owned(),
+    }
+}
+
+/// An options card shares its terminal between the worker and reviewer,
+/// following the phase that currently owns the task.
+pub(in crate::lean::tui) fn card_terminal_role(view: &View, key: &str) -> String {
+    match task_card(view, key) {
+        Some((task, Role::Pair)) => {
+            let role = if task.status == status::REVIEWING {
+                "reviewer"
+            } else {
+                "worker"
+            };
+            format!("{role}:{}", task.id)
+        }
         _ => key.to_owned(),
     }
 }

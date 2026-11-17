@@ -38,6 +38,9 @@ impl Core {
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
+        let _operation = self.operation("")?;
+        let project = project.canonicalize()?;
+        Self::validate_session_project(&project)?;
         let _lifecycle = self
             .locks
             .session_lifecycle
@@ -112,6 +115,9 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
+        let _operation = self.operation(&message.conversation)?;
+        let source = self.locks.source(&message.conversation);
+        let _source = source.lock().expect("conversation source scope");
         let graph = self.locks.graph();
         let _scope = self.locks.integration();
         let before = message
@@ -127,6 +133,10 @@ impl Core {
         self.refresh_delivered_tasks(message, &before)?;
         drop(_scope);
         drop(graph);
+        drop(_source);
+        if let Some(plan) = &message.plan {
+            self.maybe_continue_plan(&message.conversation, plan)?;
+        }
         Ok(reply)
     }
 
@@ -146,7 +156,7 @@ impl Core {
         for task in tasks {
             self.announce_task(&message.conversation, &task, None);
         }
-        self.maybe_continue_plan(&message.conversation, plan)
+        Ok(())
     }
 
     fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) -> Result<()> {

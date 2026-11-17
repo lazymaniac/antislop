@@ -83,7 +83,7 @@ pub(crate) fn require_owned_outputs(
 
 type IndexStamp = (u64, u64, u64, i64, i64);
 
-struct PreparedArtifacts {
+pub(crate) struct PreparedArtifacts {
     paths: Vec<String>,
     blobs: Vec<(String, Publication, Option<std::fs::File>)>,
     index: PathBuf,
@@ -101,7 +101,7 @@ fn index_stamp(lock: &Path) -> Result<Option<IndexStamp>> {
     }
 }
 
-fn prepare_owned_artifacts(
+pub(crate) fn prepare_owned_artifacts(
     project: &Path,
     base: &str,
     change: &str,
@@ -143,7 +143,7 @@ fn prepare_owned_artifacts(
 impl PreparedArtifacts {
     /// Publication performs only fd-relative filesystem operations. Git and
     /// full blob preparation have completed before any shared scope lock.
-    fn land_outputs(self, project: &Path) -> Result<Integration> {
+    pub(crate) fn publish(self, project: &Path) -> Result<Integration> {
         let _index = index::Lease::acquire_at(self.index.clone())?;
         if self.conflict || index_stamp(&self.index)? != self.index_stamp {
             return Ok(Integration::UserEdits(self.paths));
@@ -165,7 +165,8 @@ impl PreparedArtifacts {
     }
 }
 
-pub(crate) fn deliver_owned_artifacts(
+#[cfg(test)]
+fn deliver_owned_artifacts(
     project: &Path,
     base: &str,
     change: &str,
@@ -173,8 +174,7 @@ pub(crate) fn deliver_owned_artifacts(
     expected: &BTreeMap<String, String>,
     backups: &Path,
 ) -> Result<Integration> {
-    prepare_owned_artifacts(project, base, change, original, expected, backups)?
-        .land_outputs(project)
+    prepare_owned_artifacts(project, base, change, original, expected, backups)?.publish(project)
 }
 
 fn require_untracked(project: &Path, path: &str) -> Result<()> {

@@ -78,6 +78,7 @@ impl Store {
         )
     }
 
+    #[cfg(test)]
     pub(in crate::lean) fn answer_agent_question(
         &self,
         conversation: &str,
@@ -254,7 +255,7 @@ fn record_question_answer(
     request: &str,
     answer: &str,
 ) -> Result<()> {
-    tx.execute("UPDATE tasks SET status='queued' WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1 AND NOT EXISTS(SELECT 1 FROM agent_answer_waits WHERE request=?1 AND released=0)", [request])?;
+    tx.execute("UPDATE tasks SET status='queued',feedback=json_set(coalesce(feedback,'{}'),'$.current_reason',NULL) WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1 AND NOT EXISTS(SELECT 1 FROM agent_answer_waits WHERE request=?1 AND released=0)", [request])?;
     tx.execute(
         "UPDATE agent_questions SET state='answered',answer=?3 WHERE conversation_id=?1 AND id=?2",
         params![conversation, request, answer],

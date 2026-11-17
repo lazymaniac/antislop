@@ -959,7 +959,23 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     );
     let deadline = Instant::now() + Duration::from_secs(120);
     let daemon = loop {
-        if let Some(identity) = identity().filter(|identity| identity["busy"] == true) {
+        let running_turn = rusqlite::Connection::open_with_flags(
+            state.join("core.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|db| {
+            db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM turns WHERE status='running')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(false);
+        if let Some(identity) =
+            identity().filter(|identity| identity["busy"] == true && running_turn)
+        {
             break identity["pid"].clone();
         }
         if first.try_wait().unwrap().is_some() {
@@ -1003,7 +1019,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     assert!(
         error
             .to_string()
-            .contains("another project or configuration path")
+            .contains("another project or configuration path"),
+        "{error}"
     );
     assert!(!state.join("antislop.toml").exists());
     assert_eq!(identity().unwrap()["pid"], daemon);
@@ -1466,5 +1483,222 @@ fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
             .unwrap()
             .status,
         TurnStatus::Done
+    );
+}
+
+#[test]
+fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor() {
+    use antislop::lean::daemon::{
+        Client, ControlRequest, ConversationRequest, HistoryRequest, Request,
+    };
+    let directory = common::tempdir();
+    let dir = directory.path().canonicalize().unwrap();
+    let project = dir.join("project");
+    init_project(&project);
+    let codex = fake_codex(&dir);
+    let unique_cli = dir.join("activation-codex");
+    std::fs::rename(&codex, &unique_cli).unwrap();
+    std::fs::rename(
+        codex.with_file_name("codex.shim.py"),
+        unique_cli.with_file_name("activation-codex.shim.py"),
+    )
+    .unwrap();
+    let config = dir.join("antislop.toml");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/antislop.toml"
+        ))
+        .unwrap()
+        .replace("binary = \"codex\"", "binary = \"activation-codex\""),
+    )
+    .unwrap();
+    let state = dir.join("state");
+    common::runtime_environment(&project);
+    common::assert_test_socket(std::path::Path::new("../state"), &project);
+    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_antislop"));
+    let mut daemon = std::process::Command::new(executable)
+        .arg("__core")
+        .arg(&project)
+        .arg(&config)
+        .arg(&state)
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .current_dir(&project)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(dir.join("daemon-test.log")).unwrap())
+        .spawn()
+        .unwrap();
+    let client = Client::at(&state);
+    let identity = || client.call(&Request::Control(ControlRequest::Identity));
+    let wait_for = |predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            if let Ok(value) = identity()
+                && predicate(&value)
+            {
+                break value;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "daemon condition timed out: {:?}; {}",
+                identity(),
+                std::fs::read_to_string(dir.join("daemon-test.log")).unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let original = wait_for(&|_| true);
+    assert!(
+        original["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "runtime_activation_async_v1")
+    );
+    assert!(
+        original["launch_error"]
+            .as_str()
+            .unwrap()
+            .contains("activation-codex")
+    );
+    let conversation = client
+        .call(&Request::Control(ControlRequest::Start))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let successor = dir.join("antislop-successor");
+    std::fs::copy(executable, &successor).unwrap();
+    let target = antislop::lean::daemon::build_identity(&successor).unwrap();
+    let request = |path| {
+        Request::Control(ControlRequest::ActivateRuntime {
+            request_id: None,
+            executable: successor.to_string_lossy().into_owned(),
+            path,
+            conversation: Some(conversation.clone()),
+            task: None,
+        })
+    };
+    let operation = client.call(&request(None)).unwrap();
+    assert_eq!(operation["state"], "validating");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let failed = loop {
+        let result = client
+            .call(&Request::Control(ControlRequest::RuntimeActivationStatus))
+            .unwrap();
+        if result["state"] == "failed" {
+            break result;
+        }
+        assert!(Instant::now() < deadline, "{result}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(identity().unwrap()["build"], original["build"]);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("activation-codex")
+    );
+    let launch_path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
+    assert_eq!(
+        client.call(&request(Some(launch_path.clone()))).unwrap()["state"],
+        "validating"
+    );
+    let applied = wait_for(&|v| v["build"] == target && v["launch_error"].is_null());
+    assert_eq!(
+        applied["pid"], original["pid"],
+        "handoff replaces this process without a helper service"
+    );
+    assert!(
+        applied["launch_path"]
+            .as_str()
+            .unwrap()
+            .contains(dir.to_str().unwrap())
+    );
+    assert_eq!(
+        client
+            .call(&Request::Control(ControlRequest::RuntimeActivationStatus))
+            .unwrap()["state"],
+        "applied"
+    );
+
+    client
+        .call(&Request::Conversation(ConversationRequest::Send {
+            conversation: conversation.clone(),
+            operation_id: None,
+            text: "sleepy: keep this turn".into(),
+            to: None,
+        }))
+        .unwrap();
+    wait_for(&|v| v["busy"] == true);
+    let second = dir.join("antislop-successor-2");
+    std::fs::copy(executable, &second).unwrap();
+    let second_build = antislop::lean::daemon::build_identity(&second).unwrap();
+    let request = Request::Control(ControlRequest::ActivateRuntime {
+        request_id: None,
+        executable: second.to_string_lossy().into_owned(),
+        path: Some(launch_path),
+        conversation: Some(conversation.clone()),
+        task: None,
+    });
+    assert_eq!(client.call(&request).unwrap()["state"], "validating");
+    assert_eq!(
+        identity().unwrap()["build"],
+        target,
+        "active turn must finish before handoff"
+    );
+    let accepted = client
+        .call(&Request::Conversation(ConversationRequest::Send {
+            conversation: conversation.clone(),
+            operation_id: None,
+            text: "new work accepted while validation runs".into(),
+            to: None,
+        }))
+        .unwrap();
+    assert!(!accepted.is_null());
+    client
+        .call(&Request::Conversation(ConversationRequest::Pause {
+            conversation: conversation.clone(),
+            paused: true,
+        }))
+        .unwrap();
+    client
+        .call(&Request::Conversation(ConversationRequest::Pause {
+            conversation: conversation.clone(),
+            paused: false,
+        }))
+        .unwrap();
+    wait_for(&|v| v["build"] == second_build && v["busy"] == false);
+    let events = client
+        .call(&Request::History(HistoryRequest::Events {
+            conversation: conversation.clone(),
+            after: 0,
+            wait_ms: 0,
+        }))
+        .unwrap();
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "turn_finished" && e["payload"]["status"] == "done"),
+        "{events}"
+    );
+    assert!(!state.join("runtime-activation.pending.json").exists());
+    assert!(Client::stop(&state, false).unwrap());
+    assert!(daemon.wait().unwrap().success());
+    std::fs::remove_file(&config).unwrap();
+    let offline = std::process::Command::new(executable)
+        .args(["activate", "--status", "--state"])
+        .arg(&state)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(offline.status.success(), "{offline:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&offline.stdout).unwrap()["state"],
+        "applied"
     );
 }

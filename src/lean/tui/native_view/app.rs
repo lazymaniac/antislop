@@ -16,7 +16,9 @@ impl App {
                     || (details.terminal_visible()
                         && (details.selected_round.is_none() || details.resume_round))
             })
-            .map_or_else(Vec::new, |details| native_panels(details, graph_key))
+            .map_or_else(Vec::new, |details| {
+                native_panels(details, graph_key, &self.view)
+            })
     }
 
     fn graph_native_key(&self) -> Option<&str> {
@@ -76,7 +78,7 @@ impl App {
     fn native_key_role(&self) -> Option<String> {
         let details = self.details.as_ref()?;
         if let Some(key) = self.graph_native_key() {
-            return Some(details.composer_recipient(key));
+            return Some(details.composer_recipient(&graph::card_terminal_role(&self.view, key)));
         }
         if !details.terminal_visible()
             || (details.selected_round.is_some() && !details.resume_round)
@@ -172,13 +174,17 @@ struct WantedView {
     rows: u16,
 }
 
-fn native_panels(details: &Details, graph_key: Option<&str>) -> Vec<WantedView> {
+fn native_panels(
+    details: &Details,
+    graph_key: Option<&str>,
+    view: &crate::lean::tui::view::View,
+) -> Vec<WantedView> {
     if let Some(key) = graph_key {
         let area = details.native_areas[0];
         if area.is_empty() {
             return Vec::new();
         }
-        let role = details.composer_recipient(key);
+        let role = details.composer_recipient(&graph::card_terminal_role(view, key));
         let (role, identity) = native_identity(details, &role);
         return vec![WantedView {
             role,

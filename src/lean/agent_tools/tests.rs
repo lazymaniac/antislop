@@ -318,3 +318,59 @@ mod dependencies;
 mod blockers;
 
 mod result_evidence;
+
+#[test]
+fn answer_delivery_commits_while_integration_is_held_and_rejects_a_closed_caller() {
+    let (_directory, core, conversation) = core();
+    let worker = core
+        .store
+        .start_turn(&conversation, "worker:question", "fixture", 0, None)
+        .unwrap();
+    let request = core
+        .store
+        .ask_agent_question(&conversation, &worker.id, "question", "Which path?")
+        .unwrap();
+    let caller = core
+        .store
+        .start_turn(&conversation, "orchestrator", "fixture", 0, None)
+        .unwrap();
+    let integration = core.locks.integration();
+    let args = json!({"request":request,"answer":"Use the approved path"});
+    let receipt = core
+        .answer_agent_tool(&conversation, &caller.id, &args)
+        .unwrap();
+    assert_eq!(receipt["delivered"], true);
+    assert_eq!(
+        core.answer_agent_tool(&conversation, &caller.id, &args)
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(
+        core.store
+            .agent_question(&conversation, &request, None)
+            .unwrap()["answer"],
+        "Use the approved path"
+    );
+    assert!(
+        core.answer_agent_tool(
+            &conversation,
+            &caller.id,
+            &json!({"request":request,"answer":"Different"})
+        )
+        .is_err()
+    );
+    core.store
+        .db()
+        .execute(
+            "UPDATE turns SET status='interrupted' WHERE id=?1",
+            [&caller.id],
+        )
+        .unwrap();
+    assert!(
+        core.answer_agent_tool(&conversation, &caller.id, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("closed or superseded")
+    );
+    drop(integration);
+}

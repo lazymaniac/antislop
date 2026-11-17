@@ -95,6 +95,7 @@ impl<'a> Integration<'a> {
                 self.project,
                 base,
                 change,
+                self.cancel,
             );
         }
         let session_tree = self

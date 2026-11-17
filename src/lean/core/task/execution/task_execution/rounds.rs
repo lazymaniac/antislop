@@ -20,6 +20,9 @@ impl Execution<'_> {
         let Some(finished) = self.finish_worker_report(round, report)? else {
             return Ok(false);
         };
+        if crate::lean::daemon::activation::gate_approval(self.core, self.task)? {
+            return Ok(false);
+        }
         let Some(verdict) =
             self.review_round(round, state, &finished.report, finished.changes.as_deref())?
         else {

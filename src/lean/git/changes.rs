@@ -115,19 +115,5 @@ pub fn squash(worktree: &Path, base: &str, purpose: CommitPurpose) -> Result<Str
     let subject = task_subject(worktree, base, "HEAD")?;
     let message = subject.as_deref().unwrap_or(commit_subject(purpose));
     let tree = ok(worktree, &["rev-parse", "HEAD^{tree}"])?;
-    ok(
-        worktree,
-        &[
-            "-c",
-            "user.name=antislop",
-            "-c",
-            "user.email=antislop@localhost",
-            "commit-tree",
-            &tree,
-            "-p",
-            base,
-            "-m",
-            message,
-        ],
-    )
+    ok(worktree, &["commit-tree", &tree, "-p", base, "-m", message])
 }

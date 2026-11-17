@@ -64,3 +64,34 @@ CREATE TABLE IF NOT EXISTS request_operations(
  operation_id TEXT NOT NULL, kind TEXT NOT NULL, result TEXT NOT NULL,
  created_ms INTEGER NOT NULL,
  PRIMARY KEY(conversation_id,operation_id));
+CREATE TABLE IF NOT EXISTS runtime_activations(
+ id TEXT PRIMARY KEY, signature TEXT NOT NULL, executable TEXT NOT NULL, build TEXT NOT NULL,
+ project TEXT NOT NULL, config TEXT NOT NULL, launch_path TEXT NOT NULL,
+ task TEXT, conversation TEXT, generation INTEGER, config_revision TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('validating','waiting_for_idle','switching','applied','failed','cancelled','interrupted')),
+ error TEXT, log TEXT, diagnostic_tail TEXT, created_ms INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS runtime_activation_active ON runtime_activations((1))
+ WHERE state IN ('validating','waiting_for_idle','switching');
+CREATE TABLE IF NOT EXISTS runtime_activation_conversations(
+ operation TEXT NOT NULL REFERENCES runtime_activations(id), conversation TEXT NOT NULL,
+ plan TEXT, cancelled INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(operation,conversation));
+CREATE TABLE IF NOT EXISTS runtime_activation_events(
+ seq INTEGER PRIMARY KEY, operation TEXT NOT NULL REFERENCES runtime_activations(id),
+ state TEXT NOT NULL, error TEXT, created_ms INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS agent_answer_receipts(
+ request TEXT PRIMARY KEY REFERENCES agent_questions(id) ON DELETE CASCADE, conversation TEXT NOT NULL,
+ signature TEXT NOT NULL, result TEXT NOT NULL, resume_pending INTEGER NOT NULL DEFAULT 1);
+
+CREATE TABLE IF NOT EXISTS session_titles(
+ conversation TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+ title TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS message_classifications(
+ message INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
+ kind TEXT NOT NULL, reason TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS runtime_validation_processes(
+ operation TEXT NOT NULL REFERENCES runtime_activations(id) ON DELETE CASCADE,
+ phase TEXT NOT NULL, pid INTEGER NOT NULL, started_ms INTEGER NOT NULL, executable TEXT NOT NULL,
+ PRIMARY KEY(operation,phase));

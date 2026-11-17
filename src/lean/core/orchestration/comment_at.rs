@@ -181,11 +181,22 @@ impl Core {
             .activity
             .task_cancels
             .lock()
-            .expect("task cancel mutex")
+            .expect("task cancellations")
             .values()
         {
             if owner == conversation {
                 flag.store(true, Ordering::SeqCst);
+            }
+        }
+        for operation in self
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+        {
+            if operation.conversation == conversation {
+                operation.cancel.store(true, Ordering::SeqCst);
             }
         }
         for flags in [
@@ -198,6 +209,13 @@ impl Core {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
             }
+        }
+        if let Err(error) = crate::lean::daemon::activation::cancel_conversation(self, conversation)
+        {
+            self.notice(
+                conversation,
+                &format!("could not cancel pending runtime activation: {error}"),
+            );
         }
     }
 
@@ -230,7 +248,14 @@ impl Core {
         plans: &HashMap<String, Arc<AtomicBool>>,
     ) -> bool {
         let running = self.activity.running.lock().expect("running mutex");
-        !self.activity.agent_review_running(conversation)
+        !self
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+            .any(|operation| operation.conversation == conversation)
+            && !self.activity.agent_review_running(conversation)
             && !self
                 .revisions
                 .jobs
@@ -246,10 +271,21 @@ impl Core {
     pub fn busy(&self) -> bool {
         !self
             .activity
-            .agent_reviews
+            .operations
             .lock()
-            .expect("agent reviews mutex")
+            .expect("operation leases")
             .is_empty()
+            || !self
+                .runtime_activation_cancels
+                .lock()
+                .expect("activation cancellations")
+                .is_empty()
+            || !self
+                .activity
+                .agent_reviews
+                .lock()
+                .expect("agent reviews mutex")
+                .is_empty()
             || !self
                 .revisions
                 .jobs

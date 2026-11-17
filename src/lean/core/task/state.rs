@@ -32,6 +32,11 @@ impl Core {
         task: &mut Task,
         status: &str,
     ) -> Result<()> {
+        if status == tasks::status::APPROVED
+            && crate::lean::daemon::activation::gate_approval(self, task)?
+        {
+            return Ok(());
+        }
         self.stop(conversation, task, status, None)
     }
 
@@ -61,11 +66,16 @@ impl Core {
 }
 
 fn record_stop_reason(task: &mut Task, reason: Option<&str>) {
+    if let Some(feedback) = task.feedback.as_mut() {
+        feedback["current_reason"] = json!(reason);
+    }
+
     if let Some(reason) = reason {
         let feedback = task
             .feedback
             .get_or_insert_with(|| json!({"round":task.round}));
         feedback["reason"] = json!(reason);
+        feedback["current_reason"] = json!(reason);
     }
 }
 

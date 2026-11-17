@@ -1,5 +1,43 @@
 use super::super::super::{Request, WireRequest};
 
+fn encode_activation(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
+    use crate::lean::daemon::ControlRequest;
+    match request {
+        Request::Control(ControlRequest::ActivateRuntime {
+            request_id,
+            executable,
+            path,
+            conversation,
+            task,
+        }) => Ok(WireRequest::ActivateRuntime {
+            request_id,
+            executable,
+            path,
+            conversation,
+            task,
+        }),
+        Request::Control(ControlRequest::RuntimeActivationStatus) => {
+            Ok(WireRequest::RuntimeActivationStatus)
+        }
+        Request::Control(ControlRequest::RuntimeActivationOperation { request_id }) => {
+            Ok(WireRequest::RuntimeActivationOperation { request_id })
+        }
+        Request::Control(ControlRequest::CancelRuntimeActivation { request_id }) => {
+            Ok(WireRequest::CancelRuntimeActivation { request_id })
+        }
+        Request::Control(ControlRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        }) => Ok(WireRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        }),
+        other => Err(Box::new(other)),
+    }
+}
+
 fn encode_runtime_notice(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
     match request {
         Request::Control(crate::lean::daemon::ControlRequest::RuntimeNotice {
@@ -89,7 +127,8 @@ fn encode_start_in(request: Request) -> std::result::Result<WireRequest, Box<Req
 }
 
 pub(super) fn encode_group_all(request: Request) -> std::result::Result<WireRequest, Box<Request>> {
-    encode_runtime_notice(request)
+    encode_activation(request)
+        .or_else(|request| encode_runtime_notice(*request))
         .or_else(|request| encode_identity(*request))
         .or_else(|request| encode_get_config(*request))
         .or_else(|request| encode_set_config(*request))

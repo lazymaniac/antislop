@@ -172,9 +172,34 @@ impl Store {
     }
 
     pub fn interview_summary(&self, conversation: &str, summary: &str, upto: u64) -> Result<()> {
+        self.interview_summary_with_title(conversation, summary, "", upto)
+    }
+
+    pub(in crate::lean) fn interview_summary_with_title(
+        &self,
+        conversation: &str,
+        summary: &str,
+        title: &str,
+        upto: u64,
+    ) -> Result<()> {
         require(!summary.trim().is_empty(), "requirements summary is empty")?;
         let mut db = self.db();
         let tx = db.transaction()?;
+        use unicode_segmentation::UnicodeSegmentation;
+        let title = if title.trim().is_empty() {
+            summary
+                .unicode_words()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            title.trim().to_owned()
+        };
+        require(
+            title.graphemes(true).count() <= 80,
+            "requirements title exceeds 80 graphemes",
+        )?;
+        tx.execute("INSERT INTO session_titles(conversation,title) VALUES(?1,?2) ON CONFLICT(conversation) DO UPDATE SET title=excluded.title",params![conversation,title])?;
         let changed = tx.execute("UPDATE session_workflow SET summary=?2,upto_message=?3 WHERE conversation_id=?1 AND phase='interview'", params![conversation,summary,upto as i64])?;
         require(changed == 1, "session is not in interview")?;
         tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'workflow',?2,?3)",
@@ -209,10 +234,11 @@ impl Store {
             return Ok(false);
         }
 
-        if let Some((_, requested_summary, requested_upto)) =
+        if let Some((_, requested_summary, requested_upto, requested_title)) =
             latest_scope_confirmation(&tx, conversation)?
             && requested_summary == summary
             && requested_upto == upto_message
+            && requested_title == scope_title(&tx, conversation)?
         {
             return Ok(false);
         }
@@ -234,7 +260,8 @@ impl Store {
         text: &str,
         seq: u64,
     ) -> Result<()> {
-        let Some((question, summary, upto_message)) = latest_scope_confirmation(tx, conversation)?
+        let Some((question, summary, upto_message, title)) =
+            latest_scope_confirmation(tx, conversation)?
         else {
             return Ok(());
         };
@@ -257,6 +284,7 @@ impl Store {
         )?;
         if current.as_ref() != Some(&(summary.clone(), upto_message))
             || previous_user as u64 != upto_message
+            || title != scope_title(tx, conversation)?
         {
             return Ok(());
         }
@@ -270,7 +298,7 @@ impl Store {
         )?;
         tx.execute(
             "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'scope_confirmed',?2,?3)",
-            params![conversation,serde_json::json!({"question_id":question.id,"summary":summary,"upto_message":seq,"answer_message":seq}).to_string(),now_ms()],
+            params![conversation,serde_json::json!({"question_id":question.id,"title":title,"summary":summary,"upto_message":seq,"answer_message":seq}).to_string(),now_ms()],
         )?;
         Ok(())
     }
@@ -292,7 +320,7 @@ fn current_interview(
 fn latest_scope_confirmation(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
-) -> Result<Option<(crate::lean::interview::Question, String, u64)>> {
+) -> Result<Option<(crate::lean::interview::Question, String, u64, String)>> {
     let payload: Option<String> = tx
         .query_row(
             "SELECT payload FROM events WHERE conversation_id=?1 AND kind='scope_confirmation_requested' ORDER BY seq DESC LIMIT 1",
@@ -307,6 +335,7 @@ fn latest_scope_confirmation(
                 serde_json::from_value(value["question"].clone())?,
                 value["summary"].as_str().unwrap_or_default().to_owned(),
                 value["upto_message"].as_u64().unwrap_or_default(),
+                value["title"].as_str().unwrap_or_default().to_owned(),
             ))
         })
         .transpose()
@@ -334,10 +363,24 @@ fn scope_is_confirmed(
         [conversation],
         |row| row.get(0),
     )?;
-    Ok(payload["summary"] == summary
-        && payload["upto_message"].as_u64() == Some(upto_message)
-        && payload["answer_message"].as_i64() == Some(latest_user)
-        && !summary.trim().is_empty())
+    Ok(
+        payload["title"].as_str().unwrap_or_default() == scope_title(tx, conversation)?
+            && payload["summary"] == summary
+            && payload["upto_message"].as_u64() == Some(upto_message)
+            && payload["answer_message"].as_i64() == Some(latest_user)
+            && !summary.trim().is_empty(),
+    )
+}
+
+fn scope_title(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<String> {
+    Ok(tx
+        .query_row(
+            "SELECT title FROM session_titles WHERE conversation=?1",
+            [conversation],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or_default())
 }
 
 fn request_scope_confirmation(
@@ -346,9 +389,12 @@ fn request_scope_confirmation(
     summary: &str,
     upto_message: u64,
 ) -> Result<()> {
+    let title = scope_title(tx, conversation)?;
     let question = crate::lean::interview::Question {
         id: format!("scope-confirmation-{}", crate::id()),
-        context: "Planning must use the scope and acceptance criteria in this summary.".into(),
+        context: format!(
+            "Title: {title}\nPlanning must use the scope and acceptance criteria in this summary."
+        ),
         question: "Do you confirm this scope so planning can begin?".into(),
         options: vec![
             crate::lean::interview::Choice {
@@ -364,7 +410,7 @@ fn request_scope_confirmation(
     Store::write_user_decision(tx, conversation, &question)?;
     tx.execute(
         "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'scope_confirmation_requested',?2,?3)",
-        params![conversation,serde_json::json!({"question":question,"summary":summary,"upto_message":upto_message}).to_string(),now_ms()],
+        params![conversation,serde_json::json!({"question":question,"title":title,"summary":summary,"upto_message":upto_message}).to_string(),now_ms()],
     )?;
     Ok(())
 }
@@ -374,6 +420,7 @@ fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str)
         "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND EXISTS(
              SELECT 1 FROM events e WHERE e.conversation_id=?1 AND e.kind='scope_confirmed'
                AND json_extract(e.payload,'$.summary')=session_workflow.summary
+               AND coalesce(json_extract(e.payload,'$.title'),'')=coalesce((SELECT title FROM session_titles WHERE conversation=?1),'')
                AND json_extract(e.payload,'$.upto_message')=session_workflow.upto_message
                AND json_extract(e.payload,'$.answer_message')=(SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'))",
         [conversation],

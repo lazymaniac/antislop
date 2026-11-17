@@ -38,6 +38,7 @@ impl App {
             Command::AcceptPlan => self.accept_plan(),
             Command::DirectExecute => self.trigger_direct_execute(),
             Command::LinkTask => self.toggle_flow_link(),
+            Command::CommentSelectedFile => self.comment_workbench_file(),
             _ => {}
         }
     }

@@ -50,6 +50,18 @@ pub fn reap(pid: u32, started_ms: i64, provider: &str) -> bool {
     terminate_group(pid)
 }
 
+/// End a verified recorded validator after a daemon restart without escalation.
+pub(crate) fn terminate_validator(pid: u32, started_ms: i64, executable: &str) {
+    if let Ok(pid) = i32::try_from(pid)
+        && is_original_cli(pid, started_ms, executable)
+    {
+        // SAFETY: original group identity and start time were verified above.
+        unsafe {
+            libc::kill(-pid, libc::SIGTERM);
+        }
+    }
+}
+
 fn is_original_cli(pid: i32, started_ms: i64, provider: &str) -> bool {
     // SAFETY: getpgid only reads the process table.
     if pid <= 1 || unsafe { libc::getpgid(pid) } != pid {

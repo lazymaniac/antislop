@@ -21,6 +21,7 @@ impl Core {
             .lock()
             .expect("session lifecycle mutex");
         self.store.conversation(conversation)?;
+        self.require_accepting()?;
         let mut jobs = self
             .activity
             .agent_reviews

@@ -8,7 +8,7 @@ pub use recovery::recovery_fingerprint;
 mod artifact_update;
 mod artifacts;
 pub(crate) use artifact_update::parent::Parent;
-pub(crate) use artifact_update::{artifact_file, deliver_owned_artifacts, require_owned_outputs};
+pub(crate) use artifact_update::{artifact_file, prepare_owned_artifacts, require_owned_outputs};
 mod changes;
 mod integration;
 mod snapshots;
@@ -217,6 +217,63 @@ pub enum Integration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_history_uses_the_configured_git_identity() {
+        for user_edit in [false, true] {
+            let project = repo();
+            let path = project.path();
+            ok(path, &["config", "user.name", "Configured Author"]).unwrap();
+            ok(path, &["config", "user.email", "author@example.test"]).unwrap();
+            let base = head(path).unwrap();
+            let trees = tempfile::tempdir().unwrap();
+            let worker = trees.path().join("worker");
+            add_worktree(path, &worker, "antislop/identity", &base).unwrap();
+
+            std::fs::write(worker.join("a.txt"), "checkpoint\n").unwrap();
+            let checkpoint = commit_all(&worker, CommitPurpose::Checkpoint).unwrap();
+            std::fs::write(worker.join("a.txt"), "result\n").unwrap();
+            let scoped =
+                commit_paths(&worker, &["a.txt".into()], CommitPurpose::TaskResult).unwrap();
+            std::fs::write(worker.join("report.md"), "artifact input\n").unwrap();
+            let result = commit_all_with_message(&worker, "feat: deliver task result").unwrap();
+            let snapshot = snapshot(&worker, CommitPurpose::WorkspaceSnapshot).unwrap();
+            let change = squash(&worker, &base, CommitPurpose::TaskResult).unwrap();
+            let inputs = base_with_artifacts(
+                path,
+                &base,
+                &std::collections::BTreeMap::from([("report.md".into(), result.clone())]),
+            )
+            .unwrap();
+            if user_edit {
+                std::fs::write(path.join("b.txt"), "user edit\n").unwrap();
+            }
+            let Integration::Committed(landed) = integrate(path, &base, &change, true).unwrap()
+            else {
+                panic!("expected the task to be committed");
+            };
+
+            for (kind, revision) in [
+                ("checkpoint", checkpoint),
+                ("scoped result", scoped),
+                ("worker result", result),
+                ("snapshot", snapshot),
+                ("squashed result", change),
+                ("artifact inputs", inputs),
+                ("integration", landed),
+            ] {
+                assert_eq!(
+                    ok(
+                        path,
+                        &["show", "-s", "--format=%an%n%ae%n%cn%n%ce", &revision]
+                    )
+                    .unwrap(),
+                    "Configured Author\nauthor@example.test\nConfigured Author\nauthor@example.test",
+                    "{kind}, user_edit={user_edit}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn generated_commit_subjects_are_fixed_english() {
@@ -714,6 +771,75 @@ mod snapshot_tests {
         let mut changed = changed_files(path, &before, &after).unwrap();
         changed.sort();
         assert_eq!(changed, [" file1.txt", "a.txt", "b.txt", "renamed.txt"]);
+    }
+
+    #[test]
+    fn source_staging_updates_tracked_ignored_files_without_adding_ignored_outputs() {
+        let dir = repo();
+        let path = dir.path();
+        std::fs::create_dir(path.join("target")).unwrap();
+        let tracked = "target/tracked[1]\n.txt";
+        let deleted = "target/deleted.txt";
+        std::fs::write(path.join(tracked), "before\n").unwrap();
+        std::fs::write(path.join(deleted), "delete me\n").unwrap();
+        ok(
+            path,
+            &[
+                "--literal-pathspecs",
+                "add",
+                "--force",
+                "--",
+                tracked,
+                deleted,
+            ],
+        )
+        .unwrap();
+        super::worktree::commit_staged(path, "chore: prepare tracked ignored files").unwrap();
+        let base = head(path).unwrap();
+
+        std::fs::write(path.join(tracked), "after\n").unwrap();
+        std::fs::remove_file(path.join(deleted)).unwrap();
+        std::fs::write(path.join("target/cache.log"), "ignored build output\n").unwrap();
+        std::fs::write(path.join("new.txt"), "new source\n").unwrap();
+        let index = std::fs::read(path.join(".git/index")).unwrap();
+
+        let snapshot = snapshot(path, CommitPurpose::TestFixture).unwrap();
+        assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
+        let mut files = changed_files(path, &base, &snapshot).unwrap();
+        files.sort();
+        assert_eq!(files, ["new.txt", deleted, tracked]);
+        assert_eq!(
+            ok(path, &["show", &format!("{snapshot}:{tracked}")]).unwrap(),
+            "after"
+        );
+
+        let checkpoint = commit_all(path, CommitPurpose::Checkpoint).unwrap();
+        assert_eq!(
+            tree_identity(path, &checkpoint).unwrap(),
+            tree_identity(path, &snapshot).unwrap()
+        );
+        assert!(path.join("target/cache.log").exists());
+        assert!(ok(path, &["status", "--porcelain"]).unwrap().is_empty());
+
+        std::fs::write(path.join(tracked), "landed\n").unwrap();
+        std::fs::write(path.join("b.txt"), "user staged edit\n").unwrap();
+        ok(path, &["add", "b.txt"]).unwrap();
+        let landed = commit_paths(path, &[tracked.into()], CommitPurpose::Integration).unwrap();
+        assert_eq!(
+            changed_files(path, &checkpoint, &landed).unwrap(),
+            [tracked]
+        );
+        assert_eq!(ok(path, &["status", "--porcelain"]).unwrap(), "M  b.txt");
+        let ignored = commit_paths(
+            path,
+            &["target/cache.log".into()],
+            CommitPurpose::Integration,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(ignored.contains("paths are ignored"), "{ignored}");
+        assert_eq!(head(path).unwrap(), landed);
+        assert_eq!(ok(path, &["status", "--porcelain"]).unwrap(), "M  b.txt");
     }
 
     #[test]

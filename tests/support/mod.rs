@@ -82,6 +82,7 @@ pub fn session_worktree(
         .events_since(conversation, 0, 100_000)
         .unwrap()
         .into_iter()
+        .rev()
         .find(|event| event.kind == "session_started")
         .and_then(|event| event.payload["branch"].as_str().map(str::to_owned))
         .expect("session_started event includes the session branch");

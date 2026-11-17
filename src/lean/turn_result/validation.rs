@@ -109,7 +109,7 @@ impl TurnResult {
         match self {
             Self::Report { text, .. }
             | Self::Plan { document: text, .. }
-            | Self::Requirements { markdown: text } => text.clone(),
+            | Self::Requirements { markdown: text, .. } => text.clone(),
             Self::Completed { report, .. } | Self::Review { report, .. } => report.clone(),
             Self::Blocked {
                 report,

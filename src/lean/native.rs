@@ -9,7 +9,7 @@ use crate::{Error, Result, require};
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,7 @@ pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
 #[derive(Default)]
 pub struct Registry {
     sessions: Mutex<HashMap<(String, String), Arc<Session>>>,
+    generation: AtomicU64,
 }
 
 pub struct Session {

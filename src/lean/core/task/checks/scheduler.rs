@@ -73,6 +73,9 @@ impl<'a> Scheduler<'a> {
                 continue;
             }
             if self.reservations.is_empty() {
+                if crate::lean::daemon::activation::pending(self.core) {
+                    break;
+                }
                 if !self.blocked_worktrees.is_empty() {
                     let blocked = std::mem::take(&mut self.blocked_worktrees);
                     if self.core.wait_for_worktree_available(&blocked, self.cancel) {
@@ -99,6 +102,9 @@ impl<'a> Scheduler<'a> {
     where
         'a: 'scope,
     {
+        if crate::lean::daemon::activation::pending(self.core) {
+            return false;
+        }
         let _graph_guard = self
             .core
             .locks

@@ -8,8 +8,18 @@ impl Core {
         spec: &TaskContract,
         project: &Path,
     ) -> Result<String> {
-        let _integration = self.locks.integration();
         let conversation = self.store.plan_conversation(plan_id)?;
+        let operation = self.operation(&conversation)?;
+        if let Some(task) = self.store.task_in_plan_by_id(plan_id, &spec.id)? {
+            operation.bind_task(&task.id);
+        }
+        let source = self.locks.source(&conversation);
+        let _source = mail::lock_cancellable(&source, &operation.cancel)
+            .ok_or_else(|| Error::Invalid("writer allocation cancelled".into()))?;
+        require(
+            !operation.cancel.load(Ordering::SeqCst),
+            "writer allocation cancelled",
+        )?;
         let session_tree = self.session_worktree(&conversation, project)?;
         let onto = self.plan_base(plan_id, &session_tree)?;
         // A result that landed is in the project the base was taken from.

@@ -5,6 +5,7 @@ pub(super) fn spawn_daemon(
     config: &Path,
     state: &Path,
     executable: PathBuf,
+    launch_path: Option<&std::ffi::OsStr>,
 ) -> Result<std::process::Child> {
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -20,6 +21,9 @@ pub(super) fn spawn_daemon(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(log);
+    if let Some(path) = launch_path {
+        command.env("PATH", path);
+    }
     detach_daemon(&mut command);
     command.spawn().map_err(Into::into)
 }

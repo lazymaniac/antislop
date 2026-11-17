@@ -180,7 +180,11 @@ fn selected_run_snapshot(
     Ok(Snapshot { task, documents })
 }
 
-fn append_result_documents(client: &Client, conversation: &str, task: &mut Value) -> Result<()> {
+pub(in crate::lean::tui) fn append_result_documents(
+    client: &Client,
+    conversation: &str,
+    task: &mut Value,
+) -> Result<()> {
     let documents = client.call(&Request::Session(
         crate::lean::daemon::SessionRequest::ResultDocuments {
             conversation: conversation.into(),

@@ -581,6 +581,24 @@ mod tests {
             "current input"
         );
         assert_eq!(git::head(&project).unwrap(), revised_base);
+        let git::CombineResult::Applied(combined) = git::combine_or_conflict(
+            &project,
+            &core.state.join("worktrees").join("verify-restored-owner"),
+            &revised_base,
+            &[(owner_for_path.base.unwrap(), retained_tip)],
+        )
+        .unwrap() else {
+            panic!("the retained delta must integrate onto the revised input")
+        };
+        assert_eq!(
+            git::ok(&project, &["show", &format!("{combined}:input.txt")]).unwrap(),
+            "revised input"
+        );
+        assert_eq!(
+            git::ok(&project, &["show", &format!("{combined}:local-edit.txt")]).unwrap(),
+            "keep this edit"
+        );
+        assert_eq!(git::head(&project).unwrap(), revised_base);
     }
 
     #[test]

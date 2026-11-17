@@ -69,8 +69,15 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
         );
     } else {
         assert_eq!(
-            core.deliver_artifact_change(&tasks[0], &specs[0], &project, &base, &change)
-                .unwrap(),
+            core.deliver_artifact_change(
+                &tasks[0],
+                &specs[0],
+                &project,
+                &base,
+                &change,
+                &AtomicBool::new(false)
+            )
+            .unwrap(),
             git::Integration::Applied
         );
     }
@@ -125,6 +132,7 @@ fn deliver(f: &Fixture, n: usize) -> git::Integration {
             &f.project,
             f.tasks[n].base.as_deref().unwrap(),
             f.tasks[n].result.as_deref().unwrap(),
+            &AtomicBool::new(false),
         )
         .unwrap()
 }

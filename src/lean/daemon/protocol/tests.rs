@@ -8,6 +8,20 @@ use serde_json::json;
 fn grouped_requests_keep_the_tagged_wire_shape() {
     let cases = [
         (
+            Request::Control(ControlRequest::ActivateRuntime {
+                request_id: None,
+                executable: "/runtime/antislop".into(),
+                path: Some("/tools:/usr/bin".into()),
+                conversation: Some("c".into()),
+                task: Some("t".into()),
+            }),
+            json!({"op":"activate_runtime","executable":"/runtime/antislop","path":"/tools:/usr/bin","conversation":"c","task":"t"}),
+        ),
+        (
+            Request::Control(ControlRequest::RuntimeActivationStatus),
+            json!({"op":"runtime_activation_status"}),
+        ),
+        (
             Request::Terminal(TerminalRequest::TerminalOpen {
                 conversation: "c".into(),
                 role: "writer".into(),

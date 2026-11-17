@@ -267,6 +267,22 @@ impl App {
                     theme.accent(),
                 )));
             }
+            if self.view.is_critical_path_task(&task.id) {
+                let downstream = self.view.task_downstream_dependents(&task.id);
+                let cp_label = if downstream.is_empty() {
+                    "⚡ CRITICAL PATH (end of chain)".to_owned()
+                } else {
+                    format!(
+                        "⚡ CRITICAL PATH · blocks {}: {}",
+                        downstream.len(),
+                        downstream.join(", ")
+                    )
+                };
+                lines.push(Line::from(Span::styled(
+                    truncate(&cp_label, w),
+                    theme.warning().add_modifier(Modifier::BOLD),
+                )));
+            }
             if !meta.covers.is_empty() {
                 lines.push(Line::from(Span::styled(
                     truncate(&format!("covers: {}", meta.covers.join(", ")), w),
@@ -292,6 +308,15 @@ impl App {
                 ),
                 theme.text(),
             )));
+            if let Some(clock) = self
+                .view
+                .agent_live_clock(&format!("worker:{}", task.id), theme.ascii)
+            {
+                lines.push(Line::from(Span::styled(
+                    truncate(&format!("   Elapsed: {clock}"), w),
+                    theme.accent().add_modifier(Modifier::BOLD),
+                )));
+            }
             if let Some(act) = taskinfo::worker_activity(&self.view, task) {
                 lines.push(Line::from(Span::styled(
                     truncate(&format!("   {act}"), w),

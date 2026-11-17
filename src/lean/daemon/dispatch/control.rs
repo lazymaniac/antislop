@@ -5,6 +5,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         context,
         request,
         &[
+            activation,
             identity,
             runtime_notice,
             shutdown,
@@ -12,6 +13,50 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             conversations_and_start,
         ],
     )
+}
+
+fn activation(context: &Context<'_>, request: Request) -> Result<Route> {
+    use crate::lean::daemon::{ControlRequest, activation};
+    Ok(match request {
+        Request::Control(ControlRequest::ActivateRuntime {
+            request_id,
+            executable,
+            path,
+            conversation,
+            task,
+        }) => Route::Handled(activation::request(
+            context.core,
+            context.project,
+            context.config,
+            Path::new(&executable),
+            path.as_deref(),
+            conversation.as_deref(),
+            task.as_deref(),
+            request_id.as_deref(),
+        )?),
+        Request::Control(ControlRequest::RuntimeActivationStatus) => {
+            Route::Handled(activation::status(&context.core.state, None)?)
+        }
+        Request::Control(ControlRequest::ClassifyRuntimeFailure {
+            conversation,
+            message,
+            reason,
+        }) => {
+            validate_project_conversation(context.core, context.project, &conversation)?;
+            Route::Handled(context.core.store.classify_preflight_failure(
+                &conversation,
+                message,
+                &reason,
+            )?)
+        }
+        Request::Control(ControlRequest::RuntimeActivationOperation { request_id }) => {
+            Route::Handled(activation::status(&context.core.state, Some(&request_id))?)
+        }
+        Request::Control(ControlRequest::CancelRuntimeActivation { request_id }) => {
+            Route::Handled(activation::cancel_operation(context.core, &request_id)?)
+        }
+        request => Route::Unmatched(request),
+    })
 }
 
 fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
@@ -23,12 +68,15 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
             let _guard = core.config.updating();
             json!({
                 "build": build(),
+                "capabilities": super::super::version_info()["capabilities"],
                 "busy": core.busy(),
                 "pid": std::process::id(),
                 "project": project,
                 "project_identity": core.store.repository_id(&project.to_string_lossy())?,
                 "config": config,
                 "config_modified": core.config.modified(),
+                "launch_path": std::env::var("PATH").ok(),
+                "launch_error": crate::lean::doctor::preflight(&core.config_snapshot()).err().map(|e|e.to_string()),
             })
         }),
         request => Route::Unmatched(request),
@@ -43,6 +91,8 @@ fn shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
                 !core.busy(),
                 "the daemon is executing work; use antislop stop --force to cancel it",
             )?;
+            core.cancel_operations();
+            super::super::activation::cancel_all(core)?;
             std::fs::write(core.state.join("stopped"), [])?;
             core.native.shutdown()?;
             Value::Null
@@ -55,6 +105,8 @@ fn force_shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     Ok(match request {
         Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown) => Route::Handled({
+            core.cancel_operations();
+            super::super::activation::cancel_all(core)?;
             std::fs::write(core.state.join("stopped"), [])?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while core.busy() && Instant::now() < deadline {

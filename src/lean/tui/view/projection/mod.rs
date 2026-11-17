@@ -80,6 +80,7 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("approval_escalated", approvals::on_approval_escalated),
     ("approval_mode_changed", approvals::on_approval_mode_changed),
     ("notice", reviews::on_notice),
+    ("runtime_activation", reviews::on_notice),
     ("check", tasks::on_check),
     ("integration", integration),
     ("task_recovery", task_recovery),

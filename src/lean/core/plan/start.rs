@@ -3,13 +3,30 @@ mod runner;
 use crate::lean::*;
 
 impl Core {
-    /// Caller holds the integration/scope mutex, including recovery paths.
+    /// Prepare outside shared locks, then publish one revalidated start.
     pub(in crate::lean) fn start_plan_with_scope_lock(
         self: &Arc<Self>,
         conversation: &str,
         plan_id: &str,
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
+        let operation = self.operation(conversation)?;
+        let starting = self.locks.turn(conversation, "plan-start");
+        let _starting = starting.lock().expect("conversation plan start");
+        require(
+            !self.activity.plan_running(conversation),
+            "a plan is already running",
+        )?;
+        // Repository and CLI validation run with a tracked reservation and no
+        // global maps or graph/integration guards held.
+        self.preflight_plan_start(conversation, plan_id)?;
+        let graph = self.locks.graph();
+        let integration = self.locks.integration();
+        require(
+            !operation.cancel.load(Ordering::SeqCst),
+            "plan start cancelled",
+        )?;
+        self.require_accepting()?;
         self.ensure_plan_can_start(conversation)?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         if git::is_repository(&project) {
@@ -20,8 +37,6 @@ impl Core {
             !plans.contains_key(conversation),
             "a plan is already running",
         )?;
-        self.validate_plan_inputs(conversation, plan_id)?;
-        self.ensure_profiles_launch(plan_id)?;
         queue(&self.store)?;
         let activated: bool = self.store.db().query_row(
             "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
@@ -40,8 +55,29 @@ impl Core {
         let cancel = Arc::new(AtomicBool::new(false));
         plans.insert(conversation.to_owned(), cancel.clone());
         drop(plans);
+        drop(integration);
+        drop(graph);
         self.spawn_plan_runner(conversation, plan_id, cancel, &tasks);
         Ok(tasks)
+    }
+
+    pub(in crate::lean) fn preflight_plan_start(
+        &self,
+        conversation: &str,
+        plan: &str,
+    ) -> Result<()> {
+        require(
+            !crate::lean::daemon::activation::pending(self),
+            "runtime activation is pending; retry after the successor confirms readiness",
+        )?;
+        self.ensure_plan_can_start(conversation)?;
+        self.ensure_profiles_launch(plan)?;
+        self.validate_plan_inputs(conversation, plan)?;
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        if git::is_repository(&project) {
+            self.create_session_branch(conversation, &project)?;
+        }
+        Ok(())
     }
 
     /// Refuses to start a team whose CLIs cannot be launched, naming the

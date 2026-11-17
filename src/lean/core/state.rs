@@ -47,6 +47,8 @@ impl ConfigState {
 pub(in crate::lean) struct Activity {
     /// Conversations with an orchestrator loop running, and its cancel flag.
     pub(in crate::lean::core) running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Scoped preparation/recovery work participates in handoff and deletion.
+    pub(in crate::lean::core) operations: Mutex<HashMap<String, ScopedOperation>>,
     /// Conversations with a plan running, and its cancel flag.
     pub(in crate::lean::core) plans: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a code review the user asked for, and its flag.
@@ -88,8 +90,9 @@ pub(in crate::lean) struct Locks {
     pub(in crate::lean::core) integrating: Mutex<()>,
     pub(in crate::lean::core) graph_updates: Mutex<()>,
     pub(in crate::lean::core) turns: Mutex<mail::TurnLocks>,
-    /// Serializes starting an orchestrator with permanent session deletion.
-    pub(in crate::lean::core) session_lifecycle: Mutex<()>,
+    /// Serializes message commits and orchestrator starts with session deletion
+    /// and the final runtime handoff.
+    pub(in crate::lean) session_lifecycle: Mutex<()>,
 }
 
 fn has(map: &Mutex<HashMap<String, impl Sized>>, key: &str) -> bool {
@@ -98,7 +101,114 @@ fn has(map: &Mutex<HashMap<String, impl Sized>>, key: &str) -> bool {
         .contains_key(key)
 }
 
+pub(in crate::lean::core) struct ScopedOperation {
+    pub conversation: String,
+    pub task: Option<String>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+pub(in crate::lean) struct OperationLease<'a> {
+    core: &'a Core,
+    id: String,
+    pub(in crate::lean) cancel: Arc<AtomicBool>,
+}
+impl OperationLease<'_> {
+    pub(in crate::lean) fn bind_task(&self, task: &str) {
+        if let Some(operation) = self
+            .core
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .get_mut(&self.id)
+        {
+            operation.task = Some(task.into());
+        }
+    }
+}
+impl Drop for OperationLease<'_> {
+    fn drop(&mut self) {
+        self.core
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .remove(&self.id);
+    }
+}
+impl Core {
+    /// Work registration callers hold the lifecycle admission fence.
+    pub(in crate::lean) fn require_accepting(&self) -> Result<()> {
+        require(
+            !daemon::activation::pending(self) && !self.state.join("stopped").exists(),
+            "runtime is switching or stopping; retry after readiness is confirmed",
+        )
+    }
+    pub(in crate::lean) fn cancel_task_operations(&self, conversation: &str, task: &str) -> usize {
+        self.activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+            .filter(|operation| {
+                if operation.conversation == conversation && operation.task.as_deref() == Some(task)
+                {
+                    operation.cancel.store(true, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                }
+            })
+            .count()
+    }
+    pub(in crate::lean) fn cancel_operations(&self) {
+        for operation in self
+            .activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .values()
+        {
+            operation.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+    pub(in crate::lean) fn operation(&self, conversation: &str) -> Result<OperationLease<'_>> {
+        let _lifecycle = self
+            .locks
+            .session_lifecycle
+            .lock()
+            .expect("session lifecycle mutex");
+        self.require_accepting()?;
+        let id = crate::id();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.activity
+            .operations
+            .lock()
+            .expect("operation leases")
+            .insert(
+                id.clone(),
+                ScopedOperation {
+                    conversation: conversation.into(),
+                    task: None,
+                    cancel: cancel.clone(),
+                },
+            );
+        Ok(OperationLease {
+            core: self,
+            id,
+            cancel,
+        })
+    }
+}
+
 impl Locks {
+    pub(in crate::lean) fn primary(&self, project: &Path) -> Result<Arc<Mutex<()>>> {
+        Ok(self.turn(&project.canonicalize()?.to_string_lossy(), "primary-tree"))
+    }
+    pub(in crate::lean) fn source(&self, conversation: &str) -> Arc<Mutex<()>> {
+        self.turn(conversation, "source-scope")
+    }
+
     /// Held while a change lands on the user's branch or the scope it
     /// lands into is read.
     pub(in crate::lean) fn integration(&self) -> MutexGuard<'_, ()> {
@@ -183,5 +293,79 @@ impl RevisionState {
             .get(conversation)
             .cloned()
             .flatten()
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn a_reserved_operation_fences_deletion_and_accepts_manual_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let operation = core.operation(&conversation).unwrap();
+        assert!(core.busy());
+        assert!(!core.is_idle(&conversation));
+        assert!(
+            core.delete_session(&conversation)
+                .unwrap_err()
+                .to_string()
+                .contains("stop this session")
+        );
+        core.cancel(&conversation);
+        assert!(operation.cancel.load(Ordering::SeqCst));
+        drop(operation);
+        assert!(!core.busy());
+        assert!(core.is_idle(&conversation));
+        core.delete_session(&conversation).unwrap();
+        std::fs::write(core.state.join("stopped"), []).unwrap();
+        assert!(core.operation("new-operation").is_err());
+    }
+
+    #[test]
+    fn waiting_for_a_conversation_source_scope_holds_no_global_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let task=core.store.add_plan(&conversation,&[json!({"id":"writer","title":"Writer","goal":"Create result","change_kind":"code","kind":"implementation"})]).unwrap().remove(0);
+        let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
+        let source = core.locks.source(&conversation);
+        let held = source.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = core.clone();
+        let root = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(worker.writer_base(&task.plan_id, &spec, &root));
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while core.activity.operations.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(core.busy());
+        assert!(!core.is_idle(&conversation));
+        assert!(core.locks.graph_updates.try_lock().is_ok());
+        assert!(core.locks.integrating.try_lock().is_ok());
+        assert!(core.activity.plans.try_lock().is_ok());
+        assert!(core.locks.source("another-conversation").try_lock().is_ok());
+        core.cancel(&conversation);
+        drop(held);
+        let error = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("writer allocation cancelled"));
     }
 }

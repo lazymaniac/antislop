@@ -80,6 +80,7 @@ fn round_snapshot(
     task["_rounds"] = rounds;
     hydrate_verdict(client, conversation, uuid, selected, &mut task)?;
     let documents = round_documents(client, conversation, uuid, selected, &task)?;
+    super::session::append_result_documents(client, conversation, &mut task)?;
     Ok(Snapshot { task, documents })
 }
 
@@ -296,7 +297,7 @@ mod tests {
             {"check":"goal","severity":"medium","issue":"Round 1 finding","where":"calc.py:1"}]});
         let server = std::thread::spawn(move || {
             let mut asked = Vec::new();
-            while !asked.contains(&"history_content:verdict".to_owned()) {
+            while !asked.contains(&"result_documents".to_owned()) {
                 let (mut stream, _) = listener.accept().unwrap();
                 let request: Value = crate::transport::read(&mut std::io::BufReader::new(
                     stream.try_clone().unwrap(),
@@ -316,6 +317,10 @@ mod tests {
                         assert_eq!(request["owner"]["field"], "verdict");
                         asked.push("history_content:verdict".into());
                         json!({"text":verdict.to_string(),"next_offset":120,"done":true})
+                    }
+                    "result_documents" => {
+                        asked.push("result_documents".into());
+                        json!([])
                     }
                     other => panic!("unexpected request {other}"),
                 };

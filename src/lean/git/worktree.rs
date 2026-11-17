@@ -223,17 +223,7 @@ pub(super) fn commit_staged(worktree: &Path, message: &str) -> Result<String> {
     {
         ok(
             worktree,
-            &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
-                "commit",
-                "--quiet",
-                "--no-verify",
-                "-m",
-                message,
-            ],
+            &["commit", "--quiet", "--no-verify", "-m", message],
         )?;
     }
     head(worktree)

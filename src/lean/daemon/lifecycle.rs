@@ -12,6 +12,7 @@ struct Runtime {
 
 pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     let (runtime, listener) = start(project, config_path, state)?;
+    super::activation::confirm(&runtime.core, &runtime.project, &runtime.config)?;
     spawn_idle_cleanup(&runtime, state);
     accept_connections(listener, runtime);
     Ok(())
@@ -72,11 +73,20 @@ fn bind_socket(state: &Path) -> Result<(PathBuf, UnixListener)> {
 fn spawn_idle_cleanup(runtime: &Runtime, state: &Path) {
     let core = runtime.core.clone();
     let database = state.join("core.db");
+    let stopped = state.join("stopped");
     let socket = runtime.socket.clone();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            if !(database.exists() && socket.exists()) && !core.busy() {
+            if let Err(error) = super::activation::apply_when_idle(&core) {
+                eprintln!("runtime activation failed: {error}");
+            }
+            let stopping = stopped.exists() || !(database.exists() && socket.exists());
+            if stopping {
+                core.cancel_operations();
+                let _ = super::activation::cancel_all(&core);
+            }
+            if stopping && !core.busy() {
                 let _ = core.native.shutdown();
                 std::process::exit(0);
             }
@@ -106,7 +116,8 @@ fn serve_connection(stream: UnixStream, runtime: Runtime) {
             }
         };
         let shutdown = response.shutdown;
-        let successful_shutdown = shutdown && response.response.error.is_none();
+        let successful_shutdown =
+            shutdown && response.response.error.is_none() && !runtime.core.busy();
         if crate::transport::write(reader.get_mut(), &response.response).is_err() {
             return;
         }

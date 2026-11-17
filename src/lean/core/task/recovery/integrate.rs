@@ -12,6 +12,17 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     let integration_project = integration_project(core, work)?;
     let all_changed = git::changed_files(&integration_project, &base, &change)?;
     validate_consent(work, &all_changed)?;
+    if work.spec.delivery == Some(tasks::DeliveryMode::Untracked)
+        && let Some(consent) = &work.req.consent_files
+    {
+        require(
+            consent.iter().collect::<std::collections::BTreeSet<_>>()
+                == all_changed
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+            "untracked artifact recovery requires consent for every changed output",
+        )?;
+    }
     let (notice, card) = integrate_changes(core, work, &integration_project, &base, &change)?;
     work.integrated_files = work.req.consent_files.take().unwrap_or(all_changed.clone());
     mark_remaining_changes(work, &integration_project, &change, &all_changed)?;
@@ -35,6 +46,9 @@ fn finish_integration(
     notice: &str,
     card: (Outcome, Option<String>),
 ) -> Result<()> {
+    let graph = core.locks.graph();
+    let integration = core.locks.integration();
+    super::ensure_current(core, work)?;
     land(
         &mut work.task,
         card.0,
@@ -49,6 +63,8 @@ fn finish_integration(
     if work.task.status == status::APPROVED {
         core.unblock_dependent_tasks(&work.req.conversation, &work.req.plan, &work.task.id)?;
     }
+    drop(integration);
+    drop(graph);
     core.maybe_continue_plan(&work.req.conversation, &work.req.plan)?;
     Ok(())
 }
@@ -95,8 +111,14 @@ fn integrate_changes(
     work.spec
         .validate_change_paths(&git::changed_files(integration_project, base, change)?)?;
     if work.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
-        let result =
-            core.deliver_artifact_change(&work.task, &work.spec, &work.project, base, change)?;
+        let result = core.deliver_artifact_change(
+            &work.task,
+            &work.spec,
+            &work.project,
+            base,
+            change,
+            &work.cancel,
+        )?;
         return integration_result(work, result);
     }
     let result = git::integrate_scoped(

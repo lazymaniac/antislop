@@ -39,7 +39,7 @@ fn describe_status(kind: &str, payload: &Value) -> Option<String> {
             Some("⏸ paused: new steps wait, /continue resumes".into())
         }
         "paused" => Some("▶ resumed".into()),
-        "notice" => Some(format!("⚠ {}", value(payload, "text"))),
+        "notice" | "runtime_activation" => Some(format!("⚠ {}", value(payload, "text"))),
         "mail" if payload["kind"] != "copy" => Some(describe_mail(payload)),
         "mail_delivered" => Some(format!("✓ delivered messages {}", payload["ids"])),
         "mail_rejected" => Some(format!(

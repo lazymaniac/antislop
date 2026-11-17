@@ -163,17 +163,17 @@ impl Details {
     }
 
     pub fn change_result_document(&mut self, direction: isize) {
-        let keys = self.visible_result_keys();
+        let keys = &self.result_index;
         if keys.is_empty() {
             self.selected_result_document = None;
             return;
         }
-        let current = self
+        let at = self
             .selected_result_document
             .as_ref()
             .and_then(|key| keys.iter().position(|item| item == key))
             .unwrap_or(0);
-        let next = (current as isize + direction).rem_euclid(keys.len() as isize) as usize;
+        let next = (at as isize + direction).rem_euclid(keys.len() as isize) as usize;
         self.selected_result_document = Some(keys[next].clone());
         self.result_selection_generation = self.result_selection_generation.wrapping_add(1);
         self.result_loading = None;
@@ -201,7 +201,7 @@ impl Details {
         let mut keys = Vec::new();
         let mut records = std::collections::HashMap::new();
         if self.documents.contains_key("result") {
-            keys.push("result".to_owned());
+            keys.push("result".into());
         }
         let mut membership = keys
             .iter()

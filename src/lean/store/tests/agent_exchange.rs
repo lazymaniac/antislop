@@ -593,3 +593,71 @@ fn runtime_error_text_and_feedback_do_not_become_worker_completions() {
         task.report
     );
 }
+
+#[test]
+fn delivered_receipts_are_scoped_and_failure_artifacts_remain_in_history() {
+    let (_dir, store, conversation, _task, turn) = fixture();
+    let request = store
+        .ask_agent_question(&conversation, &turn.id, "scope", "Which scope?")
+        .unwrap();
+    let receipt = store
+        .answer_agent_with_disposition(&conversation, &request, "Approved scope", "continue", "")
+        .unwrap();
+    let other = store.create_conversation("other").unwrap();
+    assert!(
+        store
+            .answer_agent_with_disposition(&other.id, &request, "Approved scope", "continue", "")
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .answer_agent_with_disposition(
+                &conversation,
+                &request,
+                "Approved scope",
+                "continue",
+                ""
+            )
+            .unwrap(),
+        receipt
+    );
+    let command = "__runtime_preflight project config state";
+    let artifact = store.add_message(&conversation, "user", command).unwrap();
+    store
+        .classify_preflight_failure(
+            &conversation,
+            artifact.seq,
+            "old dispatcher fell through to chat",
+        )
+        .unwrap();
+    assert!(
+        !store
+            .messages_by(&conversation, "user", 0)
+            .unwrap()
+            .iter()
+            .any(|m| m.seq == artifact.seq)
+    );
+    assert!(
+        !store
+            .messages_after(&conversation, 0)
+            .unwrap()
+            .iter()
+            .any(|m| m.seq == artifact.seq)
+    );
+    let original: String = store
+        .db()
+        .query_row(
+            "SELECT text FROM messages WHERE seq=?1",
+            [artifact.seq as i64],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(store.content.decode(&original).unwrap(), command);
+    assert!(
+        store
+            .events_since(&conversation, 0, 100)
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "message_classified")
+    );
+}
