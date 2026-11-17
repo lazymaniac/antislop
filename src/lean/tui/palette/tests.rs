@@ -45,6 +45,34 @@ fn command_palette_keeps_only_actions_without_a_direct_route() {
 }
 
 #[test]
+fn small_change_picker_labels_share_the_options_summary() {
+    let view = View::default();
+    let expected = "options when enabled; static analysis + tests";
+
+    let mut commands = Picker::new(Kind::Commands);
+    commands.query = "small-change".into();
+    assert_eq!(
+        commands.items(&view)[0].0,
+        format!("Rigor: small-change · {expected}")
+    );
+
+    let rigor = Picker::new(Kind::Rigor);
+    assert!(
+        rigor.items(&view).iter().any(|(label, _)| {
+            label == &format!("small-change · light ceremony · {expected}")
+        })
+    );
+
+    let slash_commands = Picker::new(Kind::SlashCommands);
+    assert!(
+        slash_commands
+            .items(&view)
+            .iter()
+            .any(|(label, _)| { label == &format!("/small-change · light rigor ({expected})") })
+    );
+}
+
+#[test]
 fn the_conversation_is_searched_newest_first() {
     let mut view = View::default();
     for (seq, text) in [(1, "plan importu"), (2, "inne"), (3, "Import gotowy")] {

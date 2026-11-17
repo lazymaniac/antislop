@@ -2,6 +2,8 @@ use super::catalog::COMMANDS;
 use super::picker_layout::PickerLayout;
 use super::*;
 
+const SMALL_CHANGE_OPTIONS_SUMMARY: &str = "options when enabled; static analysis + tests";
+
 fn command_items() -> Vec<(String, Action)> {
     COMMANDS
         .iter()
@@ -23,7 +25,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "Rigor: small-change · options when enabled; static analysis + tests".into(),
+            format!("Rigor: small-change · {SMALL_CHANGE_OPTIONS_SUMMARY}"),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
@@ -94,11 +96,7 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
     use crate::lean::tasks::Team;
     let current = view.team;
     let entries = [
-        (
-            Team::SmallChange,
-            "small-change",
-            "light ceremony · options when enabled; static analysis + tests",
-        ),
+        (Team::SmallChange, "small-change", "light ceremony"),
         (
             Team::Feature,
             "feature",
@@ -133,10 +131,12 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
             } else {
                 ""
             };
-            (
-                format!("{name}{mark} · {desc}"),
-                Action::Run(Command::SelectTeam(team)),
-            )
+            let label = if team == Team::SmallChange {
+                format!("{name}{mark} · {desc} · {SMALL_CHANGE_OPTIONS_SUMMARY}")
+            } else {
+                format!("{name}{mark} · {desc}")
+            };
+            (label, Action::Run(Command::SelectTeam(team)))
         })
         .collect()
 }
@@ -154,7 +154,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::OpenRigorPicker),
         ),
         (
-            "/small-change · light rigor (options when enabled; static analysis + tests)".into(),
+            format!("/small-change · light rigor ({SMALL_CHANGE_OPTIONS_SUMMARY})"),
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
