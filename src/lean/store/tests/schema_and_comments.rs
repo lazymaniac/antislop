@@ -268,26 +268,12 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
     store
         .select_planned_team(id, Team::Refactoring, "planner chose refactoring")
         .unwrap();
-    assert_eq!(store.team(id).unwrap(), Team::SmallChange);
-    assert_eq!(
-        store.user_selected_team(id).unwrap(),
-        Some(Team::SmallChange)
-    );
+    assert_eq!(store.user_selected_team(id).unwrap(), None);
     assert!(
         store
             .team_note(id)
             .unwrap()
-            .contains("user explicitly selected")
-    );
-    store
-        .select_team(id, Team::Refactoring, "user changed their mind")
-        .unwrap();
-    assert_eq!(store.team(id).unwrap(), Team::Refactoring);
-    assert!(
-        store
-            .team_note(id)
-            .unwrap()
-            .contains("user explicitly selected team `refactoring`")
+            .contains("planner chose team `refactoring`")
     );
     store.delete_session(id).unwrap();
     let again = store.create_conversation("project").unwrap();
@@ -295,7 +281,7 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
 }
 
 #[test]
-fn migrating_legacy_team_keeps_unknown_until_a_new_explicit_choice() {
+fn upgrading_team_state_preserves_the_known_ui_selection() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
@@ -308,182 +294,8 @@ fn migrating_legacy_team_keeps_unknown_until_a_new_explicit_choice() {
             .select_team(
                 &conversation_id,
                 Team::SmallChange,
-                "User selected small-change rigor mode in UI before provenance existed",
+                "Selected by user in UI",
             )
-            .unwrap();
-    }
-
-    let legacy = Connection::open(&path).unwrap();
-    legacy
-        .execute_batch(
-            "ALTER TABLE teams DROP COLUMN origin;
-             UPDATE teams SET user_selected=1;
-             CREATE TRIGGER fail_team_origin_migration BEFORE UPDATE OF origin ON teams
-             BEGIN SELECT RAISE(ABORT, 'forced origin migration failure'); END;",
-        )
-        .unwrap();
-    drop(legacy);
-
-    let error = Store::open(&path).err().unwrap().to_string();
-    assert!(error.contains("forced origin migration failure"), "{error}");
-    let legacy = Connection::open(&path).unwrap();
-    let origin_column: i64 = legacy
-        .query_row(
-            "SELECT count(*) FROM pragma_table_info('teams') WHERE name='origin'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(origin_column, 0, "failed migration must roll back its DDL");
-    let (legacy_selected, team, reason): (i64, String, String) = legacy
-        .query_row(
-            "SELECT user_selected,team,reason FROM teams WHERE conversation_id=?1",
-            [&conversation_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(
-        legacy_selected, 1,
-        "failed migration must roll back data updates"
-    );
-    assert_eq!(team, Team::SmallChange.name());
-    assert_eq!(
-        reason,
-        "User selected small-change rigor mode in UI before provenance existed"
-    );
-    legacy
-        .execute_batch("DROP TRIGGER fail_team_origin_migration")
-        .unwrap();
-    drop(legacy);
-
-    let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
-    assert_eq!(upgraded.user_selected_team(&conversation_id).unwrap(), None);
-    assert_eq!(
-        upgraded.team_origin(&conversation_id).unwrap(),
-        Some(crate::lean::store::TeamOrigin::Unknown)
-    );
-    assert!(
-        upgraded
-            .team_note(&conversation_id)
-            .unwrap()
-            .contains("unverified legacy origin")
-    );
-    let row: (String, String) = upgraded
-        .db()
-        .query_row(
-            "SELECT team,reason FROM teams WHERE conversation_id=?1",
-            [&conversation_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(row.0, Team::SmallChange.name());
-    assert_eq!(
-        row.1,
-        "User selected small-change rigor mode in UI before provenance existed"
-    );
-    drop(upgraded);
-
-    let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.team(&conversation_id).unwrap(), Team::SmallChange);
-    assert_eq!(reopened.user_selected_team(&conversation_id).unwrap(), None);
-    assert_eq!(
-        reopened.team_origin(&conversation_id).unwrap(),
-        Some(crate::lean::store::TeamOrigin::Unknown)
-    );
-    reopened
-        .select_team(&conversation_id, Team::Refactoring, "explicit new choice")
-        .unwrap();
-    assert_eq!(
-        reopened.user_selected_team(&conversation_id).unwrap(),
-        Some(Team::Refactoring)
-    );
-    assert_eq!(
-        reopened.team_origin(&conversation_id).unwrap(),
-        Some(crate::lean::store::TeamOrigin::User)
-    );
-    drop(reopened);
-
-    let selected_reopened = Store::open(&path).unwrap();
-    assert_eq!(
-        selected_reopened
-            .user_selected_team(&conversation_id)
-            .unwrap(),
-        Some(Team::Refactoring)
-    );
-}
-
-#[test]
-fn concurrent_legacy_opens_do_not_erase_a_new_user_team_choice() {
-    use crate::lean::tasks::Team;
-    use std::sync::{Arc, Barrier};
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("core.db");
-    let conversation_id;
-    {
-        let store = Store::open(&path).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        conversation_id = conversation.id;
-        store
-            .select_planned_team(&conversation_id, Team::SmallChange, "planner choice")
-            .unwrap();
-    }
-    Connection::open(&path)
-        .unwrap()
-        .execute_batch(
-            "ALTER TABLE teams DROP COLUMN origin; ALTER TABLE teams DROP COLUMN user_selected",
-        )
-        .unwrap();
-
-    let barrier = Arc::new(Barrier::new(3));
-    let open_path = path.clone();
-    let open_barrier = Arc::clone(&barrier);
-    let opener = std::thread::spawn(move || {
-        open_barrier.wait();
-        let _store = Store::open(&open_path).unwrap();
-    });
-
-    let write_path = path.clone();
-    let write_conversation = conversation_id.clone();
-    let write_barrier = Arc::clone(&barrier);
-    let writer = std::thread::spawn(move || {
-        write_barrier.wait();
-        let store = Store::open(&write_path).unwrap();
-        store
-            .select_team(
-                &write_conversation,
-                Team::Refactoring,
-                "user selected after upgrade",
-            )
-            .unwrap();
-    });
-
-    barrier.wait();
-    opener.join().unwrap();
-    writer.join().unwrap();
-
-    let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.team(&conversation_id).unwrap(), Team::Refactoring);
-    assert_eq!(
-        reopened.user_selected_team(&conversation_id).unwrap(),
-        Some(Team::Refactoring)
-    );
-}
-
-#[test]
-fn adding_user_selection_flag_preserves_structured_user_origin() {
-    use crate::lean::tasks::Team;
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("core.db");
-    let conversation_id;
-    {
-        let store = Store::open(&path).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        conversation_id = conversation.id;
-        store
-            .select_team(&conversation_id, Team::SmallChange, "explicit UI selection")
             .unwrap();
     }
 
@@ -494,10 +306,6 @@ fn adding_user_selection_flag_preserves_structured_user_origin() {
 
     let upgraded = Store::open(&path).unwrap();
     assert_eq!(upgraded.team(&conversation_id).unwrap(), Team::SmallChange);
-    assert_eq!(
-        upgraded.team_origin(&conversation_id).unwrap(),
-        Some(crate::lean::store::TeamOrigin::User)
-    );
     assert_eq!(
         upgraded.user_selected_team(&conversation_id).unwrap(),
         Some(Team::SmallChange)

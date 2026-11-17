@@ -350,45 +350,6 @@ fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_
 }
 
 #[test]
-fn refreshing_options_keeps_each_owner_contract_and_dependency_pairing() {
-    let mut first = options_test_task("writer-a", true);
-    first.depends_on = vec!["diagnosis".into()];
-    let mut second = options_test_task("writer-b", true);
-    second.depends_on = vec!["diagnosis".into()];
-    let diagnosis: TaskContract = serde_json::from_value(serde_json::json!({
-        "id":"diagnosis",
-        "title":"Diagnosis",
-        "goal":"Inspect the prerequisite",
-        "change_kind":"none",
-        "kind":"analysis"
-    }))
-    .unwrap();
-    let mut revised = super::super::with_options(vec![first, second, diagnosis]);
-    for task in &mut revised {
-        match task.id.as_str() {
-            "writer-a" => task.goal = "Updated objective for A".into(),
-            "writer-b" => task.goal = "Updated objective for B".into(),
-            _ => {}
-        }
-    }
-    let revised = super::super::refresh_existing_options(revised);
-
-    for (owner, goal) in [
-        ("writer-a", "Updated objective for A"),
-        ("writer-b", "Updated objective for B"),
-    ] {
-        let option = revised
-            .iter()
-            .find(|task| task.options_for.as_deref() == Some(owner))
-            .unwrap();
-        let writer = revised.iter().find(|task| task.id == owner).unwrap();
-        assert!(option.goal.contains(goal));
-        assert_eq!(option.depends_on, ["diagnosis"]);
-        assert!(writer.depends_on.contains(&option.id));
-    }
-}
-
-#[test]
 fn refinalization_preserves_a_read_only_consumers_explicit_options_dependency() {
     for required_gates in [false, true] {
         let finish = |plan| {

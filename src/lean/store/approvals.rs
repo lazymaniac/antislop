@@ -2,23 +2,6 @@
 //! id of one of the dialog's choices.
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::lean) enum TeamOrigin {
-    User,
-    Planner,
-    Unknown,
-}
-
-impl TeamOrigin {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Planner => "planner",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 pub(in crate::lean) const SUPERVISED: &str = "supervised";
 pub(in crate::lean) const AUTONOMOUS: &str = "autonomous";
 
@@ -94,7 +77,7 @@ impl Store {
         let name: Option<String> = self
             .db()
             .query_row(
-                "SELECT team FROM teams WHERE conversation_id=?1 AND origin='user' AND user_selected=1",
+                "SELECT team FROM teams WHERE conversation_id=?1 AND user_selected=1",
                 [conversation],
                 |row| row.get(0),
             )
@@ -103,45 +86,21 @@ impl Store {
             .transpose()
     }
 
-    pub(in crate::lean) fn team_origin(&self, conversation: &str) -> Result<Option<TeamOrigin>> {
-        let origin: Option<String> = self
-            .db()
-            .query_row(
-                "SELECT origin FROM teams WHERE conversation_id=?1",
-                [conversation],
-                |row| row.get(0),
-            )
-            .optional()?;
-        origin
-            .map(|origin| match origin.as_str() {
-                "user" => Ok(TeamOrigin::User),
-                "planner" => Ok(TeamOrigin::Planner),
-                "unknown" => Ok(TeamOrigin::Unknown),
-                _ => Err(Error::Invalid(format!("invalid team origin `{origin}`"))),
-            })
-            .transpose()
-    }
-
-    /// Team guidance for planning and plan review, empty when no saved team needs guidance.
+    /// Team guidance for planning and plan review, empty for automatic feature mode.
     pub(in crate::lean) fn team_note(&self, conversation: &str) -> Result<String> {
-        let row: Option<(String, String, String)> = self
+        let row: Option<(String, String, bool)> = self
             .db()
             .query_row(
-                "SELECT team,reason,origin FROM teams WHERE conversation_id=?1",
+                "SELECT team,reason,user_selected FROM teams WHERE conversation_id=?1",
                 [conversation],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         Ok(match row {
-            Some((team, reason, origin)) if origin == "user" => format!(
+            Some((team, reason, true)) => format!(
                 "\n\nThe user explicitly selected team `{team}`: {reason}. Keep this rigor choice; do not change it in `submit_plan`."
             ),
-            Some((team, reason, origin)) if origin == "unknown" => format!(
-                "\n\nThe saved team is `{team}` with an unverified legacy origin: {reason}. Preserve this team and reason; do not replace it in `submit_plan` without a new explicit user selection."
-            ),
-            Some((team, reason, origin))
-                if origin == "planner" && team != crate::lean::tasks::Team::default().name() =>
-            {
+            Some((team, reason, false)) if team != crate::lean::tasks::Team::default().name() => {
                 format!(
                     "\n\nThe planner chose team `{team}` (fewer quality gates than `feature`): {reason}\nReject the plan if the work needs more checking than that team runs."
                 )
@@ -157,7 +116,7 @@ impl Store {
         team: crate::lean::tasks::Team,
         reason: &str,
     ) -> Result<()> {
-        self.save_team(conversation, team, reason, TeamOrigin::User)
+        self.save_team(conversation, team, reason, true)
     }
 
     /// Records a planner-selected team without changing the source of a user's choice.
@@ -167,7 +126,7 @@ impl Store {
         team: crate::lean::tasks::Team,
         reason: &str,
     ) -> Result<()> {
-        self.save_team(conversation, team, reason, TeamOrigin::Planner)
+        self.save_team(conversation, team, reason, false)
     }
 
     fn save_team(
@@ -175,29 +134,44 @@ impl Store {
         conversation: &str,
         team: crate::lean::tasks::Team,
         reason: &str,
-        origin: TeamOrigin,
+        user_selected: bool,
     ) -> Result<()> {
-        // Store a choice and its provenance atomically. A planner update cannot
-        // overwrite a user or unknown legacy choice that raced its earlier read.
-        let user_selected = origin == TeamOrigin::User;
-        let changed = self.db().execute(
-            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,?5,?6,?7)
-             ON CONFLICT(conversation_id) DO UPDATE SET team=excluded.team,reason=excluded.reason,version=excluded.version,updated_ms=excluded.updated_ms,user_selected=excluded.user_selected,origin=excluded.origin
-             WHERE (?6=1 OR teams.origin NOT IN ('user','unknown'))
-               AND (teams.team<>excluded.team OR teams.reason<>excluded.reason OR teams.user_selected<>excluded.user_selected OR teams.origin<>excluded.origin)",
+        let current: Option<(String, String)> = self
+            .db()
+            .query_row(
+                "SELECT team,reason FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let current_user_selected: bool = self
+            .db()
+            .query_row(
+                "SELECT user_selected FROM teams WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+        let unchanged = current
+            .as_ref()
+            .is_some_and(|(name, saved)| name == team.name() && saved == reason)
+            && current_user_selected == user_selected;
+        if unchanged {
+            return Ok(());
+        }
+        self.db().execute(
+            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected) VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(conversation_id) DO UPDATE SET team=?2,reason=?3,version=?4,updated_ms=?5,user_selected=?6",
             params![
                 conversation,
                 team.name(),
                 reason,
                 crate::lean::tasks::TEAM_VERSION,
                 now_ms(),
-                user_selected,
-                origin.as_str()
+                user_selected
             ],
         )?;
-        if changed == 0 {
-            return Ok(());
-        }
         self.append_event(
             conversation,
             None,

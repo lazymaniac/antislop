@@ -288,7 +288,7 @@ const SCHEMA: u32 = 16;
 mod approvals;
 #[path = "store/operations.rs"]
 mod operations;
-pub(in crate::lean) use approvals::{AUTONOMOUS, ApprovalRequest, TeamOrigin};
+pub(in crate::lean) use approvals::{AUTONOMOUS, ApprovalRequest};
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;
 #[path = "store/comments_and_mail.rs"]

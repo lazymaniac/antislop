@@ -8,7 +8,6 @@ use antislop::{
         tasks::{self, TaskContract},
     },
 };
-use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -78,26 +77,6 @@ fn run_scenario_with_options(
     required_format: &str,
     scenario: &str,
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
-    run_scenario_with_team(
-        plan,
-        (gates, local_options, None),
-        report,
-        implementation,
-        claim,
-        required_format,
-        scenario,
-    )
-}
-
-fn run_scenario_with_team(
-    plan: Value,
-    (gates, local_options, team): (bool, bool, Option<tasks::Team>),
-    report: &str,
-    implementation: &str,
-    claim: &str,
-    required_format: &str,
-    scenario: &str,
-) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -126,12 +105,6 @@ fn run_scenario_with_team(
         assert!(out.status.success(), "{out:?}");
     }
     common::runtime_environment(&project);
-    let authored_ids: HashSet<String> = plan["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|task| task["id"].as_str().map(str::to_owned))
-        .collect();
     std::fs::write(
         dir.path().join("settings.json"),
         json!({"plan":plan,"report":report,"implementation":implementation,"claim":claim,"scenario":scenario})
@@ -161,17 +134,6 @@ fn run_scenario_with_team(
     )
     .unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
-    if let Some(team) = team {
-        // Integration tests exercise the Core scheduler directly, so seed the
-        // same persisted user choice that the daemon's select_team action writes.
-        Connection::open(project.join(".antislop/core.db"))
-            .unwrap()
-            .execute(
-                "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,0,1,'user')",
-                rusqlite::params![conversation.id, team.name(), "Selected in integration fixture", tasks::TEAM_VERSION],
-            )
-            .unwrap();
-    }
     let mut accepted_plans = HashSet::new();
     let mut idle = || {
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -258,30 +220,19 @@ fn run_scenario_with_team(
         idle();
     }
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
-    let integration_worktree = support::session_worktree(&core, &project, &conversation.id);
     for task in tasks.iter().filter(|task| {
-        authored_ids.contains(task.spec["id"].as_str().unwrap_or_default())
-            && task.spec["change_kind"]
-                .as_str()
-                .is_some_and(|kind| kind != "none")
+        task.spec["change_kind"]
+            .as_str()
+            .is_some_and(|kind| kind != "none")
     }) {
-        let file =
-            integration_worktree.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
+        let file = project.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
         if task.status == "approved" {
             let expected = if implementation == "selected" {
                 "A"
             } else {
                 implementation
             };
-            assert_eq!(
-                std::fs::read_to_string(&file).unwrap_or_else(|error| {
-                    panic!(
-                        "missing integrated authored output {} for {task:?}: {error}",
-                        file.display()
-                    )
-                }),
-                expected
-            );
+            assert_eq!(std::fs::read_to_string(file).unwrap(), expected);
         } else {
             assert!(!file.exists(), "rejected implementation must not land");
         }
@@ -667,220 +618,6 @@ fn explicitly_disabled_local_options_do_not_require_a_selection() {
         .unwrap();
     assert!(!worker.contains("selected_approach"));
     assert!(!worker.contains("Never silently switch variants"));
-}
-
-#[test]
-fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_order() {
-    let (stored, calls, events) = run_scenario_with_team(
-        json!({"tasks":[writer("w")]}),
-        (true, true, Some(tasks::Team::SmallChange)),
-        REPORT,
-        "A",
-        "",
-        "A",
-        "",
-    );
-
-    let specs: Vec<TaskContract> = stored
-        .iter()
-        .map(|task| serde_json::from_value(task.spec.clone()).unwrap())
-        .collect();
-    let by_id: std::collections::BTreeMap<_, _> =
-        specs.iter().map(|spec| (spec.id.as_str(), spec)).collect();
-    assert_eq!(
-        by_id.keys().copied().collect::<Vec<_>>(),
-        [
-            "review-testing",
-            "review-testing-options",
-            "static-analyzer",
-            "static-analyzer-options",
-            "w",
-            "w-options"
-        ]
-    );
-    assert_eq!(by_id["w"].kind, antislop::config::WorkKind::Implementation);
-    assert_eq!(by_id["w-options"].kind, antislop::config::WorkKind::Options);
-    assert_eq!(by_id["w-options"].options_for.as_deref(), Some("w"));
-    assert_eq!(by_id["w"].depends_on, ["w-options"]);
-    assert_eq!(
-        by_id["static-analyzer"].kind,
-        antislop::config::WorkKind::StaticAnalysis
-    );
-    assert_eq!(
-        by_id["static-analyzer-options"].options_for.as_deref(),
-        Some("static-analyzer")
-    );
-    assert_eq!(by_id["static-analyzer-options"].depends_on, ["w"]);
-    assert_eq!(
-        by_id["static-analyzer"].depends_on,
-        ["w", "static-analyzer-options"]
-    );
-    assert_eq!(
-        by_id["review-testing"].kind,
-        antislop::config::WorkKind::Testing
-    );
-    assert_eq!(
-        by_id["review-testing-options"].options_for.as_deref(),
-        Some("review-testing")
-    );
-    assert_eq!(by_id["review-testing-options"].depends_on, ["w"]);
-    assert_eq!(
-        by_id["review-testing"].depends_on,
-        ["w", "review-testing-options"]
-    );
-    assert!(stored.iter().all(|task| task.status == "approved"));
-
-    assert_eq!(
-        calls.iter().filter(|call| call["worker"] == true).count(),
-        6,
-        "each writer, generated option and quality gate must execute"
-    );
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|call| { specs.iter().any(|spec| call["reviewed"] == spec.title) })
-            .count(),
-        specs.len(),
-        "each generated role must receive its independent reviewer"
-    );
-    for spec in &specs {
-        let worker_position = calls
-            .iter()
-            .position(|call| call["worker"] == true && call["task"] == spec.id)
-            .unwrap_or_else(|| panic!("missing worker call for {}", spec.id));
-        let reviewer_position = calls
-            .iter()
-            .position(|call| call["reviewed"] == spec.title)
-            .unwrap_or_else(|| panic!("missing reviewer call for {}", spec.id));
-        assert!(
-            worker_position < reviewer_position,
-            "{} must finish execution before its independent review",
-            spec.id
-        );
-        let worker = calls.get(worker_position).unwrap();
-        let reviewer = calls.get(reviewer_position).unwrap();
-        assert_eq!(reviewer["approved"], true, "{}", spec.id);
-        if spec.kind == antislop::config::WorkKind::Options {
-            assert!(
-                worker["prompt"]
-                    .as_str()
-                    .unwrap()
-                    .contains("End with select")
-            );
-            continue;
-        }
-        if spec.changes_code() {
-            assert_eq!(
-                reviewer["files"][format!("result-{}.txt", spec.id)],
-                "A",
-                "reviewer must inspect the actual probe output for {}",
-                spec.id
-            );
-        }
-    }
-
-    let event_position = |runtime_id: &str, status: &str| {
-        let task = stored
-            .iter()
-            .find(|task| task.spec["id"] == runtime_id)
-            .unwrap();
-        events
-            .iter()
-            .position(|event| event["task"] == task.id && event["status"] == status)
-            .unwrap_or_else(|| panic!("missing {status} event for {runtime_id}"))
-    };
-    for (option, owner) in [
-        ("w-options", "w"),
-        ("static-analyzer-options", "static-analyzer"),
-        ("review-testing-options", "review-testing"),
-    ] {
-        assert!(
-            event_position(option, "approved") < event_position(owner, "working"),
-            "{option} must be approved before {owner} starts"
-        );
-    }
-    for gate in ["static-analyzer", "review-testing"] {
-        assert!(
-            event_position("w", "approved") < event_position(gate, "working"),
-            "{gate} must wait for the implementation"
-        );
-    }
-}
-
-#[test]
-fn small_change_policy_boundaries_match_core_scheduled_graph() {
-    let writer_plan = json!({"tasks":[writer("w")]});
-    let cases = [
-        (
-            "options-off",
-            (true, false),
-            vec!["w", "review-testing", "static-analyzer"],
-        ),
-        ("gates-off", (false, true), vec!["w", "w-options"]),
-    ];
-    for (scenario, policies, expected) in cases {
-        let (stored, calls, events) = run_scenario_with_team(
-            writer_plan.clone(),
-            (policies.0, policies.1, Some(tasks::Team::SmallChange)),
-            REPORT,
-            "A",
-            "",
-            "A",
-            scenario,
-        );
-        let mut actual: Vec<_> = stored
-            .iter()
-            .map(|task| task.spec["id"].as_str().unwrap())
-            .collect();
-        actual.sort_unstable();
-        let mut expected = expected;
-        expected.sort_unstable();
-        assert_eq!(actual, expected, "{scenario}");
-        assert!(
-            stored.iter().all(|task| task.status == "approved"),
-            "{scenario}"
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| {
-                    stored
-                        .iter()
-                        .any(|task| call["reviewed"] == task.spec["title"])
-                })
-                .count(),
-            stored.len(),
-            "every scheduled task needs a reviewer in {scenario}"
-        );
-        assert!(events.iter().any(|event| event["status"] == "approved"));
-    }
-
-    let (stored, calls, events) = run_scenario_with_team(
-        json!({"tasks":[{"id":"inspect","title":"Inspect","goal":"Read only","change_kind":"none","kind":"analysis","reviewer":{"summary":"report findings"}}]}),
-        (true, true, Some(tasks::Team::SmallChange)),
-        REPORT,
-        "A",
-        "",
-        "A",
-        "non-code",
-    );
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].spec["id"], "inspect");
-    assert_eq!(stored[0].spec["kind"], "analysis");
-    assert!(stored[0].spec["options_for"].is_null());
-    assert_eq!(stored[0].status, "approved");
-    assert_eq!(
-        calls.iter().filter(|call| call["worker"] == true).count(),
-        1
-    );
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|call| call["reviewed"] == stored[0].spec["title"])
-            .count(),
-        1
-    );
-    assert!(events.iter().any(|event| event["status"] == "approved"));
 }
 
 fn assert_core_delivery(scenario: &str) {

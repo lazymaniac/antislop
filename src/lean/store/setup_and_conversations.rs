@@ -6,7 +6,7 @@ use schema::{initialize_base_tables, initialize_plan_tables};
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        let mut connection = Connection::open(path)?;
+        let connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let found = validate_database(&connection, path)?;
         if found == 0 {
@@ -14,39 +14,19 @@ impl Store {
         }
         // Additive runtime tables; no existing session is repaired or resumed.
         connection.execute_batch(include_str!("runtime_policy.sql"))?;
-        // Keep schema migration and provenance initialization in one SQLite
-        // transaction. Legacy reason text and the old selection flag cannot
-        // prove who chose a team, so origin-less rows remain unknown.
-        let migration =
-            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let has_user_selected: bool = migration.query_row(
+        let has_user_selected: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('teams') WHERE name='user_selected')",
             [],
             |row| row.get(0),
         )?;
         if !has_user_selected {
-            migration.execute_batch(
+            connection.execute_batch(
                 "ALTER TABLE teams ADD COLUMN user_selected INTEGER NOT NULL DEFAULT 0 CHECK(user_selected IN (0,1));",
             )?;
-        }
-        let has_origin: bool = migration.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('teams') WHERE name='origin')",
-            [],
-            |row| row.get(0),
-        )?;
-        if !has_origin {
-            migration.execute_batch(
-                "ALTER TABLE teams ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown' CHECK(origin IN ('unknown','user','planner'));
-                 UPDATE teams SET origin='unknown',user_selected=0;",
-            )?;
-        } else if !has_user_selected {
-            // An earlier schema already had structured origin; preserve its
-            // confirmed user selections when adding the write-serialization flag.
-            migration.execute_batch(
-                "UPDATE teams SET user_selected=CASE WHEN origin='user' THEN 1 ELSE 0 END;",
+            connection.execute_batch(
+                "UPDATE teams SET user_selected=1 WHERE reason='Selected by user in UI' OR reason LIKE 'User selected % rigor mode in UI';",
             )?;
         }
-        migration.commit()?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
