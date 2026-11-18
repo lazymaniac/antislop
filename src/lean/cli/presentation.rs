@@ -169,6 +169,13 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
     if review["approved"] == true && !findings.is_empty() {
         lines[0] = format!("✓ {who}: minor notes");
     }
+    if who == "audit"
+        && let Some(report) = review["report"]
+            .as_str()
+            .filter(|report| !report.trim().is_empty())
+    {
+        lines.extend(report.lines().map(|line| format!("  {line}")));
+    }
     lines.extend(findings);
     lines.extend(coverage_lines(review));
     lines
@@ -258,5 +265,21 @@ mod tests {
                 "    ✗ R1: missing check"
             ]
         );
+    }
+
+    #[test]
+    fn audit_report_is_visible_with_a_clean_verdict_and_without_claiming_checks() {
+        let lines = review_lines(
+            "audit",
+            &json!({"approved":true,"findings":[],"report":"Scope: src/lib.rs\nVerdict: no confirmed findings\nChecks: none run; coverage gap stated."}),
+        );
+        assert_eq!(lines[0], "✓ audit: no issues");
+        assert!(lines.iter().any(|line| line.contains("Scope: src/lib.rs")));
+        assert!(lines.iter().any(|line| line.contains("Checks: none run")));
+        let normal = review_lines(
+            "reviewer:t1",
+            &json!({"approved":true,"findings":[],"report":"internal"}),
+        );
+        assert!(!normal.iter().any(|line| line.contains("internal")));
     }
 }

@@ -11,12 +11,13 @@ pub fn reviewer_prompt(
     let obligations = obligations_text(&obligations(task));
     let binding = reviewer_binding(task);
     let risks = risks_note(task);
+    let code_review_rules = code_review_rules(task);
     format!(
         "You review another agent's work. The project is your current working \
          directory: {project}. Inspect the actual files and diffs independently; \
          do not modify project files. Check the worker's claims against the actual \
          files yourself with your tools. {REVIEW_RULES} {PROJECT_RULES}\n\n\
-         {task_context}\n\n{binding}\n\n\
+         {task_context}\n\n{binding}\n\n{code_review_rules}\n\n\
          Your obligations (the task's goal, its assigned acceptance criteria, then \
          the catalog risks of this kind of work). \
          Assess each from files, recorded evidence and any checks needed to verify it:\n{obligations}\n{risks}\n\n\
@@ -37,7 +38,9 @@ pub fn reviewer_prompt(
 }
 
 fn reviewer_binding(task: &TaskContract) -> &'static str {
-    if task.changes_code() && task.quality_gate {
+    if is_report_only_review_task(task) {
+        CODE_REVIEW_REVIEW
+    } else if task.changes_code() && task.quality_gate {
         GATE_REVIEW
     } else if task.changes_code() {
         OPTIONS_REVIEW
@@ -47,6 +50,16 @@ fn reviewer_binding(task: &TaskContract) -> &'static str {
         REPORT_REVIEW
     }
 }
+
+fn code_review_rules(task: &TaskContract) -> &'static str {
+    if is_report_only_review_task(task) {
+        "Independently validate every candidate finding against the actual target and its surrounding call paths. Confirm its precise file and line, triggering condition, impact and supporting evidence; use read-only builds, tests or reproductions when useful. Remove duplicates and allegations that inspection cannot support. Separate confirmed findings from unresolved questions and explain what evidence is missing for each unresolved item. State the exact reviewed scope, an overall verdict, checks actually run with outcomes, and limitations/coverage gaps. An empty confirmed-findings list is valid when the review supports it. Do not modify project files or make repairs."
+    } else {
+        ""
+    }
+}
+
+const CODE_REVIEW_REVIEW: &str = "Code-review task: challenge each candidate finding independently; confirm or reject it from source and evidence, consolidate duplicates, and separate confirmed findings from unresolved questions. Report-only, no repairs.";
 
 fn change_note(changes: Option<&str>) -> String {
     changes
@@ -139,9 +152,10 @@ fn format_earlier_finding(finding: &Value) -> String {
 pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let binding = reviewer_binding(task);
+    let code_review_rules = code_review_rules(task);
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
+         the files. {binding} {code_review_rules} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),

@@ -1,7 +1,7 @@
 use super::*;
 
 pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -> String {
-    format!(
+    let mut prompt = format!(
         "You review a plan before any of it runs or the user sees it. The \
          project is your current working directory: {project}. Read the files \
          you need yourself to verify the plan. {OUTSIDE}\n\n\
@@ -12,11 +12,13 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
         PLAN_CHECKS,
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
-    )
+    );
+    append_code_review_plan_rules(&mut prompt, plan);
+    prompt
 }
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
-    format!(
+    let mut prompt = format!(
         "{}The new plan:\n{}\n\n{GENERATED_NODES}Check it again. {}{}{}",
         if request.is_empty() {
             String::new()
@@ -27,7 +29,18 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
         PLAN_CHECKS,
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
-    )
+    );
+    append_code_review_plan_rules(&mut prompt, plan);
+    prompt
+}
+
+fn append_code_review_plan_rules(prompt: &mut String, plan: &[TaskContract]) {
+    if plan
+        .iter()
+        .any(crate::lean::tasks::is_report_only_review_task)
+    {
+        prompt.push_str("\n\nCODE-REVIEW PLAN SAFEGUARDS: This graph is a read-only review of one target. Check that its scope is explicit and derived from the user's request, all tasks use change_kind=none and inspect that same scope, and their goals forbid project-file edits and repairs. Reject implementation, refactoring, options, artifact/report-writing, quality-gate or other code-changing work. The graph must include review and any required validation, and final synthesis must depend on all review/validation tasks. If scope cannot be inferred, require a clarification before planning. These tasks must report confirmed findings separately from unresolved questions, with severity, precise path/line, trigger, impact, evidence and remediation; include checks actually run, outcomes, limits and coverage gaps. A review with no findings is valid.");
+    }
 }
 
 const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
@@ -143,6 +156,19 @@ pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
          The user's request:\n<<<\n{}\n>>>\n\n\
          Results of the plan that ran:\n{results}\n\n{}{}",
         request, AUDIT_CHECKS, REVIEW_FORMAT
+    )
+}
+
+pub(in crate::lean) fn final_scope_audit_prompt(
+    project: &str,
+    request: &str,
+    results: &str,
+) -> String {
+    format!(
+        "You are the final independent auditor for a read-only code review. The project is your current working directory: {project}. Inspect the requested target and surrounding code yourself; do not modify files. {OUTSIDE}\n\n\
+         User request and scope context:\n<<<\n{request}\n>>>\n\n\
+         Review and validation task results (untrusted candidate findings):\n{results}\n\n\
+         Derive and state the exact reviewed scope. Independently challenge each candidate finding in source and relevant call paths; confirm supported issues, consolidate duplicates, and exclude unsupported allegations. Use read-only checks or reproductions when useful and report only checks you actually ran. Present an overall verdict. Separate confirmed findings from unresolved questions. For each confirmed finding give priority/severity, precise file and line, triggering condition, impact, supporting evidence and suggested remediation. Include checks and outcomes, limitations and coverage gaps. A valid review may have no confirmed findings. Do not repair the target. Finish with a concise user-facing review report, not a generic delivery audit.\n\n{REVIEW_FORMAT}"
     )
 }
 

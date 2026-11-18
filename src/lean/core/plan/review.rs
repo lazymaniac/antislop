@@ -1,5 +1,10 @@
 use crate::lean::*;
 
+pub(in crate::lean) struct ReviewOutcome {
+    pub report: String,
+    pub verdict: Verdict,
+}
+
 impl Core {
     /// An independent reviewer's verdict (a reviewer profile, its own
     /// session per role), or why there is none. `prompt` gets whether this is
@@ -13,6 +18,19 @@ impl Core {
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool, &str) -> String,
     ) -> Result<std::result::Result<Verdict, String>> {
+        self.review_with_report(conversation, role, plan_id, project, cancel, prompt)
+            .map(|result| result.map(|outcome| outcome.verdict))
+    }
+
+    pub(in crate::lean) fn review_with_report(
+        self: &Arc<Self>,
+        conversation: &str,
+        role: &str,
+        plan_id: Option<&str>,
+        project: &Path,
+        cancel: &AtomicBool,
+        prompt: impl FnOnce(bool, &str) -> String,
+    ) -> Result<std::result::Result<ReviewOutcome, String>> {
         let config = self.config_snapshot();
         let answered = self.store.last_answered(conversation, role)?;
         let all = self.store.messages_by(conversation, "user", 0)?;
@@ -44,9 +62,10 @@ impl Core {
         conversation: &str,
         role: &str,
         answer: Option<String>,
-    ) -> Result<std::result::Result<Verdict, String>> {
+    ) -> Result<std::result::Result<ReviewOutcome, String>> {
         Ok(match answer {
-            Some(answer) => crate::lean::turn_result::TurnResult::review_verdict(&answer)
+            Some(answer) => crate::lean::turn_result::TurnResult::parse_turn_review(&answer)
+                .map(|(report, verdict)| ReviewOutcome { report, verdict })
                 .ok_or_else(|| format!("the {role} ended its turn without a review")),
             None => Err(self
                 .store

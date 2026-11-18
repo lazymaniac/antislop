@@ -90,6 +90,70 @@ fn finalization_adds_options_with_and_without_required_gates() {
 }
 
 #[test]
+fn code_review_selection_accepts_only_report_only_review_tasks() {
+    use crate::lean::core::plan::proposal::checked_team_plan;
+
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    config.policy.local_options = true;
+    let analysis: TaskContract = serde_json::from_value(json!({
+        "id":"review", "title":"Review target", "goal":"Inspect target and report verified findings without edits.",
+        "change_kind":"none", "kind":"analysis",
+        "acceptance_criteria":[{"id":"C1","text":"The report states scope, verdict, evidence and limits"}]
+    })).unwrap();
+    let checked = checked_team_plan(
+        std::slice::from_ref(&analysis),
+        &config,
+        tasks::Team::CodeReview,
+    )
+    .unwrap();
+    assert_eq!(checked.len(), 1, "code-review adds no gates or options");
+    assert_eq!(checked[0].id, "review");
+    assert!(tasks::is_report_only_review_task(&checked[0]));
+    assert_eq!(checked[0].change_kind(), tasks::ChangeKind::None);
+    assert!(!checked[0].quality_gate && checked[0].options_for.is_none());
+    let ordinary = checked_team_plan(&checked, &config, tasks::Team::Feature).unwrap();
+    assert!(!tasks::is_report_only_review_task(&ordinary[0]));
+
+    let mut forbidden = Vec::new();
+    let mut code = analysis.clone();
+    code.change_kind = tasks::ChangeKind::Code;
+    forbidden.push(code);
+    let mut artifact = analysis.clone();
+    artifact.change_kind = tasks::ChangeKind::Artifact;
+    artifact.outputs = vec!["review.md".into()];
+    forbidden.push(artifact);
+    for kind in [
+        WorkKind::Implementation,
+        WorkKind::Refactoring,
+        WorkKind::Options,
+        WorkKind::Writing,
+        WorkKind::Delivery,
+    ] {
+        let mut task = analysis.clone();
+        task.kind = kind;
+        forbidden.push(task);
+    }
+    let mut gate = analysis.clone();
+    gate.quality_gate = true;
+    forbidden.push(gate);
+    let mut options = analysis;
+    options.options_for = Some("review".into());
+    forbidden.push(options);
+
+    for task in forbidden {
+        let result = checked_team_plan(
+            std::slice::from_ref(&task),
+            &config,
+            tasks::Team::CodeReview,
+        );
+        assert!(result.is_err(), "accepted forbidden task {}", task.id);
+        let error = result.unwrap_err();
+        assert!(error.contains(&task.id), "{error}");
+    }
+}
+
+#[test]
 fn writer_base_through_options_includes_both_dependency_chains_and_local_user_changes() {
     let project = test_tempdir();
     let root = project.path();

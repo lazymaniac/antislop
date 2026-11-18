@@ -249,6 +249,55 @@ fn an_options_reviewer_leaves_the_writers_tests_and_validation_to_the_writer() {
 }
 
 #[test]
+fn code_review_workers_and_reviewers_are_read_only_and_validate_findings_independently() {
+    let review: TaskContract = serde_json::from_value(serde_json::json!({
+        "id":"review", "title":"Review scope", "goal":"Review the named diff and report findings.",
+        "change_kind":"none", "kind":"analysis"
+    }))
+    .unwrap();
+    let mut review = review;
+    review.reviewer.summary = Some(CODE_REVIEW_REVIEWER_SUMMARY.into());
+    let worker = worker_prompt("/p", &review);
+    assert!(worker.contains("read-only code-review task"));
+    assert!(worker.contains("do not modify, create, delete or commit project files"));
+    let fresh = reviewer_prompt("/p", &review, "Scope and candidate findings", None);
+    let resumed = reviewer_followup(&review, "Updated report", None);
+    for prompt in [fresh, resumed] {
+        assert!(
+            prompt.contains("Independently validate every candidate finding"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Separate confirmed findings from unresolved questions"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("An empty confirmed-findings list is valid"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("read-only"), "{prompt}");
+    }
+}
+
+#[test]
+fn code_review_final_audit_has_valid_empty_and_finding_report_requirements() {
+    let prompt = final_scope_audit_prompt("/p", "Review src/lib.rs", "No findings were proposed.");
+    for required in [
+        "exact reviewed scope",
+        "overall verdict",
+        "triggering condition",
+        "supporting evidence",
+        "unresolved questions",
+        "checks and outcomes",
+        "limitations and coverage gaps",
+        "A valid review may have no confirmed findings",
+        "do not modify files",
+    ] {
+        assert!(prompt.contains(required), "missing {required}: {prompt}");
+    }
+}
+
+#[test]
 fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "audit", "title": "Audit", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "performance",

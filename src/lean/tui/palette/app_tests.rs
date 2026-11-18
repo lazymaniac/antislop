@@ -90,6 +90,12 @@ fn recommendation_popup_preselects_rigor_and_preserves_other_drafts() {
     let picker = app.picker.as_ref().unwrap();
     assert_eq!(
         picker.items(&app.view)[picker.selected].1,
+        Action::Run(Command::SelectTeam(Team::CodeReview))
+    );
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let picker = app.picker.as_ref().unwrap();
+    assert_eq!(
+        picker.items(&app.view)[picker.selected].1,
         Action::Run(Command::SelectTeam(Team::Research))
     );
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));

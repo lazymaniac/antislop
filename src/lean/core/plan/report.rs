@@ -11,8 +11,13 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let tasks = self.store.plan(plan_id)?;
+        let code_review = self.store.team(conversation)? == tasks::Team::CodeReview;
         let results = task_results(&tasks);
-        let mut text = report_intro(&results);
+        let mut text = if code_review {
+            format!("# Code review results\n\nReviewed scope and candidate reports:\n{results}")
+        } else {
+            report_intro(&results)
+        };
         if !cancel.load(Ordering::SeqCst) {
             self.append_plan_audit(
                 PlanAuditInput {
@@ -33,6 +38,7 @@ impl Core {
         input: PlanAuditInput<'_>,
         text: &mut String,
     ) -> Result<()> {
+        let code_review = self.store.team(input.conversation)? == tasks::Team::CodeReview;
         let binding = self.final_audit_binding(input.conversation, input.plan_id)?;
         let mut audit = self.run_report_audit(
             input.conversation,
@@ -49,8 +55,16 @@ impl Core {
         {
             audit=Err("plan, scope or integrated files changed during final audit; audit the current result again".into());
         }
-        apply_audit_gates(&mut audit, input.tasks);
-        let mut payload = review_json(&audit);
+        let mut audit_report = None;
+        if let Ok((report, _)) = &audit {
+            audit_report = Some(report.clone());
+        }
+        let mut verdict = audit.map(|(_, verdict)| verdict);
+        apply_audit_gates(&mut verdict, input.tasks);
+        let mut payload = review_json(&verdict);
+        if code_review {
+            payload["report"] = json!(audit_report);
+        }
         payload["plan"] = json!(input.plan_id);
         payload["binding"] = json!(binding);
         self.store.append_event(
@@ -60,7 +74,7 @@ impl Core {
             "audit",
             &payload,
         )?;
-        text.push_str(&audit_text(&audit));
+        text.push_str(&audit_text(&verdict, code_review, audit_report.as_deref()));
         Ok(())
     }
 
@@ -128,7 +142,7 @@ impl Core {
         plan_id: &str,
         cancel: &AtomicBool,
         results: &str,
-    ) -> Result<std::result::Result<Verdict, String>> {
+    ) -> Result<std::result::Result<(String, Verdict), String>> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let integrated = if git::is_repository(&project) {
             self.session_worktree(conversation, &project)?
@@ -142,24 +156,31 @@ impl Core {
             integrated.display(),
             project.display()
         );
-        self.review(
+        let code_review = self.store.team(conversation)? == tasks::Team::CodeReview;
+        self.review_with_report(
             conversation,
             AUDITOR,
             Some(plan_id),
             &integrated,
             cancel,
             |first, request| {
+                let audit_request = format!("{sources}\nNew messages:\n{request}");
                 if first {
-                    tasks::audit_prompt(
-                        &project_text,
-                        &format!("{sources}\nNew messages:\n{request}"),
-                        results,
-                    )
+                    if code_review {
+                        tasks::final_scope_audit_prompt(&project_text, &audit_request, results)
+                    } else {
+                        tasks::audit_prompt(&project_text, &audit_request, results)
+                    }
                 } else {
-                    tasks::audit_followup(&format!("{sources}\nNew messages:\n{request}"), results)
+                    if code_review {
+                        tasks::final_scope_audit_prompt(&project_text, &audit_request, results)
+                    } else {
+                        tasks::audit_followup(&audit_request, results)
+                    }
                 }
             },
         )
+        .map(|result| result.map(|outcome| (outcome.report, outcome.verdict)))
     }
 }
 
@@ -247,8 +268,30 @@ fn unapproved_task_ids(tasks: &[Task]) -> String {
         .join(", ")
 }
 
-fn audit_text(audit: &std::result::Result<Verdict, String>) -> String {
+fn audit_text(
+    audit: &std::result::Result<Verdict, String>,
+    code_review: bool,
+    report: Option<&str>,
+) -> String {
     match audit {
+        Ok(verdict) if code_review => {
+            let report =
+                report.unwrap_or("The independent auditor returned no user-facing report text.");
+            let overall = if verdict.approved {
+                "**Overall verdict: no blocking findings.**"
+            } else {
+                "**Overall verdict: unresolved findings or checks remain.**"
+            };
+            let findings = if verdict.findings.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nAdditional audit findings:\n{}\n",
+                    tasks::findings_text(&verdict.findings)
+                )
+            };
+            format!("\n## Independent code review\n{overall}\n\n{report}\n{findings}")
+        }
         Ok(verdict) if verdict.approved => {
             "\n## Independent audit\nThe request is fully delivered.\n".to_owned()
         }
@@ -265,6 +308,39 @@ fn audit_text(audit: &std::result::Result<Verdict, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_review_report_presents_scope_verdict_and_confirmed_findings_or_none() {
+        let clean = Verdict {
+            approved: true,
+            findings: vec![],
+            coverage: serde_json::Map::new(),
+            resolved: vec![],
+        };
+        let clean_report = "Scope: src/lib.rs:1-80\nVerdict: no confirmed findings\nUnresolved: dependency behavior not exercised; no tests run.";
+        let clean_text = audit_text(&Ok(clean), true, Some(clean_report));
+        assert!(clean_text.contains("Independent code review"));
+        assert!(clean_text.contains("Scope: src/lib.rs:1-80"));
+        assert!(clean_text.contains("no confirmed findings"));
+        assert!(clean_text.contains("Unresolved: dependency behavior not exercised"));
+        assert!(!clean_text.contains("Additional audit findings"));
+
+        let with_finding = Verdict {
+            approved: false,
+            findings: vec![
+                json!({"severity":"medium","issue":"Input X causes Y","where":"src/lib.rs:42"}),
+            ],
+            coverage: serde_json::Map::new(),
+            resolved: vec![],
+        };
+        let text = audit_text(
+            &Ok(with_finding),
+            true,
+            Some("Verdict: one confirmed issue"),
+        );
+        assert!(text.contains("one confirmed issue"));
+        assert!(text.contains("[medium] Input X causes Y (src/lib.rs:42)"));
+    }
 
     #[test]
     fn an_audit_is_current_only_for_the_same_scope_plan_and_integrated_files() {
