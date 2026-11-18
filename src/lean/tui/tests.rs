@@ -587,6 +587,117 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
 }
 
 #[test]
+fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.view.tasks = vec![
+        view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        },
+        view::TaskRow {
+            id: "t2".into(),
+            depends_on: vec!["t1".into()],
+            ..Default::default()
+        },
+        view::TaskRow {
+            id: "t3".into(),
+            depends_on: vec!["t1".into()],
+            ..Default::default()
+        },
+    ];
+    app.selected = "worker:t3".into();
+    app.graph_expanded = Some(app.selected.clone());
+    app.graph_revealed = None;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut previous_frame_origin = None;
+    for (width, height) in [(120, 40), (80, 24), (12, 5)] {
+        if width == 80 {
+            app.view.tasks[2].depends_on = vec!["t2".into()];
+            app.generation += 1;
+            // A resize can leave an offset for the previous expanded geometry.
+            app.offset = (0, 0);
+        }
+        terminal.backend_mut().resize(width, height);
+        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let viewport = app.graph_area.expect("the full graph view rendered");
+        let graph = graph::Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope_with_exception(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        );
+        let node = graph.node("worker:t3").expect("expanded worker node");
+        let frame = graph
+            .frames
+            .iter()
+            .find(|frame| frame.key == node.group.as_deref().unwrap())
+            .unwrap();
+        let frame_origin = (frame.x, frame.y);
+        if width == 80 {
+            assert_ne!(
+                frame_origin,
+                previous_frame_origin.unwrap(),
+                "resized layout must move the selected frame"
+            );
+        }
+        previous_frame_origin = Some(frame_origin);
+        let (screen_x, screen_y) = (
+            i32::from(viewport.x) + i32::from(frame.x) - i32::from(app.offset.0),
+            i32::from(viewport.y) + i32::from(frame.y) - i32::from(app.offset.1),
+        );
+        let right = screen_x + i32::from(frame.width);
+        let bottom = screen_y + i32::from(frame.height);
+        let viewport_right = i32::from(viewport.right());
+        let viewport_bottom = i32::from(viewport.bottom());
+
+        if width >= 40 && height >= 16 {
+            assert_eq!(screen_x, i32::from(viewport.x) + 1, "{width}x{height}");
+            assert_eq!(screen_y, i32::from(viewport.y) + 1, "{width}x{height}");
+            assert_eq!(right, viewport_right - 1, "{width}x{height}");
+            assert_eq!(bottom, viewport_bottom - 1, "{width}x{height}");
+            assert_eq!(node.width, app.graph_viewport.unwrap().0 - 6);
+            assert_eq!(node.height, app.graph_viewport.unwrap().1 - 4);
+        } else {
+            let node = graph.node("worker:t3").unwrap();
+            let node_screen = (
+                i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0),
+                i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1),
+            );
+            let [clipped_card, title, content] =
+                graph::expanded_card_areas(viewport, node_screen, (node.width, node.height));
+            for rect in [clipped_card, title, content] {
+                if !rect.is_empty() {
+                    assert!(rect.x >= viewport.x && rect.y >= viewport.y);
+                    assert!(rect.right() <= viewport.right());
+                    assert!(rect.bottom() <= viewport.bottom());
+                }
+            }
+        }
+
+        let normal = graph::Graph::new_with_viewport(
+            &app.view,
+            &app.graph_scope_with_exception(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        let normal_node = normal.node("worker:t2").unwrap();
+        let expanded_sibling = graph.node("worker:t2").unwrap();
+        assert_eq!(
+            (expanded_sibling.width, expanded_sibling.height),
+            (normal_node.width, normal_node.height),
+            "ordinary card dimensions changed at {width}x{height}"
+        );
+    }
+}
+
+#[test]
 fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     let mut app = test_app();
     app.focus = Focus::Graph;

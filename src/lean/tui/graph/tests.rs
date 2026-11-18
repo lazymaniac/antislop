@@ -46,8 +46,7 @@ fn expanded_pty_content_grows_with_the_viewport() {
         usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
         364
     );
-    // The expanded card keeps MARGIN on either side.
-    assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
+    assert_eq!((size.expanded_w, size.expanded_h), (74, 10));
     let expanded = content_area(size.expanded_w, size.expanded_h);
     let baseline = content_area(56, 10);
     assert_eq!(

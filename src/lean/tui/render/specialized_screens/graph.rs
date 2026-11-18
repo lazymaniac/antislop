@@ -106,9 +106,17 @@ impl App {
         // of stopping a cell short when `from` is above or left of the view.
         let lerp = |from: i32, to: i32| to + (from - to) * (full - progress) / full;
         // The fully opened card lands where reveal_selected_node puts it.
-        let settled = node_x - i32::from(expanded_offset_x(graph, (node.x, node.width), width));
+        let (outer_x, outer_y) =
+            expanded_outer_origin(graph, node.x, node.y, node.group.as_deref());
+        let settled_offset_x = outer_x
+            .saturating_sub(1)
+            .min(graph.width.saturating_sub(width));
+        let settled_offset_y = outer_y
+            .saturating_sub(1)
+            .min(graph.height.saturating_sub(height));
+        let settled = node_x - i32::from(settled_offset_x);
         let left = lerp(anchor_x - node_w / 2, settled);
-        let top = lerp(anchor_y - node_h / 2, 0);
+        let top = lerp(anchor_y - node_h / 2, node_y - i32::from(settled_offset_y));
         let max_x = i32::from(graph.width.saturating_sub(width));
         let max_y = i32::from(graph.height.saturating_sub(height));
         self.offset.0 = (node_x - left).clamp(0, max_x.max(0)) as u16;
@@ -295,6 +303,14 @@ impl App {
         let progress = self.view.now_click_rows(max_rows);
         let (graph_area, now_area) = graph_progress_areas(frame_inner, progress.len());
         let inner = padded(graph_area);
+        if self
+            .graph_viewport
+            .is_some_and(|viewport| viewport != (inner.width, inner.height))
+        {
+            // Re-run the reveal against the layout rebuilt for this viewport,
+            // even when the selected key has not changed.
+            self.graph_revealed = None;
+        }
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
         (inner, now_area, progress)
@@ -383,13 +399,19 @@ impl App {
         };
         let (left, top) = &mut self.offset;
         if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
-            // An opened card fills the view: put all of it on screen.
-            *left = expanded_offset_x(
-                graph,
-                (node.x, node.width),
-                self.graph_viewport.map_or(0, |v| v.0),
+            // Keep the unit frame's outer edge one cell inside the viewport.
+            let (outer_x, outer_y) =
+                expanded_outer_origin(graph, node.x, node.y, node.group.as_deref());
+            *left = outer_x.saturating_sub(1).min(
+                graph
+                    .width
+                    .saturating_sub(self.graph_viewport.map_or(0, |v| v.0)),
             );
-            *top = node.y;
+            *top = outer_y.saturating_sub(1).min(
+                graph
+                    .height
+                    .saturating_sub(self.graph_viewport.map_or(0, |v| v.1)),
+            );
             return;
         }
         reveal_axis(
@@ -625,13 +647,15 @@ fn graph_vertical_markers(graph: &Graph, offset_y: u16, viewport_height: u16) ->
         })
 }
 
-/// The horizontal offset centring an opened card in a view `width` wide,
-/// within the graph: a graph wider than a phone's panel, its other rows
-/// scrolling, still shows the card with even margins.
-fn expanded_offset_x(graph: &Graph, (x, card): (u16, u16), width: u16) -> u16 {
-    (x + card / 2)
-        .saturating_sub(width / 2)
-        .min(graph.width.saturating_sub(width))
+fn expanded_outer_origin(graph: &Graph, x: u16, y: u16, group: Option<&str>) -> (u16, u16) {
+    group
+        .and_then(|group| {
+            graph
+                .frames
+                .iter()
+                .find(|frame| frame.key == group && frame.visible)
+        })
+        .map_or((x, y), |frame| (frame.x, frame.y))
 }
 
 fn graph_position_marker_glyph(above: bool, ascii: bool) -> &'static str {

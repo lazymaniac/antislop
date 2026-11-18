@@ -1614,12 +1614,16 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             legacy_card.1.saturating_sub(4),
         );
         assert!(content.0 > legacy_content.0);
-        // A margin either side and its task frame: nothing more, and
-        // nothing past the viewport.
+        // One outer cell on either side plus the task frame's two columns.
         assert_eq!(
-            card.width + 10,
+            card.width + 6,
             viewport.0,
             "card keeps only its required margins"
+        );
+        assert_eq!(
+            card.height + 4,
+            viewport.1,
+            "frame keeps one top and bottom cell"
         );
         assert!(graph.width <= viewport.0, "the graph fits the canvas");
         println!(
@@ -4525,13 +4529,12 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
         1,
     );
     let card = expanded.node("worker:t1").unwrap();
-    // A margin either side and the task frame keep the card within the
-    // viewport.
-    assert_eq!((card.width, card.height), (66, 10));
+    // The unit frame is exactly one cell inside each viewport edge.
+    assert_eq!((card.width, card.height), (70, 8));
+    assert_eq!((card.width + 6, card.height + 4), initial_viewport);
     assert!(expanded.width <= 76);
     let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
-    assert_eq!(content_area, 310);
-    assert_eq!(usize::from(52u16) * usize::from(card.height - 4), 312);
+    assert_eq!(content_area, 198);
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
