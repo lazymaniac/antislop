@@ -332,6 +332,126 @@ fn a_plan_comment_gets_an_independent_revision_and_review() {
     );
 }
 
+#[test]
+fn a_plan_comment_can_request_a_full_replan_with_the_active_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let source = std::fs::read_to_string(&codex).unwrap();
+    let branch = r#"elif "request a complete replacement" in prompt:
+    import os, urllib.request, re
+    def gateway(name, arguments):
+        body = {"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{
+            "name":name, "arguments":arguments, "_meta":{"threadId":"orch"}}}
+        request = urllib.request.Request(os.environ["ANTISLOP_MCP_URL"],
+            json.dumps(body).encode(), {"Authorization":"Bearer " + os.environ["ANTISLOP_MCP_TOKEN"],
+            "Content-Type":"application/json"})
+        result = json.loads(urllib.request.urlopen(request, timeout=30).read())["result"]
+        if result.get("isError"):
+            raise RuntimeError(result["content"][0]["text"])
+        return json.loads(result["content"][0]["text"])
+    active = gateway("current_turn", {})
+    assert active["turn"] == os.environ["FIXTURE_TURN"]
+    assert active["role"] == "comment-orchestrator"
+    assert "request_replan" in active["tools"] and "revise_plan" in active["tools"]
+    requested = gateway("request_replan", {"turn":active["turn"],
+        "reason":"The user asked for a complete replacement of the current plan."})
+    assert requested["state"] == "requested"
+    ids = re.findall(r"user comment #(\d+) on", prompt)
+    answer = "The planner will prepare a complete replacement.\n```comments\n" + json.dumps({"addressed":[{"id":int(i),"how":"Requested a complete replacement plan"} for i in ids]}) + "\n```"
+"#;
+    let marker = "elif \"Address each new user comment\" in prompt:";
+    assert!(source.contains(marker));
+    let replanned = r#"elif "Runtime capability boundary: you are the planner." in prompt and "The user asked for a complete replacement of the current plan." in prompt:
+    plan = {"tasks": [{"id":"replacement", "title":"Replacement storage assessment",
+        "summary":"Reassess storage under a fresh plan.", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],
+        "goal":"Reassess storage", "change_kind":"none", "kind":"analysis",
+        "reviewer":{"summary":"Review the replacement assessment."}}]}
+    answer = "Replacement plan.\n```plan\n" + json.dumps(plan) + "\n```"
+"#;
+    let planner_marker = "elif \"You are the planner\" in prompt:";
+    assert!(source.contains(planner_marker));
+    let source = source.replace(planner_marker, &format!("{replanned}{planner_marker}"));
+    std::fs::write(&codex, source.replace(marker, &format!("{branch}{marker}"))).unwrap();
+
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let initial = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    let comment = core
+        .comment_scoped(
+            &conversation.id,
+            Some(&initial),
+            &format!("plan:{initial}:line:2"),
+            "Please request a complete replacement of the plan",
+        )
+        .unwrap();
+    assert_eq!(core.review_comments(&conversation.id, &initial).unwrap(), 1);
+    wait_idle(&core, &conversation.id);
+
+    let comment_turn = core
+        .store
+        .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
+        .unwrap()
+        .expect("comment orchestrator ran");
+    assert_eq!(comment_turn.status, antislop::lean::store::TurnStatus::Done);
+    let replacement = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    let calls = calls(dir.path());
+    assert_ne!(initial, replacement, "planner submitted a replacement plan");
+    let history = core
+        .store
+        .plan_history(&conversation.id, &replacement)
+        .unwrap();
+    assert!(
+        history
+            .turns
+            .iter()
+            .any(|turn| { turn.role == "plan-reviewer" && turn.status == "done" })
+    );
+
+    let planner = calls
+        .iter()
+        .find(|(binary, prompt)| {
+            binary == "codex"
+                && prompt.contains("Runtime capability boundary: you are the planner.")
+                && prompt.contains("The user asked for a complete replacement")
+        })
+        .expect("the full replan ran the planner");
+    assert!(
+        planner
+            .1
+            .contains("The user asked for a complete replacement")
+    );
+    assert!(planner.1.contains("t1") && planner.1.contains("t2"));
+    let comment_call = calls
+        .iter()
+        .find(|(_, prompt)| prompt.contains("Address each new user comment"))
+        .expect("comment orchestrator handled the comment");
+    assert!(comment_call.1.contains(&initial));
+    assert!(
+        comment_call
+            .1
+            .contains("Only the orchestrator calls revise_plan")
+    );
+    assert!(
+        comment_call
+            .1
+            .contains("request_replan delegates a complete replacement")
+    );
+    assert!(
+        core.store
+            .comments(&conversation.id, "resolved")
+            .unwrap()
+            .iter()
+            .any(|entry| entry.id == comment.id)
+    );
+}
+
 fn calls(dir: &Path) -> Vec<(String, String)> {
     std::fs::read_to_string(dir.join(CALLS))
         .unwrap()

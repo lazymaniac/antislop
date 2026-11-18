@@ -101,6 +101,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
 fn orchestrator_tools() -> Vec<&'static str> {
     vec![
         TOOL,
+        "current_turn",
         ASK_USER,
         SUBMIT_REQUIREMENTS,
         SUBMIT_PLAN,
