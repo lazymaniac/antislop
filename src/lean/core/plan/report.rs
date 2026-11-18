@@ -61,20 +61,35 @@ impl Core {
         }
         let mut verdict = audit.map(|(_, verdict)| verdict);
         apply_audit_gates(&mut verdict, input.tasks);
-        let mut payload = review_json(&verdict);
-        if code_review {
-            payload["report"] = json!(audit_report);
-        }
-        payload["plan"] = json!(input.plan_id);
-        payload["binding"] = json!(binding);
-        self.store.append_event(
+        self.persist_plan_audit(
             input.conversation,
-            None,
-            Some(input.plan_id),
-            "audit",
-            &payload,
+            input.plan_id,
+            &binding,
+            code_review,
+            audit_report.as_deref(),
+            &verdict,
         )?;
         text.push_str(&audit_text(&verdict, code_review, audit_report.as_deref()));
+        Ok(())
+    }
+
+    fn persist_plan_audit(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        binding: &str,
+        code_review: bool,
+        report: Option<&str>,
+        verdict: &std::result::Result<Verdict, String>,
+    ) -> Result<()> {
+        let mut payload = review_json(verdict);
+        if code_review {
+            payload["report"] = json!(report);
+        }
+        payload["plan"] = json!(plan_id);
+        payload["binding"] = json!(binding);
+        self.store
+            .append_event(conversation, None, Some(plan_id), "audit", &payload)?;
         Ok(())
     }
 
@@ -340,6 +355,73 @@ mod tests {
         );
         assert!(text.contains("one confirmed issue"));
         assert!(text.contains("[medium] Input X causes Y (src/lib.rs:42)"));
+    }
+
+    #[test]
+    fn code_review_final_audit_persists_report_and_verdict_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_team(&conversation, tasks::Team::CodeReview, "Review-only run")
+            .unwrap();
+        let tasks = core
+            .store
+            .add_plan(
+                &conversation,
+                &[json!({
+                    "id":"review",
+                    "title":"Review candidate",
+                    "goal":"Inspect the candidate",
+                    "kind":"code_review",
+                    "change_kind":"none",
+                    "acceptance_criteria":[{"id":"C1","text":"Findings are supported by evidence"}]
+                })],
+            )
+            .unwrap();
+        let plan_id = &tasks[0].plan_id;
+        let report = "Scope: src/lib.rs:1-80\nVerdict: no confirmed findings";
+        let verdict = Ok(Verdict {
+            approved: false,
+            findings: vec![json!({
+                "severity":"medium",
+                "issue":"Input X causes Y",
+                "where":"src/lib.rs:42"
+            })],
+            coverage: serde_json::Map::new(),
+            resolved: vec![],
+        });
+
+        core.persist_plan_audit(
+            &conversation,
+            plan_id,
+            "binding-123",
+            true,
+            Some(report),
+            &verdict,
+        )
+        .unwrap();
+
+        let event = core
+            .store
+            .latest_audit_event(&conversation)
+            .unwrap()
+            .expect("final audit event was persisted");
+        assert_eq!(event.kind, "audit");
+        assert_eq!(event.plan_id.as_deref(), Some(plan_id.as_str()));
+        assert_eq!(event.payload["plan"], json!(plan_id));
+        assert_eq!(event.payload["binding"], "binding-123");
+        assert_eq!(event.payload["report"], report);
+        assert_eq!(event.payload["approved"], false);
+        assert_eq!(event.payload["findings"][0]["issue"], "Input X causes Y");
+        assert_eq!(event.payload["findings"][0]["where"], "src/lib.rs:42");
     }
 
     #[test]
