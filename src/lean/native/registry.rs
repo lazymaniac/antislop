@@ -105,6 +105,45 @@ impl Registry {
         Ok(true)
     }
 
+    /// End an interrupted CLI while keeping its recorded provider session for resumption.
+    pub(crate) fn retire_role(&self, conversation: &str, role: &str) -> Result<()> {
+        let retired = self
+            .sessions
+            .lock()
+            .map_err(invalid)?
+            .remove(&(conversation.to_owned(), role.to_owned()));
+        if let Some(session) = retired {
+            session.stop.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    /// Completion releases only this conversation's idle CLIs, including attached terminals.
+    pub(crate) fn retire_conversation(&self, conversation: &str) -> Result<bool> {
+        let retired = {
+            let mut sessions = self.sessions.lock().map_err(invalid)?;
+            if sessions.iter().any(|((owner, _), session)| {
+                owner == conversation
+                    && (session.executing.load(Ordering::SeqCst) || Arc::strong_count(session) != 1)
+            }) {
+                return Ok(false);
+            }
+            let keys = sessions
+                .keys()
+                .filter(|(owner, _)| owner == conversation)
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| sessions.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        for session in &retired {
+            session.stop.store(true, Ordering::SeqCst);
+        }
+        drop(retired);
+        Ok(true)
+    }
+
     pub(crate) fn shutdown(&self) -> Result<()> {
         let retired = {
             let mut sessions = self.sessions.lock().map_err(invalid)?;

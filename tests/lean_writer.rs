@@ -1602,6 +1602,21 @@ fn a_committed_change_names_its_commit_on_the_card() {
     let head = git(&session, &["rev-parse", "HEAD"]);
     assert_eq!(feedback["integration"]["outcome"], "committed");
     assert_eq!(feedback["integration"]["commit"], head);
+    let commit_message = git(&session, &["log", "-1", "--format=%B"]);
+    assert_eq!(feedback["integration"]["commit_message"], commit_message);
+    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
+    let integration = events
+        .iter()
+        .find(|event| event.kind == "integration" && event.payload["id"] == "t1")
+        .unwrap();
+    assert_eq!(integration.payload["commit_message"], commit_message);
+    let mut view = antislop::lean::tui::view::View::default();
+    for event in events {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert!(view.cards.iter().any(|card| matches!(card,
+        antislop::lean::tui::TranscriptCard::System {title,text,..}
+        if title == "Completed: Add greeting" && text.contains(&commit_message) && !text.contains(&head))));
     assert_eq!(
         feedback["integration"]["files"],
         serde_json::json!(["hello.txt"])

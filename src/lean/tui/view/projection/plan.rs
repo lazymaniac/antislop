@@ -20,13 +20,18 @@ pub(super) fn on_plan_proposed(
     } else {
         (false, "Plan received.".into())
     });
+    let preserve_live_graph =
+        payload["scope_revision"].is_string() && payload["plan"].as_str() == view.plan.as_deref();
+    view.pending_scope_revision = payload["scope_revision"].is_string();
     view.plan = payload["plan"].as_str().map(str::to_owned);
     view.plan_head_revision = payload["base_revision"].as_i64().unwrap_or(0);
     view.plan_doc = payload["document"].as_str().unwrap_or_default().to_owned();
-    view.tasks = proposed_tasks(payload);
-    view.task_meta = proposed_task_meta(payload);
-    fill_parallel_fallback(view, payload);
-    reset_plan_agents(view);
+    if !preserve_live_graph {
+        view.tasks = proposed_tasks(payload);
+        view.task_meta = proposed_task_meta(payload);
+        fill_parallel_fallback(view, payload);
+        reset_plan_agents(view);
+    }
     append_plan_review(view, payload);
     publish_plan_summary(view, payload);
 }
@@ -102,6 +107,20 @@ fn proposed_activity(writes: bool) -> String {
     } else {
         String::new()
     }
+}
+
+pub(super) fn update_contract(row: &mut TaskRow, contract: TaskRow) {
+    row.title = contract.title;
+    row.summary = contract.summary;
+    row.reviewer_summary = contract.reviewer_summary;
+    row.section = contract.section;
+    row.kind = contract.kind;
+    row.goal = contract.goal;
+    row.depends_on = contract.depends_on;
+    row.parallel_with = contract.parallel_with;
+    row.change_kind = contract.change_kind;
+    row.focus = contract.focus;
+    row.risks = contract.risks;
 }
 
 fn strings(value: &Value) -> Vec<String> {

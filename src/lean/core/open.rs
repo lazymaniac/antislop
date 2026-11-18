@@ -103,6 +103,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
             let Some(core) = weak.upgrade() else { break };
             let _ = core.native.reap_idle();
             core.drain_worktree_cleanup();
+            core.finish_idle_sessions();
         }
     });
 }

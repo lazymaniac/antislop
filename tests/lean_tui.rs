@@ -1000,7 +1000,7 @@ fn app_fake_request_capture_through_app() {
     let (tx, rx) = mpsc::channel::<Value>();
 
     let handle = thread::spawn(move || {
-        for _ in 0..7 {
+        for _ in 0..8 {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -1065,11 +1065,21 @@ fn app_fake_request_capture_through_app() {
         "kind": "plan_proposed",
         "payload": {
             "plan": "plan-xyz",
+            "scope_revision": "scope-change-1",
+            "revision_token": "reviewed-scope-token",
             "tasks": [
                 {"id": "t1", "title": "Kompilacja", "change_kind": "code"}
             ]
         }
     }));
+    app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
+    app.run_workflow(Command::AcceptPlan);
+    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(req["op"], "resume");
+    assert_eq!(req["plan"], "plan-xyz");
+    assert_eq!(req["revision_token"], "reviewed-scope-token");
+    assert_eq!(app.input.text, "Unsent draft 👩‍💻");
+
     // 6. Plan resume
     app.view.apply(&json!({
         "seq": 2,
@@ -3313,6 +3323,11 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         }
     }));
     assert_eq!(app.view.messages[1].state, "waiting for turn");
+    assert_eq!(
+        app.view.cards.len(),
+        1,
+        "internal instructions stay in agent history"
+    );
     app.view.apply(&serde_json::json!({
         "kind": "mail_rejected",
         "payload": {
@@ -3337,6 +3352,8 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
     assert!(text.contains("orchestrator"));
     assert!(text.contains("delivered"));
     assert!(text.contains("rejected"));
+    assert!(text.contains("agent unavailable"));
+    assert!(!text.contains("Task t9 to perform"));
     assert!(text.contains("First user request"));
 }
 
@@ -7760,6 +7777,7 @@ fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
     );
     app.view.messages.push(antislop::lean::tui::MessageEntry {
         id: "7".into(),
+        sent_at: None,
         sender: "user".into(),
         target: "orchestrator".into(),
         state: "delivered".into(),

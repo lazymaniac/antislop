@@ -21,7 +21,7 @@ pub(super) fn on_comment_replied(
     }
 }
 
-pub(super) fn on_mail(view: &mut View, payload: &Value) {
+pub(super) fn on_mail(view: &mut View, event: &Value, payload: &Value) {
     let recipient = event_text(payload, "recipient");
     let mail_id = payload["id"].as_u64().unwrap_or_default();
     view.mail.insert(mail_id, recipient.clone());
@@ -31,14 +31,17 @@ pub(super) fn on_mail(view: &mut View, payload: &Value) {
     } else {
         format!("m{}", view.after)
     };
-    let message = mail_message_entry(&id_str, &sender, &recipient, payload);
+    let mut message = mail_message_entry(&id_str, &sender, &recipient, payload);
+    message.sent_at = event["created_ms"].as_i64();
     view.messages.push(message.clone());
-    view.cards.push(TranscriptCard::Message(message));
     let line = mail_line(&sender, &recipient, payload);
-    view.push(
-        Style::default().fg(crate::lean::tui::theme::ayu::PURPLE),
-        format!("✉ {line} · waiting for recipient's next turn"),
-    );
+    if sender == "You" || recipient == "user" || recipient == "You" {
+        view.cards.push(TranscriptCard::Message(message));
+        view.push(
+            Style::default().fg(crate::lean::tui::theme::ayu::PURPLE),
+            format!("✉ {line} · waiting for recipient's next turn"),
+        );
+    }
     let from = View::mail_key(&event_text(payload, "sender"));
     let to = View::mail_key(&recipient);
     record_mail_link(view, from, to, &line);
@@ -47,6 +50,7 @@ pub(super) fn on_mail(view: &mut View, payload: &Value) {
 fn mail_message_entry(id: &str, sender: &str, recipient: &str, payload: &Value) -> MessageEntry {
     MessageEntry {
         id: id.to_owned(),
+        sent_at: None,
         sender: sender.to_owned(),
         target: recipient.to_owned(),
         text: event_text(payload, "text"),
@@ -102,7 +106,14 @@ pub(super) fn on_mail_delivered(
                     msg.state = "delivered".to_owned();
                 }
             }
-            if let Some(recipient) = view.mail.remove(&mail_id) {
+            if let Some(recipient) = view.mail.remove(&mail_id)
+                && view.messages.iter().any(|message| {
+                    message.id == id_str
+                        && (message.sender == "You"
+                            || message.target == "user"
+                            || message.target == "You")
+                })
+            {
                 view.push(dim(), format!("✓ {recipient} received message"));
             }
         }
@@ -113,14 +124,14 @@ pub(super) fn on_mail_rejected(view: &mut View, payload: &Value) {
     let sender = event_text(payload, "sender");
     let recipient = event_text(payload, "recipient");
     mark_rejected_messages(view, &sender, &recipient);
-    view.push(
-        Style::default().fg(crate::lean::tui::theme::ayu::RED),
+    view.system_card(
+        "Message rejected",
         format!(
-            "✗ message from {} to {} undeliverable: {}",
-            sender,
-            recipient,
-            event_text(payload, "reason")
+            "Message to {} could not be delivered: {}",
+            clean_line(&recipient),
+            clean(&event_text(payload, "reason"))
         ),
+        crate::lean::tui::theme::Tone::Failed,
     );
 }
 

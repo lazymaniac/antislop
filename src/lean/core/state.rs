@@ -57,7 +57,7 @@ pub(in crate::lean) struct Activity {
     /// Active task processes can be cancelled independently.
     pub(in crate::lean::core) task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
     pub(in crate::lean::core) task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
-    pub(in crate::lean::core) orchestrator_restarts: Mutex<HashSet<String>>,
+    pub(in crate::lean) finishing: Mutex<HashSet<String>>,
     /// The blocked report last handed to each conversation's orchestrator,
     /// so that an unchanged block is told once.
     pub(in crate::lean::core) blocked_seen: Mutex<HashMap<String, String>>,
@@ -179,6 +179,15 @@ impl Core {
             .lock()
             .expect("session lifecycle mutex");
         self.require_accepting()?;
+        require(
+            !self
+                .activity
+                .finishing
+                .lock()
+                .expect("session finish mutex")
+                .contains(conversation),
+            "the session is finalizing its result; retry when cleanup finishes",
+        )?;
         let id = crate::id();
         let cancel = Arc::new(AtomicBool::new(false));
         self.activity

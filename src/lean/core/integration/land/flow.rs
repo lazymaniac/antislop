@@ -178,6 +178,7 @@ impl<'a> Integration<'a> {
             self.spec,
             &outcome,
             &landed,
+            &target,
         )?;
         if landing.status == status::APPROVED {
             self.record_result_documents(&target, change, &landed)?;

@@ -354,7 +354,9 @@ mod tests {
         for event in core.store.events_since(&conversation, 0, 10_000).unwrap() {
             view.apply(&serde_json::to_value(event).unwrap());
         }
-        assert!(view.tasks.iter().any(|task| task.id == "extra"));
+        assert!(view.plan_proposed());
+        assert!(!view.tasks.iter().any(|task| task.id == "extra"));
+        assert!(view.plan_doc.contains("extra"));
         let candidate_token = core.plan_revision_token(&conversation, &plan).unwrap();
         core.discard_scope_revision(&conversation, &plan, Some("Keep the accepted scope"), false)
             .unwrap();

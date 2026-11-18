@@ -422,8 +422,6 @@ mod tests {
                 context.upto,
                 &context.project,
                 &context.config,
-                context.is_comment,
-                context.audit_response.is_some(),
             );
             assert_eq!(setup.role, ORCHESTRATOR);
             let prompt = super::super::render_prompt(context, false, false);
@@ -459,8 +457,6 @@ mod tests {
                 context.upto,
                 &context.project,
                 &context.config,
-                context.is_comment,
-                context.audit_response.is_some(),
             );
             assert_eq!(setup.role, ORCHESTRATOR);
 

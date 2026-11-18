@@ -53,6 +53,9 @@ const HANDLERS: &[(&str, Handler)] = &[
     ),
     ("interview_question", conversation::on_interview_question),
     ("session_started", conversation::on_session_started),
+    ("session_completed", conversation::on_session_completed),
+    ("session_finalizing", conversation::on_session_finalizing),
+    ("session_cleanup_pending", reviews::on_notice),
     ("team_selected", conversation::on_team_selected),
     ("agent_final", agents::on_agent_final),
     ("planning_progress", conversation::on_planning_progress),
@@ -104,8 +107,8 @@ fn integration(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) 
 fn task_recovery(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
     tasks::on_task_recovery(view, payload);
 }
-fn mail_message(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
-    mail::on_mail(view, payload);
+fn mail_message(view: &mut View, event: &Value, payload: &Value, _: String, _: &str) {
+    mail::on_mail(view, event, payload);
 }
 fn mail_rejected(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
     mail::on_mail_rejected(view, payload);

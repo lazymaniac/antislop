@@ -272,7 +272,7 @@ fn a_plan_comment_gets_an_independent_revision_and_review() {
     );
     assert!(
         core.store
-            .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
+            .last_turn(&conversation.id, "orchestrator")
             .unwrap()
             .is_none()
     );
@@ -309,7 +309,7 @@ fn a_plan_comment_gets_an_independent_revision_and_review() {
     );
     let turn = core
         .store
-        .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
+        .last_turn(&conversation.id, "orchestrator")
         .unwrap()
         .unwrap();
     assert_eq!(turn.status, antislop::lean::store::TurnStatus::Done);
@@ -351,7 +351,7 @@ fn a_plan_comment_can_request_a_full_replan_with_the_active_turn() {
         return json.loads(result["content"][0]["text"])
     active = gateway("current_turn", {})
     assert active["turn"] == os.environ["FIXTURE_TURN"]
-    assert active["role"] == "comment-orchestrator"
+    assert active["role"] == "orchestrator"
     assert "request_replan" in active["tools"] and "revise_plan" in active["tools"]
     requested = gateway("request_replan", {"turn":active["turn"],
         "reason":"The user asked for a complete replacement of the current plan."})
@@ -394,7 +394,7 @@ fn a_plan_comment_can_request_a_full_replan_with_the_active_turn() {
 
     let comment_turn = core
         .store
-        .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
+        .last_turn(&conversation.id, "orchestrator")
         .unwrap()
         .expect("comment orchestrator ran");
     assert_eq!(comment_turn.status, antislop::lean::store::TurnStatus::Done);
@@ -622,7 +622,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
         .sessions(&conversation.id)
         .unwrap()
         .into_iter()
-        .filter(|turn| turn.role == antislop::lean::COMMENT_ORCHESTRATOR)
+        .filter(|turn| turn.role == "orchestrator")
         .count();
     assert_eq!(turns, 1, "both comments are answered in one turn");
     let prompt = calls(dir.path())

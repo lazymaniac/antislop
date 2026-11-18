@@ -4,58 +4,14 @@ pub(super) fn comment_context(
     core: &Core,
     conversation: &str,
     upto: u64,
-    answered: u64,
     is_comment: bool,
 ) -> Result<String> {
     let mut context = String::new();
     if is_comment {
         append_comment_instructions(&mut context);
         append_comment_plans(core, conversation, upto, &mut context)?;
-    } else {
-        append_comment_followup(core, conversation, answered, &mut context)?;
     }
     Ok(context)
-}
-
-fn append_comment_followup(
-    core: &Core,
-    conversation: &str,
-    answered: u64,
-    context: &mut String,
-) -> Result<()> {
-    if core.store.last_answered(conversation, ORCHESTRATOR)? >= answered {
-        return Ok(());
-    }
-    context.push_str("\n\nThe comment agent handled feedback since your previous turn. Continue from its current plan and answer:\n");
-    append_last_orchestrator_reply(core, conversation, context)?;
-    append_latest_plan(core, conversation, context)?;
-    Ok(())
-}
-
-fn append_last_orchestrator_reply(
-    core: &Core,
-    conversation: &str,
-    context: &mut String,
-) -> Result<()> {
-    if let Some(reply) = core
-        .store
-        .messages_by(conversation, ORCHESTRATOR, 0)?
-        .last()
-    {
-        context.push_str(&reply.text);
-        context.push('\n');
-    }
-    Ok(())
-}
-
-fn append_latest_plan(core: &Core, conversation: &str, context: &mut String) -> Result<()> {
-    if let Some(task) = core.store.latest_plan(conversation)?.first()
-        && let Some(document) = core.store.plan_document(conversation, &task.plan_id)?
-    {
-        context.push_str(&document);
-        context.push('\n');
-    }
-    Ok(())
 }
 
 fn append_comment_instructions(context: &mut String) {

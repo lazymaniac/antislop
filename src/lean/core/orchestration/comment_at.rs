@@ -162,14 +162,12 @@ impl Core {
         self.store.conversation(conversation)?;
         let running = self.activity.running.lock().expect("running mutex");
         self.store.add_message(conversation, RUNTIME,
-            "Restart the current orchestration round in a fresh session. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. The runtime imposes no access limits or execution budgets on agents. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
-        self.activity
-            .orchestrator_restarts
-            .lock()
-            .expect("orchestrator restart mutex")
-            .insert(conversation.into());
+            "Continue orchestration in this same session after interrupting the current response. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. The runtime imposes no access limits or execution budgets on agents. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
         if let Some(cancel) = running.get(conversation) {
             cancel.store(true, Ordering::SeqCst);
+        }
+        for role in ORCHESTRATION_ROLES {
+            self.native.retire_role(conversation, role)?;
         }
         drop(running);
         self.wake(conversation);
@@ -177,6 +175,19 @@ impl Core {
     }
 
     pub fn cancel(&self, conversation: &str) {
+        if self
+            .activity
+            .finishing
+            .lock()
+            .expect("session finish mutex")
+            .contains(conversation)
+            && let Err(error) = self.store.set_paused(conversation, true)
+        {
+            self.notice(
+                conversation,
+                &format!("could not stop session cleanup: {error}"),
+            );
+        }
         for (owner, flag) in self
             .activity
             .task_cancels
@@ -242,7 +253,7 @@ impl Core {
         self.store.delete_session(conversation)
     }
 
-    fn is_idle_with_plans(
+    pub(in crate::lean::core) fn is_idle_with_plans(
         &self,
         conversation: &str,
         plans: &HashMap<String, Arc<AtomicBool>>,
@@ -250,11 +261,17 @@ impl Core {
         let running = self.activity.running.lock().expect("running mutex");
         !self
             .activity
-            .operations
+            .finishing
             .lock()
-            .expect("operation leases")
-            .values()
-            .any(|operation| operation.conversation == conversation)
+            .expect("session finish mutex")
+            .contains(conversation)
+            && !self
+                .activity
+                .operations
+                .lock()
+                .expect("operation leases")
+                .values()
+                .any(|operation| operation.conversation == conversation)
             && !self.activity.agent_review_running(conversation)
             && !self
                 .revisions
@@ -271,10 +288,16 @@ impl Core {
     pub fn busy(&self) -> bool {
         !self
             .activity
-            .operations
+            .finishing
             .lock()
-            .expect("operation leases")
+            .expect("session finish mutex")
             .is_empty()
+            || !self
+                .activity
+                .operations
+                .lock()
+                .expect("operation leases")
+                .is_empty()
             || !self
                 .runtime_activation_cancels
                 .lock()

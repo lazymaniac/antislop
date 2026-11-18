@@ -14,8 +14,14 @@ pub(super) fn record(
     spec: &TaskContract,
     outcome: &git::Integration,
     files: &[String],
+    target: &Path,
 ) -> Result<Landing> {
     let landing = record_outcome(core, task, outcome, files)?;
+    if let git::Integration::Committed(commit) = outcome {
+        let message = git::ok(target, &["log", "-1", "--format=%B", commit])?;
+        task.feedback.as_mut().expect("landing feedback")["integration"]["commit_message"] =
+            json!(tasks::bound(&message, tasks::DETAIL_LIMIT));
+    }
     append_event(core, conversation, task, spec, &landing);
     Ok(landing)
 }
@@ -77,7 +83,8 @@ fn append_event(
             "id": spec.id,
             "title": spec.title,
             "status": landing.status,
-            "detail": tasks::bound(&landing.text, tasks::DETAIL_LIMIT)
+            "detail": tasks::bound(&landing.text, tasks::DETAIL_LIMIT),
+            "commit_message": task.feedback.as_ref().map(|feedback| &feedback["integration"]["commit_message"])
         }),
     );
 }

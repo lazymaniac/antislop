@@ -2,12 +2,34 @@ use super::super::tui::view::clean;
 use serde_json::Value;
 use std::io::Write;
 
-pub(super) fn latest_plan(events: &[Value]) -> Option<String> {
+pub(super) struct PresentedPlan {
+    pub(super) id: String,
+    pub(super) revision_token: Option<String>,
+}
+
+pub(super) fn latest_plan(events: &[Value]) -> Option<PresentedPlan> {
     events
         .iter()
         .rev()
-        .find(|event| event["kind"] == "plan_proposed")
-        .and_then(|event| event["payload"]["plan"].as_str().map(str::to_owned))
+        .find(|event| {
+            matches!(
+                event["kind"].as_str(),
+                Some("plan_proposed" | "scope_revision_resolved")
+            )
+        })
+        .and_then(|event| {
+            let payload = &event["payload"];
+            Some(PresentedPlan {
+                id: payload["plan"].as_str()?.to_owned(),
+                revision_token: if event["kind"] == "plan_proposed"
+                    && payload["scope_revision"].is_string()
+                {
+                    payload["revision_token"].as_str().map(str::to_owned)
+                } else {
+                    None
+                },
+            })
+        })
 }
 
 /// One terminal line for an event, if it is worth one.
@@ -40,7 +62,28 @@ fn describe_status(kind: &str, payload: &Value) -> Option<String> {
         }
         "paused" => Some("▶ resumed".into()),
         "notice" | "runtime_activation" => Some(format!("⚠ {}", value(payload, "text"))),
-        "mail" if payload["kind"] != "copy" => Some(describe_mail(payload)),
+        "session_cleanup_pending" => Some(format!("⚠ {}", value(payload, "text"))),
+        "session_finalizing" => Some(format!(
+            "All tasks and the final audit passed. Finalizing branch {} and removing temporary session resources.",
+            value(payload, "branch")
+        )),
+        "session_completed" if !payload["branch"].is_string() => Some(format!(
+            "Session completed. Reports and evidence are available in session history for {}. Temporary agent resources released.",
+            value(payload, "project")
+        )),
+        "session_completed" => Some(format!(
+            "Session completed. Repository: {}\nFinal branch: {}\nReview: git diff main...{}\nContinue: git switch {}\nTemporary task branches, worktrees and agent processes removed.",
+            value(payload, "project"),
+            value(payload, "branch"),
+            value(payload, "branch"),
+            value(payload, "branch")
+        )),
+        "mail"
+            if payload["kind"] != "copy"
+                && (payload["sender"] == "user" || payload["recipient"] == "user") =>
+        {
+            Some(describe_mail(payload))
+        }
         "mail_delivered" => Some(format!("✓ delivered messages {}", payload["ids"])),
         "mail_rejected" => Some(format!(
             "✗ message to {} undeliverable: {}",
@@ -57,16 +100,13 @@ fn value(payload: &Value, key: &str) -> String {
 }
 
 fn describe_message(payload: &Value) -> Option<String> {
+    if payload["internal"] == true {
+        return None;
+    }
     if payload["author"] == "runtime" {
         return Some("· task results handed to orchestrator".into());
     }
-    if payload["author"] == "plan-reviewer" {
-        return Some(format!(
-            "\nplan reviewer sent the plan back:\n{}\n",
-            value(payload, "text")
-        ));
-    }
-    if payload["author"] == "user" {
+    if payload["author"] != "orchestrator" {
         return None;
     }
     Some(format!(
@@ -135,6 +175,25 @@ fn describe_mail(payload: &Value) -> String {
 }
 
 fn describe_task(payload: &Value) -> String {
+    if payload["status"] == "approved" {
+        let selection = &payload["feedback"]["selection"];
+        if let Some(approach) = selection["approach"].as_str() {
+            return format!(
+                "✓ {}: selected {}\nWhy: {}\nTradeoffs: {}",
+                value(payload, "title"),
+                clean(approach),
+                clean(selection["rationale"].as_str().unwrap_or_default()),
+                clean(selection["tradeoffs"].as_str().unwrap_or_default())
+            );
+        }
+        if let Some(message) = payload["feedback"]["integration"]["commit_message"].as_str() {
+            return format!(
+                "✓ Completed: {}\nCommit: {}",
+                value(payload, "title"),
+                clean(message)
+            );
+        }
+    }
     let reason = match payload["reason"].as_str() {
         Some(reason) if payload["status"] == "waiting" => {
             format!(" — {reason}; agent CLI is waiting for login or rate limit reset, then /resume")

@@ -155,11 +155,11 @@ pub(super) fn on_message_2(
         // Shown by their `comment` and `code_review` events.
         "user" if message_text(payload).starts_with(crate::lean::COMMENT_PREFIX) => {}
         "code-review" => {}
-        "user" => record_user_message(view, payload),
+        "user" => record_user_message(view, event, payload),
         "runtime" => record_runtime_message(view),
-        ORCHESTRATOR | PLAN_REVIEWER | crate::lean::PLANNER | "requirements-planner"
-            if view.workflow_phase.as_deref() == Some("planning") => {}
-        author => record_agent_message(view, author, payload),
+        ORCHESTRATOR if view.workflow_phase.as_deref() == Some("planning") => {}
+        ORCHESTRATOR => record_agent_message(view, event, ORCHESTRATOR, payload),
+        _ => {}
     };
 }
 
@@ -167,11 +167,22 @@ fn message_text(payload: &Value) -> String {
     payload["text"].as_str().unwrap_or_default().to_owned()
 }
 
-fn record_user_message(view: &mut View, payload: &Value) {
+fn record_user_message(view: &mut View, event: &Value, payload: &Value) {
     let text = message_text(payload);
     update_user_message_state(view, payload, &text);
+    let text = if let Some((heading, answer)) = text.split_once('\n')
+        && heading
+            .strip_prefix("Interview answer (")
+            .and_then(|id| id.strip_suffix(')'))
+            .is_some()
+    {
+        format!("Interview answer\n{answer}")
+    } else {
+        text
+    };
     let message = MessageEntry {
         id: format!("m{}", view.after),
+        sent_at: event["created_ms"].as_i64(),
         sender: "You".into(),
         target: "orchestrator".into(),
         text: text.clone(),
@@ -224,7 +235,7 @@ fn record_runtime_message(view: &mut View) {
     view.push(Style::default(), "");
 }
 
-fn record_agent_message(view: &mut View, author: &str, payload: &Value) {
+fn record_agent_message(view: &mut View, event: &Value, author: &str, payload: &Value) {
     let display = match author {
         ORCHESTRATOR => "orchestrator",
         PLAN_REVIEWER => "plan reviewer",
@@ -232,6 +243,7 @@ fn record_agent_message(view: &mut View, author: &str, payload: &Value) {
     };
     let message = MessageEntry {
         id: format!("m{}", view.after),
+        sent_at: event["created_ms"].as_i64(),
         sender: display.to_owned(),
         target: "You".into(),
         text: message_text(payload),
@@ -257,14 +269,35 @@ pub(super) fn on_scope_revision_resolved(
     _key: String,
     _turn: &str,
 ) {
+    view.pending_scope_revision = false;
+    view.plan_revision_token = None;
     view.plan_doc = payload["document"].as_str().unwrap_or_default().into();
-    view.tasks = super::plan::proposed_tasks(payload);
+    let mut previous: HashMap<_, _> = std::mem::take(&mut view.tasks)
+        .into_iter()
+        .map(|row| (row.id.clone(), row))
+        .collect();
+    view.tasks = super::plan::proposed_tasks(payload)
+        .into_iter()
+        .map(|contract| {
+            if let Some(mut row) = previous.remove(&contract.id) {
+                super::plan::update_contract(&mut row, contract);
+                row
+            } else {
+                TaskRow {
+                    status: "queued".into(),
+                    ..contract
+                }
+            }
+        })
+        .collect();
     view.task_meta = super::plan::proposed_task_meta(payload);
-    view.task_rows.clear();
+    view.task_rows = view
+        .tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| row.uuid.as_ref().map(|uuid| (uuid.clone(), index)))
+        .collect();
     view.plan_head_revision = payload["revision"].as_i64().unwrap_or(0);
-    for task in &mut view.tasks {
-        task.status = "queued".into();
-    }
     view.requirements_progress = Some((
         false,
         if payload["accepted"] == true {
@@ -274,4 +307,44 @@ pub(super) fn on_scope_revision_resolved(
         }
         .into(),
     ));
+}
+
+pub(super) fn on_session_completed(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    let project = clean_line(payload["project"].as_str().unwrap_or_default());
+    let text = if let Some(branch) = payload["branch"].as_str() {
+        let branch = clean_line(branch);
+        view.session_branch = Some(branch.clone());
+        format!(
+            "Changes are saved in {project}\nFinal branch: {branch}\nReview: git diff main...{branch}\nContinue with the result: git switch {branch}\nTemporary worktrees, task branches and agent processes have been removed. Reports and retained evidence remain in session history."
+        )
+    } else {
+        format!(
+            "Completed reports are available in session history for {project}.\nTemporary agent resources have been released."
+        )
+    };
+    view.system_card(
+        "Session completed",
+        text,
+        crate::lean::tui::theme::Tone::Done,
+    );
+}
+
+pub(super) fn on_session_finalizing(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    let branch = payload["branch"]
+        .as_str()
+        .map(|branch| format!("\nFinal branch: {}", clean_line(branch)))
+        .unwrap_or_default();
+    view.system_card("Finalizing session", format!("All tasks and the final audit passed.{branch}\nSaving the result and removing temporary worktrees, task branches and agent processes."), crate::lean::tui::theme::Tone::Active);
 }

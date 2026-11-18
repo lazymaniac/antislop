@@ -1,7 +1,7 @@
 use super::super::daemon::{Client, Request};
 use super::super::tui::view::clean;
 use super::Options;
-use super::presentation::{latest_plan, print};
+use super::presentation::{PresentedPlan, latest_plan, print};
 use crate::Result;
 use serde_json::Value;
 use std::io::{BufRead, IsTerminal};
@@ -97,7 +97,7 @@ fn poll_events(
     conversation: String,
     typed: mpsc::Receiver<String>,
     mut last: u64,
-    mut plan: Option<String>,
+    mut plan: Option<PresentedPlan>,
 ) -> Result<()> {
     let mut input_open = true;
     loop {
@@ -123,7 +123,7 @@ fn process_input(
     client: &Client,
     conversation: &str,
     typed: &mpsc::Receiver<String>,
-    plan: &Option<String>,
+    plan: &Option<PresentedPlan>,
     mut open: bool,
 ) -> bool {
     loop {
@@ -144,7 +144,7 @@ fn process_input(
     open
 }
 
-fn input_request(conversation: &str, line: &str, plan: &Option<String>) -> Option<Request> {
+fn input_request(conversation: &str, line: &str, plan: &Option<PresentedPlan>) -> Option<Request> {
     let text = line.trim();
     if text.is_empty() {
         return None;
@@ -161,7 +161,7 @@ fn input_request(conversation: &str, line: &str, plan: &Option<String>) -> Optio
     Some(send_request(conversation, text))
 }
 
-fn plan_request(conversation: &str, plan: &Option<String>) -> Option<Request> {
+fn plan_request(conversation: &str, plan: &Option<PresentedPlan>) -> Option<Request> {
     let Some(plan) = plan else {
         eprintln!("✗ there is no plan to resume");
         return None;
@@ -170,8 +170,8 @@ fn plan_request(conversation: &str, plan: &Option<String>) -> Option<Request> {
         crate::lean::daemon::ConversationRequest::Resume {
             conversation: conversation.to_owned(),
             operation_id: Some(crate::id()),
-            plan: plan.clone(),
-            revision_token: None,
+            plan: plan.id.clone(),
+            revision_token: plan.revision_token.clone(),
         },
     ))
 }
@@ -198,4 +198,29 @@ fn send_request(conversation: &str, text: &str) -> Request {
         text: text.to_owned(),
         to: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resume_sends_the_displayed_scope_revision_and_clears_it_after_resolution() {
+        let proposal = json!({"kind":"plan_proposed","payload":{
+            "plan":"p1","scope_revision":"r1","revision_token":"reviewed-token"
+        }});
+        let plan = latest_plan(std::slice::from_ref(&proposal));
+        let request = input_request("c1", "/resume", &plan).unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap()["revision_token"],
+            "reviewed-token"
+        );
+        let plan = latest_plan(&[
+            proposal,
+            json!({"kind":"scope_revision_resolved","payload":{"plan":"p1"}}),
+        ]);
+        let request = input_request("c1", "/resume", &plan).unwrap();
+        assert!(serde_json::to_value(request).unwrap()["revision_token"].is_null());
+    }
 }

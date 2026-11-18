@@ -305,13 +305,14 @@ impl App {
                 Some("✗ send the draft comments (Review) and resolve the rest first".into());
             return;
         }
+        let revision_token = self.view.plan_revision_token.clone();
         self.plan_view = None;
         self.send_command(Some("plan accepted"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
                 operation_id: Some(crate::id()),
                 plan,
-                revision_token: None,
+                revision_token,
             })
         });
     }

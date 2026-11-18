@@ -226,6 +226,107 @@ impl Core {
         Ok(true)
     }
 
+    /// Completed sessions retain commits as history refs and release every exact allocated checkout name.
+    pub(in crate::lean::core) fn release_session_checkouts(
+        &self,
+        conversation: &str,
+        project: &Path,
+        tasks: &[Task],
+    ) -> Result<bool> {
+        let mut scratch = std::collections::HashMap::new();
+        for task in tasks {
+            task_path_component(&task.id)?;
+            if let Some(id) = task.spec["id"].as_str() {
+                let path = crate::lean::core::plan::helpers::writer_base_scratch(
+                    &self.state,
+                    &task.plan_id,
+                    id,
+                );
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                scratch.insert(name.clone(), format!("antislop/combine-{name}"));
+            }
+        }
+        let directory = crate::lean::core::worktree::paths::worktree_directory(&self.state)?;
+        if directory.exists() {
+            for entry in std::fs::read_dir(&directory)? {
+                require(
+                    !self.store.paused(conversation)?,
+                    "session cleanup is paused; continue to resume cleanup",
+                )?;
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let task = tasks
+                    .iter()
+                    .find(|task| checkout_kind(&name, &task.id).is_some());
+                let expected = match (task, scratch.get(&name)) {
+                    (Some(_), _) => format!("antislop/{name}"),
+                    (_, Some(branch)) => branch.clone(),
+                    _ => continue,
+                };
+                let path = entry.path();
+                let Some(_lease) = self.try_lease_worktree(&path) else {
+                    return Ok(false);
+                };
+                require(
+                    !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
+                    "allocated checkout is a symlink; preserved",
+                )?;
+                require(
+                    git::worktree_branch(&path)? == expected,
+                    "allocated checkout changed branches; preserved",
+                )?;
+                require(
+                    git::worktree_project(&path)?.canonicalize()?
+                        == git::worktree_project(project)?.canonicalize()?,
+                    "allocated checkout belongs to another repository; preserved",
+                )?;
+                let outputs = task
+                    .map(|task| self.store.artifact_output_history(task))
+                    .transpose()?
+                    .unwrap_or_default();
+                let snapshot =
+                    git::snapshot_with_artifacts(&path, &outputs, git::CommitPurpose::Checkpoint)?;
+                // Keep the existing history-restore convention after dropping branch/worktree resources.
+                git::ok(
+                    project,
+                    &[
+                        "update-ref",
+                        &format!(
+                            "refs/antislop/view-history/{}",
+                            crate::hash(path.as_os_str().as_encoded_bytes())
+                        ),
+                        &snapshot,
+                    ],
+                )?;
+                git::ok(
+                    project,
+                    &["worktree", "remove", "--force", &path.to_string_lossy()],
+                )?;
+            }
+        }
+        for branch in git::branches(project, "antislop/")? {
+            require(
+                !self.store.paused(conversation)?,
+                "session cleanup is paused; continue to resume cleanup",
+            )?;
+            let name = branch.trim_start_matches("antislop/");
+            if tasks
+                .iter()
+                .any(|task| checkout_kind(name, &task.id).is_some())
+                || scratch.values().any(|expected| expected == &branch)
+            {
+                let history = format!(
+                    "refs/antislop/session-history/{}/{}",
+                    crate::hash(conversation.as_bytes()),
+                    crate::hash(branch.as_bytes())
+                );
+                git::ok(project, &["update-ref", &history, &branch])?;
+                git::delete_branch(project, &branch)?;
+            }
+        }
+        Ok(true)
+    }
+
     fn cleanup_task_worktrees(&self, id: &str) -> Result<bool> {
         self.cleanup_task_worktrees_with_hook(id, || {})
     }

@@ -133,7 +133,7 @@ fn request_context(core: &Core, conversation: &str, upto: u64) -> Result<Request
     let asked = core.asked_since(conversation, answered, upto)?;
     let is_comment = includes_comment(&asked);
     let open = open_comments(core, conversation, answered)?;
-    let comment_text = comment_context(core, conversation, upto, answered, is_comment)?;
+    let comment_text = comment_context(core, conversation, upto, is_comment)?;
     Ok(RequestContext {
         answered,
         asked,
@@ -157,21 +157,12 @@ fn turn_setup<'a>(
     upto: u64,
     project: &Path,
     config: &Config,
-    is_comment: bool,
-    audit_response: bool,
 ) -> TurnSetup<'a> {
     TurnSetup {
         session_policy: SessionPolicy::Role,
         conversation,
         plan_id: None,
-        role: if audit_response {
-            ORCHESTRATOR
-        } else if is_comment {
-            COMMENT_ORCHESTRATOR
-        } else {
-            ORCHESTRATOR
-        }
-        .into(),
+        role: ORCHESTRATOR.into(),
         profile: config.resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
         cwd: project.to_path_buf(),
         add_dirs: vec![],
@@ -211,8 +202,6 @@ pub(super) fn ask(
         context.upto,
         &context.project,
         &context.config,
-        context.is_comment,
-        context.audit_response.is_some(),
     );
     setup.plan_id = context.graph.first().map(|task| task.plan_id.clone());
     core.turn(setup, cancel, |first, fresh| {

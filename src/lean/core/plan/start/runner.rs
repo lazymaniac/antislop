@@ -247,21 +247,6 @@ impl Core {
             running.remove(conversation);
             return None;
         }
-        if self
-            .activity
-            .orchestrator_restarts
-            .lock()
-            .expect("orchestrator restart mutex")
-            .remove(conversation)
-            && let Err(error) = self.store.forget_orchestrator_sessions(conversation)
-        {
-            self.notice(
-                conversation,
-                &format!("orchestrator restart failed: {error}"),
-            );
-            running.remove(conversation);
-            return None;
-        }
         cancel.store(false, Ordering::SeqCst);
         match self.unanswered(conversation) {
             Ok(Some(upto)) => Some(upto),

@@ -361,6 +361,26 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
                         event["task"] == option_row.id && event["status"] == "approved"
                     })
                     .expect("options must be approved");
+                let choice = &events[done]["feedback"]["selection"];
+                assert!(
+                    choice["approach"]
+                        .as_str()
+                        .is_some_and(|text| !text.is_empty())
+                );
+                assert_eq!(
+                    choice["rationale"],
+                    "The focused approach satisfies this local contract"
+                );
+                let mut view = antislop::lean::tui::view::View::default();
+                view.apply(
+                    &json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"fixture",
+                    "tasks":stored.iter().map(|task| task.spec.clone()).collect::<Vec<_>>()}}),
+                );
+                view.apply(&json!({"seq":2,"kind":"task","payload":events[done]}));
+                assert!(view.cards.iter().any(|card| matches!(card,
+                    antislop::lean::tui::TranscriptCard::System { title,text,.. }
+                    if title.starts_with("Selected approach:") && text.contains(choice["approach"].as_str().unwrap())
+                        && text.contains("The focused approach satisfies this local contract"))));
                 let start = events
                     .iter()
                     .position(|event| {

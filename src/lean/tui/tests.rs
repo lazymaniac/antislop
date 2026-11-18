@@ -1960,12 +1960,65 @@ fn the_narrow_header_keeps_a_clickable_plan_button() {
 }
 
 #[test]
+fn chat_shows_sent_datetime_and_hides_interview_and_message_identifiers() {
+    for question_id in [
+        "f9ada472b97",
+        "scope-confirmation-a6894657-4111-42bc-bac2-246e0c777f16",
+    ] {
+        let sent_at = 1_700_000_000_000_i64;
+        let mut app = test_app();
+        let event = serde_json::json!({"seq":1019,"kind":"message","created_ms":sent_at,"payload":{
+            "author":"user","seq":4,
+            "text":format!("Interview answer ({question_id})\nQuestion: Confirm scope?\nAnswer: Confirm scope 👩‍💻")
+        }});
+        app.view.apply(&event);
+        assert_eq!(app.view.messages[0].sent_at, Some(sent_at));
+        assert_eq!(app.view.messages[0].id, "m1019");
+        assert!(!app.view.messages[0].text.contains(question_id));
+        assert!(app.view.messages[0].text.contains("Confirm scope 👩‍💻"));
+        for width in [100, 50, 12] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|frame| app.draw_transcript(frame, frame.area(), &Theme::new(false, false)))
+                .unwrap();
+            let rendered: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(!rendered.contains(question_id));
+            assert!(!rendered.contains("m1019"));
+            if width >= 50 {
+                assert!(rendered.contains("2023-"), "{rendered}");
+                assert!(rendered.contains(":20"), "{rendered}");
+            }
+        }
+        app.view.apply(
+            &serde_json::json!({"seq":1020,"kind":"message","created_ms":sent_at+1000,"payload":{
+                "author":"orchestrator","text":"Scope confirmed"
+            }}),
+        );
+        app.view.apply(&serde_json::json!({"seq":1021,"kind":"mail","created_ms":sent_at+2000,"payload":{
+            "id":7,"sender":"user","recipient":"orchestrator","kind":"agent_work","text":"Continue"
+        }}));
+        assert_eq!(app.view.messages[1].sent_at, Some(sent_at + 1000));
+        assert_eq!(app.view.messages[2].sent_at, Some(sent_at + 2000));
+        let mut replay = view::View::default();
+        replay.apply(&event);
+        assert_eq!(replay.messages[0].sent_at, Some(sent_at));
+    }
+}
+
+#[test]
 fn transcript_cache_reuses_rows_and_matches_fresh_layout() {
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = test_app();
     for i in 0..40 {
         app.view.cards.push(TranscriptCard::Message(MessageEntry {
             id: i.to_string(),
+            sent_at: None,
             sender: "You".into(),
             target: "orchestrator".into(),
             text: format!("message {i}: {}", "👩‍💻 e\u{301} tekst ".repeat(20)),
@@ -2053,6 +2106,7 @@ fn transcript_row_cache_stays_bounded_while_history_keeps_growing() {
     for i in 0..1500 {
         app.view.cards.push(TranscriptCard::Message(MessageEntry {
             id: i.to_string(),
+            sent_at: None,
             sender: "You".into(),
             target: "orchestrator".into(),
             text: format!("entry {i} {}", "wrapped text ".repeat(8)),
@@ -2193,6 +2247,7 @@ fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
         .cards
         .push(view::TranscriptCard::Message(view::MessageEntry {
             id: "m1".into(),
+            sent_at: None,
             sender: "You".into(),
             target: "orchestrator".into(),
             text: "build it".into(),

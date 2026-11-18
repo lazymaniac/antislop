@@ -308,6 +308,6 @@ fn record_graph_task(
         params![apply.revision.plan, spec.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'graph_task',?3,?4)",
-        params![apply.conversation, apply.revision.plan, serde_json::json!({"plan":apply.revision.plan,"id":id,"status":status,"round":round,"spec":spec}).to_string(), now_ms()])?;
+        params![apply.conversation, apply.revision.plan, serde_json::json!({"plan":apply.revision.plan,"id":id,"status":status,"round":round,"spec":spec,"preserve_progress":!apply.affected.contains(&id)}).to_string(), now_ms()])?;
     Ok(())
 }

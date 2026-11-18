@@ -12,7 +12,7 @@ pub(super) fn on_graph_task(view: &mut View, payload: &Value) {
     row.round = payload["round"].as_u64().unwrap_or(0);
     view.task_meta
         .insert(row.id.clone(), plan::extract_task_meta(&payload["spec"]));
-    insert_graph_task(view, row);
+    insert_graph_task(view, row, payload["preserve_progress"] != false);
     refresh_parallel_tasks(view);
 }
 
@@ -27,9 +27,17 @@ fn graph_task_row(payload: &Value) -> Option<TaskRow> {
     }
 }
 
-fn insert_graph_task(view: &mut View, row: TaskRow) {
+fn insert_graph_task(view: &mut View, row: TaskRow, preserve_progress: bool) {
     if let Some(existing) = view.tasks.iter_mut().find(|existing| existing.id == row.id) {
-        *existing = row;
+        if preserve_progress
+            && existing.uuid == row.uuid
+            && existing.status == row.status
+            && existing.round == row.round
+        {
+            plan::update_contract(existing, row);
+        } else {
+            *existing = row;
+        }
     } else {
         if !view.plan_doc.trim().is_empty() && !view.plan_doc.contains(&format!("[{}]", row.id)) {
             let number = view.tasks.len() + 1;

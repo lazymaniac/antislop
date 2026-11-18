@@ -61,6 +61,7 @@ pub struct Entry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageEntry {
     pub id: String,
+    pub sent_at: Option<i64>,
     pub sender: String,
     pub target: String,
     pub text: String,
@@ -219,6 +220,8 @@ pub struct View {
     pub messages: Vec<MessageEntry>,
     /// Structured cards for rendering the conversation.
     pub cards: Vec<TranscriptCard>,
+    /// A reviewed scope proposal awaits acceptance while the live graph keeps its progress.
+    pub pending_scope_revision: bool,
     pub plan_revision_token: Option<String>,
     pub conversation_revision_token: Option<String>,
     /// Agent key of each running turn.
@@ -395,6 +398,125 @@ mod tests {
         assert_eq!(view.agents["worker:implementation"].turns, 3);
         assert_eq!(view.task_rows["extra-uuid"], 1);
         assert_eq!(view.plan_revision_token.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn scope_proposals_and_resolution_keep_live_progress_and_agent_history() {
+        for accepted in [false, true] {
+            let mut view = View::default();
+            let contract = json!({"id":"inspect","title":"Inspect","change_kind":"none"});
+            view.apply(&event(
+                1,
+                None,
+                "plan_proposed",
+                json!({"plan":"p1","tasks":[contract.clone()]}),
+            ));
+            view.apply(&event(2, None, "task", json!({"id":"inspect","task":"task-uuid","status":"approved","round":3,
+                "feedback":{"round":3,"effect":"Verified inputs","coverage":{"total":1,"ok":1},"integration":{"outcome":"approved"}}})));
+            view.agents
+                .entry("worker:inspect".into())
+                .or_default()
+                .turns = 4;
+            view.mailbox
+                .insert("worker:inspect".into(), vec!["Evidence retained".into()]);
+            let previous = view.tasks[0].clone();
+            let proposed = json!({"id":"extra","title":"Extra","change_kind":"none"});
+            view.apply(&event(3, None, "plan_proposed", json!({"plan":"p1","scope_revision":"r1","revision_token":"reviewed-token",
+                "document":"Reviewed scope and proposed extra task", "tasks":[contract.clone(),proposed.clone()]})));
+            assert!(view.plan_proposed());
+            assert_eq!(view.plan_revision_token.as_deref(), Some("reviewed-token"));
+            assert_eq!(view.tasks.as_slice(), std::slice::from_ref(&previous));
+            assert_eq!(view.agents["worker:inspect"].turns, 4);
+            assert_eq!(view.mailbox["worker:inspect"], ["Evidence retained"]);
+            view.apply(&event(
+                4,
+                None,
+                "graph_task",
+                json!({"plan":"p1","id":"task-uuid","status":"approved","round":3,
+                "spec":{"id":"inspect","title":"Inspect inputs","change_kind":"none"}}),
+            ));
+            assert_eq!(view.tasks[0].effect, previous.effect);
+            assert_eq!(view.tasks[0].obligations, previous.obligations);
+            let contracts = if accepted {
+                vec![contract, proposed]
+            } else {
+                vec![contract]
+            };
+            view.apply(&event(
+                5,
+                None,
+                "scope_revision_resolved",
+                json!({"plan":"p1","accepted":accepted,
+                "revision":1,"document":"Accepted scope","tasks":contracts}),
+            ));
+            assert!(!view.plan_proposed());
+            assert!(view.plan_revision_token.is_none());
+            assert_eq!(view.tasks[0], previous);
+            assert_eq!(view.agents["worker:inspect"].turns, 4);
+            assert_eq!(view.task_rows["task-uuid"], 0);
+            assert_eq!(view.tasks.len(), if accepted { 2 } else { 1 });
+            if accepted {
+                assert_eq!(view.tasks[1].status, "queued");
+            }
+        }
+    }
+
+    #[test]
+    fn agent_coordination_stays_in_agent_history_instead_of_chat() {
+        let mut view = View::default();
+        for (index, author) in [
+            crate::lean::REPLAN,
+            crate::lean::PLANNER_BLOCKER,
+            crate::lean::PLANNER,
+            PLAN_REVIEWER,
+            "requirements-planner",
+            "plan-lint",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let instruction = event(
+                index as u64 + 1,
+                None,
+                "message",
+                json!({
+                    "author":author,"text":"Internal redraft instructions"
+                }),
+            );
+            view.apply(&instruction);
+            assert!(crate::lean::cli::describe(&instruction).is_none());
+        }
+        assert!(view.messages.is_empty());
+        assert!(view.cards.is_empty());
+        assert!(view.transcript.is_empty());
+        let mail = event(
+            7,
+            None,
+            "mail",
+            json!({"id":42,"sender":"orchestrator",
+            "recipient":"worker:t1","kind":"instruction","text":"Internal work request"}),
+        );
+        view.apply(&mail);
+        assert!(crate::lean::cli::describe(&mail).is_none());
+        view.apply(&event(8, None, "mail_delivered", json!({"ids":[42]})));
+        assert!(view.cards.is_empty());
+        assert!(view.transcript.is_empty());
+        assert_eq!(view.messages[0].state, "delivered");
+        assert!(
+            view.mailbox["orchestrator"]
+                .iter()
+                .any(|text| text.contains("Internal work request"))
+        );
+        view.apply(&event(
+            9,
+            None,
+            "message",
+            json!({"author":"orchestrator","text":"Here is the reviewed plan."}),
+        ));
+        assert_eq!(view.cards.len(), 1);
+        assert!(
+            matches!(&view.cards[0], TranscriptCard::Message(message) if message.text == "Here is the reviewed plan.")
+        );
     }
 
     #[test]

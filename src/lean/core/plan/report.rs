@@ -77,7 +77,7 @@ impl Core {
             .map(serde_json::from_value::<TaskContract>)
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let files = if git::is_repository(&project) {
-            let integrated = self.session_worktree(conversation, &project)?;
+            let integrated = self.session_result_fingerprint(conversation, &project)?;
             let artifacts = specs
                 .iter()
                 .filter(|task| task.delivery == Some(tasks::DeliveryMode::Untracked))
@@ -85,7 +85,7 @@ impl Core {
                 .map(|path| project.join(path).to_string_lossy().into_owned())
                 .collect::<Vec<_>>();
             (
-                git::integrated_fingerprint(&integrated)?,
+                integrated,
                 if artifacts.is_empty() {
                     String::new()
                 } else {

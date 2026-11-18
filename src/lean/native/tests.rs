@@ -1321,3 +1321,42 @@ fn real_cli_approval_dialogs_are_recognized_and_answered() {
         outcome.text
     );
 }
+
+#[test]
+fn session_completion_releases_its_clis_and_preserves_other_conversations() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: opencode(dir.path()),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let first = core
+        .native
+        .prepare_scoped(&core, "finished", "orchestrator", &spec, "")
+        .unwrap();
+    let foreign = core
+        .native
+        .prepare_scoped(&core, "other", "orchestrator", &spec, "")
+        .unwrap();
+    assert!(
+        !core.native.retire_conversation("finished").unwrap(),
+        "an in-flight reference fences cleanup"
+    );
+    drop(first);
+    assert!(core.native.retire_conversation("finished").unwrap());
+    assert!(
+        core.native
+            .get("finished", "orchestrator")
+            .unwrap()
+            .is_none()
+    );
+    assert!(core.native.get("other", "orchestrator").unwrap().is_some());
+    foreign.check_alive().unwrap();
+}

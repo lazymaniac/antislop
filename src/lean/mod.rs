@@ -143,7 +143,7 @@ pub fn diff_revision_token(
 }
 
 const ORCHESTRATOR: &str = "orchestrator";
-/// Plan feedback has an independent native CLI session.
+/// Historical role retained when reading conversations created before session unification.
 pub const COMMENT_ORCHESTRATOR: &str = "comment-orchestrator";
 /// Drafts and corrects plans; its own native CLI session and execution profile.
 pub const PLANNER: &str = "planner";
@@ -227,7 +227,15 @@ fn record_message_and_wake(
 }
 
 fn wake_locked(core: &Arc<Core>, conversation: &str) {
-    if daemon::activation::pending(core) || core.state.join("stopped").exists() {
+    if daemon::activation::pending(core)
+        || core.state.join("stopped").exists()
+        || core
+            .activity
+            .finishing
+            .lock()
+            .expect("session finish mutex")
+            .contains(conversation)
+    {
         return;
     }
     let Some(cancel) = core.activity.start_orchestrator(conversation) else {

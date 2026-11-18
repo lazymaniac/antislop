@@ -316,7 +316,7 @@ fn events_result(
         && (after > latest_seq || (oldest_seq > 1 && after < oldest_seq.saturating_sub(1)));
     Ok(json!({
         "events": events,
-        "idle": core.is_idle(conversation),
+        "idle": core.frontend_idle(conversation)?,
         "has_more": has_more,
         "history_unavailable": history_unavailable,
         "oldest_seq": oldest_seq,

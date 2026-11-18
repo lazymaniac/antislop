@@ -139,7 +139,7 @@ fn restart_and_cancel(context: &Context<'_>, request: Request) -> Result<Route> 
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.restart_orchestrator(&conversation)?;
-            json!("restarting the orchestrator in a fresh session")
+            json!("resuming the orchestrator in the same session")
         }),
         request => Route::Unmatched(request),
     })

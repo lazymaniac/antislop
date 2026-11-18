@@ -138,12 +138,32 @@ fn message_heading(msg: &MessageEntry, person: Style, theme: &Theme) -> Vec<Span
 }
 
 fn message_right(msg: &MessageEntry, theme: &Theme) -> String {
-    format!(
-        "{} {} {}",
-        theme.clean(&msg.state),
-        theme.glyphs().dot,
-        theme.clean(&msg.id)
-    )
+    let state = theme.clean(&msg.state);
+    match msg.sent_at.and_then(message_datetime) {
+        Some(datetime) if state.is_empty() => datetime,
+        Some(datetime) => format!("{datetime} {} {state}", theme.glyphs().dot),
+        None => state,
+    }
+}
+
+fn message_datetime(milliseconds: i64) -> Option<String> {
+    let seconds = milliseconds.div_euclid(1000) as libc::time_t;
+    let mut calendar = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // SAFETY: localtime_r writes to a valid tm buffer and reads the supplied timestamp.
+    if unsafe { libc::localtime_r(&seconds, calendar.as_mut_ptr()) }.is_null() {
+        return None;
+    }
+    // SAFETY: a successful localtime_r initialized the entire tm structure.
+    let calendar = unsafe { calendar.assume_init() };
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        calendar.tm_year + 1900,
+        calendar.tm_mon + 1,
+        calendar.tm_mday,
+        calendar.tm_hour,
+        calendar.tm_min,
+        calendar.tm_sec
+    ))
 }
 
 fn comment_card(

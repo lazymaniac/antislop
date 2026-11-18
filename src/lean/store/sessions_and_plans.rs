@@ -24,20 +24,6 @@ impl Store {
         Ok(answered)
     }
 
-    /// Starts subsequent orchestration turns without resuming the old sessions.
-    pub fn forget_orchestrator_sessions(&self, conversation: &str) -> Result<()> {
-        self.db().execute(
-            "UPDATE turns SET session_id=NULL WHERE conversation_id=?1 AND role IN (?2,?3,?4)",
-            params![
-                conversation,
-                crate::lean::ORCHESTRATION_ROLES[0],
-                crate::lean::ORCHESTRATION_ROLES[1],
-                crate::lean::ORCHESTRATION_ROLES[2]
-            ],
-        )?;
-        Ok(())
-    }
-
     /// Forgets the CLI sessions of a task’s worker and reviewer turns.
     pub fn forget_task_sessions(&self, task: &str) -> Result<()> {
         self.db().execute(

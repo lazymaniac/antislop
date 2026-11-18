@@ -1,5 +1,6 @@
 use crate::lean::*;
 use rusqlite::OptionalExtension;
+mod finish;
 
 #[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,7 +1,7 @@
 use crate::lean::*;
 
 impl Core {
-    /// The next message boundary for either orchestration session.
+    /// The next message boundary for the orchestrator or planner.
     pub(in crate::lean) fn unanswered(&self, conversation: &str) -> Result<Option<u64>> {
         // A failed turn counts as handled (the next message asks again); one
         // cut off by a restart does not.

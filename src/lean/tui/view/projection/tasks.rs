@@ -13,6 +13,26 @@ pub(super) fn on_task(view: &mut View, payload: &Value) {
     view.task_rows.insert(task_uuid.clone(), index);
     let progress = update_task_row(view, index, payload, &task_uuid);
     report_task_reason(view, &id, &progress);
+    if report_task_selection(view, &id, &progress, payload) {
+        return;
+    }
+    if progress.status == "approved"
+        && feedback_is_current(&payload["feedback"], progress.round)
+        && let Some(message) = payload["feedback"]["integration"]["commit_message"]
+            .as_str()
+            .filter(|message| !message.trim().is_empty())
+    {
+        if (progress.previous_status.as_str(), progress.previous_round)
+            != (progress.status.as_str(), progress.round)
+        {
+            view.system_card(
+                &format!("Completed: {}", progress.title),
+                format!("Commit: {}", bound(&clean(message), DETAIL_LIMIT)),
+                crate::lean::tui::theme::Tone::Done,
+            );
+        }
+        return;
+    }
     view.report_progress(
         &id,
         &progress.title,
@@ -20,6 +40,46 @@ pub(super) fn on_task(view: &mut View, payload: &Value) {
         (&progress.status, progress.round),
         progress.reason,
     );
+}
+
+fn report_task_selection(
+    view: &mut View,
+    id: &str,
+    progress: &TaskProgress,
+    payload: &Value,
+) -> bool {
+    if progress.status != "approved"
+        || progress.previous_status == "approved"
+        || !feedback_is_current(&payload["feedback"], progress.round)
+        || !payload["feedback"]["selection"].is_object()
+    {
+        return false;
+    }
+    let selection = &payload["feedback"]["selection"];
+    let field = |key: &str| {
+        bound(
+            &clean_line(selection[key].as_str().unwrap_or_default()),
+            DETAIL_LIMIT,
+        )
+    };
+    let target = view
+        .task_meta
+        .get(id)
+        .and_then(|meta| meta.options_for.as_deref())
+        .and_then(|target| view.tasks.iter().find(|task| task.id == target))
+        .map(|task| task.title.as_str())
+        .unwrap_or(&progress.title);
+    view.system_card(
+        &format!("Selected approach: {target}"),
+        format!(
+            "Chosen: {}\nWhy: {}\nTradeoffs: {}",
+            field("approach"),
+            field("rationale"),
+            field("tradeoffs")
+        ),
+        crate::lean::tui::theme::Tone::Done,
+    );
+    true
 }
 
 struct TaskProgress {
@@ -136,7 +196,14 @@ pub(super) fn on_integration(view: &mut View, payload: &Value) {
     // so a cut here never loses evidence. Events written before
     // the daemon bounded details fold through the same cut.
     let detail = bound(&clean_line(&event_text(payload, "detail")), DETAIL_LIMIT);
-    report_integration(view, &title, &detail, approved);
+    // Committed completions are announced by the authoritative task-state event.
+    if !approved
+        || !payload["commit_message"]
+            .as_str()
+            .is_some_and(|message| !message.trim().is_empty())
+    {
+        report_integration(view, &title, &detail, approved);
+    }
     update_integration_row(view, payload, &detail);
 }
 

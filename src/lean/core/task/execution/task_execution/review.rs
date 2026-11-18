@@ -178,6 +178,20 @@ pub(super) fn save_verdict(mut input: VerdictSave<'_>) -> Result<()> {
         input.summary_effect,
         input.repairs,
     );
+    if input.spec.kind == WorkKind::Options && input.verdict.approved {
+        let result = input.core.store.completed_task_output(input.task)?;
+        let selection: turn_result::Selection =
+            serde_json::from_value(result["selection"].clone())?;
+        let chosen = selection.chosen().ok_or_else(|| {
+            Error::Invalid("options completion has no selected alternative".into())
+        })?;
+        input.task.feedback.as_mut().expect("round feedback")["selection"] = json!({
+            "selected":tasks::bound(&selection.selected, tasks::DETAIL_LIMIT),
+            "approach":tasks::bound(&chosen.approach, tasks::DETAIL_LIMIT),
+            "tradeoffs":tasks::bound(&chosen.tradeoffs, tasks::DETAIL_LIMIT),
+            "rationale":tasks::bound(&selection.rationale, tasks::DETAIL_LIMIT)
+        });
+    }
     input.core.store.update_task(input.task)?;
     Ok(())
 }

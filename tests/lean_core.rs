@@ -140,8 +140,7 @@ echo '{{"type":"turn.completed"}}'
 }
 
 #[test]
-fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
-    use antislop::lean::COMMENT_ORCHESTRATOR;
+fn comments_share_the_orchestrator_session_and_new_conversations_start_their_own() {
     let dir = common::tempdir();
     init_project(dir.path());
     let core = Core::open(
@@ -157,15 +156,16 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
         .last_turn(&conversation.id, "orchestrator")
         .unwrap()
         .unwrap();
+    assert_eq!(main.status, TurnStatus::Done, "{:?}", main.error);
     let first = core
         .comment(&conversation.id, "orchestrator", "slow-comment")
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while core
         .store
-        .last_turn(&conversation.id, COMMENT_ORCHESTRATOR)
+        .last_turn(&conversation.id, "orchestrator")
         .unwrap()
-        .is_none()
+        .is_none_or(|turn| turn.id == main.id)
     {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
@@ -181,14 +181,14 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
     let sessions = core.store.sessions(&conversation.id).unwrap();
     let comments: Vec<_> = sessions
         .iter()
-        .filter(|turn| turn.role == COMMENT_ORCHESTRATOR)
+        .filter(|turn| turn.role == "orchestrator" && turn.turn_id != main.id)
         .collect();
     assert_eq!(comments.len(), 3);
     assert!(comments.iter().all(|turn| turn.status == "done"));
     assert!(
         comments
             .iter()
-            .all(|turn| turn.session_id != main.session_id)
+            .all(|turn| turn.session_id == main.session_id)
     );
     assert!(
         comments
@@ -199,7 +199,9 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
     let ids: Vec<_> = events
         .iter()
         .filter(|event| {
-            event.kind == "turn_started" && event.payload["role"] == COMMENT_ORCHESTRATOR
+            event.kind == "turn_started"
+                && event.payload["role"] == "orchestrator"
+                && event.turn_id.as_deref() != Some(main.id.as_str())
         })
         .map(|event| event.payload["comments"].clone())
         .collect();
@@ -220,7 +222,35 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
         .unwrap();
     assert_eq!(resumed_main.session_id, main.session_id);
     let calls = std::fs::read_to_string(dir.path().join("comment-calls.log")).unwrap();
-    assert!(calls.contains("The comment agent handled feedback"));
+    assert!(!calls.contains("The comment agent handled feedback"));
+    assert!(!calls.contains("Task round handoff"));
+    let other = core.start(dir.path()).unwrap();
+    core.send(&other.id, "Another request").unwrap();
+    wait_idle(&core, &other.id);
+    let other_turn = core
+        .store
+        .last_turn(&other.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert!(main.session_id.is_some());
+    assert_ne!(other_turn.session_id, main.session_id);
+    let first_session = main.session_id;
+    let state = dir.path().join("state");
+    drop(core);
+    let reopened = Core::open(&state, config(&dir.path().join("comment-codex"))).unwrap();
+    reopened
+        .send(&conversation.id, "Continue after daemon restart")
+        .unwrap();
+    wait_idle(&reopened, &conversation.id);
+    assert_eq!(
+        reopened
+            .store
+            .last_turn(&conversation.id, "orchestrator")
+            .unwrap()
+            .unwrap()
+            .session_id,
+        first_session
+    );
 }
 
 #[test]
@@ -312,7 +342,7 @@ fn diff_comments_are_delivered_to_the_validated_worker_once_with_location() {
 
 #[test]
 fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
-    use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
+    use antislop::lean::tui::view::View;
     let dir = common::tempdir();
     init_project(dir.path());
     let core = Core::open(
@@ -336,7 +366,7 @@ fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
         .remove(0);
     let failed = core
         .store
-        .last_turn(&conversation.id, COMMENT_ORCHESTRATOR)
+        .last_turn(&conversation.id, "orchestrator")
         .unwrap()
         .unwrap();
     assert_eq!(failed.status, TurnStatus::Failed);
@@ -487,7 +517,7 @@ fn interrupted_comment_sessions_resume_after_daemon_restart() {
     assert!(
         turns
             .iter()
-            .any(|session| session.role == COMMENT_ORCHESTRATOR && session.status == "done")
+            .any(|session| session.role == "orchestrator" && session.status == "done")
     );
     let mut view = View::default();
     for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
@@ -1654,16 +1684,17 @@ fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
         .unwrap()
         .unwrap();
     assert_eq!(restarted.status, TurnStatus::Done);
-    assert_ne!(restarted.session_id, first.session_id);
+    assert!(first.session_id.is_some());
+    assert_eq!(restarted.session_id, first.session_id);
     assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
     let calls = std::fs::read_to_string(dir.path().join("comment-calls.log")).unwrap();
     let last = calls.rsplit("---").nth(1).unwrap();
-    assert!(last.contains("Original request"));
+    assert!(!last.contains("fresh session"));
     let launches = std::fs::read_to_string(dir.path().join("comment-argv.jsonl")).unwrap();
     let args: Vec<String> = serde_json::from_str(launches.lines().last().unwrap()).unwrap();
     assert_eq!(args.first().map(String::as_str), Some("exec"));
     assert!(
-        !args.iter().any(|arg| arg == "resume" || arg == "--resume"),
+        args.iter().any(|arg| arg == "resume" || arg == "--resume"),
         "{args:?}"
     );
     core.restart_orchestrator(&conversation.id).unwrap();
