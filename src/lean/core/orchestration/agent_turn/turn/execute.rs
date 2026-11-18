@@ -219,7 +219,10 @@ fn record_rejected_tool(
             Some(turn),
             None,
             "agent_tool_rejected",
-            &json!({"tool":tool,"error":error.to_string()}),
+            &json!({
+                "tool":agent::persisted_error(tool),
+                "error":agent::persisted_error(&error.to_string())
+            }),
         )
         .map_err(|logging| {
             Error::Invalid(format!(
@@ -364,7 +367,7 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn rejected_dependency_tool_keeps_raw_diagnostic_after_reopen() {
+    fn rejected_dependency_tool_redacts_persisted_diagnostic_after_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("state");
         let config =
@@ -410,11 +413,12 @@ mod tests {
             &role,
             &turn.id,
             "read_dependency_result",
-            &json!({"dependency":"missing"}),
+            &json!({"dependency":"missing token=dependency-secret"}),
         );
         let error = outcome.as_ref().unwrap_err().to_string();
         assert!(error.contains("inventory"), "{error}");
         assert!(error.contains(&consumer.id), "{error}");
+        assert!(error.contains("dependency-secret"), "{error}");
         record_rejected_tool(
             &core,
             &conversation,
@@ -424,16 +428,33 @@ mod tests {
         )
         .unwrap();
 
+        let unknown_tool = "unknown token=tool-secret";
+        let unknown_outcome =
+            core.agent_tool(&conversation, &role, &turn.id, unknown_tool, &json!({}));
+        record_rejected_tool(
+            &core,
+            &conversation,
+            &turn.id,
+            unknown_tool,
+            &unknown_outcome,
+        )
+        .unwrap();
+
         drop(core);
         let reopened = Core::open(&state, config).unwrap();
         let events = reopened.store.events_since(&conversation, 0, 100).unwrap();
-        let rejection = events
+        let rejections = events
             .iter()
-            .find(|event| event.kind == "agent_tool_rejected")
-            .expect("tool rejection remains in durable event history");
+            .filter(|event| event.kind == "agent_tool_rejected")
+            .collect::<Vec<_>>();
+        assert_eq!(rejections.len(), 2);
+        let rejection = rejections[0];
         assert_eq!(rejection.turn_id.as_deref(), Some(turn.id.as_str()));
         assert_eq!(rejection.payload["tool"], "read_dependency_result");
-        assert_eq!(rejection.payload["error"], error);
+        assert_eq!(rejection.payload["error"], agent::persisted_error(&error));
+        assert!(!rejection.payload.to_string().contains("dependency-secret"));
+        assert_eq!(rejections[1].payload["tool"], "unknown [REDACTED]");
+        assert!(!rejections[1].payload.to_string().contains("tool-secret"));
 
         let mut replayed_view = crate::lean::tui::view::View::default();
         for event in &events {
@@ -441,13 +462,13 @@ mod tests {
         }
         assert!(replayed_view.cards.iter().all(|card| !matches!(card,
             crate::lean::tui::view::TranscriptCard::System { title, text, .. }
-                if title == "Agent tool rejected" || text.contains(&error)
+                if title == "Agent tool rejected" || text.contains("dependency-secret")
         )));
         assert!(
             replayed_view
                 .transcript
                 .iter()
-                .all(|entry| !entry.text.contains(&error))
+                .all(|entry| !entry.text.contains("dependency-secret"))
         );
     }
 }
