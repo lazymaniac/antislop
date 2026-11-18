@@ -1503,6 +1503,161 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
 }
 
 #[test]
+fn expanded_card_resize_redraws_same_app_with_margins_and_clipping() {
+    use antislop::lean::tui::{graph, view::TaskRow};
+
+    let mut app = App::test_app();
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Root".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Sibling".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "Expanded child".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t3".into();
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let collapsed = graph::Graph::new_with_viewport(
+        &app.view,
+        &app.graph_scope,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let collapsed_sibling = collapsed.node("worker:t2").unwrap();
+
+    // Set a settled expansion directly so this test measures resize behavior,
+    // not the time-dependent opening animation.
+    app.graph_expanded = Some(app.selected.clone());
+    app.graph_revealed = None;
+
+    let mut previous_frame_origin = None;
+    for (width, height) in [(120, 40), (80, 24), (12, 5)] {
+        if width == 80 {
+            app.view.tasks[2].depends_on = vec!["t2".into()];
+            app.generation += 1;
+        }
+        terminal.backend_mut().resize(width, height);
+        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let viewport = app
+            .graph_area
+            .expect("graph rendered at minimum dimensions");
+        let graph = graph::Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope,
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        );
+        let node = graph
+            .node("worker:t3")
+            .expect("expanded node remains visible");
+        let frame = graph
+            .frames
+            .iter()
+            .find(|frame| frame.key == node.group.as_deref().unwrap())
+            .expect("expanded card frame");
+        let frame_origin = (frame.x, frame.y);
+        if width == 80 {
+            assert_ne!(
+                frame_origin,
+                previous_frame_origin.unwrap(),
+                "resized layout must move the expanded frame"
+            );
+        }
+        previous_frame_origin = Some(frame_origin);
+
+        let screen = (
+            i32::from(viewport.x) + i32::from(frame.x) - i32::from(app.offset.0),
+            i32::from(viewport.y) + i32::from(frame.y) - i32::from(app.offset.1),
+        );
+        let right = screen.0 + i32::from(frame.width);
+        let bottom = screen.1 + i32::from(frame.height);
+        if width >= 80 {
+            assert_eq!(screen.0, i32::from(viewport.x) + 1, "{width}x{height} left");
+            assert_eq!(screen.1, i32::from(viewport.y) + 1, "{width}x{height} top");
+            assert_eq!(
+                right,
+                i32::from(viewport.right()) - 1,
+                "{width}x{height} right"
+            );
+            assert_eq!(
+                bottom,
+                i32::from(viewport.bottom()) - 1,
+                "{width}x{height} bottom"
+            );
+        } else {
+            let clipped_left = screen.0.max(i32::from(viewport.x));
+            let clipped_top = screen.1.max(i32::from(viewport.y));
+            let clipped_right = right.min(i32::from(viewport.right()));
+            let clipped_bottom = bottom.min(i32::from(viewport.bottom()));
+            assert!(
+                clipped_left < clipped_right,
+                "frame is visible at {width}x{height}"
+            );
+            assert!(
+                clipped_top < clipped_bottom,
+                "frame is visible at {width}x{height}"
+            );
+            assert!(clipped_left >= i32::from(viewport.x));
+            assert!(clipped_top >= i32::from(viewport.y));
+            assert!(clipped_right <= i32::from(viewport.right()));
+            assert!(clipped_bottom <= i32::from(viewport.bottom()));
+        }
+
+        let ordinary = graph::Graph::new_with_viewport(
+            &app.view,
+            &app.graph_scope,
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        let ordinary_sibling = ordinary.node("worker:t2").unwrap();
+        let expanded_sibling = graph.node("worker:t2").unwrap();
+        if width == 120 {
+            assert_eq!(
+                (ordinary_sibling.width, ordinary_sibling.height),
+                (collapsed_sibling.width, collapsed_sibling.height),
+                "collapsed layout changed while expanding a sibling"
+            );
+        }
+        assert_eq!(
+            (expanded_sibling.width, expanded_sibling.height),
+            (ordinary_sibling.width, ordinary_sibling.height),
+            "ordinary card dimensions changed at {width}x{height}"
+        );
+
+        if width == 120 {
+            // Preserve a valid but stale offset and reveal marker into the
+            // next draw. The viewport change must trigger reveal again.
+            app.offset = (
+                graph.width.saturating_sub(app.graph_viewport.unwrap().0),
+                graph.height.saturating_sub(app.graph_viewport.unwrap().1),
+            );
+            app.graph_revealed = Some(app.selected.clone());
+        }
+    }
+}
+
+#[test]
 fn graph_position_markers_follow_offscreen_nodes_and_resize() {
     use antislop::lean::tui::graph::Graph;
     use antislop::lean::tui::view::TaskRow;
