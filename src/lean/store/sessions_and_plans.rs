@@ -74,12 +74,48 @@ impl Store {
         Ok(self
             .db()
             .query_row(
-                "SELECT session_id FROM turns WHERE conversation_id=?1 AND role=?2 AND provider=?3
-                 AND session_id IS NOT NULL ORDER BY started_ms DESC, rowid DESC LIMIT 1",
+                "SELECT t.session_id FROM turns t WHERE t.conversation_id=?1 AND t.role=?2 AND t.provider=?3
+                 AND t.session_id IS NOT NULL
+                 AND NOT EXISTS (
+                    SELECT 1 FROM events e JOIN turns retired ON retired.id=e.turn_id
+                    WHERE e.conversation_id=t.conversation_id AND e.kind='provider_session_lost'
+                      AND retired.role=t.role AND retired.provider=t.provider
+                      AND (retired.started_ms>t.started_ms
+                        OR (retired.started_ms=t.started_ms AND retired.rowid>t.rowid))
+                 ) ORDER BY t.started_ms DESC, t.rowid DESC LIMIT 1",
                 params![conversation, role, provider],
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    /// Retires a provider session that the CLI explicitly rejected. The event
+    /// prevents older IDs for this role/provider from becoming active again.
+    pub fn retire_session(&self, turn: &str, reason: &str) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let (conversation, role, provider): (String, String, String) = tx.query_row(
+            "SELECT conversation_id,role,provider FROM turns WHERE id=?1",
+            [turn],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        tx.execute("UPDATE turns SET session_id=NULL WHERE id=?1", [turn])?;
+        tx.execute(
+            "UPDATE run_contexts SET provider_thread_id=NULL,provider_session_id=NULL WHERE turn_id=?1",
+            [turn],
+        )?;
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms)
+             VALUES(?1,?2,'provider_session_lost',?3,?4)",
+            params![
+                conversation,
+                turn,
+                serde_json::json!({"role":role,"provider":provider,"reason":reason}).to_string(),
+                now_ms()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Turns left running by a daemon that stopped become interrupted; nothing

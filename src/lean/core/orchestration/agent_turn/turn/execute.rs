@@ -256,6 +256,21 @@ fn run_cli(
         let result = prepared
             .native
             .run(&core.native, &state.turn.id, text, cancel);
+        if let Err(error) = &result
+            && crate::lean::ORCHESTRATION_ROLES.contains(&state.role.as_str())
+        {
+            if is_rejected_session(error, state.resume.as_deref()) {
+                core.store
+                    .retire_session(&state.turn.id, &agent::persisted_error(&error.to_string()))?;
+            } else if let Some(identity) = prepared.native.identity()
+                && state
+                    .resume
+                    .as_deref()
+                    .is_none_or(|resume| resume == identity)
+            {
+                core.store.set_session(&state.turn.id, &identity)?;
+            }
+        }
         if !should_retry(&prepared.native, &result, cancel) {
             return result;
         }
@@ -269,6 +284,25 @@ fn run_cli(
         }
         restart_native(core, state, prepared, handler)?;
     }
+}
+
+fn is_rejected_session(error: &Error, resumed: Option<&str>) -> bool {
+    if resumed.is_none() {
+        return false;
+    }
+    let diagnostic = error.to_string().to_ascii_lowercase();
+    (diagnostic.contains("session ") && diagnostic.contains(" was not found"))
+        || [
+            "session not found",
+            "thread not found",
+            "unknown session",
+            "invalid session id",
+            "session has expired",
+            "cannot resume session",
+            "unable to resume thread",
+        ]
+        .iter()
+        .any(|marker| diagnostic.contains(marker))
 }
 
 fn should_retry(

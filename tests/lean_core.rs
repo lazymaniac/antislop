@@ -624,12 +624,202 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Done);
     let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
-    let last = calls
-        .split("\n---\n")
-        .filter(|c| !c.is_empty())
-        .last()
+    assert!(calls.contains("fail please") && calls.contains("now it works"));
+}
+
+#[test]
+fn paused_and_cancelled_orchestrator_turns_keep_the_provider_session() {
+    let dir = common::tempdir();
+    let project = dir.path().join("project");
+    init_project(&project);
+    let codex = fake_codex(dir.path());
+    let wrapper = dir.path().join("slow-start-codex");
+    let marker = dir.path().join("cancellable-cli-started");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *sleepy-cancel*) touch '{}'; sleep 10;; esac\nexec '{}' \"$@\"\n",
+            marker.display(),
+            codex.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &wrapper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    common::interactive(&wrapper);
+    let core = Core::open(&dir.path().join("state"), config(&wrapper)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    core.send(&conversation.id, "first message").unwrap();
+    wait_idle(&core, &conversation.id);
+    let first = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
         .unwrap();
-    assert!(last.contains("fail please") && last.contains("now it works"));
+    assert_eq!(first.session_id.as_deref(), Some("T1"));
+
+    core.pause(&conversation.id, true).unwrap();
+    core.send(&conversation.id, "follow-up while paused")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let paused_follow_up = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused_follow_up.session_id.as_deref(), Some("T1"));
+    core.pause(&conversation.id, false).unwrap();
+
+    core.send(&conversation.id, "sleepy-cancel").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let running = loop {
+        let turn = core
+            .store
+            .last_turn(&conversation.id, "orchestrator")
+            .unwrap()
+            .unwrap();
+        if turn.id != paused_follow_up.id {
+            let call_deadline = Instant::now() + Duration::from_secs(5);
+            while !marker.exists() {
+                assert!(
+                    Instant::now() < call_deadline,
+                    "CLI did not receive the cancellable turn"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            core.pause(&conversation.id, true).unwrap();
+            break turn;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "second orchestrator turn did not start"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    core.cancel(&conversation.id);
+    let cancel_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let turn = core
+            .store
+            .sessions(&conversation.id)
+            .unwrap()
+            .into_iter()
+            .find(|turn| turn.turn_id == running.id)
+            .unwrap();
+        if turn.status == "cancelled" {
+            break;
+        }
+        assert!(
+            Instant::now() < cancel_deadline,
+            "cancel did not settle the active turn: {turn:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let cancelled = core
+        .store
+        .sessions(&conversation.id)
+        .unwrap()
+        .into_iter()
+        .find(|turn| turn.turn_id == running.id)
+        .unwrap();
+    assert_eq!(cancelled.status, "cancelled");
+    assert_eq!(cancelled.session_id.as_deref(), Some("T1"));
+    let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+    let calls: Vec<_> = calls
+        .split("\n---\n")
+        .filter(|call| !call.is_empty())
+        .collect();
+    assert!(
+        calls[1].contains("resume ")
+            && calls[1].contains(" T1 ")
+            && calls[1].contains("follow-up while paused"),
+        "{}",
+        calls[1]
+    );
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].contains("resume ") && calls[1].contains(" T1 "));
+}
+
+#[test]
+fn a_rejected_provider_session_is_reported_and_retired_before_recovery() {
+    let dir = common::tempdir();
+    let project = dir.path().join("project");
+    init_project(&project);
+    let codex = fake_codex(dir.path());
+    let wrapper = dir.path().join("rejecting-codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nhas_resume=0\nfor arg; do [ \"$arg\" = resume ] && has_resume=1; done\ncase \"$*\" in *reject-session*) if [ $has_resume -eq 1 ]; then echo 'Session T1 was not found' >&2; exit 1; fi;; esac\nexec '{}' \"$@\"\n",
+            codex.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &wrapper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    common::interactive(&wrapper);
+    let core = Core::open(&dir.path().join("state"), config(&wrapper)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    core.send(&conversation.id, "first request").unwrap();
+    wait_idle(&core, &conversation.id);
+    core.send(&conversation.id, "reject-session follow-up")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let failed = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, TurnStatus::Failed);
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Session T1 was not found")
+    );
+    assert_eq!(failed.session_id, None);
+    assert!(
+        core.store
+            .last_session(&conversation.id, "orchestrator", "codex")
+            .unwrap()
+            .is_none()
+    );
+    let events = core.store.events_since(&conversation.id, 0, 500).unwrap();
+    assert!(events.iter().any(|event| {
+        event.kind == "provider_session_lost"
+            && event.turn_id.as_deref() == Some(failed.id.as_str())
+            && event.payload["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("Session T1 was not found"))
+    }));
+
+    core.send(&conversation.id, "start a fresh session")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let recovered = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.status, TurnStatus::Done);
+    let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+    let calls: Vec<_> = calls
+        .split("\n---\n")
+        .filter(|call| !call.is_empty())
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        !calls[1].contains("resume T1"),
+        "retired session was reused: {}",
+        calls[1]
+    );
 }
 
 #[test]
