@@ -60,6 +60,28 @@ fn expanded_pty_content_grows_with_the_viewport() {
 }
 
 #[test]
+fn expanded_standalone_agent_keeps_its_canvas_margin_without_a_task_frame() {
+    let mut view = view(vec![task("t1", &[])]);
+    view.agents
+        .insert(ORCHESTRATOR.into(), super::super::view::Agent::default());
+    let viewport = (80, 24);
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some(viewport),
+        Some(ORCHESTRATOR.into()),
+        0,
+    );
+    let node = graph.node(ORCHESTRATOR).unwrap();
+    assert!(node.visible);
+    assert!(node.group.is_none());
+    assert_eq!(node.x, 1);
+    assert_eq!((node.width, node.height), (viewport.0 - 2, viewport.1 - 2));
+}
+
+#[test]
 fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
     let tasks = (1..=6).map(|n| task(&format!("t{n}"), &[])).collect();
     let view = view(tasks);
@@ -168,7 +190,7 @@ fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() 
                 "edge {from} -> {to} crosses card {} at ({},{})",
                 node.key,
                 node.x,
-                node.y
+                node.y,
             );
         }
     }
@@ -244,8 +266,10 @@ fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() 
             for node in &visible {
                 assert!(
                     !Graph::route_intersects_card(&path, node),
-                    "terminal={width}x{height} edge {from} -> {to} crosses {}",
-                    node.key
+                    "terminal={width}x{height} edge {from} -> {to} crosses {} at ({},{}), path={path:?}",
+                    node.key,
+                    node.x,
+                    node.y
                 );
             }
         }

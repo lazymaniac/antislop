@@ -57,7 +57,12 @@ pub(super) fn row_tops(
     rows: usize,
 ) -> Tops {
     let split = admin.partition_point(|row| !is_final_review(row[0]));
-    let (mut admin_tops, y) = admin_row_tops(builder, &admin[..split], 0);
+    let expanded_admin = builder
+        .size
+        .expanded_key
+        .as_deref()
+        .is_some_and(|expanded| admin.iter().any(|row| row.contains(&expanded)));
+    let (mut admin_tops, y) = admin_row_tops(builder, &admin[..split], u16::from(expanded_admin));
     let heights = row_heights(placed, rows);
     let (unit_tops, gap_tops, mut bottom) = content_tops(&heights, gaps, split == 0, y);
     if split < admin.len() && (split > 0 || rows > 0) {

@@ -11,11 +11,19 @@ mod model;
 mod placement;
 mod render;
 
-use build::{card_height, layers, measure, member_keys, rows, units};
+use build::{card_height, layers, measure, member_keys, rows, shown_members, units};
 use links::{buses, crossed, gap_lines, lane_reserve, links, place_lanes};
 use model::{Bus, Lane, Link, Placed, Side, Tops, Unit};
 use placement::{admin_rows, admin_width, center_rows, row_tops};
 use render::{Wiring, entry_columns, push_admin, push_hidden, push_links, push_unit};
+
+fn shares_expanded_frame(builder: &Builder<'_>, unit: &Unit) -> bool {
+    let shown = shown_members(builder, unit);
+    builder.viewport.is_some()
+        && builder.step == FULL_STEP
+        && shown.len() == 1
+        && builder.size.expanded_key.as_deref() == Some(shown[0].0.as_str())
+}
 
 /// Rows between a frame's border and its cards.
 const FRAME_Y: u16 = 1;
@@ -116,19 +124,19 @@ fn fit_expanded_card(builder: &mut Builder<'_>, units: &[Unit]) {
     else {
         return;
     };
-    let available_width = width.saturating_sub(2);
-    let available_height = height.saturating_sub(2);
     let in_unit = units
         .iter()
         .any(|unit| member_keys(builder.view, unit).contains(&expanded));
-    let (frame_x, frame_y) = if in_unit {
+    let (frame_x, frame_y) = if in_unit && builder.step < FULL_STEP {
         (2 * FRAME_X, 2 * FRAME_Y)
     } else {
         (0, 0)
     };
+    // A task card shares its outer frame's border while expanded. The
+    // ordinary cards still use FRAME_X/FRAME_Y inside their frame.
     builder.size.limit_expanded_width(
-        available_width.saturating_sub(frame_x),
-        available_height.saturating_sub(frame_y),
+        width.saturating_sub(2).saturating_sub(frame_x),
+        height.saturating_sub(2).saturating_sub(frame_y),
     );
 }
 

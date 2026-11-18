@@ -1585,42 +1585,58 @@ fn expanded_card_resize_redraws_same_app_with_margins_and_clipping() {
         }
         previous_frame_origin = Some(frame_origin);
 
-        let screen = (
+        let frame_screen = (
             i32::from(viewport.x) + i32::from(frame.x) - i32::from(app.offset.0),
             i32::from(viewport.y) + i32::from(frame.y) - i32::from(app.offset.1),
         );
-        let right = screen.0 + i32::from(frame.width);
-        let bottom = screen.1 + i32::from(frame.height);
+        let node_screen = (
+            i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0),
+            i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1),
+        );
         if width >= 80 {
-            assert_eq!(screen.0, i32::from(viewport.x) + 1, "{width}x{height} left");
-            assert_eq!(screen.1, i32::from(viewport.y) + 1, "{width}x{height} top");
+            for (label, (x, y), card_width, card_height) in [
+                ("frame", frame_screen, frame.width, frame.height),
+                ("node", node_screen, node.width, node.height),
+            ] {
+                assert_eq!(
+                    x,
+                    i32::from(viewport.x) + 1,
+                    "{label} left {width}x{height}"
+                );
+                assert_eq!(y, i32::from(viewport.y) + 1, "{label} top {width}x{height}");
+                assert_eq!(
+                    x + i32::from(card_width),
+                    i32::from(viewport.right()) - 1,
+                    "{label} right {width}x{height}"
+                );
+                assert_eq!(
+                    y + i32::from(card_height),
+                    i32::from(viewport.bottom()) - 1,
+                    "{label} bottom {width}x{height}"
+                );
+            }
             assert_eq!(
-                right,
-                i32::from(viewport.right()) - 1,
-                "{width}x{height} right"
-            );
-            assert_eq!(
-                bottom,
-                i32::from(viewport.bottom()) - 1,
-                "{width}x{height} bottom"
+                (node.x, node.y, node.width, node.height),
+                (frame.x, frame.y, frame.width, frame.height)
             );
         } else {
-            let clipped_left = screen.0.max(i32::from(viewport.x));
-            let clipped_top = screen.1.max(i32::from(viewport.y));
-            let clipped_right = right.min(i32::from(viewport.right()));
-            let clipped_bottom = bottom.min(i32::from(viewport.bottom()));
-            assert!(
-                clipped_left < clipped_right,
-                "frame is visible at {width}x{height}"
-            );
-            assert!(
-                clipped_top < clipped_bottom,
-                "frame is visible at {width}x{height}"
-            );
-            assert!(clipped_left >= i32::from(viewport.x));
-            assert!(clipped_top >= i32::from(viewport.y));
-            assert!(clipped_right <= i32::from(viewport.right()));
-            assert!(clipped_bottom <= i32::from(viewport.bottom()));
+            for (label, (x, y), card_width, card_height) in [
+                ("frame", frame_screen, frame.width, frame.height),
+                ("node", node_screen, node.width, node.height),
+            ] {
+                let clipped_left = x.max(i32::from(viewport.x));
+                let clipped_top = y.max(i32::from(viewport.y));
+                let clipped_right = (x + i32::from(card_width)).min(i32::from(viewport.right()));
+                let clipped_bottom = (y + i32::from(card_height)).min(i32::from(viewport.bottom()));
+                assert!(
+                    clipped_left < clipped_right && clipped_top < clipped_bottom,
+                    "{label} is visible at {width}x{height}"
+                );
+                assert!(clipped_left >= i32::from(viewport.x));
+                assert!(clipped_top >= i32::from(viewport.y));
+                assert!(clipped_right <= i32::from(viewport.right()));
+                assert!(clipped_bottom <= i32::from(viewport.bottom()));
+            }
         }
 
         let ordinary = graph::Graph::new_with_viewport(
@@ -1769,14 +1785,15 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             legacy_card.1.saturating_sub(4),
         );
         assert!(content.0 > legacy_content.0);
-        // One outer cell on either side plus the task frame's two columns.
+        // The expanded task card and its shared outer border each keep a
+        // one-cell margin on every side.
         assert_eq!(
-            card.width + 6,
+            card.width + 2,
             viewport.0,
             "card keeps only its required margins"
         );
         assert_eq!(
-            card.height + 4,
+            card.height + 2,
             viewport.1,
             "frame keeps one top and bottom cell"
         );
@@ -4684,12 +4701,13 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
         1,
     );
     let card = expanded.node("worker:t1").unwrap();
-    // The unit frame is exactly one cell inside each viewport edge.
-    assert_eq!((card.width, card.height), (70, 8));
-    assert_eq!((card.width + 6, card.height + 4), initial_viewport);
+    // The expanded task card shares the frame boundary and keeps one cell
+    // inside each viewport edge.
+    assert_eq!((card.width, card.height), (74, 10));
+    assert_eq!((card.width + 2, card.height + 2), initial_viewport);
     assert!(expanded.width <= 76);
     let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
-    assert_eq!(content_area, 198);
+    assert_eq!(content_area, 350);
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(

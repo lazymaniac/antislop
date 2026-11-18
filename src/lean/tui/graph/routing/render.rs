@@ -64,6 +64,49 @@ impl Graph {
         self.render_frames(view, canvas, &selected, &critical_path, theme);
         self.render_edges(canvas, relations, &selected, &nodes);
         self.render_nodes(view, canvas, selected, &critical_path, theme, tick);
+        self.render_expanded_frame_overlay(view, canvas, &nodes, theme);
+    }
+
+    /// A fully expanded task card shares the frame border, so restore its
+    /// caption and incoming arrow after the card paints over the frame.
+    fn render_expanded_frame_overlay(
+        &self,
+        view: &View,
+        canvas: &mut Canvas,
+        nodes: &HashMap<&str, &Node>,
+        theme: &Theme,
+    ) {
+        let Some(node) = self
+            .expanded
+            .as_deref()
+            .and_then(|key| nodes.get(key).copied())
+            .filter(|node| node.visible)
+        else {
+            return;
+        };
+        let Some(group) = node.group.as_deref() else {
+            return;
+        };
+        let Some(frame) = self.frame(group).filter(|frame| {
+            (frame.x, frame.y, frame.width, frame.height)
+                == (node.x, node.y, node.width, node.height)
+        }) else {
+            return;
+        };
+        if let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) {
+            Self::draw_frame_title(canvas, frame, task, true, theme);
+        }
+        for edge in self.edges.iter().filter(|edge| edge.to == group) {
+            let Some(path) = self.edge_path(edge, nodes) else {
+                continue;
+            };
+            let Some(&(x, y)) = path.last() else {
+                continue;
+            };
+            if y.saturating_add(1) == node.y {
+                canvas.put(x, node.y, '▼', edge.kind.style());
+            }
+        }
     }
 
     fn render_edges(

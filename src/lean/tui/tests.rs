@@ -647,31 +647,49 @@ fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
             );
         }
         previous_frame_origin = Some(frame_origin);
-        let (screen_x, screen_y) = (
+        let frame_screen = (
             i32::from(viewport.x) + i32::from(frame.x) - i32::from(app.offset.0),
             i32::from(viewport.y) + i32::from(frame.y) - i32::from(app.offset.1),
         );
-        let right = screen_x + i32::from(frame.width);
-        let bottom = screen_y + i32::from(frame.height);
+        let node_screen = (
+            i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0),
+            i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1),
+        );
         let viewport_right = i32::from(viewport.right());
         let viewport_bottom = i32::from(viewport.bottom());
 
         if width >= 40 && height >= 16 {
-            assert_eq!(screen_x, i32::from(viewport.x) + 1, "{width}x{height}");
-            assert_eq!(screen_y, i32::from(viewport.y) + 1, "{width}x{height}");
-            assert_eq!(right, viewport_right - 1, "{width}x{height}");
-            assert_eq!(bottom, viewport_bottom - 1, "{width}x{height}");
-            assert_eq!(node.width, app.graph_viewport.unwrap().0 - 6);
-            assert_eq!(node.height, app.graph_viewport.unwrap().1 - 4);
-        } else {
-            let node = graph.node("worker:t3").unwrap();
-            let node_screen = (
-                i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0),
-                i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1),
+            for (label, (x, y), card_width, card_height) in [
+                ("frame", frame_screen, frame.width, frame.height),
+                ("node", node_screen, node.width, node.height),
+            ] {
+                assert_eq!(
+                    x,
+                    i32::from(viewport.x) + 1,
+                    "{label} left {width}x{height}"
+                );
+                assert_eq!(y, i32::from(viewport.y) + 1, "{label} top {width}x{height}");
+                assert_eq!(
+                    x + i32::from(card_width),
+                    viewport_right - 1,
+                    "{label} right {width}x{height}"
+                );
+                assert_eq!(
+                    y + i32::from(card_height),
+                    viewport_bottom - 1,
+                    "{label} bottom {width}x{height}"
+                );
+            }
+            assert_eq!(
+                (node.x, node.y, node.width, node.height),
+                (frame.x, frame.y, frame.width, frame.height)
             );
+        } else {
             let [clipped_card, title, content] =
                 graph::expanded_card_areas(viewport, node_screen, (node.width, node.height));
-            for rect in [clipped_card, title, content] {
+            let frame_bounds =
+                graph::expanded_card_areas(viewport, frame_screen, (frame.width, frame.height))[0];
+            for rect in [clipped_card, frame_bounds, title, content] {
                 if !rect.is_empty() {
                     assert!(rect.x >= viewport.x && rect.y >= viewport.y);
                     assert!(rect.right() <= viewport.right());
@@ -694,6 +712,61 @@ fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
             (normal_node.width, normal_node.height),
             "ordinary card dimensions changed at {width}x{height}"
         );
+    }
+}
+
+#[test]
+fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.view
+        .agents
+        .insert(view::ORCHESTRATOR.into(), view::Agent::default());
+    app.selected = view::ORCHESTRATOR.into();
+    app.graph_expanded = Some(app.selected.clone());
+    app.graph_revealed = None;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    for (width, height) in [(120, 40), (80, 24), (12, 5)] {
+        terminal.backend_mut().resize(width, height);
+        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let viewport = app
+            .graph_area
+            .expect("graph rendered at minimum dimensions");
+        let graph = graph::Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope_with_exception(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        );
+        let node = graph
+            .node(view::ORCHESTRATOR)
+            .expect("expanded standalone agent");
+        assert!(node.group.is_none());
+        let screen = (
+            i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0),
+            i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1),
+        );
+        if width >= 40 && height >= 16 {
+            assert_eq!(screen.0, i32::from(viewport.x) + 1, "{width}x{height} left");
+            assert_eq!(screen.1, i32::from(viewport.y) + 1, "{width}x{height} top");
+            assert_eq!(node.width + 2, app.graph_viewport.unwrap().0);
+            assert_eq!(node.height + 2, app.graph_viewport.unwrap().1);
+        } else {
+            let [card, title, content] =
+                graph::expanded_card_areas(viewport, screen, (node.width, node.height));
+            for rect in [card, title, content] {
+                if !rect.is_empty() {
+                    assert!(rect.x >= viewport.x && rect.y >= viewport.y);
+                    assert!(rect.right() <= viewport.right());
+                    assert!(rect.bottom() <= viewport.bottom());
+                }
+            }
+        }
     }
 }
 
