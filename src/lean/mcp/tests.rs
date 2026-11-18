@@ -208,6 +208,7 @@ mod role_tests {
             allowed_tools("orchestrator"),
             vec![
                 "finish_turn",
+                "current_turn",
                 "ask_user",
                 "submit_requirements",
                 "submit_plan",
