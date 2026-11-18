@@ -67,13 +67,23 @@ fn finalization_adds_options_with_and_without_required_gates() {
             assert_eq!(specs.len(), 2);
             assert!(!tasks::missing_quality_agents(&specs).is_empty());
         }
-        for writer in specs.iter().filter(|spec| spec.change_kind.has_delivery()) {
+        for writer in specs
+            .iter()
+            .filter(|spec| spec.change_kind.has_delivery() && !spec.quality_gate)
+        {
             assert!(writer.depends_on.iter().any(|id| {
                 specs.iter().any(|spec| {
                     spec.id == *id
                         && spec.kind == WorkKind::Options
                         && !spec.change_kind.has_delivery()
                 })
+            }));
+        }
+        for gate in specs.iter().filter(|spec| spec.quality_gate) {
+            assert!(!gate.depends_on.iter().any(|id| {
+                specs
+                    .iter()
+                    .any(|spec| spec.id == *id && spec.options_for.as_deref() == Some(&gate.id))
             }));
         }
     }
@@ -377,7 +387,10 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
         .map(|task| task.kind)
         .collect();
     assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
-    for writer in finalized.iter().filter(|task| task.changes_code()) {
+    for writer in finalized
+        .iter()
+        .filter(|task| task.changes_code() && !task.quality_gate)
+    {
         let options = finalized
             .iter()
             .find(|task| task.options_for.as_deref() == Some(writer.id.as_str()))
@@ -407,6 +420,23 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
             gate.depends_on
                 .iter()
                 .any(|dependency| dependency == "writer")
+        );
+        assert!(
+            finalized
+                .iter()
+                .all(|task| task.options_for.as_deref() != Some(gate.id.as_str())),
+            "quality gate {} must not have an options task",
+            gate.id
+        );
+        assert!(
+            gate.depends_on.iter().all(|dependency| {
+                finalized
+                    .iter()
+                    .find(|task| task.id == *dependency)
+                    .is_none_or(|task| task.options_for.is_none())
+            }),
+            "quality gate {} must not depend on an options task",
+            gate.id
         );
     }
 
@@ -653,7 +683,7 @@ fn a_team_runs_only_its_own_gates_and_options() {
         .collect();
     let code_writers: Vec<_> = small
         .iter()
-        .filter(|spec| spec.options_for.is_none() && spec.changes_code())
+        .filter(|spec| spec.options_for.is_none() && spec.changes_code() && !spec.quality_gate)
         .collect();
     assert_eq!(options.len(), code_writers.len());
     assert!(options.iter().all(|option| {
@@ -663,6 +693,22 @@ fn a_team_runs_only_its_own_gates_and_options() {
                 .any(|writer| writer.id == *owner && writer.depends_on.contains(&option.id))
         })
     }));
+    for gate in small.iter().filter(|spec| spec.quality_gate) {
+        assert!(
+            options
+                .iter()
+                .all(|option| option.options_for.as_deref() != Some(gate.id.as_str())),
+            "quality gate {} must not have an options task",
+            gate.id
+        );
+        assert!(
+            gate.depends_on
+                .iter()
+                .all(|dependency| { options.iter().all(|option| option.id != *dependency) }),
+            "quality gate {} must not depend on an options task",
+            gate.id
+        );
+    }
     tasks::validate(&small).unwrap();
     assert_eq!(
         small,
@@ -674,8 +720,6 @@ fn a_team_runs_only_its_own_gates_and_options() {
         feature
     );
 
-    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::SmallChange).is_none());
-    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::Feature).is_some());
     assert!(
         tasks::Team::Research
             .misfit(std::slice::from_ref(&writer))
@@ -687,4 +731,52 @@ fn a_team_runs_only_its_own_gates_and_options() {
         tasks::Team::SecurityFix
     );
     assert!(tasks::Team::parse("everything").is_err());
+}
+
+#[test]
+fn context_scout_is_not_predefined_or_required_and_legacy_context_tasks_round_trip() {
+    assert!(
+        tasks::PREDEFINED_AGENT_POOL
+            .iter()
+            .all(|agent| agent.id != "context-scout" && agent.kind != WorkKind::Context)
+    );
+    assert!(!tasks::team_catalog().contains("context scout"));
+    for instructions in [
+        tasks::planner_instructions(),
+        tasks::orchestrator_instructions(),
+    ] {
+        assert!(!instructions.contains("context-scout"));
+        assert!(!instructions.contains("context scout"));
+    }
+
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement", "goal": "Make the requested change",
+        "change_kind": "code", "kind": "implementation",
+        "acceptance_criteria":[{"id":"C1","text":"The requested change is implemented"}]
+    }))
+    .unwrap();
+    for team in tasks::Team::ALL {
+        let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+        tasks::validate(&plan).unwrap();
+        assert!(plan.iter().all(|task| task.kind != WorkKind::Context));
+        let gates: Vec<_> = plan
+            .iter()
+            .filter(|task| task.quality_gate)
+            .map(|task| task.kind)
+            .collect();
+        assert_eq!(gates, team.gates());
+    }
+
+    let historical = json!({
+        "id": "context", "title": "Context", "goal": "Read existing contracts",
+        "change_kind": "none", "kind": "context"
+    });
+    let restored: TaskContract = serde_json::from_value(historical.clone()).unwrap();
+    assert_eq!(restored.kind, WorkKind::Context);
+    let serialized = serde_json::to_value(&restored).unwrap();
+    assert_eq!(serialized["kind"], historical["kind"]);
+    assert_eq!(
+        serde_json::from_value::<TaskContract>(serialized).unwrap(),
+        restored
+    );
 }

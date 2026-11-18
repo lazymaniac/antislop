@@ -11,11 +11,19 @@ mod model;
 mod placement;
 mod render;
 
-use build::{card_height, layers, measure, member_keys, rows, units};
+use build::{card_height, layers, measure, member_keys, rows, shown_members, units};
 use links::{buses, crossed, gap_lines, lane_reserve, links, place_lanes};
 use model::{Bus, Lane, Link, Placed, Side, Tops, Unit};
 use placement::{admin_rows, admin_width, center_rows, row_tops};
 use render::{Wiring, entry_columns, push_admin, push_hidden, push_links, push_unit};
+
+fn shares_expanded_frame(builder: &Builder<'_>, unit: &Unit) -> bool {
+    let shown = shown_members(builder, unit);
+    builder.viewport.is_some()
+        && builder.step == FULL_STEP
+        && shown.len() == 1
+        && builder.size.expanded_key.as_deref() == Some(shown[0].0.as_str())
+}
 
 /// Rows between a frame's border and its cards.
 const FRAME_Y: u16 = 1;
@@ -69,7 +77,7 @@ fn settle(builder: &mut Builder<'_>, units: &[Unit]) -> Arrangement {
     let (mut reserve, mut narrowed) = (0, false);
     let mut attempt = 0;
     loop {
-        resize(builder, units, reserve, narrowed);
+        resize(builder, units, reserve);
         let arrangement = arrange(builder, units);
         let need = lane_reserve(&arrangement.buses);
         // The lanes passing the expanded card take room it had.
@@ -99,36 +107,37 @@ fn arrange(builder: &Builder<'_>, units: &[Unit]) -> Arrangement {
 
 /// Size the cards for `reserve` columns kept clear on either side of the
 /// rows; the expanded card narrows too when a lane passes its row.
-fn resize(builder: &mut Builder<'_>, units: &[Unit], reserve: u16, narrowed: bool) {
+fn resize(builder: &mut Builder<'_>, units: &[Unit], reserve: u16) {
     builder.size =
         Size::fit(builder.viewport, builder.size.expanded_key.clone()).animated(builder.step);
     builder.lanes = reserve;
     if let (Some((width, _)), true) = (builder.viewport, reserve > 0) {
         builder.size.reserve_columns(width, 2 * reserve);
     }
-    let extra = if narrowed {
-        2 * reserve.saturating_sub(MARGIN)
-    } else {
-        0
-    };
-    fit_expanded_card(builder, units, extra);
+    fit_expanded_card(builder, units);
 }
 
-/// Narrow the expanded card so that it and its unit's frame fit across the
-/// viewport, `reserve` columns aside; its partners step aside meanwhile.
-fn fit_expanded_card(builder: &mut Builder<'_>, units: &[Unit], reserve: u16) {
-    let (Some((width, _)), Some(expanded)) = (builder.viewport, builder.size.expanded_key.clone())
+/// Fit the expanded card and its unit frame inside the viewport's one-cell margin.
+fn fit_expanded_card(builder: &mut Builder<'_>, units: &[Unit]) {
+    let (Some((width, height)), Some(expanded)) =
+        (builder.viewport, builder.size.expanded_key.clone())
     else {
         return;
     };
-    let available = width.saturating_sub(2 * MARGIN + reserve);
     let in_unit = units
         .iter()
         .any(|unit| member_keys(builder.view, unit).contains(&expanded));
-    let frame = if in_unit { 2 * FRAME_X } else { 0 };
-    builder
-        .size
-        .limit_expanded_width(available.saturating_sub(frame));
+    let (frame_x, frame_y) = if in_unit && builder.step < FULL_STEP {
+        (2 * FRAME_X, 2 * FRAME_Y)
+    } else {
+        (0, 0)
+    };
+    // A task card shares its outer frame's border while expanded. The
+    // ordinary cards still use FRAME_X/FRAME_Y inside their frame.
+    builder.size.limit_expanded_width(
+        width.saturating_sub(2).saturating_sub(frame_x),
+        height.saturating_sub(2).saturating_sub(frame_y),
+    );
 }
 
 /// The row of the unit holding the expanded card.

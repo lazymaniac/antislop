@@ -188,11 +188,18 @@ impl Store {
     /// The latest recorded work goal, falling back to the first user request.
     pub fn conversation_goal(&self, conversation: &str) -> Result<String> {
         let db = self.db();
-        let goal: Option<String> = db.query_row(
+        let mut goal: Option<String> = db.query_row(
             "SELECT s.summary FROM plan_scopes b JOIN scopes s ON s.id=b.scope_id JOIN plans p ON p.id=b.plan_id WHERE p.conversation_id=?1 ORDER BY p.created_ms DESC,p.rowid DESC,b.revision DESC LIMIT 1",
             [conversation],
             |row| row.get(0),
         ).optional()?;
+        if goal.is_none() {
+            goal = db.query_row(
+                "SELECT summary FROM scopes WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            ).optional()?;
+        }
         if let Some(goal) = goal.filter(|goal| !goal.trim().is_empty()) {
             return Ok(goal);
         }

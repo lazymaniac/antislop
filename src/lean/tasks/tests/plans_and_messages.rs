@@ -23,19 +23,26 @@ fn plans_that_write_get_the_required_quality_gates() {
         ]
     );
     let full = with_options(with_required_agents(tasks));
-    assert_eq!(full.len(), 12);
+    assert_eq!(full.len(), 9);
     validate(&full).unwrap();
     let gate = |kind| full.iter().find(|task| task.kind == kind).unwrap();
+    let options: Vec<_> = full
+        .iter()
+        .filter(|task| task.options_for.is_some())
+        .collect();
+    for quality_gate in full.iter().filter(|task| task.quality_gate) {
+        assert!(quality_gate.options_for.is_none());
+        assert!(
+            quality_gate
+                .depends_on
+                .iter()
+                .all(|dependency| { options.iter().all(|option| option.id != *dependency) })
+        );
+    }
     let refactor = gate(WorkKind::Refactoring);
-    assert_eq!(
-        refactor.depends_on,
-        vec!["t1", "t2", "quality-refactoring-options"]
-    );
+    assert_eq!(refactor.depends_on, vec!["t1", "t2"]);
     let lint = gate(WorkKind::StaticAnalysis);
-    assert_eq!(
-        lint.depends_on,
-        vec!["t1", "t2", "quality-refactoring", "static-analyzer-options"]
-    );
+    assert_eq!(lint.depends_on, vec!["t1", "t2", "quality-refactoring"]);
     assert!(serde_json::to_value(lint).unwrap().get("scope").is_none());
     assert!(!gate(WorkKind::Security).change_kind.has_delivery());
     assert_eq!(
@@ -46,8 +53,7 @@ fn plans_that_write_get_the_required_quality_gates() {
             "quality-refactoring",
             "static-analyzer",
             "security-auditor",
-            "performance-auditor",
-            "integration-gate-options"
+            "performance-auditor"
         ]
     );
     assert!(missing_quality_agents(&full).is_empty());

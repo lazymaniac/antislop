@@ -87,8 +87,8 @@ impl Size {
         };
         // Three cards of a unit side by side, in their frame.
         let unit = MARGIN + 2 * CARD_GAP + 2 * FRAME_X;
-        // An expanded card keeps `MARGIN` on either side.
-        let full_w = vp_w.saturating_sub(2 * MARGIN).max(MIN_WIDTH);
+        // Leave one cell for the outer edge; unit fitting subtracts its frame.
+        let full_w = vp_w.saturating_sub(2).max(MIN_WIDTH);
         let full_h = vp_h.saturating_sub(2).max(MIN_HEIGHT);
         Self {
             w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),
@@ -119,10 +119,10 @@ impl Size {
         self.grow();
     }
 
-    /// Narrow the fully grown expanded card to `width` at most, so that it
-    /// and its unit's other cards stay within the viewport.
-    pub(super) fn limit_expanded_width(&mut self, width: u16) {
+    /// Limit the fully grown expanded card so its frame stays within the viewport.
+    pub(super) fn limit_expanded_width(&mut self, width: u16, height: u16) {
         self.full_w = self.full_w.min(width).max(MIN_WIDTH);
+        self.full_h = self.full_h.min(height).max(MIN_HEIGHT);
         self.grow();
     }
 

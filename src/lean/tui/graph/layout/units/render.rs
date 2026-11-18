@@ -63,11 +63,12 @@ pub(super) fn push_unit(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, t
 
 fn push_cards(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16, group: &str) {
     let shown = shown_members(builder, unit);
-    let y = top + FRAME_Y;
+    let single_expanded = super::shares_expanded_frame(builder, unit);
+    let y = if single_expanded { top } else { top + FRAME_Y };
     let mut previous: Option<(String, u16)> = None;
     let mut offset = 0;
     for (key, folded) in &shown {
-        let x = spot.x + FRAME_X + offset;
+        let x = spot.x + if single_expanded { 0 } else { FRAME_X + offset };
         push_card(builder, key, *folded, x, y, group, &mut previous);
         offset += builder.size.width(key, false) + CARD_GAP;
     }

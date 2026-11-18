@@ -547,15 +547,30 @@ fn required_gates_join_plans_that_write() {
         .iter()
         .map(|task| task.spec["kind"].as_str().unwrap().to_owned())
         .collect();
-    for writer in plan.iter().filter(|task| {
-        task.spec["change_kind"]
-            .as_str()
-            .is_some_and(|kind| kind != "none")
-    }) {
+    for writer in plan
+        .iter()
+        .filter(|task| task.spec["change_kind"] == "code" && task.spec["quality_gate"] != true)
+    {
         let dependencies = writer.spec["depends_on"].as_array().unwrap();
         assert!(plan.iter().any(|task| task.spec["kind"] == "options"
             && task.spec["change_kind"] == "none"
             && dependencies.contains(&task.spec["id"])));
+    }
+    for gate in plan.iter().filter(|task| task.spec["quality_gate"] == true) {
+        assert!(
+            plan.iter()
+                .all(|task| task.spec["options_for"] != gate.spec["id"])
+        );
+        assert!(
+            gate.spec["depends_on"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|id| {
+                    plan.iter()
+                        .all(|task| task.spec["id"] != *id || task.spec["kind"] != "options")
+                })
+        );
     }
     let plan: Vec<_> = plan
         .iter()

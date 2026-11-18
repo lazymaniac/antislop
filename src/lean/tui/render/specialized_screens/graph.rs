@@ -1,7 +1,7 @@
 use super::super::super::*;
 
 impl App {
-    pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
+    pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
         self.now_area = now_area;
@@ -48,15 +48,47 @@ impl App {
             &mut canvas,
             self.relations,
             &self.selected,
-            &Theme::from_env(),
+            theme,
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
             self.draw_expanded_card_panels(frame, inner, &graph);
+            self.draw_expanded_entry_arrows(frame, inner, &graph, theme);
         }
         self.draw_progress(frame, now_area, &progress);
+    }
+
+    /// Restore incoming arrows after the expanded title has painted its row.
+    /// Route coordinates stay in graph space until clipped to the visible
+    /// viewport, just like the card panels.
+    fn draw_expanded_entry_arrows(
+        &self,
+        frame: &mut Frame,
+        viewport: Rect,
+        graph: &Graph,
+        theme: &Theme,
+    ) {
+        let visible = viewport.intersection(frame.area());
+        let arrow = theme.clean("▼");
+        for (x, y, style) in graph.expanded_entry_arrows() {
+            let screen_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
+            let screen_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
+            if screen_x < i32::from(visible.x)
+                || screen_y < i32::from(visible.y)
+                || screen_x >= i32::from(visible.right())
+                || screen_y >= i32::from(visible.bottom())
+            {
+                continue;
+            }
+            if let Some(cell) = frame
+                .buffer_mut()
+                .cell_mut((screen_x as u16, screen_y as u16))
+            {
+                cell.set_symbol(&arrow).set_style(style);
+            }
+        }
     }
 
     /// The card being laid out as expanded and how far it has grown: it eases
@@ -106,9 +138,17 @@ impl App {
         // of stopping a cell short when `from` is above or left of the view.
         let lerp = |from: i32, to: i32| to + (from - to) * (full - progress) / full;
         // The fully opened card lands where reveal_selected_node puts it.
-        let settled = node_x - i32::from(expanded_offset_x(graph, (node.x, node.width), width));
+        let (outer_x, outer_y) =
+            expanded_outer_origin(graph, node.x, node.y, node.group.as_deref());
+        let settled_offset_x = outer_x
+            .saturating_sub(1)
+            .min(graph.width.saturating_sub(width));
+        let settled_offset_y = outer_y
+            .saturating_sub(1)
+            .min(graph.height.saturating_sub(height));
+        let settled = node_x - i32::from(settled_offset_x);
         let left = lerp(anchor_x - node_w / 2, settled);
-        let top = lerp(anchor_y - node_h / 2, 0);
+        let top = lerp(anchor_y - node_h / 2, node_y - i32::from(settled_offset_y));
         let max_x = i32::from(graph.width.saturating_sub(width));
         let max_y = i32::from(graph.height.saturating_sub(height));
         self.offset.0 = (node_x - left).clamp(0, max_x.max(0)) as u16;
@@ -154,7 +194,7 @@ impl App {
         // must be clipped with it instead of sliding along with the scroll.
         let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(self.offset.0);
         let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(self.offset.1);
-        let [card, title, content] =
+        let [card, mut title, content] =
             graph::expanded_card_areas(viewport, (left, top), (node.width, node.height));
         if card.is_empty() {
             self.graph_card_area = None;
@@ -162,6 +202,19 @@ impl App {
         }
         self.graph_card_area = Some(content).filter(|area| !area.is_empty());
         if !title.is_empty() {
+            // A dependency entry can share the title row. Keep the title
+            // painter out of that cell so its suffix is not cut in half
+            // before the final arrow pass restores the route glyph.
+            for (x, y, _) in graph.expanded_entry_arrows() {
+                let arrow_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
+                let arrow_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
+                if arrow_y == i32::from(title.y)
+                    && arrow_x >= i32::from(title.x)
+                    && arrow_x < i32::from(title.right())
+                {
+                    title.width = title.width.min((arrow_x - i32::from(title.x)) as u16);
+                }
+            }
             render_card_title(frame, title, self.details.as_ref(), &self.view, &key);
         }
         if content.is_empty() {
@@ -295,6 +348,14 @@ impl App {
         let progress = self.view.now_click_rows(max_rows);
         let (graph_area, now_area) = graph_progress_areas(frame_inner, progress.len());
         let inner = padded(graph_area);
+        if self
+            .graph_viewport
+            .is_some_and(|viewport| viewport != (inner.width, inner.height))
+        {
+            // Re-run the reveal against the layout rebuilt for this viewport,
+            // even when the selected key has not changed.
+            self.graph_revealed = None;
+        }
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
         (inner, now_area, progress)
@@ -383,13 +444,19 @@ impl App {
         };
         let (left, top) = &mut self.offset;
         if self.graph_expanded.as_deref() == Some(self.selected.as_str()) {
-            // An opened card fills the view: put all of it on screen.
-            *left = expanded_offset_x(
-                graph,
-                (node.x, node.width),
-                self.graph_viewport.map_or(0, |v| v.0),
+            // Keep the unit frame's outer edge one cell inside the viewport.
+            let (outer_x, outer_y) =
+                expanded_outer_origin(graph, node.x, node.y, node.group.as_deref());
+            *left = outer_x.saturating_sub(1).min(
+                graph
+                    .width
+                    .saturating_sub(self.graph_viewport.map_or(0, |v| v.0)),
             );
-            *top = node.y;
+            *top = outer_y.saturating_sub(1).min(
+                graph
+                    .height
+                    .saturating_sub(self.graph_viewport.map_or(0, |v| v.1)),
+            );
             return;
         }
         reveal_axis(
@@ -625,13 +692,15 @@ fn graph_vertical_markers(graph: &Graph, offset_y: u16, viewport_height: u16) ->
         })
 }
 
-/// The horizontal offset centring an opened card in a view `width` wide,
-/// within the graph: a graph wider than a phone's panel, its other rows
-/// scrolling, still shows the card with even margins.
-fn expanded_offset_x(graph: &Graph, (x, card): (u16, u16), width: u16) -> u16 {
-    (x + card / 2)
-        .saturating_sub(width / 2)
-        .min(graph.width.saturating_sub(width))
+fn expanded_outer_origin(graph: &Graph, x: u16, y: u16, group: Option<&str>) -> (u16, u16) {
+    group
+        .and_then(|group| {
+            graph
+                .frames
+                .iter()
+                .find(|frame| frame.key == group && frame.visible)
+        })
+        .map_or((x, y), |frame| (frame.x, frame.y))
 }
 
 fn graph_position_marker_glyph(above: bool, ascii: bool) -> &'static str {

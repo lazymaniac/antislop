@@ -337,32 +337,38 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             gates
         );
         for spec in specs.iter().filter(|t| t.change_kind.has_delivery()) {
-            let option = specs
-                .iter()
-                .find(|o| {
-                    spec.depends_on.contains(&o.id) && o.kind == antislop::config::WorkKind::Options
-                })
-                .unwrap();
-            assert!(!option.change_kind.has_delivery());
-            let option_row = stored.iter().find(|t| t.spec["id"] == option.id).unwrap();
             let writer_row = stored.iter().find(|t| t.spec["id"] == spec.id).unwrap();
-            let done = events
-                .iter()
-                .position(|e| e["task"] == option_row.id && e["status"] == "approved")
-                .unwrap_or_else(|| {
-                    panic!(
-                        "options not approved: {:?}",
-                        stored
-                            .iter()
-                            .map(|t| (&t.spec["id"], &t.status, &t.report))
-                            .collect::<Vec<_>>()
-                    )
-                });
-            let start = events
-                .iter()
-                .position(|e| e["task"] == writer_row.id && e["status"] == "working")
-                .unwrap();
-            assert!(done < start);
+            if spec.quality_gate {
+                assert!(
+                    specs
+                        .iter()
+                        .all(|option| option.options_for.as_deref() != Some(&spec.id))
+                );
+            } else {
+                let option = specs
+                    .iter()
+                    .find(|option| option.options_for.as_deref() == Some(&spec.id))
+                    .unwrap();
+                assert!(spec.depends_on.contains(&option.id));
+                assert!(!option.change_kind.has_delivery());
+                let option_row = stored
+                    .iter()
+                    .find(|task| task.spec["id"] == option.id)
+                    .unwrap();
+                let done = events
+                    .iter()
+                    .position(|event| {
+                        event["task"] == option_row.id && event["status"] == "approved"
+                    })
+                    .expect("options must be approved");
+                let start = events
+                    .iter()
+                    .position(|event| {
+                        event["task"] == writer_row.id && event["status"] == "working"
+                    })
+                    .unwrap();
+                assert!(done < start);
+            }
             assert_eq!(writer_row.status, "approved");
             // The generated gates are absent from the planner input. Check their
             // own file bytes and reviewer observations, not just prompt wording.
@@ -377,14 +383,22 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
                 .unwrap()["prompt"]
                 .as_str()
                 .unwrap();
-            assert_selected_input(worker);
+            if spec.quality_gate {
+                assert!(!worker.contains("selected_approach"));
+            } else {
+                assert_selected_input(worker);
+            }
             let reviewer = calls
                 .iter()
                 .find(|c| c["worker"] == false && c["task"] == spec.title)
                 .unwrap()["prompt"]
                 .as_str()
                 .unwrap();
-            assert_selected_input(reviewer);
+            if spec.quality_gate {
+                assert!(!reviewer.contains("selected_approach"));
+            } else {
+                assert_selected_input(reviewer);
+            }
         }
         let prompt = calls.iter().find(|c| c["task"] == "w-options").unwrap()["prompt"]
             .as_str()
@@ -689,14 +703,7 @@ fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_o
         specs.iter().map(|spec| (spec.id.as_str(), spec)).collect();
     assert_eq!(
         by_id.keys().copied().collect::<Vec<_>>(),
-        [
-            "review-testing",
-            "review-testing-options",
-            "static-analyzer",
-            "static-analyzer-options",
-            "w",
-            "w-options"
-        ]
+        ["review-testing", "static-analyzer", "w", "w-options"]
     );
     assert_eq!(by_id["w"].kind, antislop::config::WorkKind::Implementation);
     assert_eq!(by_id["w-options"].kind, antislop::config::WorkKind::Options);
@@ -706,34 +713,20 @@ fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_o
         by_id["static-analyzer"].kind,
         antislop::config::WorkKind::StaticAnalysis
     );
-    assert_eq!(
-        by_id["static-analyzer-options"].options_for.as_deref(),
-        Some("static-analyzer")
-    );
-    assert_eq!(by_id["static-analyzer-options"].depends_on, ["w"]);
-    assert_eq!(
-        by_id["static-analyzer"].depends_on,
-        ["w", "static-analyzer-options"]
-    );
+    assert_eq!(by_id["static-analyzer"].depends_on, ["w"]);
     assert_eq!(
         by_id["review-testing"].kind,
         antislop::config::WorkKind::Testing
     );
-    assert_eq!(
-        by_id["review-testing-options"].options_for.as_deref(),
-        Some("review-testing")
-    );
-    assert_eq!(by_id["review-testing-options"].depends_on, ["w"]);
-    assert_eq!(
-        by_id["review-testing"].depends_on,
-        ["w", "review-testing-options"]
-    );
+    assert_eq!(by_id["review-testing"].depends_on, ["w"]);
+    assert!(by_id["static-analyzer"].quality_gate);
+    assert!(by_id["review-testing"].quality_gate);
     assert!(stored.iter().all(|task| task.status == "approved"));
 
     assert_eq!(
         calls.iter().filter(|call| call["worker"] == true).count(),
-        6,
-        "each writer, generated option and quality gate must execute"
+        4,
+        "the writer, its option and both quality gates must execute"
     );
     assert_eq!(
         calls
@@ -789,16 +782,7 @@ fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_o
             .position(|event| event["task"] == task.id && event["status"] == status)
             .unwrap_or_else(|| panic!("missing {status} event for {runtime_id}"))
     };
-    for (option, owner) in [
-        ("w-options", "w"),
-        ("static-analyzer-options", "static-analyzer"),
-        ("review-testing-options", "review-testing"),
-    ] {
-        assert!(
-            event_position(option, "approved") < event_position(owner, "working"),
-            "{option} must be approved before {owner} starts"
-        );
-    }
+    assert!(event_position("w-options", "approved") < event_position("w", "working"));
     for gate in ["static-analyzer", "review-testing"] {
         assert!(
             event_position("w", "approved") < event_position(gate, "working"),

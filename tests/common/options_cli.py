@@ -43,7 +43,12 @@ else:
         else:
             implementation = 'B' if scenario in ('reject-once', 'shared-worktree-repair') and count == 1 else settings['implementation']
             if implementation == 'selected':
-                implementation = re.findall(r'"id":\s*"([AB])"', prompt)[-1]
+                if any(authored['id'] == task for authored in settings['plan']['tasks']):
+                    implementation = re.findall(r'"id":\s*"([AB])"', prompt)[-1]
+                else:
+                    # Runtime quality gates check the required format directly;
+                    # they have no options selection of their own.
+                    implementation = open('required-format.txt').read().strip()
             open('result-'+task+'.txt','w').write(implementation)
             record_call({'written':task,'actual':open('result-'+task+'.txt').read()})
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']

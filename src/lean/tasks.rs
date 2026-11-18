@@ -230,6 +230,7 @@ const REPORT_REVIEW: &str = "This task delivers an analysis report, optionally i
 /// report task finish, so later rounds block only on what the round changed.
 const REPORT_RECHECK: &str = "In this later round, a blocking finding (medium or above) is only an earlier finding above that the updated report did not fix, or a problem in text the worker added or changed since the previous report. A gap in the code or report that was already there in the previous round and that you did not name then is not blocking now: record it in your report or as a low finding.";
 const OPTIONS_REVIEW: &str = "Independently compare the implementation with selected_approach and this task's local requirements. Review actual files and recorded checks. A changed approach requires reviewed options; the worker's declaration is not proof. Ask the orchestrator about missing or inconsistent input. Do not reassess other tasks or the whole session.";
+const GATE_REVIEW: &str = "Independently verify this quality gate's checks and any repairs against its goal and obligations. Inspect actual files, diffs and recorded evidence. The worker's report is not proof. Ask the orchestrator about missing or inconsistent input. Do not expand the gate's scope.";
 
 #[cfg(test)]
 #[path = "tasks/tests.rs"]

@@ -1,5 +1,6 @@
 use super::super::super::*;
 use super::super::links::{is_short, spots};
+use super::super::shares_expanded_frame;
 use super::*;
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
@@ -75,8 +76,10 @@ pub(in crate::lean::tui::graph::layout::units) fn push_links(
     for (number, link) in links.iter().enumerate() {
         let (from, to) = (spot[&link.from], spot[&link.to]);
         let (px, cx) = (exits[&number], entries[&link.to]);
-        let bottom = tops.units[from.row] + from.height - 1;
+        let bottom = tops.units[from.row] + from.height
+            - u16::from(!shares_expanded_frame(builder, &units[link.from]));
         let top = tops.units[to.row];
+        let target = top.saturating_sub(u16::from(shares_expanded_frame(builder, &units[link.to])));
         let entry = gap_line(gaps, tops, to.row, link.to);
         let mut path = vec![(px, bottom)];
         if is_short(link, &spot) {
@@ -86,7 +89,7 @@ pub(in crate::lean::tui::graph::layout::units) fn push_links(
             let exit = gap_line(gaps, tops, from.row + 1, link.to);
             path.extend([(px, exit), (lane, exit), (lane, entry)]);
         }
-        path.extend([(cx, entry), (cx, top)]);
+        path.extend([(cx, entry), (cx, target)]);
         let task = |unit: usize| format!("task:{}", builder.view.tasks[units[unit].task].id);
         let (from, to) = (task(link.from), task(link.to));
         builder.graph.edges.push(Edge {

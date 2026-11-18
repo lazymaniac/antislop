@@ -37,7 +37,9 @@ pub fn reviewer_prompt(
 }
 
 fn reviewer_binding(task: &TaskContract) -> &'static str {
-    if task.changes_code() {
+    if task.changes_code() && task.quality_gate {
+        GATE_REVIEW
+    } else if task.changes_code() {
         OPTIONS_REVIEW
     } else if task.kind == crate::config::WorkKind::Options {
         SELECTION_REVIEW

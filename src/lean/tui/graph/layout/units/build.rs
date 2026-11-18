@@ -303,7 +303,12 @@ pub(super) fn shown_members(builder: &Builder<'_>, unit: &Unit) -> Vec<(String, 
 pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
     let shown = shown_members(builder, unit);
     let widths = shown.iter().map(|(key, _)| builder.size.width(key, false));
-    2 * FRAME_X + widths.sum::<u16>() + (shown.len() as u16).saturating_sub(1) * CARD_GAP
+    let frame = if super::shares_expanded_frame(builder, unit) {
+        0
+    } else {
+        2 * FRAME_X
+    };
+    frame + widths.sum::<u16>() + (shown.len() as u16).saturating_sub(1) * CARD_GAP
 }
 
 pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {
@@ -326,18 +331,25 @@ pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]
     for (row, members) in rows.iter().enumerate() {
         let mut x = 0;
         for &unit in members {
+            let shown = shown_members(builder, &units[unit]);
             let width = unit_width(builder, &units[unit]);
-            let tallest = shown_members(builder, &units[unit])
+            let tallest = shown
                 .iter()
                 .map(|(key, folded)| card_height(builder, key, *folded))
                 .max()
                 .unwrap_or(builder.size.h);
+            let shared_expanded_frame = super::shares_expanded_frame(builder, &units[unit]);
             placed.push(Placed {
                 unit,
                 row,
                 x,
                 width,
-                height: tallest + 2 * FRAME_Y,
+                height: tallest
+                    + if shared_expanded_frame {
+                        0
+                    } else {
+                        2 * FRAME_Y
+                    },
             });
             x += width + GAP_X;
         }

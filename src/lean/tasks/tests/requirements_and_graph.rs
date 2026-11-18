@@ -54,6 +54,28 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
 }
 
 #[test]
+fn plan_review_options_guidance_excludes_quality_gates() {
+    let writer = contract(serde_json::json!({
+        "id":"writer","title":"Writer","goal":"Implement feature","change_kind":"code","kind":"implementation",
+        "reviewer":{"summary":"Check feature"}}));
+    let mut gate = contract(serde_json::json!({
+        "id":"static-analyzer","title":"Static analyzer","goal":"Run static analysis","change_kind":"code","kind":"static_analysis",
+        "reviewer":{"summary":"Check analysis"}}));
+    gate.quality_gate = true;
+    let plan = [writer, gate];
+
+    for prompt in [
+        plan_review_prompt("/p", "request", &plan),
+        plan_review_followup("", &plan),
+    ] {
+        assert!(prompt.contains("eligible non-gate code-changing tasks"));
+        assert!(prompt.contains("quality gates do not receive options"));
+        assert!(prompt.contains("do not require selected_approach"));
+        assert!(!prompt.contains("generates options for code-changing tasks"));
+    }
+}
+
+#[test]
 fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     let same = contract(serde_json::json!({
         "id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"UNCHANGED GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
@@ -174,7 +196,12 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
             initial,
         );
         assert!(!prompt.contains("dedicated options for every writer"));
-        assert!(prompt.contains("Only change_kind=code is eligible"));
+        assert!(
+            prompt.contains("Only eligible non-gate change_kind=code tasks receive code options")
+        );
+        assert!(
+            prompt.contains("quality gates do not receive options or require selected_approach")
+        );
         assert!(prompt.contains("not authored in a revision"));
         assert!(
             prompt.contains("Never demand manual options or code gates for none/artifact tasks")

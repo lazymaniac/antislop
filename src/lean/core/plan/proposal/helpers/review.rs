@@ -13,8 +13,6 @@ impl Core {
         record_plan_review_start(&self.store, conversation, &plan.id, config, specs)?;
         let project_text = project.to_string_lossy().into_owned();
         let scope_context = self.plan_scope_context(conversation, &plan.id)?;
-        let team = self.store.team(conversation)?;
-        let gaps = planning_gaps(specs, team);
         let team_guidance = self.store.team_guidance(conversation)?;
         let dependency_note = dependency_note(specs);
         self.review(
@@ -30,7 +28,7 @@ impl Core {
                     specs,
                     first,
                 );
-                let prompt = append_planning_gaps(prompt, gaps.as_deref()) + &dependency_note;
+                let prompt = prompt + &dependency_note;
                 append_team_guidance(prompt, team_guidance.as_ref())
             },
         )

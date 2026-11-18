@@ -614,6 +614,64 @@ mod tests {
     }
 
     #[test]
+    fn plan_revision_merge_keeps_options_off_automatically_added_gates() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::lean::store::Store::open(&directory.path().join("core.db")).unwrap();
+        let conversation = store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let owner: TaskContract = serde_json::from_value(json!({
+            "id":"writer", "title":"Writer", "goal":"Implement the requested behavior",
+            "change_kind":"code", "kind":"implementation",
+            "acceptance_criteria":[{"id":"C1","text":"The requested behavior is implemented"}]
+        }))
+        .unwrap();
+        let initial = tasks::with_options(tasks::with_required_agents(vec![owner]));
+        let baseline = store
+            .add_plan(
+                &conversation,
+                &initial
+                    .iter()
+                    .map(|spec| serde_json::to_value(spec).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let mut revised_writer = initial
+            .iter()
+            .find(|spec| spec.id == "writer")
+            .unwrap()
+            .clone();
+        revised_writer.goal = "Implement the revised requested behavior".into();
+        let revision = PlanRevision {
+            plan: baseline[0].plan_id.clone(),
+            base_revision: 0,
+            reason: "clarify the writer objective".into(),
+            scope: None,
+            tasks: vec![revised_writer],
+            retire: vec![],
+            redo: vec![],
+            replacements: Default::default(),
+        };
+
+        let merged = revision.merge(&baseline).unwrap();
+
+        tasks::validate(&merged).unwrap();
+        assert!(
+            merged
+                .iter()
+                .any(|spec| spec.options_for.as_deref() == Some("writer"))
+        );
+        for gate in merged.iter().filter(|spec| spec.quality_gate) {
+            assert!(
+                !merged
+                    .iter()
+                    .any(|spec| spec.options_for.as_deref() == Some(&gate.id))
+            );
+        }
+    }
+
+    #[test]
     fn preparation_failure_releases_the_durable_revision_slot() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();

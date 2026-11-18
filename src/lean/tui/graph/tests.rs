@@ -46,18 +46,39 @@ fn expanded_pty_content_grows_with_the_viewport() {
         usize::from(content_area(56, 10).width) * usize::from(content_area(56, 10).height),
         364
     );
-    // The expanded card keeps MARGIN on either side.
-    assert_eq!((size.expanded_w, size.expanded_h), (70, 10));
+    assert_eq!((size.expanded_w, size.expanded_h), (74, 10));
     let expanded = content_area(size.expanded_w, size.expanded_h);
     let baseline = content_area(56, 10);
     assert_eq!(
         usize::from(expanded.width) * usize::from(expanded.height),
-        462
+        490
     );
     assert!(
         usize::from(expanded.width) * usize::from(expanded.height)
             > usize::from(baseline.width) * usize::from(baseline.height)
     );
+}
+
+#[test]
+fn expanded_standalone_agent_keeps_its_canvas_margin_without_a_task_frame() {
+    let mut view = view(vec![task("t1", &[])]);
+    view.agents
+        .insert(ORCHESTRATOR.into(), super::super::view::Agent::default());
+    let viewport = (80, 24);
+    let graph = Graph::new_with_expanded(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some(viewport),
+        Some(ORCHESTRATOR.into()),
+        0,
+    );
+    let node = graph.node(ORCHESTRATOR).unwrap();
+    assert!(node.visible);
+    assert!(node.group.is_none());
+    assert_eq!(node.x, 1);
+    assert_eq!((node.width, node.height), (viewport.0 - 2, viewport.1 - 2));
 }
 
 #[test]
@@ -169,7 +190,7 @@ fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() 
                 "edge {from} -> {to} crosses card {} at ({},{})",
                 node.key,
                 node.x,
-                node.y
+                node.y,
             );
         }
     }
@@ -245,8 +266,10 @@ fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() 
             for node in &visible {
                 assert!(
                     !Graph::route_intersects_card(&path, node),
-                    "terminal={width}x{height} edge {from} -> {to} crosses {}",
-                    node.key
+                    "terminal={width}x{height} edge {from} -> {to} crosses {} at ({},{}), path={path:?}",
+                    node.key,
+                    node.x,
+                    node.y
                 );
             }
         }
@@ -1548,7 +1571,7 @@ fn an_expanded_card_spans_a_narrow_viewport_past_the_lanes_that_end_above_it() {
         .iter()
         .find(|frame| frame.task == "t4")
         .unwrap();
-    assert_eq!((frame.x, frame.x + frame.width), (MARGIN, 70 - MARGIN));
+    assert_eq!((frame.x, frame.x + frame.width), (1, 69));
     assert_eq!(graph.width, 70, "no horizontal scroll");
 }
 
