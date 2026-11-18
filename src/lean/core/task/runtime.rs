@@ -388,4 +388,59 @@ mod tests {
             .collect();
         assert_eq!(owners.len(), 70);
     }
+
+    #[test]
+    #[ignore = "synthetic performance observation; run explicitly with --ignored --nocapture"]
+    fn runtime_sweep_cost_and_retained_bytes_across_generations() {
+        use std::time::Instant;
+
+        for files_per_generation in [50usize, 250, 1_000] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = dir.path();
+            let task = "task-0001";
+            let owner = state.join("task-state").join(task);
+            let mut citations = String::new();
+            let mut expected_bytes = 0u64;
+            for generation in 0..10 {
+                let root = owner.join(format!("g{generation}")).join("scout");
+                for file in 0..files_per_generation {
+                    let path = root.join(format!("run-{file:05}")).join("journal.txt");
+                    write(&path);
+                    if file == generation % files_per_generation {
+                        citations.push_str(&format!("{}\n", path.display()));
+                        expected_bytes += 4;
+                    }
+                }
+            }
+            let started = Instant::now();
+            let sweep = sweep_uncited(
+                state,
+                task,
+                &citations,
+                std::time::SystemTime::now() + std::time::Duration::from_secs(2),
+            )
+            .unwrap();
+            let elapsed = started.elapsed();
+            assert!(sweep.errors.is_empty(), "{:?}", sweep.errors);
+            let retained_files = (0..10)
+                .filter(|generation| {
+                    owner
+                        .join(format!("g{generation}"))
+                        .join("scout")
+                        .join(format!("run-{:05}", generation % files_per_generation))
+                        .join("journal.txt")
+                        .exists()
+                })
+                .count();
+            assert_eq!(retained_files, 10);
+            assert!(sweep.bytes >= ((files_per_generation * 10 - retained_files) * 4) as u64);
+            println!(
+                "generations=10 files_per_generation={files_per_generation} total_files={} citations=10 retained_files={retained_files} retained_payload_bytes={expected_bytes} removed_entries={} removed_bytes={} sweep_ms={}",
+                files_per_generation * 10,
+                sweep.removed.len(),
+                sweep.bytes,
+                elapsed.as_millis()
+            );
+        }
+    }
 }

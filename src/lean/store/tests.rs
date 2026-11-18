@@ -11,6 +11,8 @@ mod rows_and_feedback;
 #[path = "tests/schema_and_comments.rs"]
 mod schema_and_comments;
 
+#[path = "tests/plan_history.rs"]
+mod plan_history;
 #[path = "tests/plan_revision.rs"]
 mod plan_revision;
 

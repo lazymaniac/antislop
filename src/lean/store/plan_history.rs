@@ -63,15 +63,7 @@ fn plan_history_sessions(
     plan_id: &str,
     tasks: &[Task],
 ) -> Result<(Vec<SessionInfo>, Vec<PlanAgentInfo>)> {
-    let task_ids = tasks
-        .iter()
-        .map(|task| task.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let all_turns = plan_history_turn_rows(db, conversation)?;
-    let turns = all_turns
-        .into_iter()
-        .filter(|turn| turn_belongs_to_plan(turn, plan_id, &task_ids))
-        .collect::<Vec<_>>();
+    let turns = plan_history_turn_rows(db, conversation, plan_id, tasks)?;
     let agents = plan_history_agents(&turns, tasks);
     Ok((turns, agents))
 }
@@ -79,13 +71,30 @@ fn plan_history_sessions(
 fn plan_history_turn_rows(
     db: &rusqlite::Connection,
     conversation: &str,
+    plan_id: &str,
+    tasks: &[Task],
 ) -> Result<Vec<SessionInfo>> {
+    let task_ids = serde_json::to_string(
+        &tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+    )?;
     let mut turn_stmt = db.prepare(
-            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
-             FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
-        )?;
+        "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, rowid AS sort_rowid
+         FROM turns WHERE conversation_id=?1 AND plan_id=?2
+         UNION ALL
+         SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, rowid AS sort_rowid
+         FROM turns WHERE conversation_id=?1 AND (plan_id IS NULL OR plan_id<>?2)
+           AND role IN (
+             SELECT 'worker:' || value FROM json_each(?3)
+             UNION ALL
+             SELECT 'reviewer:' || value FROM json_each(?3)
+           )
+         ORDER BY started_ms ASC, sort_rowid ASC",
+    )?;
     Ok(turn_stmt
-        .query_map([conversation], |row| {
+        .query_map([conversation, plan_id, &task_ids], |row| {
             Ok(SessionInfo {
                 turn_id: row.get(0)?,
                 plan_id: row.get(1)?,
@@ -136,15 +145,6 @@ fn plan_history_status(tasks: &[Task]) -> String {
     } else {
         "done".to_string()
     }
-}
-
-fn turn_belongs_to_plan(
-    turn: &SessionInfo,
-    plan_id: &str,
-    task_ids: &std::collections::HashSet<&str>,
-) -> bool {
-    turn.plan_id.as_deref() == Some(plan_id)
-        || crate::lean::task_role(&turn.role).is_some_and(|(id, _)| task_ids.contains(id))
 }
 
 fn plan_history_agents(turns: &[SessionInfo], tasks: &[Task]) -> Vec<PlanAgentInfo> {
