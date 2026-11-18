@@ -96,17 +96,46 @@ impl Graph {
         if let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) {
             Self::draw_frame_title(canvas, frame, task, true, theme);
         }
-        for edge in self.edges.iter().filter(|edge| edge.to == group) {
-            let Some(path) = self.edge_path(edge, nodes) else {
-                continue;
-            };
-            let Some(&(x, y)) = path.last() else {
-                continue;
-            };
-            if y.saturating_add(1) == node.y {
-                canvas.put(x, node.y, '▼', edge.kind.style());
-            }
+        for (x, y, style) in self.expanded_entry_arrows() {
+            canvas.put(x, y, '▼', style);
         }
+    }
+
+    /// Incoming routes that reach the expanded task from the row above it.
+    /// The same coordinates and styles are painted once more after the
+    /// expanded title panel so its text cannot hide the entry glyphs.
+    pub(in crate::lean::tui) fn expanded_entry_arrows(&self) -> Vec<(u16, u16, Style)> {
+        let Some(node) = self
+            .expanded
+            .as_deref()
+            .and_then(|key| self.node(key))
+            .filter(|node| node.visible)
+        else {
+            return Vec::new();
+        };
+        let Some(group) = node.group.as_deref() else {
+            return Vec::new();
+        };
+        if !self.frame(group).is_some_and(|frame| {
+            (frame.x, frame.y, frame.width, frame.height)
+                == (node.x, node.y, node.width, node.height)
+        }) {
+            return Vec::new();
+        }
+        let nodes: HashMap<&str, &Node> = self
+            .nodes
+            .iter()
+            .map(|node| (node.key.as_str(), node))
+            .collect();
+        self.edges
+            .iter()
+            .filter(|edge| edge.to == group)
+            .filter_map(|edge| {
+                let path = self.edge_path(edge, &nodes)?;
+                let &(x, y) = path.last()?;
+                (y.saturating_add(1) == node.y).then_some((x, node.y, edge.kind.style()))
+            })
+            .collect()
     }
 
     fn render_edges(

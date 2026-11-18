@@ -55,8 +55,33 @@ impl App {
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
             self.draw_expanded_card_panels(frame, inner, &graph);
+            self.draw_expanded_entry_arrows(frame, inner, &graph);
         }
         self.draw_progress(frame, now_area, &progress);
+    }
+
+    /// Restore incoming arrows after the expanded title has painted its row.
+    /// Route coordinates stay in graph space until clipped to the visible
+    /// viewport, just like the card panels.
+    fn draw_expanded_entry_arrows(&self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
+        let visible = viewport.intersection(frame.area());
+        for (x, y, style) in graph.expanded_entry_arrows() {
+            let screen_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
+            let screen_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
+            if screen_x < i32::from(visible.x)
+                || screen_y < i32::from(visible.y)
+                || screen_x >= i32::from(visible.right())
+                || screen_y >= i32::from(visible.bottom())
+            {
+                continue;
+            }
+            if let Some(cell) = frame
+                .buffer_mut()
+                .cell_mut((screen_x as u16, screen_y as u16))
+            {
+                cell.set_symbol("▼").set_style(style);
+            }
+        }
     }
 
     /// The card being laid out as expanded and how far it has grown: it eases
@@ -162,7 +187,7 @@ impl App {
         // must be clipped with it instead of sliding along with the scroll.
         let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(self.offset.0);
         let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(self.offset.1);
-        let [card, title, content] =
+        let [card, mut title, content] =
             graph::expanded_card_areas(viewport, (left, top), (node.width, node.height));
         if card.is_empty() {
             self.graph_card_area = None;
@@ -170,6 +195,19 @@ impl App {
         }
         self.graph_card_area = Some(content).filter(|area| !area.is_empty());
         if !title.is_empty() {
+            // A dependency entry can share the title row. Keep the title
+            // painter out of that cell so its suffix is not cut in half
+            // before the final arrow pass restores the route glyph.
+            for (x, y, _) in graph.expanded_entry_arrows() {
+                let arrow_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
+                let arrow_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
+                if arrow_y == i32::from(title.y)
+                    && arrow_x >= i32::from(title.x)
+                    && arrow_x < i32::from(title.right())
+                {
+                    title.width = title.width.min((arrow_x - i32::from(title.x)) as u16);
+                }
+            }
             render_card_title(frame, title, self.details.as_ref(), &self.view, &key);
         }
         if content.is_empty() {

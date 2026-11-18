@@ -2321,7 +2321,7 @@ src
        row_tops(builder,admin,placed,gaps,rows):Tops > is_final_review,admin_row_tops,row_heights,content_tops,Tops
       render/link_render
        entry_columns(builder,units,placed,buses):HashMap<usize,u16> > spots,title_end
-       push_links(builder,units,placed,wiring) ~40 > spots,exit_columns,gap_line,is_short,Edge
+       push_links(builder,units,placed,wiring) ~42 > spots,exit_columns,shares_expanded_frame,gap_line,is_short,Edge
        Wiring(C{links,buses,gaps,tops,entries})
       render.rs
        push_admin(builder,rows,tops,width) > admin_width,Node,height,layout_height
@@ -2341,7 +2341,7 @@ src
       fit(viewport,expanded_key):Self
       animated(step):Self > grow
       reserve_columns(viewport,columns) > grow
-      limit_expanded_width(width) > grow
+      limit_expanded_width(width,height) > grow
       width(key,admin):u16
       layout_height(key,_admin):u16
      = FULL_STEP=16
@@ -2378,7 +2378,8 @@ src
      new_with_expanded(view,scope,collapsed,grouping,viewport,expanded,expanded_tab):Self
      new_animated(view,scope,collapsed,grouping,viewport,(Option<String>,usize),step):Self
      render(view,canvas,relations,selected) > render_with,Theme.new
-     render_with(view,canvas,relations,selected,theme,tick) > as_str,card_key,render_{frames,edges,nodes}
+     render_with(view,canvas,relations,selected,theme,tick) > as_str,card_key,render_{frames,edges,nodes,expanded_frame_overlay}
+     expanded_entry_arrows():Vec<(u16,u16,Style)> > node,edge_path,style
      node(key):Option<&Node>
      frame(group):Option<&Frame>
      edge_path(edge,nodes):Option<Vec<(u16,u16)>> ~54 > frame,shown,as_str
@@ -2668,7 +2669,7 @@ src
      - composer_status_area,session_{block,title},ascii_border_set,session_round_label,
        {native,draw_session,composer,primary_composer}_status,mode_label,place_session_cursor
     specialized_screens/graph
-     - render_card_title,round_label,render_card_{round_data,history_message},graph_vertical_markers,expanded_offset_x,
+     - render_card_title,round_label,render_card_{round_data,history_message},graph_vertical_markers,expanded_outer_origin,
        graph_{position_marker_glyph,title,progress_areas},reveal_{axis,tall_axis}
     specialized_screens.rs
      draw_secondary_or_main(app,frame) > draw_{plan,diff,details}
@@ -2835,7 +2836,7 @@ src
      phase_action():Option<(&'static str,Command)> > interview_visible,plan_proposed
      draw_phase_action(frame,area,theme) > phase_action,style,Theme.button,borders
      draw(frame) > sync_interview,draw_min_term_guard,sync_{native_views,approval},draw_{history_or_ledger,secondary_or_main,remaining}
-     draw_graph(frame,area) ~57 > card_key,graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_{expanded_card_panels,progress}
+     draw_graph(frame,area) ~58 > card_key,graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,Theme.from_env,draw_expanded_{card_panels,entry_arrows},draw_progress
      graph_expansion():(Option<String>,u8)
      draw_main(frame) ~46 > draw_{chat,graph},approval_panel_height,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
@@ -3298,6 +3299,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 148,978 LOC · input 1,331,551 · output 49,129 tokens · state 3d4ae8f266d7 · targets AGENTS.md
+· 149,676 LOC · input 1,338,279 · output 49,166 tokens · state 4d9bf6ace455 · targets AGENTS.md
 ```
 <!-- hologram:end -->

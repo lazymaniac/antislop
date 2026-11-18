@@ -716,6 +716,120 @@ fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
 }
 
 #[test]
+fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.view.tasks = (0..5)
+        .map(|index| view::TaskRow {
+            id: format!("parent-{index}"),
+            title: format!("Parent {index}"),
+            ..Default::default()
+        })
+        .chain([view::TaskRow {
+            id: "expanded".into(),
+            title: "A long task title whose status and round reach the arrow".into(),
+            status: "running".into(),
+            depends_on: (0..5).map(|index| format!("parent-{index}")).collect(),
+            ..Default::default()
+        }])
+        .collect();
+    app.selected = "worker:expanded".into();
+    app.graph_expanded = Some(app.selected.clone());
+    app.graph_revealed = None;
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    for (width, height) in [(120, 40), (80, 24)] {
+        terminal.backend_mut().resize(width, height);
+        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let viewport = app.graph_area.expect("graph rendered after resize");
+        let graph = graph::Graph::new_with_expanded(
+            &app.view,
+            &app.graph_scope_with_exception(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+            app.graph_expanded.clone(),
+            app.graph_tab,
+        );
+        let node = graph.node("worker:expanded").expect("expanded task node");
+        let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0);
+        let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1);
+        let title_rect =
+            graph::expanded_card_areas(viewport, (left, top), (node.width, node.height))[1];
+        let routes = graph.edge_routes(app.relations);
+        let target_group = node.group.as_deref().unwrap();
+        let entry_cells = routes
+            .iter()
+            .filter(|(_, to, path)| {
+                *to == target_group
+                    && path
+                        .last()
+                        .is_some_and(|(_, y)| y.saturating_add(1) == node.y)
+            })
+            .filter_map(|(_, _, path)| path.last().map(|(x, _)| (*x, node.y)))
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut overlaps_title = false;
+        assert!(
+            !entry_cells.is_empty(),
+            "an incoming route reaches the frame"
+        );
+        for (route_x, route_y) in entry_cells {
+            let screen_x = i32::from(viewport.x) + i32::from(route_x) - i32::from(app.offset.0);
+            let screen_y = i32::from(viewport.y) + i32::from(route_y) - i32::from(app.offset.1);
+            assert!(screen_x >= i32::from(viewport.x) && screen_x < i32::from(viewport.right()));
+            assert!(screen_y >= i32::from(viewport.y) && screen_y < i32::from(viewport.bottom()));
+            let overlaps = screen_y == i32::from(title_rect.y)
+                && screen_x >= i32::from(title_rect.x)
+                && screen_x < i32::from(title_rect.right());
+            overlaps_title |= overlaps;
+            assert!(
+                overlaps,
+                "fixture route endpoint lies in title at {width}x{height}"
+            );
+            let full_heading = format!(
+                "{} · running · round unavailable",
+                app.view.tasks.last().unwrap().title
+            );
+            assert!(
+                unicode_width::UnicodeWidthStr::width(full_heading.as_str())
+                    > (screen_x - i32::from(title_rect.x)) as usize,
+                "heading text reaches the route endpoint at {width}x{height}"
+            );
+            assert_eq!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((screen_x as u16, screen_y as u16))
+                    .unwrap()
+                    .symbol(),
+                "▼",
+                "the incoming arrow remains visible at {width}x{height}"
+            );
+        }
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(overlaps_title, "long task heading overlaps route endpoint");
+        assert!(
+            rendered.contains("round unavailable"),
+            "round label remains visible"
+        );
+    }
+
+    terminal.backend_mut().resize(12, 5);
+    terminal.resize(Rect::new(0, 0, 12, 5)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.graph_area.is_some(), "minimum canvas still renders");
+    assert_eq!(terminal.backend().buffer().area, Rect::new(0, 0, 12, 5));
+}
+
+#[test]
 fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
     let mut app = test_app();
     app.focus = Focus::Graph;
