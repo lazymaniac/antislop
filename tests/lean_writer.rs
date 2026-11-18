@@ -1668,6 +1668,125 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
 }
 
 #[test]
+fn repair_rounds_reuse_one_task_branch_and_keep_earlier_changes_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let first_review = dir.path().join("first-task-review");
+    let mut script = std::fs::read_to_string(&agy).unwrap();
+    script = script.replace(
+        "elif \"You review\" in prompt:\n    session = \"reviewer\"\n    answer = \"```verdict\\n\" + json.dumps({\"approved\": \"git diff\" in prompt, \"findings\": []}) + \"\\n```\"",
+        &format!(
+            "elif \"You review\" in prompt:\n    session = \"reviewer\"\n    first = not os.path.exists({first_review:?})\n    open({first_review:?}, \"a\").close()\n    answer = \"```verdict\\n\" + json.dumps({{\"approved\": not first, \"findings\": [{{\"severity\": \"medium\", \"issue\": \"preserve the first round\", \"where\": \"first-round.txt\"}}] if first else []}}) + \"\\n```\""
+        ),
+    );
+    script = script.replace(
+        "with open(\"hello.txt\", \"w\") as f:\n        f.write(\"from worker\\n\")\n    answer = \"wrote hello.txt\"",
+        "if os.path.exists(\"first-round.txt\"):\n        assert open(\"first-round.txt\").read() == \"kept from round one\\n\", \"earlier round change missing\"\n        with open(\"second-round.txt\", \"w\") as f:\n            f.write(\"written in round two\\n\")\n    else:\n        with open(\"first-round.txt\", \"w\") as f:\n            f.write(\"kept from round one\\n\")\n    with open(\"hello.txt\", \"w\") as f:\n        f.write(\"from worker\\n\")\n    answer = \"wrote round files\"",
+    );
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = original_tasks(&core, &conversation)[0].clone();
+
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.round, 2, "review finding caused a worker repair round");
+    let branch = format!("antislop/{}", task.id);
+    assert_eq!(
+        git(&project, &["branch", "--list", &branch])
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        git(&project, &["show", &format!("{branch}:first-round.txt")]),
+        "kept from round one"
+    );
+    assert_eq!(
+        git(&project, &["show", &format!("{branch}:second-round.txt")]),
+        "written in round two"
+    );
+
+    let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let worker_cwds: Vec<_> = calls
+        .iter()
+        .filter(|call| call["args"].to_string().contains("You are a worker"))
+        .map(|call| call["cwd"].as_str().unwrap())
+        .collect();
+    let review_cwds: Vec<_> = calls
+        .iter()
+        .filter(|call| {
+            let args = call["args"].to_string();
+            args.contains("You review another agent's work")
+                || args.contains("The worker's updated report")
+        })
+        .map(|call| call["cwd"].as_str().unwrap())
+        .collect();
+    assert_eq!(worker_cwds.len(), 2, "both worker rounds ran");
+    assert!(worker_cwds.iter().all(|cwd| *cwd == worker_cwds[0]));
+    assert_eq!(review_cwds.len(), 2, "each round is reviewed");
+    assert_eq!(
+        worker_cwds[0], review_cwds[0],
+        "reviewer checks the task checkout"
+    );
+    assert!(review_cwds.iter().all(|cwd| *cwd == worker_cwds[0]));
+}
+
+#[test]
+fn separate_writer_tasks_keep_separate_branches_and_checkouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let planner = std::fs::read_to_string(&codex).unwrap().replace(
+        r#"{"tasks": [{"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
+    "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
+        r#"{"tasks": [
+    {"id": "t1", "title": "First file", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt", "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}},
+    {"id": "t2", "title": "Second file", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt", "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
+    );
+    assert_ne!(planner, std::fs::read_to_string(&codex).unwrap());
+    std::fs::write(&codex, planner).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let tasks = original_tasks(&core, &conversation);
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|task| task.status == "approved"));
+
+    let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let worker_cwds: Vec<_> = calls
+        .iter()
+        .filter(|call| call["args"].to_string().contains("You are a worker"))
+        .map(|call| call["cwd"].as_str().unwrap())
+        .collect();
+    assert_eq!(worker_cwds.len(), 2);
+    assert_ne!(
+        worker_cwds[0], worker_cwds[1],
+        "tasks use isolated checkouts"
+    );
+    for task in &tasks {
+        let branch = format!("antislop/{}", task.id);
+        assert_eq!(
+            git(&project, &["branch", "--list", &branch])
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            git(&project, &["show", &format!("{branch}:hello.txt")]),
+            "from worker"
+        );
+    }
+}
+
+#[test]
 fn resuming_preserves_an_unanswered_choice_after_the_user_commits() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
@@ -1762,12 +1881,24 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
         "elif \"You review\" in prompt:",
         "elif (\"You review\" in prompt or \"account again\" in prompt or \"does not account for\" in prompt):",
     );
+    let retry_marker = dir.path().join("worker-ran-before-recovery");
+    let script = script.replace(
+        "session = \"worker\"",
+        &format!(
+            "session = \"worker\"\n    if os.path.exists({retry_marker:?}):\n        assert open(\"hello.txt\").read() == \"from worker\\n\", \"recovery lost the earlier task branch commit\"\n    else:\n        open({retry_marker:?}, \"w\").close()"
+        ),
+    );
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting");
+    let branch = format!("antislop/{}", task.id);
+    assert_eq!(
+        git(&project, &["show", &format!("{branch}:hello.txt")]),
+        "from worker"
+    );
     let (blocked, _) = card(&core, &conversation, "t1");
     assert_eq!(blocked["integration"]["outcome"], "user_edits");
 
@@ -1790,6 +1921,13 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     let task = core.task(&task.plan_id, "t1").unwrap();
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert!(task.round >= 2, "the retry ran a later round");
+    assert_eq!(
+        git(&project, &["branch", "--list", &branch])
+            .lines()
+            .count(),
+        1,
+        "recovery continued the same task branch"
+    );
     let events: Vec<Value> = core
         .store
         .events_since(&conversation, 0, 10_000)
