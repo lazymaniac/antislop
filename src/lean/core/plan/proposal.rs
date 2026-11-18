@@ -4,7 +4,7 @@ use helpers::PreparedPlan;
 
 #[path = "proposal/helpers.rs"]
 mod helpers;
-use crate::lean::core::plan::helpers::{finalize_team_plan, planning_gaps};
+use crate::lean::core::plan::helpers::finalize_team_plan;
 use crate::lean::*;
 
 struct ProposalPublication<'a> {

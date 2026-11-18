@@ -288,13 +288,11 @@ src
     helpers
      finalize_plan(specs,required_gates,local_options):Vec<TaskContract> > finalize_team_plan
      finalize_team_plan(specs,required_gates,local_options,team):Vec<TaskContract>
-     planning_gaps(specs,team):Option<String>
      writer_base_scratch(state,{plan,spec}_id):PathBuf
     kept_tasks
      - authored,not_keepable
     proposal
      helpers/recording
-      append_planning_gaps(prompt,gaps):String
       plan_event_payload(text,plan,specs,review,waiting,revision_token):Result<serde_json::Value>
       plan_review_prompt(project,request,specs,first):String
       record_plan_review_start(store,conversation,plan,config,specs):Result<()> > Store.append_event
@@ -1127,7 +1125,7 @@ src
     require_plan_correction(conversation,turn):Result<()> > db,has_uncorrected_review_draft,require
     submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
     keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
-    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,team,planning_gaps,team_guidance,dependency_note,review,append_{planning_gaps,team_guidance}
+    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,team_guidance,dependency_note,review,append_team_guidance
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
     planning_requirements(&Arc<Self>,conversation,addressed,cancel):Result<Option<Run>> > record_addressed_comments,count_since_requirements_reset,ensure_requirements,record_requirements_failure
@@ -1738,9 +1736,9 @@ src
    agents.rs
     missing_gates(tasks,gates):Vec<&'static PredefinedAgent> > is_gate_kind
     missing_quality_agents(tasks):Vec<&'static PredefinedAgent> > missing_gates
-    refresh_existing_options(tasks):Vec<TaskContract> > as_str,options_{task,goal}
+    refresh_existing_options(tasks):Vec<TaskContract> > eligible_for_options,as_str,options_{task,goal}
     resolve_gate_dependencies(tasks) > expand_gate_dependencies
-    with_options(tasks):Vec<TaskContract> > options_{task,goal}
+    with_options(tasks):Vec<TaskContract> > eligible_for_options,options_{task,goal}
     with_required_agents(tasks):Vec<TaskContract> > with_team_gates
     with_team_gates(tasks,team_gates):Vec<TaskContract> > resolve_gate_dependencies,missing_gates,refresh_existing_options,GatePlan.new,order_graph
     without_options(tasks):Vec<TaskContract>
@@ -1834,7 +1832,6 @@ src
      parse(name):crate::Result<Self>
      gates():&'static [WorkKind]
      options():bool
-     needs_context_scout():bool
      summary():String > gates
      misfit(tasks):Option<String> > gates
     = TEAM_VERSION=2,ALL
@@ -3301,6 +3298,6 @@ src
    ledger_cli.py:*_ledger_{emit,block}
    mod:*install_ledger_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope_store,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
-· 148,847 LOC · input 1,330,335 · output 49,158 tokens · state 6a787d103056 · targets AGENTS.md
+· 148,978 LOC · input 1,331,551 · output 49,129 tokens · state 3d4ae8f266d7 · targets AGENTS.md
 ```
 <!-- hologram:end -->

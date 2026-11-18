@@ -39,13 +39,6 @@ pub(super) fn plan_review_prompt(
     }
 }
 
-pub(super) fn append_planning_gaps(prompt: String, gaps: Option<&str>) -> String {
-    match gaps {
-        Some(gaps) => format!("{prompt}\n\n{gaps}"),
-        None => prompt,
-    }
-}
-
 pub(super) fn plan_event_payload(
     text: &str,
     plan: &PreparedPlan,

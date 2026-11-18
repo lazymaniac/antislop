@@ -45,11 +45,11 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          so that every requirement is reviewed and touched code is always left in a cleaner, \
          better state than it was found.\n\n\
          Shape the team to the request; small requests get few, short tasks:\n\
-         - change to existing code: context, then implementation per module \
+         - change to existing code: implementation per module \
          (with its tests and boy-scout cleanup), then static_analysis/testing/integration \
          that checks the whole change; add architecture, dependencies, security or \
          performance tasks when the change carries those risks;\n\
-         - refactoring: context and characterization tests first, then the \
+         - refactoring: characterization tests first, then the \
          refactoring, then integration;\n\
          - security fix: threat and reproduction, fix, adversarial tests;\n\
          - new project: requirements, architecture, a vertical slice, then \

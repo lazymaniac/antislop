@@ -674,8 +674,6 @@ fn a_team_runs_only_its_own_gates_and_options() {
         feature
     );
 
-    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::SmallChange).is_none());
-    assert!(planning_gaps(std::slice::from_ref(&writer), tasks::Team::Feature).is_some());
     assert!(
         tasks::Team::Research
             .misfit(std::slice::from_ref(&writer))
@@ -687,4 +685,51 @@ fn a_team_runs_only_its_own_gates_and_options() {
         tasks::Team::SecurityFix
     );
     assert!(tasks::Team::parse("everything").is_err());
+}
+
+#[test]
+fn context_scout_is_not_predefined_or_required_and_legacy_context_tasks_round_trip() {
+    assert!(
+        tasks::PREDEFINED_AGENT_POOL
+            .iter()
+            .all(|agent| agent.id != "context-scout" && agent.kind != WorkKind::Context)
+    );
+    assert!(!tasks::team_catalog().contains("context scout"));
+    for instructions in [
+        tasks::planner_instructions(),
+        tasks::orchestrator_instructions(),
+    ] {
+        assert!(!instructions.contains("context-scout"));
+        assert!(!instructions.contains("context scout"));
+    }
+
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement", "goal": "Make the requested change",
+        "change_kind": "code", "kind": "implementation"
+    }))
+    .unwrap();
+    for team in tasks::Team::ALL {
+        let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+        tasks::validate(&plan).unwrap();
+        assert!(plan.iter().all(|task| task.kind != WorkKind::Context));
+        let gates: Vec<_> = plan
+            .iter()
+            .filter(|task| task.quality_gate)
+            .map(|task| task.kind)
+            .collect();
+        assert_eq!(gates, team.gates());
+    }
+
+    let historical = json!({
+        "id": "context", "title": "Context", "goal": "Read existing contracts",
+        "change_kind": "none", "kind": "context"
+    });
+    let restored: TaskContract = serde_json::from_value(historical.clone()).unwrap();
+    assert_eq!(restored.kind, WorkKind::Context);
+    let serialized = serde_json::to_value(&restored).unwrap();
+    assert_eq!(serialized["kind"], historical["kind"]);
+    assert_eq!(
+        serde_json::from_value::<TaskContract>(serialized).unwrap(),
+        restored
+    );
 }

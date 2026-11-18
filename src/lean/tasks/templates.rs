@@ -14,7 +14,7 @@ pub const TEAM_VERSION: u32 = 2;
 #[serde(rename_all = "kebab-case")]
 pub enum Team {
     /// A contained fix or tweak: options where policy allows them, static
-    /// analysis and tests, no context scout.
+    /// analysis and tests.
     SmallChange,
     /// New behaviour: every gate, options where policy allows them.
     #[default]
@@ -80,11 +80,6 @@ impl Team {
         matches!(self, Team::SmallChange | Team::Feature | Team::Refactoring)
     }
 
-    /// Whether a code change must be preceded by a context scout.
-    pub fn needs_context_scout(self) -> bool {
-        self != Team::SmallChange
-    }
-
     /// What the planner reads about the template.
     pub fn summary(self) -> String {
         let gates = if self.gates().is_empty() {
@@ -105,17 +100,12 @@ impl Team {
             Team::Document => "a document or other artifact, no code",
         };
         format!(
-            "`{}`: {use_for}; gates: {gates}; options: {}{}",
+            "`{}`: {use_for}; gates: {gates}; options: {}",
             self.name(),
             if self.options() {
                 "when local options are enabled"
             } else {
                 "no"
-            },
-            if self.needs_context_scout() {
-                ""
-            } else {
-                "; no context scout required"
             }
         )
     }

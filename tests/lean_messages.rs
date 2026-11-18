@@ -661,7 +661,7 @@ answer = plan(writer("t1")) if "The plan finished. Results of each task follow."
 "#;
 
 #[test]
-fn the_plan_reviewer_is_told_when_a_plan_that_changes_code_has_no_context_scout() {
+fn plan_review_does_not_require_a_context_scout_for_code_changes() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -683,8 +683,8 @@ fn the_plan_reviewer_is_told_when_a_plan_that_changes_code_has_no_context_scout(
         .find(|(_, prompt)| prompt.contains("You review a plan"))
         .expect("the plan was reviewed")
         .1;
-    assert!(review.contains("no context scout"), "{review}");
-    assert!(review.contains("do not approve it until"));
+    assert!(!review.contains("context scout"), "{review}");
+    assert!(!review.contains("context-scout"), "{review}");
 }
 
 #[test]

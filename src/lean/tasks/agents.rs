@@ -17,13 +17,6 @@ pub struct PredefinedAgent {
 /// every code change leaves the codebase cleaner and meets all requirements.
 pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
     PredefinedAgent {
-        id: "context-scout",
-        kind: WorkKind::Context,
-        title: "Context & Contracts Scout",
-        focus: "Every claim backed by files read, existing contracts and invariants identified",
-        required_for_code_changes: true,
-    },
-    PredefinedAgent {
         id: "clean-implementer",
         kind: WorkKind::Implementation,
         title: "Implementation & Boy-Scout Refactoring",
