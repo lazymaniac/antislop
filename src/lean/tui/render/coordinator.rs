@@ -2,6 +2,10 @@ use super::super::*;
 
 impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
+        self.draw_with_theme(frame, &Theme::from_env());
+    }
+
+    pub(in crate::lean::tui) fn draw_with_theme(&mut self, frame: &mut Frame, theme: &Theme) {
         self.phase_action_area = None;
         self.phase_action_command = None;
         self.now_click_targets.clear();
@@ -24,7 +28,7 @@ impl App {
             editor.draw(frame);
             return;
         }
-        super::specialized_screens::draw_secondary_or_main(self, frame);
+        super::specialized_screens::draw_secondary_or_main(self, frame, theme);
         super::overlays::draw_remaining(self, frame);
     }
 }

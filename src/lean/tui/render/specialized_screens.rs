@@ -2,21 +2,20 @@ use super::super::*;
 
 mod graph;
 
-pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame) {
-    if draw_plan(app, frame) || draw_diff(app, frame) || draw_details(app, frame) {
+pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame, theme: &Theme) {
+    if draw_plan(app, frame, theme) || draw_diff(app, frame) || draw_details(app, frame) {
         return;
     }
-    app.draw_main(frame);
+    app.draw_main(frame, theme);
 }
 
-fn draw_plan(app: &mut App, frame: &mut Frame) -> bool {
+fn draw_plan(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     let Some(plan) = &mut app.plan_view else {
         return false;
     };
-    let theme = Theme::from_env();
     // PlanView::draw and its presentation helpers remain pending ownership transfer
     // to tui-specialized-screens; this coordinator only dispatches and syncs viewport state.
-    plan.draw(frame, frame.area(), &app.view, &theme);
+    plan.draw(frame, frame.area(), &app.view, theme);
     app.text_area = Some(Rect::new(
         plan.doc_area.x.saturating_add(planview::GUTTER as u16),
         plan.doc_area.y,
@@ -77,11 +76,10 @@ impl App {
         );
     }
 
-    pub(super) fn draw_main(&mut self, frame: &mut Frame) {
+    pub(super) fn draw_main(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         let bar_height = Self::bar_height(area);
         let [body, _, footer] = Self::main_areas(area);
-        let theme = Theme::from_env();
         if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, _, team] = Layout::horizontal([
@@ -91,11 +89,11 @@ impl App {
             ])
             .areas(body);
             self.chat_area = chat;
-            self.draw_chat(frame, chat, &theme);
-            self.draw_graph(frame, team);
+            self.draw_chat(frame, chat, theme);
+            self.draw_graph(frame, team, theme);
         } else if self.focus == Focus::Chat {
             self.chat_area = body;
-            self.draw_chat(frame, body, &theme);
+            self.draw_chat(frame, body, theme);
         } else if self.approval.is_some() && body.height > 1 {
             let desired = self.approval.as_ref().map_or(6, |approval| {
                 let text_width = usize::from(body.width.saturating_sub(2)).max(1);
@@ -114,14 +112,14 @@ impl App {
             let [team, chat] =
                 Layout::vertical([Constraint::Min(1), Constraint::Length(chat_height)]).areas(body);
             self.chat_area = chat;
-            self.draw_graph(frame, team);
-            self.draw_chat(frame, chat, &theme);
+            self.draw_graph(frame, team, theme);
+            self.draw_chat(frame, chat, theme);
         } else {
             self.chat_area = body;
-            self.draw_graph(frame, body);
+            self.draw_graph(frame, body, theme);
         }
 
-        self.draw_footer(frame, footer, bar_height, &theme);
+        self.draw_footer(frame, footer, bar_height, theme);
     }
 }
 

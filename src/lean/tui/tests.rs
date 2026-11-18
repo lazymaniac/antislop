@@ -739,87 +739,109 @@ fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     for (width, height) in [(120, 40), (80, 24)] {
-        terminal.backend_mut().resize(width, height);
-        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
+        for (theme, expected_arrow) in [
+            (theme::Theme::new(true, false), "▼"),
+            (theme::Theme::new(true, true), "v"),
+        ] {
+            terminal.backend_mut().resize(width, height);
+            terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+            terminal
+                .draw(|frame| app.draw_with_theme(frame, &theme))
+                .unwrap();
 
-        let viewport = app.graph_area.expect("graph rendered after resize");
-        let graph = graph::Graph::new_with_expanded(
-            &app.view,
-            &app.graph_scope_with_exception(),
-            &app.graph_collapsed,
-            app.graph_grouping,
-            app.graph_viewport,
-            app.graph_expanded.clone(),
-            app.graph_tab,
-        );
-        let node = graph.node("worker:expanded").expect("expanded task node");
-        let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0);
-        let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1);
-        let title_rect =
-            graph::expanded_card_areas(viewport, (left, top), (node.width, node.height))[1];
-        let routes = graph.edge_routes(app.relations);
-        let target_group = node.group.as_deref().unwrap();
-        let entry_cells = routes
-            .iter()
-            .filter(|(_, to, path)| {
-                *to == target_group
-                    && path
-                        .last()
-                        .is_some_and(|(_, y)| y.saturating_add(1) == node.y)
-            })
-            .filter_map(|(_, _, path)| path.last().map(|(x, _)| (*x, node.y)))
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut overlaps_title = false;
-        assert!(
-            !entry_cells.is_empty(),
-            "an incoming route reaches the frame"
-        );
-        for (route_x, route_y) in entry_cells {
-            let screen_x = i32::from(viewport.x) + i32::from(route_x) - i32::from(app.offset.0);
-            let screen_y = i32::from(viewport.y) + i32::from(route_y) - i32::from(app.offset.1);
-            assert!(screen_x >= i32::from(viewport.x) && screen_x < i32::from(viewport.right()));
-            assert!(screen_y >= i32::from(viewport.y) && screen_y < i32::from(viewport.bottom()));
-            let overlaps = screen_y == i32::from(title_rect.y)
-                && screen_x >= i32::from(title_rect.x)
-                && screen_x < i32::from(title_rect.right());
-            overlaps_title |= overlaps;
+            let viewport = app.graph_area.expect("graph rendered after resize");
+            let graph = graph::Graph::new_with_expanded(
+                &app.view,
+                &app.graph_scope_with_exception(),
+                &app.graph_collapsed,
+                app.graph_grouping,
+                app.graph_viewport,
+                app.graph_expanded.clone(),
+                app.graph_tab,
+            );
+            let node = graph.node("worker:expanded").expect("expanded task node");
+            let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0);
+            let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1);
+            let title_rect =
+                graph::expanded_card_areas(viewport, (left, top), (node.width, node.height))[1];
+            let routes = graph.edge_routes(app.relations);
+            let target_group = node.group.as_deref().unwrap();
+            let entry_cells = routes
+                .iter()
+                .filter(|(_, to, path)| {
+                    *to == target_group
+                        && path
+                            .last()
+                            .is_some_and(|(_, y)| y.saturating_add(1) == node.y)
+                })
+                .filter_map(|(_, _, path)| path.last().map(|(x, _)| (*x, node.y)))
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut overlaps_title = false;
             assert!(
-                overlaps,
-                "fixture route endpoint lies in title at {width}x{height}"
+                !entry_cells.is_empty(),
+                "an incoming route reaches the frame"
             );
-            let full_heading = format!(
-                "{} · running · round unavailable",
-                app.view.tasks.last().unwrap().title
-            );
-            assert!(
-                unicode_width::UnicodeWidthStr::width(full_heading.as_str())
-                    > (screen_x - i32::from(title_rect.x)) as usize,
-                "heading text reaches the route endpoint at {width}x{height}"
-            );
-            assert_eq!(
-                terminal
+            for (route_x, route_y) in entry_cells {
+                let screen_x = i32::from(viewport.x) + i32::from(route_x) - i32::from(app.offset.0);
+                let screen_y = i32::from(viewport.y) + i32::from(route_y) - i32::from(app.offset.1);
+                assert!(
+                    screen_x >= i32::from(viewport.x) && screen_x < i32::from(viewport.right())
+                );
+                assert!(
+                    screen_y >= i32::from(viewport.y) && screen_y < i32::from(viewport.bottom())
+                );
+                let overlaps = screen_y == i32::from(title_rect.y)
+                    && screen_x >= i32::from(title_rect.x)
+                    && screen_x < i32::from(title_rect.right());
+                overlaps_title |= overlaps;
+                assert!(
+                    overlaps,
+                    "fixture route endpoint lies in title at {width}x{height}"
+                );
+                let full_heading = format!(
+                    "{} · running · round unavailable",
+                    app.view.tasks.last().unwrap().title
+                );
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(full_heading.as_str())
+                        > (screen_x - i32::from(title_rect.x)) as usize,
+                    "heading text reaches the route endpoint at {width}x{height}"
+                );
+                let cell = terminal
                     .backend()
                     .buffer()
                     .cell((screen_x as u16, screen_y as u16))
-                    .unwrap()
-                    .symbol(),
-                "▼",
-                "the incoming arrow remains visible at {width}x{height}"
+                    .unwrap();
+                assert_eq!(
+                    cell.symbol(),
+                    expected_arrow,
+                    "the incoming arrow remains visible at {width}x{height}"
+                );
+                let (_, _, expected_style) = graph
+                    .expanded_entry_arrows()
+                    .into_iter()
+                    .find(|(x, y, _)| *x == route_x && *y == route_y)
+                    .expect("entry arrow style");
+                assert_eq!(cell.fg, expected_style.fg.unwrap_or(Color::Reset));
+                assert_eq!(cell.bg, expected_style.bg.unwrap_or(Color::Reset));
+                assert_eq!(cell.modifier, expected_style.add_modifier);
+                if theme.ascii {
+                    assert_ne!(cell.symbol(), "▼", "ASCII arrow must not be Unicode");
+                }
+            }
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(overlaps_title, "long task heading overlaps route endpoint");
+            assert!(
+                rendered.contains("round unavailable"),
+                "round label remains visible"
             );
         }
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(overlaps_title, "long task heading overlaps route endpoint");
-        assert!(
-            rendered.contains("round unavailable"),
-            "round label remains visible"
-        );
     }
 
     terminal.backend_mut().resize(12, 5);

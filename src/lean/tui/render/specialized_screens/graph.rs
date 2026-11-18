@@ -1,7 +1,7 @@
 use super::super::super::*;
 
 impl App {
-    pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
+    pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
         self.now_area = now_area;
@@ -48,14 +48,14 @@ impl App {
             &mut canvas,
             self.relations,
             &self.selected,
-            &Theme::from_env(),
+            theme,
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
             self.draw_expanded_card_panels(frame, inner, &graph);
-            self.draw_expanded_entry_arrows(frame, inner, &graph);
+            self.draw_expanded_entry_arrows(frame, inner, &graph, theme);
         }
         self.draw_progress(frame, now_area, &progress);
     }
@@ -63,8 +63,15 @@ impl App {
     /// Restore incoming arrows after the expanded title has painted its row.
     /// Route coordinates stay in graph space until clipped to the visible
     /// viewport, just like the card panels.
-    fn draw_expanded_entry_arrows(&self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
+    fn draw_expanded_entry_arrows(
+        &self,
+        frame: &mut Frame,
+        viewport: Rect,
+        graph: &Graph,
+        theme: &Theme,
+    ) {
         let visible = viewport.intersection(frame.area());
+        let arrow = theme.clean("▼");
         for (x, y, style) in graph.expanded_entry_arrows() {
             let screen_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
             let screen_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
@@ -79,7 +86,7 @@ impl App {
                 .buffer_mut()
                 .cell_mut((screen_x as u16, screen_y as u16))
             {
-                cell.set_symbol("▼").set_style(style);
+                cell.set_symbol(&arrow).set_style(style);
             }
         }
     }
