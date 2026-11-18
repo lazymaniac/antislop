@@ -10,25 +10,17 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>) {
             "Retain complete evidence and amend the report.",
         )
         .unwrap();
-    let run = core.store.create_run(&conversation, &message.text).unwrap();
-    let source = core
+    let run = core
         .store
-        .register_message_source(&conversation, &run.id, message.seq)
-        .unwrap();
-    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"evidence-fixture","reason":"Synthetic evidence scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":message.text,"criteria":[{"id":"R1.accept","text":"Retain evidence"}]}]})).unwrap();
-    core.store
-        .apply_ledger_change(&change, &core.state, true)
+        .create_scope(&conversation, &message.text)
         .unwrap();
     let tasks = core.store.add_plan(&conversation,&[
-        json!({"id":"baseline","title":"Baseline","goal":"Measure and report","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"consumer","title":"Consumer","goal":"Read complete evidence","change_kind": "none", "kind":"analysis","depends_on":["baseline"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"sibling","title":"Sibling","goal":"Other report","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"baseline","title":"Baseline","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Measure and report","change_kind": "none", "kind":"analysis",}),
+        json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read complete evidence","change_kind": "none", "kind":"analysis","depends_on":["baseline"],}),
+        json!({"id":"sibling","title":"Sibling","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Other report","change_kind": "none", "kind":"analysis",}),
     ]).unwrap();
     core.store
-        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
+        .bind_plan_scope(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
     (directory, core, conversation, tasks)
 }

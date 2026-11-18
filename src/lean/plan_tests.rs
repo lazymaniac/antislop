@@ -18,7 +18,7 @@ fn task_role_recognizes_only_explicit_worker_and_reviewer_addresses() {
 #[test]
 fn finalization_leaves_out_options_when_local_options_are_off() {
     let writer: TaskContract = serde_json::from_value(json!({
-        "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
+        "id": "writer", "title": "Implement change", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Preserve behavior",
         "change_kind": "code", "kind": "implementation",
         "reviewer": {"summary": "Check change"}}))
     .unwrap();
@@ -45,7 +45,7 @@ fn finalization_leaves_out_options_when_local_options_are_off() {
 #[test]
 fn finalization_adds_options_with_and_without_required_gates() {
     let writer: TaskContract = serde_json::from_value(json!({
-        "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
+        "id": "writer", "title": "Implement change", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Preserve behavior",
         "change_kind": "code", "kind": "implementation",
         "reviewer": {"summary": "Check change"}}))
     .unwrap();
@@ -104,7 +104,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     .into_iter()
     .map(|(id, deps)| {
         json!({
-            "id": id, "title": id, "goal": "test", "change_kind": "code", "kind": "implementation",
+            "id": id, "title": id, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "test", "change_kind": "code", "kind": "implementation",
              "depends_on": deps, "reviewer": {"summary": "inspect diff"}})
     })
     .collect();
@@ -241,7 +241,7 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
         .into_iter()
         .map(|(id, deps)| {
             json!({
-                "id": id, "title": id, "goal": "test", "change_kind": "code", "kind": "implementation",
+                "id": id, "title": id, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "test", "change_kind": "code", "kind": "implementation",
                  "depends_on": deps, "reviewer": {"summary": "inspect diff"}})
         })
         .collect();
@@ -288,7 +288,7 @@ fn a_landed_result_releases_the_plan_base_for_later_tasks() {
 fn the_owner_goal_reaches_its_generated_options_task() {
     let mut writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change",
-        "goal": "Keep the public API source compatible",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Keep the public API source compatible",
         "change_kind": "code", "kind": "implementation", }))
     .unwrap();
     let options_goal = |writer: &TaskContract| {
@@ -307,15 +307,15 @@ fn the_owner_goal_reaches_its_generated_options_task() {
 #[test]
 fn explicit_quality_checks_precede_the_final_task_after_finalization() {
     let submitted = json!([
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
-        {"id":"t12", "title":"Document", "goal":"Document change", "change_kind": "code", "kind":"writing",  "depends_on":["t11"]},
-        {"id":"quality", "title":"Simplify", "goal":"Review and simplify change", "change_kind": "code", "kind":"refactoring", "depends_on":["t11","t12"]},
-        {"id":"static", "title":"Lint", "goal":"Run static checks", "change_kind": "code", "kind":"static_analysis", "depends_on":["quality"]},
-        {"id":"tests", "title":"Test", "goal":"Run regression tests", "change_kind": "code", "kind":"testing", "depends_on":["quality"]},
-        {"id":"security", "title":"Audit security", "goal":"Audit changed paths", "change_kind": "none", "kind":"security", "depends_on":["quality"]},
-        {"id":"performance", "title":"Audit performance", "goal":"Audit changed paths", "change_kind": "none", "kind":"performance", "depends_on":["quality"]},
-        {"id":"integration", "title":"Integrate", "goal":"Check combined results", "change_kind": "code", "kind":"integration", "depends_on":["static","tests","security","performance"]},
-        {"id":"t13", "title":"Summarize", "goal":"Summarize checked results", "change_kind": "none", "kind":"analysis", "depends_on":["integration"]}
+        {"id":"t11", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Document", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Document change", "change_kind": "code", "kind":"writing",  "depends_on":["t11"]},
+        {"id":"quality", "title":"Simplify", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Review and simplify change", "change_kind": "code", "kind":"refactoring", "depends_on":["t11","t12"]},
+        {"id":"static", "title":"Lint", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run static checks", "change_kind": "code", "kind":"static_analysis", "depends_on":["quality"]},
+        {"id":"tests", "title":"Test", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run regression tests", "change_kind": "code", "kind":"testing", "depends_on":["quality"]},
+        {"id":"security", "title":"Audit security", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Audit changed paths", "change_kind": "none", "kind":"security", "depends_on":["quality"]},
+        {"id":"performance", "title":"Audit performance", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Audit changed paths", "change_kind": "none", "kind":"performance", "depends_on":["quality"]},
+        {"id":"integration", "title":"Integrate", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Check combined results", "change_kind": "code", "kind":"integration", "depends_on":["static","tests","security","performance"]},
+        {"id":"t13", "title":"Summarize", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Summarize checked results", "change_kind": "none", "kind":"analysis", "depends_on":["integration"]}
     ]);
     let tasks = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     for required_gates in [false, true] {
@@ -362,7 +362,7 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer",
         "title": "Small fix",
-        "goal": "Make a contained code change.",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Make a contained code change.",
         "change_kind": "code",
         "kind": "implementation"
     }))
@@ -445,7 +445,7 @@ fn small_change_adds_no_options_for_tasks_without_code_changes() {
     let artifact: TaskContract = serde_json::from_value(json!({
         "id": "document",
         "title": "Update guide",
-        "goal": "Clarify the setup guide.",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Clarify the setup guide.",
         "change_kind": "none",
         "kind": "writing"
     }))
@@ -462,7 +462,7 @@ fn small_change_revision_rebuilds_feature_gates_from_the_selected_team() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer",
         "title": "Small fix",
-        "goal": "Make a contained code change.",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Make a contained code change.",
         "change_kind": "code",
         "kind": "implementation"
     }))
@@ -490,11 +490,11 @@ fn small_change_revision_rebuilds_feature_gates_from_the_selected_team() {
 #[test]
 fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     let submitted = json!([
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
-        {"id":"t12", "title":"Review", "goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
-        {"id":"t13", "title":"Report", "goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]},
-        {"id":"t14", "title":"Deliver", "goal":"Prepare delivery", "change_kind": "code", "kind":"writing",  "depends_on":["t13"]},
-        {"id":"t15", "title":"Close", "goal":"Close delivery", "change_kind": "none", "kind":"analysis", "depends_on":["t14","integration-gate"]}
+        {"id":"t11", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]},
+        {"id":"t14", "title":"Deliver", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Prepare delivery", "change_kind": "code", "kind":"writing",  "depends_on":["t13"]},
+        {"id":"t15", "title":"Close", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Close delivery", "change_kind": "none", "kind":"analysis", "depends_on":["t14","integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
@@ -540,7 +540,7 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
 #[test]
 fn generated_gate_references_do_not_hide_unknown_dependencies() {
     let submitted = json!([
-        {"id":"t1", "title":"Report", "goal":"Report", "change_kind": "none", "kind":"analysis", "depends_on":["static-analyzer", "typo"]}
+        {"id":"t1", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report", "change_kind": "none", "kind":"analysis", "depends_on":["static-analyzer", "typo"]}
     ]);
     assert!(
         tasks::planned_graph(serde_json::from_value(submitted).unwrap())
@@ -553,11 +553,11 @@ fn generated_gate_references_do_not_hide_unknown_dependencies() {
 #[test]
 fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     let submitted = json!([
-        {"id":"writer", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
-        {"id":"tests-a", "title":"Test A", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
-        {"id":"tests-b", "title":"Test B", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
-        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "change_kind": "code", "kind":"integration", "depends_on":["review-testing"]},
-        {"id":"final-report", "title":"Report", "goal":"Report checks", "change_kind": "none", "kind":"analysis", "depends_on":["integration-gate"]}
+        {"id":"writer", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"tests-a", "title":"Test A", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
+        {"id":"tests-b", "title":"Test B", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
+        {"id":"whole-change-validation", "title":"Validate", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Validate whole change", "change_kind": "code", "kind":"integration", "depends_on":["review-testing"]},
+        {"id":"final-report", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checks", "change_kind": "none", "kind":"analysis", "depends_on":["integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
@@ -596,7 +596,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
 #[test]
 fn a_gate_alias_cannot_hide_a_self_dependency() {
     let submitted = json!([
-        {"id":"tests", "title":"Test", "goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["review-testing"]}
+        {"id":"tests", "title":"Test", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["review-testing"]}
     ]);
     let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");
@@ -604,10 +604,10 @@ fn a_gate_alias_cannot_hide_a_self_dependency() {
 
 #[test]
 fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
-    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","goal":"Preserve code work","change_kind": "code", "kind":"implementation","deferred":true})).unwrap();
+    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Preserve code work","change_kind": "code", "kind":"implementation","deferred":true})).unwrap();
     let writer = planned.into_contract();
     assert!(writer.deferred);
-    let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","goal":"Read retained results","change_kind": "none", "kind":"analysis"})).unwrap();
+    let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read retained results","change_kind": "none", "kind":"analysis"})).unwrap();
     assert!(!diagnostic.deferred);
     assert!(
         serde_json::to_value(&diagnostic)
@@ -634,7 +634,7 @@ fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
 #[test]
 fn a_team_runs_only_its_own_gates_and_options() {
     let writer: TaskContract = serde_json::from_value(json!({
-        "id": "writer", "title": "Fix typo", "goal": "Correct the message",
+        "id": "writer", "title": "Fix typo", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Correct the message",
         "change_kind": "code", "kind": "implementation",
         "reviewer": {"summary": "Check change"}}))
     .unwrap();

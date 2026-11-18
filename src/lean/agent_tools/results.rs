@@ -39,7 +39,7 @@ impl Core {
     }
 
     /// Refuses within the turn what `propose` would refuse after it: a graph
-    /// that does not order, links to criteria the ledger does not have, or a
+    /// that does not order, missing acceptance criteria, or a
     /// task the runtime could not run as written.
     pub(super) fn check_submitted_plan(
         &self,
@@ -48,50 +48,20 @@ impl Core {
         keep: &[String],
         team: crate::lean::tasks::Team,
     ) -> Result<()> {
-        let mut specs = self.submitted_graph(conversation, tasks, keep)?;
-        if let Some(run) = self.store.planning_run(conversation)? {
-            let entries = self.store.ledger_entries(conversation, &run.id, None)?;
-
-            if !entries.is_empty() {
-                for spec in &mut specs {
-                    super::ledger::resolve_covers(spec, &entries)?;
-                }
-            }
-        }
+        let specs = self.submitted_graph(conversation, tasks, keep)?;
         crate::lean::core::plan::proposal::checked_team_plan(&specs, &self.config_snapshot(), team)
             .map(|_| ())
             .map_err(Error::Invalid)
     }
 
-    /// The revised tasks as contracts linked to the plan's requirements. A
-    /// task that names no `covers` keeps the links it had.
+    /// Revised tasks carry their complete task-local acceptance criteria.
     pub(super) fn revised_tasks(
         &self,
-        conversation: &str,
-        plan: &str,
+        _conversation: &str,
+        _plan: &str,
         tasks: Vec<PlannedTask>,
     ) -> Result<Vec<TaskContract>> {
-        let run = self
-            .store
-            .plan_run(plan)?
-            .ok_or_else(|| Error::Invalid("plan has no requirements".into()))?;
-        let entries = self.store.ledger_entries(conversation, &run, None)?;
-        let baseline = self.store.plan(plan)?;
-        tasks
-            .into_iter()
-            .map(|task| Self::link_revised_task(task, &baseline, &entries))
-            .collect()
-    }
-
-    pub(super) fn link_revised_task(
-        task: PlannedTask,
-        baseline: &[Task],
-        entries: &[super::ledger::LedgerEntry],
-    ) -> Result<TaskContract> {
-        let mut spec = task.into_contract();
-        restore_requirement_links(&mut spec, baseline)?;
-        super::ledger::resolve_covers(&mut spec, entries)?;
-        Ok(spec)
+        Ok(tasks.into_iter().map(PlannedTask::into_contract).collect())
     }
 
     pub(super) fn await_agent_answer(
@@ -149,44 +119,5 @@ impl Core {
             )?;
         }
         Ok(())
-    }
-}
-
-fn restore_requirement_links(spec: &mut TaskContract, baseline: &[Task]) -> Result<()> {
-    if !spec.covers.is_empty() {
-        return Ok(());
-    }
-    if let Some(old) = baseline.iter().find(|old| old.spec["id"] == spec.id) {
-        let old: TaskContract = serde_json::from_value(old.spec.clone())?;
-        spec.requirement_ids = old.requirement_ids;
-        spec.criterion_ids = old.criterion_ids;
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod revision_link_tests {
-    use super::*;
-    #[test]
-    fn omitted_covers_inherit_by_local_task_name_not_runtime_uuid() {
-        let old: Task = serde_json::from_value(json!({
-            "id":"4fd97226-b9b9-4129-9398-643377939932","plan_id":"plan","status":"queued","round":0,
-            "spec":{"id":"baseline","title":"Baseline","goal":"Future work","change_kind": "code", "kind":"implementation","requirement_ids":["R1"],"criterion_ids":["R1.1"]}
-        })).unwrap();
-        let planned: PlannedTask = serde_json::from_value(json!({"id":"baseline","title":"Baseline","goal":"Future work","change_kind": "code", "kind":"implementation","deferred":true})).unwrap();
-        let linked =
-            Core::link_revised_task(planned.clone(), std::slice::from_ref(&old), &[]).unwrap();
-        assert_eq!(linked.requirement_ids, vec!["R1"]);
-        assert_eq!(linked.criterion_ids, vec!["R1.1"]);
-        assert!(linked.deferred);
-        let mut unrelated = planned;
-        unrelated.id = old.id.clone();
-        assert!(
-            Core::link_revised_task(unrelated, &[old], &[])
-                .unwrap_err()
-                .to_string()
-                .contains("covers"),
-            "an unrelated local name must not inherit through a matching runtime UUID"
-        );
     }
 }

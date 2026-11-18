@@ -146,9 +146,7 @@ impl Card<'_> {
             }
             return description;
         }
-        if requirements_round(&self.node.key).is_some() {
-            return describe(self.view, &self.node.key);
-        }
+
         let mut base = self
             .task
             .map(|task| task.round)

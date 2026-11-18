@@ -37,21 +37,6 @@ pub(in crate::lean::tui) fn agent_result(raw: &str) -> String {
         } => {
             format!("Input needed\n{request}\n\nCheckpoint\n{checkpoint}")
         }
-        TurnResult::Ledger { extraction } => section(
-            "Extracted requirements",
-            &serde_json::json!(extraction.entries),
-        ),
-        TurnResult::Audit { findings, evidence } => format!(
-            "{}\n\n{}",
-            section("Findings", &serde_json::json!(findings)),
-            section("Evidence", &serde_json::json!(evidence))
-        ),
-        TurnResult::AuditReview { note, assessments } => {
-            format!(
-                "{note}\n\n{}",
-                section("Evidence assessments", &serde_json::json!(assessments))
-            )
-        }
     }
 }
 
@@ -123,18 +108,6 @@ mod tests {
             (
                 json!({"type":"needs_input","request":"Choose a format","checkpoint":"Files inspected"}),
                 "Files inspected",
-            ),
-            (
-                json!({"type":"ledger","extraction":{"run_id":"r1","expected_spec_revision":0,"entries":[{"id":"R1","source":{"source_id":"s1","start":0,"end":10},"interpretation":"Preserve café"}]}}),
-                "Preserve café",
-            ),
-            (
-                json!({"type":"audit","findings":[{"issue":"Missing check","where":"src/main.rs","severity":"high"}],"evidence":[{"criterion_id":"C1","task_id":"t1","result":"Reviewed café","artifact":"src/main.rs"}]}),
-                "Reviewed café",
-            ),
-            (
-                json!({"type":"audit_review","note":"Checked all evidence","assessments":[{"evidence":"E1","approved":false,"note":"Check failed"}]}),
-                "Check failed",
             ),
         ];
         for (value, expected) in fixtures {

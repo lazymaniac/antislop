@@ -52,7 +52,6 @@ impl App {
             update @ Update::NativeInputRejected { .. } => self.apply_native_input_rejected(update),
             update @ Update::PlanHistory { .. } => self.apply_plan_history(update),
             update @ Update::AgentMessage { .. } => self.apply_agent_message(update),
-            update @ Update::Ledger { .. } => self.apply_ledger(update),
             update @ Update::Config { .. } => self.apply_config(update),
             update @ Update::Events { .. } => self.apply_events(update),
             update @ Update::Conversation { .. } => self.apply_conversation(update),

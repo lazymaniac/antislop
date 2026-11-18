@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn incompatible_databases_are_rejected_without_writes() {
-    for version in [0, 1, 5, 10, 11, 12, 13, 14, 15, SCHEMA + 1] {
+    for version in [0, 1, 5, 10, 11, 12, 13, 14, 15, 16, SCHEMA + 1] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
         let db = Connection::open(&path).unwrap();
@@ -26,14 +26,14 @@ fn incompatible_databases_are_rejected_without_writes() {
 }
 
 #[test]
-fn database_without_ledger_rejections_is_rejected_before_use() {
+fn database_without_scopes_is_rejected_before_use() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
     let store = Store::open(&path).unwrap();
     let conversation = store.create_conversation("project").unwrap();
     {
         let db = store.db();
-        db.execute_batch("DROP TABLE ledger_rejections;").unwrap();
+        db.execute_batch("DROP TABLE scope_documents;").unwrap();
         db.pragma_update(None, "user_version", 11).unwrap();
     }
     drop(store);
@@ -63,7 +63,7 @@ fn current_schema_initializes_and_reopens_without_removed_columns() {
             .unwrap(),
         SCHEMA
     );
-    db.prepare("SELECT proposal_id, comment_message, resume_message, diff_hash, created_ms FROM ledger_rejections")
+    db.prepare("SELECT id,summary,upto_message FROM scopes")
         .unwrap();
     for (table, column) in [
         ("ledger_entries", "kind"),
@@ -112,7 +112,7 @@ fn comment_operation_retries_return_the_same_persisted_comment() {
 #[test]
 fn failed_initialization_is_atomic() {
     let db = Connection::open_in_memory().unwrap();
-    db.execute_batch("CREATE TABLE ledger_versions(conflict TEXT);")
+    db.execute_batch("CREATE TABLE scopes(conflict TEXT);")
         .unwrap();
     assert!(Store::initialize(&db).is_err());
     assert_eq!(

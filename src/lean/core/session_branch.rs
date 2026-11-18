@@ -591,7 +591,7 @@ mod tests {
                 &json!({"branch":"main"}),
             )
             .unwrap();
-        let spec: TaskContract = serde_json::from_value(json!({"id":"session-context","title":"Context","goal":"Read source","change_kind":"none","kind":"context"})).unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({"id":"session-context","title":"Context","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read source","change_kind":"none","kind":"context"})).unwrap();
         let mut task = core
             .store
             .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
@@ -1223,38 +1223,15 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config.clone()).unwrap();
         let conversation = started_session(&core, &project);
         let request = "Create a result file";
-        let message = core
+        let _message = core
             .store
             .add_message(&conversation.id, "user", request)
             .unwrap();
-        let run = core.store.create_run(&conversation.id, request).unwrap();
-        let source = core
-            .store
-            .register_message_source(&conversation.id, &run.id, message.seq)
-            .unwrap();
-        let entry = serde_json::from_value(json!({
-            "id":"R1", "source":{"source_id":source.id,"start":0,"end":request.len()},
-            "interpretation":request, "criteria":[{"id":"R1.1","text":"Result is written"}]
-        }))
-        .unwrap();
-        core.store
-            .apply_ledger_change(
-                &ledger::LedgerChange {
-                    conversation: conversation.id.clone(),
-                    run_id: run.id.clone(),
-                    expected_spec_revision: 0,
-                    operation_id: crate::id(),
-                    reason: "Create file requirement".into(),
-                    entries: vec![entry],
-                },
-                &core.state,
-                true,
-            )
-            .unwrap();
+        let run = core.store.create_scope(&conversation.id, request).unwrap();
         let spec: TaskContract = serde_json::from_value(json!({
-            "id":"writer-one", "title":"Add delivered file", "goal":"Create result.txt",
-            "change_kind":"code", "kind":"implementation", "requirement_ids":["R1"],
-            "criterion_ids":["R1.1"], "reviewer":{"summary":"result"}
+            "id":"writer-one", "title":"Add delivered file", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create result.txt",
+            "change_kind":"code", "kind":"implementation",
+             "reviewer":{"summary":"result"}
         }))
         .unwrap();
         let mut task = core
@@ -1263,10 +1240,7 @@ mod tests {
             .unwrap()
             .remove(0);
         core.store
-            .link_plan_run(&conversation.id, &task.plan_id, &run.id)
-            .unwrap();
-        core.store
-            .bind_task_ledger(&conversation.id, &run.id, &task.plan_id)
+            .bind_plan_scope(&conversation.id, &task.plan_id, &run.id)
             .unwrap();
         task.status = status::WORKING.into();
         let base = core.writer_base(&task.plan_id, &spec, &project).unwrap();

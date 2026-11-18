@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn a_run_continues_on_its_basis_and_starts_over_on_a_new_one() {
-        let spec = json!({"id": "a", "goal": "g"});
+        let spec = json!({"id": "a", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g"});
         let mut run = Run::resume(None, &spec, 1);
         assert!(!run.progress.record(open(&["goal"])));
         run.rejections = 1;
@@ -290,7 +290,7 @@ mod tests {
             "the baseline survived"
         );
 
-        let revised = json!({"id": "a", "goal": "narrower"});
+        let revised = json!({"id": "a", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "narrower"});
         assert_eq!(Run::resume(Some(record.clone()), &revised, 1).rejections, 0);
         assert_eq!(Run::resume(Some(record), &spec, 2).rejections, 0);
         assert_eq!(Run::resume(Some(json!("garbage")), &spec, 1).rejections, 0);

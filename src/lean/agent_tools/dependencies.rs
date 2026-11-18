@@ -203,10 +203,7 @@ impl Core {
                 selected_for: Some(spec.id),
             });
         }
-        if matches!(
-            role,
-            "requirements-audit-analyst" | "requirements-audit-reviewer"
-        ) {
+        if matches!(role, "auditor") {
             let (tasks, generation) =
                 self.store
                     .audit_dependency_scope(conversation, role, turn)?;

@@ -80,6 +80,14 @@ pub enum DeliveryMode {
     Untracked,
 }
 
+/// One mandatory, task-local acceptance check. Conditions belong in its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptanceCriterion {
+    pub id: String,
+    pub text: String,
+}
+
 /// A task as the runtime stores it, with an explicit delivery purpose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,9 +98,7 @@ pub struct TaskContract {
     pub options_for: Option<String>,
     pub id: String,
     #[serde(default)]
-    pub requirement_ids: Vec<String>,
-    #[serde(default)]
-    pub criterion_ids: Vec<String>,
+    pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub title: String,
     pub goal: String,
     /// One concise sentence describing the worker's task on the graph.
@@ -112,10 +118,6 @@ pub struct TaskContract {
     #[serde(default)]
     pub depends_on: Vec<String>,
     pub kind: WorkKind,
-    /// Requirement or criterion ids the planner says this task serves; the
-    /// runtime resolves them into `requirement_ids` and `criterion_ids`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub covers: Vec<String>,
     #[serde(default)]
     pub reviewer: ReviewerSpec,
 }

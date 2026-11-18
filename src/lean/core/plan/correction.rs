@@ -65,7 +65,7 @@ mod tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let task = json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
+        let task = json!({"id":"t1","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
         let plan = core.store.add_plan(&id, &[task]).unwrap()[0]
             .plan_id
             .clone();
@@ -111,7 +111,7 @@ mod tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let task = json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
+        let task = json!({"id":"t1","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
         let plan = core.store.add_plan(&id, &[task]).unwrap()[0]
             .plan_id
             .clone();

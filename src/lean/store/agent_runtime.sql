@@ -37,12 +37,12 @@ CREATE TABLE plan_revision_jobs (
     plan_id TEXT NOT NULL REFERENCES plans(id),
     request_key TEXT NOT NULL,
     proposal TEXT NOT NULL CHECK (json_valid(proposal)),
-    status TEXT NOT NULL CHECK (status IN ('reviewing', 'applied', 'rejected', 'interrupted')),
+    status TEXT NOT NULL CHECK (status IN ('reviewing', 'awaiting_acceptance', 'applied', 'rejected', 'interrupted')),
     error TEXT,
     UNIQUE (conversation_id, request_key)
 );
 CREATE UNIQUE INDEX one_revision_review_per_conversation
-    ON plan_revision_jobs(conversation_id) WHERE status = 'reviewing';
+    ON plan_revision_jobs(conversation_id) WHERE status IN ('reviewing','awaiting_acceptance');
 CREATE TABLE integration_attempts (
     task_id TEXT NOT NULL REFERENCES tasks(id),
     generation INTEGER NOT NULL,

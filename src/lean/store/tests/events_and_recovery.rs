@@ -11,7 +11,7 @@ fn deleting_a_session_removes_history_and_its_external_content() {
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     let run = store
-        .create_run(&conversation.id, "Remove this recorded goal")
+        .create_scope(&conversation.id, "Remove this recorded goal")
         .unwrap();
     assert_eq!(
         store.conversation_goal(&conversation.id).unwrap(),
@@ -20,12 +20,12 @@ fn deleting_a_session_removes_history_and_its_external_content() {
     let task = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"remove-me","title":"Purge","goal":"Remove the stored plan","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check purge"}})],
+            &[serde_json::json!({"id":"remove-me","title":"Purge","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Remove the stored plan","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check purge"}})],
         )
         .unwrap()
         .remove(0);
     store
-        .link_plan_run(&conversation.id, &task.plan_id, &run.id)
+        .bind_plan_scope(&conversation.id, &task.plan_id, &run.id)
         .unwrap();
     store
         .add_message(&conversation.id, "user", &"history ".repeat(20_000))
@@ -50,7 +50,8 @@ fn deleting_a_session_removes_history_and_its_external_content() {
     assert_eq!(
         store
             .db()
-            .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM scopes", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         0
     );
@@ -311,11 +312,11 @@ fn restarting_queued_tasks_does_not_invent_reports_or_accumulate_notices() {
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     let mut tasks = store.add_plan(&conversation.id, &[
-        serde_json::json!({"id":"fresh","title":"Fresh","goal":"Run","change_kind": "none", "kind":"analysis"}),
-        serde_json::json!({"id":"legacy","title":"Legacy","goal":"Run","change_kind": "none", "kind":"analysis"}),
-        serde_json::json!({"id":"checkpoint","title":"Checkpoint","goal":"Continue","change_kind": "none", "kind":"analysis"}),
-        serde_json::json!({"id":"working","title":"Working","goal":"Continue","change_kind": "none", "kind":"analysis"}),
-        serde_json::json!({"id":"reviewing","title":"Reviewing","goal":"Continue","change_kind": "none", "kind":"analysis"})
+        serde_json::json!({"id":"fresh","title":"Fresh","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"legacy","title":"Legacy","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"checkpoint","title":"Checkpoint","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Continue","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"working","title":"Working","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Continue","change_kind": "none", "kind":"analysis"}),
+        serde_json::json!({"id":"reviewing","title":"Reviewing","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Continue","change_kind": "none", "kind":"analysis"})
     ]).unwrap();
     for task in &mut tasks {
         task.status = "queued".into();

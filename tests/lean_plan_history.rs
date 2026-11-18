@@ -479,6 +479,8 @@ fn daemon_rejects_foreign_scope_requests() {
     );
     std::fs::write(&config_path, content).unwrap();
 
+    common::initialize_git_project(&project_a);
+    common::initialize_git_project(&project_b);
     let state_a = dir.path().join("state_a");
     let daemon_a = DaemonGuard::start(&project_a, &config_path, &state_a);
 

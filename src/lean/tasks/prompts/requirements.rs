@@ -87,32 +87,6 @@ pub fn findings_text(findings: &[Value]) -> String {
         .join("\n")
 }
 
-/// Readable id + text list of the requirements and criteria a reviewer must check.
-fn requirements_note(entries: &[crate::lean::ledger::LedgerEntry]) -> String {
-    if entries.is_empty() {
-        return String::new();
-    }
-    let mut note = String::from("Requirements and acceptance criteria:\n");
-    for entry in entries {
-        note.push_str(&format!(
-            "- {}: {}\n",
-            entry.spec.id, entry.spec.interpretation
-        ));
-        for criterion in &entry.spec.criteria {
-            let optional = if criterion.mandatory {
-                ""
-            } else {
-                " (optional)"
-            };
-            note.push_str(&format!(
-                "  - {}{optional}: {}\n",
-                criterion.id, criterion.text
-            ));
-        }
-    }
-    note
-}
-
 /// What a fresh session of a later round adds to its base prompt, which
 /// already carries the task and its dependency data: the requirements, what
 /// earlier rounds changed and what the reviewer found. The previous report
@@ -189,9 +163,8 @@ fn handoff_tail(
     protection: &str,
 ) -> String {
     format!(
-        "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\n{}Current open comments:\n{}{}",
+        "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\nCurrent open comments:\n{}{}",
         serde_json::json!(handoff.interruptions),
-        requirements_note(&handoff.requirements),
         serde_json::json!(handoff.comments),
         protection
     )

@@ -27,7 +27,7 @@ with open({log:?}, "a") as f:
         &codex,
         common.clone()
             + r#"
-plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+plan = {"tasks": [{"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
     "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}
 answer = "Plan.\n```plan\n" + json.dumps(plan) + "\n```" if "You are the planner" in prompt else "done"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
@@ -73,7 +73,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     )
     .unwrap();
     for script in [&codex, &agy] {
-        support::install_ledger_protocol(script);
+        support::install_task_protocol(script);
         support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
@@ -129,7 +129,7 @@ with open({log:?}, "a") as f:
         &codex,
         common.clone()
             + r#"
-plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+plan = {"tasks": [{"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
     "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}
 answer = "Plan.\n```plan\n" + json.dumps(plan) + "\n```" if "You are the planner" in prompt else "done"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
@@ -178,7 +178,7 @@ print(json.dumps({{"event": "result", "result": {{"conversation_id": session, "s
     )
     .unwrap();
     for script in [&codex, &agy] {
-        support::install_ledger_protocol(script);
+        support::install_task_protocol(script);
         support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
@@ -670,9 +670,9 @@ fn writer_failure_diagnostics_survive_fixture_cleanup_and_preserve_panics() {
         let start = codex_script.find("plan = {\"tasks\": [").unwrap();
         let end = start + codex_script[start..].find("\nanswer = ").unwrap();
         let two_task_plan = r#"plan = {"tasks": [
-    {"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+    {"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
      "change_kind": "code", "kind": "implementation"},
-    {"id": "t2", "title": "Check greeting", "goal": "Check the greeting",
+    {"id": "t2", "title": "Check greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Check the greeting",
      "change_kind": "none", "kind": "analysis", "depends_on": ["t1"]}] }"#;
         std::fs::write(
             &codex,
@@ -893,9 +893,9 @@ fn writer_completion_updates_dependents_before_releasing_its_checkout() {
     let start = codex_script.find("plan = {\"tasks\": [").unwrap();
     let end = start + codex_script[start..].find("\nanswer = ").unwrap();
     let plan = r#"plan = {"tasks": [
-    {"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+    {"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
      "change_kind": "code", "kind": "implementation"},
-    {"id": "t2", "title": "Check greeting", "goal": "Check the greeting",
+    {"id": "t2", "title": "Check greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Check the greeting",
      "change_kind": "none", "kind": "analysis", "depends_on": ["t1"]}] }"#;
     std::fs::write(
         &codex,
@@ -1090,14 +1090,17 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
         let args = call["args"].to_string();
         args.contains("You review a plan") || args.contains("You audit")
     };
-    // Plan review and the final audit read the project itself.
+    // Plan review reads the original project; final audit reads the integrated result.
     let reviews: Vec<_> = calls.iter().filter(reviewer).collect();
     assert_eq!(reviews.len(), 2);
-    assert!(
-        reviews
-            .iter()
-            .all(|call| call["cwd"] == project.to_str().unwrap())
-    );
+    for call in reviews {
+        let expected = if call["args"].to_string().contains("You audit") {
+            &session
+        } else {
+            &project
+        };
+        assert_eq!(call["cwd"], expected.to_str().unwrap());
+    }
     let agents: Vec<_> = calls
         .iter()
         .filter(|call| call["bin"] == "agy" && !reviewer(call))
@@ -1180,7 +1183,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() 
         "Create hello.txt",
         "Latest worker report",
         "wrote hello.txt",
-        "Requirements and acceptance criteria",
+        "C1: The task goal is verified",
         "Current open comments",
         "hello.txt",
         "README",
@@ -1208,12 +1211,12 @@ fn a_rejected_conflict_repair_stays_off_the_session_branch_until_reworked_and_ap
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let planner = std::fs::read_to_string(&codex).unwrap().replace(
-        r#"plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+        r#"plan = {"tasks": [{"id": "t1", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt",
     "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
         r#"plan = {"tasks": [
-    {"id": "t1", "title": "Add accepted file", "goal": "Create accepted.txt",
+    {"id": "t1", "title": "Add accepted file", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create accepted.txt",
      "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}},
-    {"id": "t2", "title": "Add greeting", "goal": "Create hello.txt", "depends_on": ["t1"],
+    {"id": "t2", "title": "Add greeting", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello.txt", "depends_on": ["t1"],
      "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"}}]}"#,
     );
     std::fs::write(&codex, planner).unwrap();
@@ -1847,7 +1850,7 @@ fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     let script = std::fs::read_to_string(&codex).unwrap().replace(
         r#""reviewer": {"summary": "file content"}}]}"#,
         r#""reviewer": {"summary": "file content"}}, {"id": "t2", "title": "Extend greeting",
-           "goal": "Extend the greeting",
+           "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Extend the greeting",
            "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "file content"},
            "depends_on": ["t1"]}]}"#,
     );
@@ -2032,7 +2035,7 @@ fn card(core: &Core, conversation: &str, spec_id: &str) -> (Value, Value) {
 fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let (codex, agy) = fake_clis(dir);
     let plan = serde_json::json!({"tasks": [
-        {"id": "t1", "title": "Audit greetings", "goal": "Report on README",
+        {"id": "t1", "title": "Audit greetings", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Report on README",
          "change_kind": "none", "kind": "analysis"}
     ]});
     let script = std::fs::read_to_string(&codex).unwrap();
@@ -2074,7 +2077,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
     let start = script.find("plan = {\"tasks\":").unwrap();
     let end = start + script[start..].find("\nanswer = ").unwrap();
     let plan = r#"plan = {"tasks": [{"id": id, "title": "Add greeting " + id,
-        "goal": "Create hello-" + id + ".txt", "change_kind": "code", "kind": "implementation"}
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Create hello-" + id + ".txt", "change_kind": "code", "kind": "implementation"}
         for id in ["first", "second"]]}"#;
     std::fs::write(
         &codex,

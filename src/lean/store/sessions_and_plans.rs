@@ -205,6 +205,7 @@ impl Store {
         tx.execute("INSERT INTO plan_heads(plan_id) VALUES(?1)", [&plan_id])?;
         let tasks = recovery::insert_proposed_tasks(&tx, conversation, &plan_id, specs, now)?;
         for task in &tasks {
+            tx.execute("INSERT INTO task_inputs(task_id) VALUES(?1)", [&task.id])?;
             tx.execute(
                 "INSERT INTO task_contracts(task_id,version,spec) VALUES(?1,0,?2)",
                 params![task.id, task.spec.to_string()],

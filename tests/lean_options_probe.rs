@@ -315,6 +315,11 @@ else:
         }
         assert_eq!(
             std::fs::read_to_string(project.join("mode.txt")).unwrap(),
+            "7\n11\n"
+        );
+        let integrated = support::session_worktree(&core, &project, &conversation.id);
+        assert_eq!(
+            std::fs::read_to_string(integrated.join("mode.txt")).unwrap(),
             if unmerged {
                 "7\n11\n"
             } else {

@@ -88,7 +88,7 @@ fn append_risk_scope(context: &SectionContext<'_>, out: &mut Vec<Section>) {
     }
     let scope = scope::lines(details, view, theme, *width, row);
     if !scope.is_empty() {
-        out.push(text_section("scope", "Dependencies", scope, 8));
+        out.push(text_section("scope", "Criteria & dependencies", scope, 8));
     }
 }
 

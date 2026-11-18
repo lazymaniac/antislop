@@ -38,15 +38,6 @@ fn card_text(view: &View, key: &str) -> Option<String> {
         crate::lean::COMMENT_ORCHESTRATOR => {
             Some("Answers your comments and acts on them.".to_owned())
         }
-        "requirements-audit-analyst" => {
-            Some("Checks implementation against each requirement.".to_owned())
-        }
-        "requirements-audit-reviewer" => {
-            Some("Independently reviews the requirements audit.".to_owned())
-        }
-        _ if requirements_round(key).is_some() => {
-            Some("Records requirements from your request and documents.".to_owned())
-        }
         _ => task_card_text(view, key),
     }
 }

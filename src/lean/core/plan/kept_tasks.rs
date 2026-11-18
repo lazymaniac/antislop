@@ -125,9 +125,9 @@ mod tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let map = json!({"id":"map","title":"Map","goal":"Map the code","change_kind": "none", "kind":"context","reviewer":{"summary": "f"}});
-        let options = json!({"id":"build-options","title":"Options","goal":"Compare","change_kind": "none", "kind":"analysis","options_for":"build","reviewer":{"summary": "f"}});
-        let build = json!({"id":"build","title":"Build","goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map","build-options"],"reviewer":{"summary": "f"}});
+        let map = json!({"id":"map","title":"Map","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Map the code","change_kind": "none", "kind":"context","reviewer":{"summary": "f"}});
+        let options = json!({"id":"build-options","title":"Options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Compare","change_kind": "none", "kind":"analysis","options_for":"build","reviewer":{"summary": "f"}});
+        let build = json!({"id":"build","title":"Build","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map","build-options"],"reviewer":{"summary": "f"}});
         let plan = core.store.add_plan(&id, &[map, options, build]).unwrap()[0]
             .plan_id
             .clone();
@@ -145,7 +145,7 @@ mod tests {
         assert!(!note.contains("build-options"), "{note}");
 
         let check: PlannedTask = serde_json::from_value(
-            json!({"id":"check","title":"Check","goal":"Check it","change_kind": "code", "kind":"testing","depends_on":["build"]}),
+            json!({"id":"check","title":"Check","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Check it","change_kind": "code", "kind":"testing","depends_on":["build"]}),
         )
         .unwrap();
         let keep = ["map".to_owned(), "build".to_owned()];
@@ -194,9 +194,9 @@ mod tests {
             serde_json::from_value(value).unwrap()
         };
         let first = planned(json!([
-            {"id":"map","title":"Map","goal":"Map the code","change_kind": "none", "kind":"context"},
-            {"id":"build","title":"Build","goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"]},
-            {"id":"later","title":"Later","goal":"Then this","change_kind": "code", "kind":"implementation","depends_on":["build"]}
+            {"id":"map","title":"Map","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Map the code","change_kind": "none", "kind":"context"},
+            {"id":"build","title":"Build","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"]},
+            {"id":"later","title":"Later","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then this","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
         let first = checked_plan(&tasks::planned_graph(first).unwrap(), &config).unwrap();
         assert!(first.iter().any(|s| s.id == "build-options"));
@@ -212,7 +212,7 @@ mod tests {
             .unwrap();
 
         let rest = planned(json!([
-            {"id":"after","title":"After","goal":"Then that","change_kind": "code", "kind":"implementation","depends_on":["build"]}
+            {"id":"after","title":"After","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then that","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
         let keep = ["map".to_owned(), "build".to_owned()];
         let second = core.submitted_graph(&id, rest, &keep).unwrap();

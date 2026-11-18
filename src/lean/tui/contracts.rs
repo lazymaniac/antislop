@@ -33,12 +33,6 @@ pub enum Update {
         text: String,
         result: std::result::Result<Value, String>,
     },
-    Ledger {
-        conversation: String,
-        request_id: u64,
-        kind: String,
-        reply: std::result::Result<Value, String>,
-    },
     Config {
         project: String,
         save: bool,
@@ -156,7 +150,6 @@ pub struct ConversationState {
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
     pub plan_view: Option<PlanView>,
-    pub ledger_view: Option<ledger::LedgerView>,
     pub scroll: usize,
     pub task_request_id: u64,
     pub diff_request_id: u64,
@@ -214,7 +207,6 @@ impl ConversationState {
         self.details = app.details.clone();
         self.diff = app.diff.clone();
         self.plan_view = app.plan_view.clone();
-        self.ledger_view = app.ledger_view.clone();
         self.flow_editor = app.flow_editor.clone();
         self.graph_link_source = app.graph_link_source.clone();
     }
@@ -265,7 +257,6 @@ impl ConversationState {
         app.details = self.details.clone();
         app.diff = self.diff.clone();
         app.plan_view = self.plan_view.clone();
-        app.ledger_view = self.ledger_view.clone();
         app.flow_editor = self.flow_editor.clone();
         app.graph_link_source = self.graph_link_source.clone();
     }

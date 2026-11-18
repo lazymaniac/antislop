@@ -112,24 +112,6 @@ impl Store {
         Ok(count as usize)
     }
 
-    /// How many messages `author` wrote since the user last spoke or approved
-    /// a requirements change; either one renews the automatic-retry budget.
-    pub fn count_since_requirements_reset(
-        &self,
-        conversation: &str,
-        author: &str,
-    ) -> Result<usize> {
-        let count: i64 = self.db().query_row(
-            "SELECT COUNT(*) FROM messages WHERE conversation_id=?1 AND author=?2
-               AND seq > COALESCE((SELECT MAX(seq) FROM messages
-                                   WHERE conversation_id=?1
-                                     AND author IN ('user','requirements-approval')), 0)",
-            params![conversation, author],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
-    }
-
     pub fn start_turn(
         &self,
         conversation: &str,

@@ -229,48 +229,17 @@ mod role_tests {
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                vec!["review", "read_evidence"],
+                if reviewer=="auditor" {vec!["review","read_dependency_result","read_evidence"]} else {vec!["review", "read_evidence"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];
             assert_eq!(review["required"], json!(["turn", "report", "findings"]));
             assert!(review["properties"]["checks"].is_null());
         }
-        for (role, tool) in [
-            ("requirements-extraction-analyst", "submit_ledger"),
-            ("requirements-audit-analyst", "submit_audit"),
-            ("requirements-audit-reviewer", "submit_audit_review"),
-        ] {
-            let expected = if role.starts_with("requirements-audit-") { vec![tool, "read_dependency_result", "read_evidence"] } else { vec![tool] };
-            assert_eq!(allowed_tools(role), expected, "{role}");
-            assert!(is_terminal(tool));
-        }
-        let entry = &tool_list("requirements-extraction-analyst")[0]["inputSchema"]["properties"]["entries"]
-            ["items"];
-        assert_eq!(
-            entry["required"],
-            json!(["id", "quote", "interpretation", "criteria"])
-        );
-        for gone in [
-            "start",
-            "end",
-            "position",
-            "disposition",
-            "implementation_owners",
-            "review_owners",
-            "task_ids",
-        ] {
-            assert!(entry["properties"][gone].is_null(), "{gone}");
-        }
-        let evidence = &tool_list("requirements-audit-analyst")[0]["inputSchema"]["properties"]["evidence"]
-            ["items"];
-        for gone in [
-            "entry_id",
-            "entry_version",
-            "generation",
-            "integrated_fingerprint",
-        ] {
-            assert!(evidence["properties"][gone].is_null(), "{gone}");
+        let criterion = &schema::planned_task()["properties"]["acceptance_criteria"]["items"];
+        assert_eq!(criterion["required"],json!(["id","text"]));
+        for role in ["planner","auditor","orchestrator"] {
+            assert!(!tool_list(role).iter().any(|tool|matches!(tool["name"].as_str(),Some("submit_ledger"|"submit_audit"|"submit_audit_review"))));
         }
         assert_eq!(allowed_tools("anyone-else"), vec!["finish_turn"]);
         let finish = &tool_list("orchestrator")[0]["inputSchema"];
@@ -278,7 +247,7 @@ mod role_tests {
         assert!(finish["properties"]["addressed"].is_object());
         assert!(tool_list("auditor")[0]["inputSchema"]["properties"]["addressed"].is_null());
         let task = &schema::revision()["tasks"]["items"];
-        assert_eq!(task["required"], json!(["id", "title", "goal", "kind", "change_kind"]));
+        assert_eq!(task["required"], json!(["id", "title", "goal", "kind", "change_kind", "acceptance_criteria"]));
         for gone in ["inputs", "reviewer", "requirement_ids"] {
             assert!(task["properties"][gone].is_null(), "{gone}");
         }
@@ -293,7 +262,7 @@ mod role_tests {
     fn a_submitted_plan_ends_the_turn_and_a_repeat_is_acknowledged() {
         let shared = shared("planner");
         shared.state.lock().unwrap().expected = Some("t1".into());
-        let call = json!({"name":"submit_plan","arguments":{"turn":"t1","document":"# Plan","tasks":[{"id":"t1","title":"Do","goal":"Do it","change_kind": "code", "kind":"implementation"}]}});
+        let call = json!({"name":"submit_plan","arguments":{"turn":"t1","document":"# Plan","tasks":[{"id":"t1","title":"Do","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Do it","change_kind": "code", "kind":"implementation"}]}});
         assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
         let finish = shared.state.lock().unwrap().finished.clone().unwrap();
         let (text, plan) = super::super::turn_result::TurnResult::plan_answer(&finish.text);
@@ -470,7 +439,7 @@ mod rejection_tests {
 #[test]
 fn task_schema_exposes_only_its_completion_and_actual_checks() {
     use crate::lean::mcp::tools::scoped_tool_list;
-    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","goal":"Report","change_kind": "none", "kind":"analysis","criterion_ids":["R1.1"]})).unwrap();
+    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis",})).unwrap();
     for (kind, tool, other) in [(crate::config::WorkKind::Analysis,"complete","select"),(crate::config::WorkKind::Options,"select","complete")] {
         task.kind = kind;
         let list = scoped_tool_list("worker:t",Some(&task));
@@ -482,7 +451,7 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
     let schema = &review["inputSchema"]["properties"]["checks"];
     assert_eq!(schema["additionalProperties"],false);
     assert!(schema["properties"]["goal"].is_object());
-    assert!(schema["properties"]["R1.1"].is_object());
+    assert!(schema["properties"]["C1"].is_object());
     assert_eq!(schema["required"].as_array().unwrap().len(),crate::lean::tasks::obligations(&task).len());
 }
 

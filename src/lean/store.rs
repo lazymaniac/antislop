@@ -50,10 +50,10 @@ mod task_progress;
 
 pub struct Store {
     connection: Mutex<Connection>,
-    content: super::content::Content,
+    pub(in crate::lean) content: super::content::Content,
     // Serializes file-backed message writes through their SQLite commit with
     // session deletion's reference scan and file cleanup.
-    content_write: Mutex<()>,
+    pub(in crate::lean) content_write: Mutex<()>,
     // Serializes idempotent requests so a concurrent retry waits for the
     // first attempt's recorded result.
     operations: Mutex<()>,
@@ -178,7 +178,7 @@ pub struct TaskVerdictInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanHistory {
-    pub run_id: Option<String>,
+    pub scope_id: Option<String>,
     pub id: String,
     pub conversation_id: String,
     pub created_ms: i64,
@@ -282,7 +282,7 @@ pub fn now_ms() -> i64 {
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
-const SCHEMA: u32 = 16;
+const SCHEMA: u32 = 17;
 
 #[path = "store/approvals.rs"]
 mod approvals;

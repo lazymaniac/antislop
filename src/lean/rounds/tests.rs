@@ -8,44 +8,27 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Task) {
         .store
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap();
-    let message = core
+    let _message = core
         .store
         .add_message(&conversation.id, "user", "Keep all context")
         .unwrap();
     let run = core
         .store
-        .create_run(&conversation.id, "Keep all context")
-        .unwrap();
-    let source = core
-        .store
-        .register_message_source(&conversation.id, &run.id, message.seq)
-        .unwrap();
-    let change = serde_json::from_value(json!({
-        "conversation":conversation.id,"run_id":run.id,"expected_spec_revision":0,
-        "operation_id":crate::id(),"reason":"test scope", "entries":[{
-            "id":"R1", "source":{"source_id":source.id,"start":0,"end":message.text.len()},
-            "interpretation":"Keep all context", "criteria":[{"id":"R1.accept","text":"Check everything"}]
-        }]
-    })).unwrap();
-    core.store
-        .apply_ledger_change(&change, &core.state, true)
+        .create_scope(&conversation.id, "Keep all context")
         .unwrap();
     let task = core
         .store
         .add_plan(
             &conversation.id,
             &[json!({
-                "requirement_ids":["R1"], "criterion_ids":["R1.accept"],
-            "id":"task", "title":"Round task", "goal":"Keep all context",
+
+            "id":"task", "title":"Round task", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Keep all context",
                 "change_kind": "none", "kind":"implementation", "reviewer":{"summary": "Check everything"}})],
         )
         .unwrap()
         .remove(0);
     core.store
-        .link_plan_run(&conversation.id, &task.plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation.id, &run.id, &task.plan_id)
+        .bind_plan_scope(&conversation.id, &task.plan_id, &run.id)
         .unwrap();
     (dir, core, conversation.id, task)
 }
@@ -251,8 +234,6 @@ fn handoff_recovers_latest_report_after_interruption_without_older_reports() {
     assert_eq!(handoff.report.as_ref().unwrap().0, 2);
     let prompt = tasks::round_handoff_prompt(&handoff, false);
     assert!(prompt.contains(&"Latest complete report\n".repeat(2000)));
-    assert!(prompt.contains("Keep all context"));
-    assert!(prompt.contains("Check everything"));
     assert!(prompt.contains("listed above"));
     assert!(tasks::round_handoff_prompt(&handoff, true).contains("file:12"));
     assert!(!prompt.contains("OLD REPORT MUST NOT APPEAR"));
@@ -658,7 +639,6 @@ fn editing_same_named_profile_rotates_cli_and_supplies_full_context_after_restar
     assert_ne!(first.session_id, second.session_id);
     let prompt = turn_prompt(dir.path(), &second.id);
     assert!(prompt.contains("Latest worker report (source round 1):\ncomplete report"));
-    assert!(prompt.contains("Check everything"));
     assert_eq!(
         execute(&core, &conversation, &task, changed.clone(), false).as_deref(),
         Some("complete report")
@@ -811,7 +791,6 @@ fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh(
             );
             let prompt = turn_prompt(dir.path(), &latest.id);
             assert!(prompt.contains("Round: 3"));
-            assert!(prompt.contains("Check everything"));
             if prefix == "worker" {
                 assert!(prompt.contains(expected))
             }
@@ -862,7 +841,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
 fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() {
     let (_dir, core, conversation, mut task) = fixture();
     let extra_specs: Vec<_>=["dep","unrelated"].into_iter().map(|id|json!({
-        "id":id,"title":id,"goal":"Provide evidence","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Check evidence"}})).collect();
+        "id":id,"title":id,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Provide evidence","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Check evidence"}})).collect();
     let mut others = core.store.add_plan(&conversation, &extra_specs).unwrap();
     let full_report = "FULL DEPENDENCY REPORT\n".repeat(2000);
     for (index, other) in others.iter_mut().enumerate() {

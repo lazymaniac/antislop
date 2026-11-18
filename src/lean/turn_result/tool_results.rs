@@ -88,6 +88,11 @@ fn plan_tool(args: &serde_json::Value) -> Result<TurnResult> {
     let tasks = serde_json::from_value(args["tasks"].clone())
         .map_err(|error| crate::Error::Invalid(format!("tasks: {error}")))?;
     Ok(TurnResult::Plan {
+        scope: if args["scope"].is_null() {
+            None
+        } else {
+            Some(required_text(args, "scope")?)
+        },
         document: required_text(args, "document")?,
         tasks,
         keep: kept(args)?,

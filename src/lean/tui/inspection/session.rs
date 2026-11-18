@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
         append_final_events(&mut builder, &client, "conversation", &json!({"events":[
             {"kind":"agent","payload":{"text":"Internal activity"}},
-            {"kind":"agent_final","payload":{"text":json!({"type":"audit_review","note":"Independent check","assessments":[{"evidence":"E1","approved":false,"note":"Missing café check"}]}).to_string()}}
+            {"kind":"agent_final","payload":{"text":json!({"type":"review","report":"Independent check","verdict":{"approved":false,"findings":[{"severity":"high","issue":"Missing café check","where":"result"}]}}).to_string()}}
         ]})).unwrap();
         let document = builder.finish().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

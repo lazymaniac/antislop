@@ -68,7 +68,7 @@ mod tests {
             .store
             .create_conversation(root.to_str().unwrap())
             .unwrap();
-        let mut task=core.store.add_plan(&conversation.id,&[serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
+        let mut task=core.store.add_plan(&conversation.id,&[serde_json::json!({"id":"analyze","title":"Analyze","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
         task.status = "approved".into();
         task.round = 1;
         core.store.update_task(&task).unwrap();

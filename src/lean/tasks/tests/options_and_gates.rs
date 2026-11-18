@@ -2,9 +2,9 @@ use super::*;
 
 fn options_test_task(id: &str, writes: bool) -> TaskContract {
     serde_json::from_value(serde_json::json!({
-            "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
+            "id": id, "title": "Change storage", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Preserve storage behavior",
             "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",
-            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "reviewer": {"summary": "Check storage"},
+              "reviewer": {"summary": "Check storage"},
         }))
         .unwrap()
 }
@@ -27,8 +27,7 @@ fn options_inherit_writer_context_and_precede_it() {
             .is_none()
     );
     assert_eq!(options.depends_on, writer.depends_on);
-    assert_eq!(options.requirement_ids, writer.requirement_ids);
-    assert_eq!(options.criterion_ids, writer.criterion_ids);
+    assert_eq!(options.acceptance_criteria, writer.acceptance_criteria);
     assert_eq!(full[2].depends_on, ["context", "writer-options"]);
     assert!(options.goal.contains("2–4"));
     assert!(options.goal.contains("End with select"));
@@ -140,7 +139,7 @@ fn a_code_worker_is_told_to_implement_a_selection_only_when_options_exist() {
 #[test]
 fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need() {
     let mut scout: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "map", "title": "Map", "goal": "Map the storage code.",
+        "id": "map", "title": "Map", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Map the storage code.",
         "change_kind": "none", "kind": "context", "reviewer": {"summary": "f"}}))
     .unwrap();
     for prompt in [
@@ -160,7 +159,7 @@ fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need(
 #[test]
 fn automatically_added_quality_gates_have_distinct_concise_summaries() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
+        "id": "t1", "title": "Change storage", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Implement and document the change.",
         "change_kind": "code", "kind": "implementation",  "reviewer": {"summary": "Check the storage change."}}))
     .unwrap();
     let full = with_options(with_required_agents(vec![task]));
@@ -178,10 +177,10 @@ fn automatically_added_quality_gates_have_distinct_concise_summaries() {
 #[test]
 fn parallel_peers_follow_dependencies() {
     let tasks = submitted(serde_json::json!({"tasks":[
-        {"id":"t1","title":"Context","section":"1. Context","goal":"g","change_kind": "none", "kind":"context"},
-        {"id":"t2","title":"Mod A","section":"2. Module A","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
-        {"id":"t3","title":"Mod B","section":"3. Module B","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
-        {"id":"t4","title":"Mod A2","section":"2. Module A","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"refactoring"}
+        {"id":"t1","title":"Context","section":"1. Context","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"context"},
+        {"id":"t2","title":"Mod A","section":"2. Module A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t3","title":"Mod B","section":"3. Module B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t4","title":"Mod A2","section":"2. Module A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"refactoring"}
     ]}))
     .unwrap();
     let peers = parallel_peers(&tasks);
@@ -196,15 +195,17 @@ fn parallel_peers_follow_dependencies() {
 
 #[test]
 fn parallel_peers_follow_long_dependency_chains() {
-    let task = |at: usize, deps: Vec<String>| TaskContract {
-        requirement_ids: vec![],
-        criterion_ids: vec![],
+    let task = |at: usize, deps: Vec<String>| {
+        TaskContract {
+
+        acceptance_criteria: Vec::new(),
         id: format!("t{at}"),
         depends_on: deps,
         ..serde_json::from_value(serde_json::json!({
-            "id": "x", "title": "T", "goal": "g",
+            "id": "x", "title": "T", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g",
             "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}}))
         .unwrap()
+    }
     };
     // A chain of 400 plus one independent task: only the loner has peers,
     // and every chained task is ordered against every other.
@@ -291,7 +292,7 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
         ("none", false, serde_json::json!([])),
         ("artifact", true, serde_json::json!(["report.md"])),
     ] {
-        let task: PlannedTask = serde_json::from_value(serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report problems without repairing the project","kind":"analysis","change_kind":change,"outputs":outputs})).unwrap();
+        let task: PlannedTask = serde_json::from_value(serde_json::json!({"id":"analyze","title":"Analyze","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report problems without repairing the project","kind":"analysis","change_kind":change,"outputs":outputs})).unwrap();
         let mut plan = planned_graph(vec![task]).unwrap();
         for _ in 0..3 {
             plan = with_options(with_required_agents(plan));
@@ -318,12 +319,12 @@ fn artifact_analysis_never_grows_code_gates_on_refinalization() {
 
 #[test]
 fn revision_refreshes_generated_objective_and_inserts_a_new_prerequisite_before_options() {
-    let writer:TaskContract=serde_json::from_value(serde_json::json!({"id":"writer","title":"Writer","goal":"Old absolute output","change_kind": "code", "kind":"implementation"})).unwrap();
+    let writer:TaskContract=serde_json::from_value(serde_json::json!({"id":"writer","title":"Writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Old absolute output","change_kind": "code", "kind":"implementation"})).unwrap();
     let first = super::super::with_options(vec![writer.clone()]);
     let mut updated = writer;
     updated.goal = "New relative output only".into();
     updated.depends_on = vec!["diagnosis".into(), "writer-options".into()];
-    let diagnosis:TaskContract=serde_json::from_value(serde_json::json!({"id":"diagnosis","title":"Diagnosis","goal":"Inspect prerequisite","change_kind": "none", "kind":"analysis"})).unwrap();
+    let diagnosis:TaskContract=serde_json::from_value(serde_json::json!({"id":"diagnosis","title":"Diagnosis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect prerequisite","change_kind": "none", "kind":"analysis"})).unwrap();
     let merged = super::super::refresh_existing_options(vec![first[0].clone(), updated, diagnosis]);
     let ordered = super::super::order_graph(merged).unwrap();
     let options = ordered
@@ -358,7 +359,7 @@ fn refreshing_options_keeps_each_owner_contract_and_dependency_pairing() {
     let prerequisite_a: TaskContract = serde_json::from_value(serde_json::json!({
         "id":"prerequisite-a",
         "title":"Prerequisite A",
-        "goal":"Inspect prerequisite A",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect prerequisite A",
         "change_kind":"none",
         "kind":"analysis"
     }))
@@ -366,7 +367,7 @@ fn refreshing_options_keeps_each_owner_contract_and_dependency_pairing() {
     let prerequisite_b: TaskContract = serde_json::from_value(serde_json::json!({
         "id":"prerequisite-b",
         "title":"Prerequisite B",
-        "goal":"Inspect prerequisite B",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect prerequisite B",
         "change_kind":"none",
         "kind":"analysis"
     }))

@@ -156,24 +156,16 @@ fn options_tasks(core: &Core, conversation: &str) -> Vec<Task> {
             "Select a viable approach before continuing.",
         )
         .unwrap();
-    let run = core.store.create_run(conversation, &message.text).unwrap();
-    let source = core
+    let run = core
         .store
-        .register_message_source(conversation, &run.id, message.seq)
-        .unwrap();
-    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"options-fixture","reason":"Synthetic options scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":message.text,"criteria":[{"id":"R1.accept","text":"No dependent work until a viable choice is approved"}]}]})).unwrap();
-    core.store
-        .apply_ledger_change(&change, &core.state, true)
+        .create_scope(conversation, &message.text)
         .unwrap();
     let tasks = core.store.add_plan(conversation, &[
-        json!({"id":"options","title":"Options","goal":"Choose a viable approach","change_kind": "none", "kind":"options","options_for":"consumer","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
-        json!({"id":"consumer","title":"Consumer","goal":"Apply the approach","change_kind": "none", "kind":"analysis","depends_on":["options"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"options","title":"Options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Choose a viable approach","change_kind": "none", "kind":"options","options_for":"consumer",}),
+        json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Apply the approach","change_kind": "none", "kind":"analysis","depends_on":["options"],}),
     ]).unwrap();
     core.store
-        .link_plan_run(conversation, &tasks[0].plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(conversation, &run.id, &tasks[0].plan_id)
+        .bind_plan_scope(conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
     tasks
 }

@@ -83,7 +83,7 @@ fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
             "tasks": [{
                 "id": "analysis",
                 "title": "Analyze",
-                "goal": "Report findings",
+                "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Report findings",
                 "kind": "analysis",
                 "change_kind": "none"
             }]
@@ -138,7 +138,7 @@ fn submit_plan_preserves_a_user_selected_small_change_team() {
         "tasks": [{
             "id": "writer",
             "title": "Fix typo",
-            "goal": "Fix a contained typo.",
+            "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Fix a contained typo.",
             "kind": "implementation",
             "change_kind": "code"
         }],
@@ -224,7 +224,7 @@ fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
         "tasks": [{
             "id": "writer",
             "title": "Fix typo",
-            "goal": "Fix a contained typo.",
+            "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Fix a contained typo.",
             "kind": "implementation",
             "change_kind": "code"
         }],
@@ -274,7 +274,7 @@ fn task_tools_reject_superseded_input_generations() {
         .store
         .add_plan(
             &conversation,
-            &[json!({"id":"task","title":"Task","goal":"Do work","change_kind": "none", "kind":"analysis"})],
+            &[json!({"id":"task","title":"Task","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Do work","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);
@@ -283,15 +283,15 @@ fn task_tools_reject_superseded_input_generations() {
         .store
         .start_turn(&conversation, &role, "codex", 0, Some(&task.plan_id))
         .unwrap();
-    let run = core
+    let _run = core
         .store
-        .create_run(&conversation, "New task inputs")
+        .create_scope(&conversation, "New task inputs")
         .unwrap();
     core.store
         .db()
         .execute(
-            "INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2)",
-            [&task.id, &run.id],
+            "UPDATE task_inputs SET generation=0 WHERE task_id=?1",
+            rusqlite::params![&task.id],
         )
         .unwrap();
     core.store
@@ -322,8 +322,8 @@ fn task_tools_reject_superseded_input_generations() {
 fn full_dependency_reports_are_paged_scoped_and_follow_the_original_producer() {
     let (_directory, core, conversation) = core();
     let specs = [
-        json!({"id":"analysis","title":"Analysis","goal":"Find all issues","change_kind": "none", "kind":"analysis"}),
-        json!({"id":"consumer","title":"Consume","goal":"Use all findings","change_kind": "none", "kind":"analysis","depends_on":["analysis"]}),
+        json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Find all issues","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"consumer","title":"Consume","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Use all findings","change_kind": "none", "kind":"analysis","depends_on":["analysis"]}),
     ];
     let tasks = core.store.add_plan(&conversation, &specs).unwrap();
     let report = (1..=16)
@@ -415,7 +415,7 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         .store
         .add_plan(
             &owner,
-            &[json!({"id":"local","title":"Local","goal":"Report","change_kind": "none", "kind":"analysis"})],
+            &[json!({"id":"local","title":"Local","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);
@@ -423,18 +423,19 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         .store
         .start_turn(&owner, PLANNER, "fixture", 0, None)
         .unwrap();
-    assert!(core.agent_tool(&foreign,PLANNER,&turn.id,"submit_plan",&json!({"document":"Plan","tasks":[{"id":"other","title":"Other","goal":"Report","change_kind": "none", "kind":"analysis"}]})).is_err());
+    assert!(core.agent_tool(&foreign,PLANNER,&turn.id,"submit_plan",&json!({"document":"Plan","tasks":[{"id":"other","title":"Other","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"}]})).is_err());
     let run = core
         .store
-        .create_run(&foreign, "Foreign requirements")
+        .create_scope(&foreign, "Foreign requirements")
         .unwrap();
     assert!(
         core.store
-            .link_plan_run(&foreign, &task.plan_id, &run.id)
+            .bind_plan_scope(&foreign, &task.plan_id, &run.id)
             .is_err()
     );
     assert!(core.resume_plan(&foreign, &task.plan_id).is_err());
     let revision = store::PlanRevision {
+        scope: None,
         plan: task.plan_id.clone(),
         base_revision: 0,
         reason: "Foreign revision".into(),
@@ -458,7 +459,7 @@ fn answered_questions_return_their_answer_on_wait_and_are_not_asked_again() {
         .store
         .add_plan(
             &conversation,
-            &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
+            &[json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"})],
         )
         .unwrap()
         .remove(0);

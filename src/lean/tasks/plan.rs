@@ -23,7 +23,7 @@ pub struct PlannedTask {
     #[serde(default)]
     pub delivery: Option<DeliveryMode>,
     #[serde(default)]
-    pub covers: Vec<String>,
+    pub acceptance_criteria: Vec<AcceptanceCriterion>,
     #[serde(default)]
     pub section: Option<String>,
     #[serde(default)]
@@ -35,8 +35,7 @@ impl PlannedTask {
         TaskContract {
             quality_gate: false,
             options_for: None,
-            requirement_ids: Vec::new(),
-            criterion_ids: Vec::new(),
+            acceptance_criteria: self.acceptance_criteria,
             reviewer: ReviewerSpec {
                 summary: Some(reviewer_summary(self.change_kind != ChangeKind::None).into()),
             },
@@ -51,7 +50,6 @@ impl PlannedTask {
             delivery: self.delivery,
             depends_on: self.depends_on,
             kind: self.kind,
-            covers: self.covers,
         }
     }
 }
@@ -160,6 +158,7 @@ pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
     for task in tasks {
         validate_task_id(&task.id)?;
         validate_change(task)?;
+        validate_acceptance_criteria(task)?;
         validate_dependencies(task, &seen)?;
         crate::require(
             !task.title.trim().is_empty() && !task.goal.trim().is_empty(),
@@ -228,6 +227,36 @@ fn validate_change(task: &TaskContract) -> Result<()> {
                 "task {}: outputs under .antislop require delivery=untracked",
                 task.id
             ),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_acceptance_criteria(task: &TaskContract) -> Result<()> {
+    crate::require(
+        task.quality_gate || task.options_for.is_some() || !task.acceptance_criteria.is_empty(),
+        &format!(
+            "task {}: acceptance_criteria must contain at least one check",
+            task.id
+        ),
+    )?;
+    let mut ids = BTreeSet::new();
+    for criterion in &task.acceptance_criteria {
+        validate_task_id(&criterion.id)?;
+        crate::require(
+            criterion.id != GOAL_CHECK
+                && !criterion.id.strip_prefix('R').is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                && ids.insert(&criterion.id),
+            &format!(
+                "task {}: duplicate or reserved acceptance criterion {}",
+                task.id, criterion.id
+            ),
+        )?;
+        crate::require(
+            !criterion.text.trim().is_empty(),
+            &format!("task {}: criterion {} needs text", task.id, criterion.id),
         )?;
     }
     Ok(())

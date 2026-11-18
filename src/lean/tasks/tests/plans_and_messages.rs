@@ -4,8 +4,8 @@ use serde_json::json;
 #[test]
 fn plans_that_write_get_the_required_quality_gates() {
     let tasks = submitted(json!({"tasks":[
-        {"id":"t1","title":"A","goal":"g","change_kind": "code", "kind":"implementation"},
-        {"id":"t2","title":"T","goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"testing"}
+        {"id":"t1","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "code", "kind":"implementation"},
+        {"id":"t2","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"testing"}
     ]}))
     .unwrap();
     let ids: Vec<_> = missing_quality_agents(&tasks)
@@ -54,13 +54,13 @@ fn plans_that_write_get_the_required_quality_gates() {
 
     // A read-only plan needs no gates.
     let tasks =
-        submitted(json!({"tasks":[{"id":"t1","title":"a","goal":"b","change_kind": "none", "kind":"analysis"}]})).unwrap();
+        submitted(json!({"tasks":[{"id":"t1","title":"a","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"b","change_kind": "none", "kind":"analysis"}]})).unwrap();
     assert_eq!(with_required_agents(tasks).len(), 1);
 }
 
 #[test]
 fn plans_with_unknown_dependencies_are_rejected() {
-    let task = |depends_on: &str| json!({"tasks":[{"id":"t1","title":"a","goal":"b","depends_on":[depends_on],"change_kind": "none", "kind":"analysis"}]});
+    let task = |depends_on: &str| json!({"tasks":[{"id":"t1","title":"a","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"b","depends_on":[depends_on],"change_kind": "none", "kind":"analysis"}]});
     assert!(
         submitted(task("t9"))
             .unwrap_err()

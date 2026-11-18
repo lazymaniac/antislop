@@ -19,7 +19,7 @@ use crate::lean::native::invalid;
 #[cfg(test)]
 use dispatch::{call, dispatch};
 #[cfg(test)]
-use gateway::{Shared, State, is_terminal};
+use gateway::{Shared, State};
 #[cfg(test)]
 use serde_json::{Value, json};
 #[cfg(test)]

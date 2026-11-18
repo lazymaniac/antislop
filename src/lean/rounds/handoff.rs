@@ -30,31 +30,6 @@ impl Core {
         ))
     }
 
-    pub(super) fn add_handoff_requirements(
-        &self,
-        task: &Task,
-        spec: &tasks::TaskContract,
-        handoff: &mut RoundHandoff,
-    ) -> Result<()> {
-        let conversation = self.store.plan_conversation(&task.plan_id)?;
-        if let Some(run) = self.store.plan_run(&task.plan_id)? {
-            handoff.requirements = self
-                .store
-                .ledger_entries(&conversation, &run, None)?
-                .into_iter()
-                .filter(|entry| spec.requirement_ids.contains(&entry.spec.id))
-                .map(|mut entry| {
-                    entry
-                        .spec
-                        .criteria
-                        .retain(|criterion| spec.criterion_ids.contains(&criterion.id));
-                    entry
-                })
-                .collect();
-        }
-        Ok(())
-    }
-
     pub(super) fn add_handoff_comments(
         &self,
         task: &Task,
@@ -187,7 +162,6 @@ fn base_handoff(task: &Task, round: u32, cwd: &Path, seed: HandoffSeed) -> Round
         result: task.result.clone(),
         interrupted: false,
         interruptions: vec![],
-        requirements: vec![],
         comments: vec![],
         protected_paths: vec![],
         primary: seed.primary,

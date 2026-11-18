@@ -669,8 +669,8 @@ mod tests {
                 .unwrap()
                 .id;
             let tasks = core.store.add_plan(&conversation, &[
-                json!({"id":"activate","title":"Activate","goal":"Run successor","change_kind":"none","kind":"delivery"}),
-                json!({"id":"next","title":"Continue","goal":"Use successor","change_kind":"none","kind":"analysis","depends_on":["activate"]}),
+                json!({"id":"activate","title":"Activate","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run successor","change_kind":"none","kind":"delivery"}),
+                json!({"id":"next","title":"Continue","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Use successor","change_kind":"none","kind":"analysis","depends_on":["activate"]}),
             ]).unwrap();
             let mut task = tasks[0].clone();
             task.report = Some("prepared activation; retained report".into());

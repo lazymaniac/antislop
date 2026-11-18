@@ -71,57 +71,6 @@ pub(super) fn plain_review() -> Value {
     })
 }
 
-/// A requirement as the extraction analyst submits it.
-pub(super) fn ledger_entry() -> Value {
-    let criterion = object(
-        json!({"id":{"type":"string","description":"Globally unique, e.g. R1.1"},"text":{"type":"string","description":"How acceptance is checked"},"mandatory":{"type":"boolean","description":"Omit for true"},"integration":{"type":"boolean","description":"Accepts the combined outcomes of the child requirements"}}),
-        &["id", "text"],
-    );
-    object(
-        json!({
-            "id":{"type":"string","description":"Stable id, e.g. R1; existing requirements keep theirs"},
-            "quote":{"type":"string","description":"The user's words this comes from, copied exactly; long enough to occur once in its source"},
-            "source":{"type":"string","description":"The source id the quote is in; omit for the first source that has it"},
-            "interpretation":{"type":"string","description":"The obligation in full sentences"},
-
-            "qualifiers":{"type":"array","items":{"type":"string"},"description":"Exceptions, limits and conditions the user gave"},
-            "parent":{"type":"string","description":"Id of the requirement this one refines"},
-            "depends_on":{"type":"array","items":{"type":"string"}},
-            "mandatory":{"type":"boolean","description":"Omit for true; false for a preference"},
-            "criteria":{"type":"array","items":criterion}
-        }),
-        &["id", "quote", "interpretation", "criteria"],
-    )
-}
-
-/// `submit_audit`: problems found and evidence per acceptance criterion.
-pub(super) fn audit() -> Value {
-    let finding = object(
-        json!({"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium reject"},"issue":{"type":"string"},"where":{"type":"string","description":"File, requirement or criterion id"}}),
-        &["severity", "issue", "where"],
-    );
-    let evidence = object(
-        json!({"criterion_id":{"type":"string"},"task_id":{"type":"string","description":"The plan's id of the task that delivered it"},"result":{"type":"string","description":"The concrete checks you made and what you observed"},"artifact":{"type":"string","description":"A file or command output that shows it"}}),
-        &["criterion_id", "task_id", "result"],
-    );
-    json!({
-        "findings":{"type":"array","items":finding,"description":"Empty when there is nothing to fix"},
-        "evidence":{"type":"array","items":evidence}
-    })
-}
-
-/// `submit_audit_review`: one assessment per proposed evidence id.
-pub(super) fn audit_review() -> Value {
-    let assessment = object(
-        json!({"evidence":{"type":"string","description":"The proposed evidence id, e.g. E1"},"approved":{"type":"boolean"},"note":{"type":"string","description":"What you checked and observed"}}),
-        &["evidence", "approved", "note"],
-    );
-    json!({
-        "note":{"type":"string","description":"Coverage and gaps of the audit"},
-        "assessments":{"type":"array","items":assessment}
-    })
-}
-
 /// A task as the planner writes it; the runtime derives everything else.
 pub(super) fn planned_task() -> Value {
     object(
@@ -136,11 +85,18 @@ pub(super) fn planned_task() -> Value {
             "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Describes the result; all agents have full filesystem access."},
             "outputs":{"type":"array","items":{"type":"string"},"description":"Explicit relative output files, required for artifact"},
             "delivery":{"enum":["untracked"],"description":"Deliver a new artifact without modifying the project HEAD or index"},
-            "covers":{"type":"array","items":{"type":"string"},"description":"Acceptance criterion ids (or requirement ids) from the requirements this task delivers"},
+            "acceptance_criteria":{"type":"array","minItems":1,"items":object(json!({"id":{"type":"string","description":"Task-local stable id, e.g. C1"},"text":{"type":"string"}}), &["id","text"])},
             "section":{"type":"string"},
             "summary":{"type":"string"}
         }),
-        &["id", "title", "goal", "kind", "change_kind"],
+        &[
+            "id",
+            "title",
+            "goal",
+            "kind",
+            "change_kind",
+            "acceptance_criteria",
+        ],
     )
 }
 
@@ -171,6 +127,7 @@ const KINDS: [&str; 18] = [
 /// the orchestrator was shown.
 pub(super) fn revision() -> Value {
     json!({
+        "scope":{"type":"string","description":"Complete proposed scope in Markdown; omit to preserve the accepted scope. A change awaits user acceptance with the reviewed plan."},
         "reason":{"type":"string","description":"What the revision changes and why"},
         "tasks":{"type":"array","items":planned_task(),"description":"Changed or added tasks, each complete"},
         "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"},

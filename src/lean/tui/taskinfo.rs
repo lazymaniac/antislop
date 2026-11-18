@@ -170,8 +170,15 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
         if meta.deferred {
             parts.push("⏸ HELD".into());
         }
-        if !meta.covers.is_empty() {
-            parts.push(format!("R:{}", meta.covers.join("+")));
+        if !meta.acceptance_criteria.is_empty() {
+            parts.push(format!(
+                "C:{}",
+                meta.acceptance_criteria
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            ));
         }
     }
     while parts.len() > 1 && UnicodeWidthStr::width(parts.join(" · ").as_str()) > width {

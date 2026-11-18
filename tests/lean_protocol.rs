@@ -26,7 +26,7 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "outpu
 "#,
     )
     .unwrap();
-    support::install_ledger_protocol(&script);
+    support::install_task_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     common::interactive(&script);
     script
@@ -54,7 +54,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "
 "#,
     )
     .unwrap();
-    support::install_ledger_protocol(&script);
+    support::install_task_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     common::interactive(&script);
     script
@@ -660,8 +660,7 @@ fn test_revision_token_review_and_stale_revision_rejection() {
 #[test]
 fn grouped_requests_reach_each_daemon_dispatch_domain() {
     use antislop::lean::daemon::{
-        ControlRequest, ConversationRequest, HistoryRequest, LedgerRequest, SessionRequest,
-        TerminalRequest,
+        ControlRequest, ConversationRequest, HistoryRequest, SessionRequest, TerminalRequest,
     };
 
     let dir = tempfile::tempdir().unwrap();
@@ -704,15 +703,6 @@ fn grouped_requests_reach_each_daemon_dispatch_domain() {
                 wait_ms: 0,
             }))
             .unwrap()["events"]
-            .is_array()
-    );
-    assert!(
-        daemon
-            .client
-            .call(&Request::Ledger(LedgerRequest::ListRuns {
-                conversation: conversation.clone(),
-            }))
-            .unwrap()
             .is_array()
     );
     assert!(
@@ -1290,105 +1280,6 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
 }
 
 #[test]
-fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    common::initialize_git_project(&project);
-    let codex = fake_codex(dir.path());
-    let agy = fake_agy(dir.path());
-    let config = write_config(dir.path(), &codex, &agy);
-    let state = dir.path().join("state");
-    let daemon = DaemonGuard::start(&project, &config, &state);
-    let conversation = daemon.call_raw(&json!({"op":"start"})).unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let run = daemon
-        .call_raw(
-            &json!({"op":"create_run","conversation":conversation,"goal":"User-controlled scope"}),
-        )
-        .unwrap();
-    let run_id = run["id"].as_str().unwrap();
-    let text = "Never split 👩‍💻 or combining e\u{301}; preserve every qualifier.";
-    let source=daemon.call_raw(&json!({"op":"add_ledger_source","conversation":conversation,"run_id":run_id,"text":text})).unwrap();
-    let change = json!({"conversation":conversation,"run_id":run_id,"expected_spec_revision":0,"operation_id":"create-requirement-once","reason":"User adds explicit scope","entries":[{"id":"REQ-1","source":{"source_id":source["id"],"start":0,"end":text.len()},"interpretation":"Preserve grapheme clusters and qualifiers","criteria":[{"id":"REQ-1.C1","text":"Independently exercise ZWJ and combining sequences","mandatory":true}]}]});
-    let proposal = daemon
-        .call_raw(&json!({"op":"propose_ledger_change","change":change}))
-        .unwrap();
-    let repeated = daemon
-        .call_raw(&json!({"op":"propose_ledger_change","change":change}))
-        .unwrap();
-    assert_eq!(proposal["proposal_id"], repeated["proposal_id"]);
-    let mut tampered = change.clone();
-    tampered["entries"][0]["mandatory"] = json!(false);
-    assert!(daemon.call_raw(&json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":tampered})).is_err());
-    let apply = json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":change});
-    let result = daemon.call_raw(&apply).unwrap();
-    assert_eq!(result["spec_revision"], 1);
-    assert_eq!(daemon.call_raw(&apply).unwrap(), result);
-    let query = json!({"conversation":conversation,"run_id":run_id,"offset":0,"limit":1,"missing_coverage":true});
-    let page = daemon
-        .call_raw(&json!({"op":"list_requirements","query":query}))
-        .unwrap();
-    assert_eq!(page["total"], 1);
-    assert_eq!(page["entries"][0]["status"], "identified");
-    assert_eq!(page["entries"][0]["original"], text);
-    let entry=daemon.call_raw(&json!({"op":"get_ledger_entry","conversation":conversation,"run_id":run_id,"id":"REQ-1","revision":1})).unwrap();
-    assert_eq!(entry["history"].as_array().unwrap().len(), 1);
-    assert!(entry["evidence"].as_array().unwrap().is_empty());
-    let diff=daemon.call_raw(&json!({"op":"get_ledger_diff","conversation":conversation,"run_id":run_id,"from_revision":0,"to_revision":1})).unwrap();
-    assert_eq!(diff["after"][0]["id"], "REQ-1");
-    assert_eq!(daemon.call_raw(&json!({"op":"get_ledger_source","conversation":conversation,"run_id":run_id,"source_id":source["id"]})).unwrap()["text"],text);
-    assert_eq!(
-        daemon
-            .call_raw(&json!({"op":"list_runs","conversation":conversation}))
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    let other = daemon.call_raw(&json!({"op":"start"})).unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        daemon
-            .call_raw(
-                &json!({"op":"get_ledger_entry","conversation":other,"run_id":run_id,"id":"REQ-1"})
-            )
-            .is_err()
-    );
-    let mut revised = change.clone();
-    revised["operation_id"] = json!("revise-and-reject-once");
-    revised["expected_spec_revision"] = json!(1);
-    revised["entries"][0]["interpretation"] = json!("Proposed changed wording");
-    let proposal = daemon
-        .call_raw(&json!({"op":"propose_ledger_change","change":revised}))
-        .unwrap();
-    let request = Request::Ledger(
-        antislop::lean::daemon::LedgerRequest::RejectLedgerProposal {
-            conversation: conversation.clone(),
-            run_id: run_id.into(),
-            proposal_id: proposal["proposal_id"].as_str().unwrap().into(),
-            diff_hash: proposal["diff_hash"].as_str().unwrap().into(),
-            comment: "Keep every qualifier 👩‍💻".into(),
-        },
-    );
-    assert_eq!(daemon.client.call(&request).unwrap()["rejected"], true);
-    assert_eq!(daemon.call_raw(&json!({"op":"reject_ledger_proposal","conversation":conversation,"run_id":run_id,"proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"comment":"Keep every qualifier 👩‍💻"})).unwrap()["rejected"], true);
-    assert!(daemon.call_raw(&json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":revised})).is_err());
-    assert!(
-        daemon
-            .call_raw(
-                &json!({"op":"get_ledger_proposal","conversation":conversation,"run_id":run_id})
-            )
-            .is_err()
-    );
-}
-
-#[test]
 fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
@@ -1405,34 +1296,22 @@ fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
         .as_str()
         .unwrap()
         .to_owned();
-    let run = daemon
-        .client
-        .call(&Request::Ledger(
-            antislop::lean::daemon::LedgerRequest::CreateRun {
-                conversation: conversation.clone(),
-                goal: "large source".into(),
-            },
-        ))
-        .unwrap();
-    let run_id = run["id"].as_str().unwrap().to_owned();
     let text = "👩‍💻e\u{301}\n\"\\".repeat(400_000);
     assert!(text.len() > antislop::transport::MAX_FRAME);
     let source = daemon
         .client
-        .call(&Request::Ledger(
-            antislop::lean::daemon::LedgerRequest::AddLedgerSource {
+        .call(&Request::Conversation(
+            antislop::lean::daemon::ConversationRequest::AddSource {
                 conversation: conversation.clone(),
-                run_id: run_id.clone(),
                 text: text.clone(),
             },
         ))
         .unwrap();
     let restored = daemon
         .client
-        .call(&Request::Ledger(
-            antislop::lean::daemon::LedgerRequest::GetLedgerSource {
+        .call(&Request::Conversation(
+            antislop::lean::daemon::ConversationRequest::GetSource {
                 conversation,
-                run_id,
                 source_id: source["id"].as_str().unwrap().into(),
             },
         ))
@@ -1603,7 +1482,7 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
 }
 
 #[test]
-fn removed_ledger_endpoint_is_rejected() {
+fn removed_fixture_endpoint_is_rejected() {
     assert!(
         serde_json::from_value::<Request>(
             json!({"op":"list_plan_items","query":{"conversation":"c","run_id":"r"}})

@@ -6,8 +6,7 @@ pub(super) struct GatePlan {
     prior_gates: Vec<String>,
     refactoring: Option<String>,
     ids: BTreeSet<String>,
-    requirement_ids: Vec<String>,
-    criterion_ids: Vec<String>,
+
     ordered: Vec<&'static PredefinedAgent>,
 }
 
@@ -34,8 +33,7 @@ impl GatePlan {
             prior_gates: Vec::new(),
             refactoring: None,
             ids: tasks.iter().map(|task| task.id.clone()).collect(),
-            requirement_ids: union_ids(&upstream, |task| &task.requirement_ids),
-            criterion_ids: union_ids(&upstream, |task| &task.criterion_ids),
+
             ordered,
         }
     }
@@ -46,14 +44,7 @@ impl GatePlan {
         let id = reserve_task_id(agent.id, &mut self.ids);
         let dependencies = self.dependencies(agent.kind, &id);
         let description = gate_description(agent);
-        let mut task = gate_task(
-            agent,
-            id,
-            dependencies,
-            &self.requirement_ids,
-            &self.criterion_ids,
-            description,
-        );
+        let mut task = gate_task(agent, id, dependencies, description);
         task.deferred = self.deferred;
         Some(task)
     }
@@ -102,18 +93,6 @@ fn writer_ids(tasks: &[TaskContract]) -> Vec<String> {
         .iter()
         .filter(|task| task.changes_code())
         .map(|task| task.id.clone())
-        .collect()
-}
-
-fn union_ids(
-    tasks: &[TaskContract],
-    select: impl Fn(&TaskContract) -> &Vec<String>,
-) -> Vec<String> {
-    tasks
-        .iter()
-        .flat_map(|task| select(task).iter().cloned())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
         .collect()
 }
 
@@ -170,8 +149,7 @@ fn gate_task(
     agent: &PredefinedAgent,
     id: String,
     depends_on: Vec<String>,
-    requirement_ids: &[String],
-    criterion_ids: &[String],
+
     description: GateDescription,
 ) -> TaskContract {
     TaskContract {
@@ -184,9 +162,9 @@ fn gate_task(
         delivery: None,
         deferred: false,
         quality_gate: true,
+        acceptance_criteria: Vec::new(),
         options_for: None,
-        requirement_ids: requirement_ids.to_vec(),
-        criterion_ids: criterion_ids.to_vec(),
+
         id,
         title: agent.title.to_owned(),
         summary: Some(description.summary.to_owned()),
@@ -195,7 +173,7 @@ fn gate_task(
 
         depends_on,
         kind: agent.kind,
-        covers: Vec::new(),
+
         reviewer: ReviewerSpec {
             summary: Some(description.reviewer_summary.to_owned()),
         },

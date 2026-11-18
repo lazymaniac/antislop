@@ -1,6 +1,6 @@
 use super::{
-    ControlRequest, ConversationRequest, HistoryRequest, LedgerRequest, Request, SessionRequest,
-    TerminalRequest, WireRequest,
+    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionRequest, TerminalRequest,
+    WireRequest,
 };
 use serde_json::json;
 
@@ -47,10 +47,11 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
             json!({"op":"events","conversation":"c","after":4,"wait_ms":0,"limit":null}),
         ),
         (
-            Request::Ledger(LedgerRequest::ListRuns {
+            Request::Conversation(ConversationRequest::GetSource {
+                source_id: "s".into(),
                 conversation: "c".into(),
             }),
-            json!({"op":"list_runs","conversation":"c"}),
+            json!({"op":"get_source","conversation":"c","source_id":"s"}),
         ),
         (
             Request::Conversation(ConversationRequest::Plans {
@@ -124,18 +125,7 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"session_content","conversation":"c","event":1,"field":"prompt","offset":0}),
         json!({"op":"result_documents","conversation":"c"}),
         json!({"op":"result_document_content","conversation":"c","id":"e8f444f0-e3e5-4823-bc05-cd5857368f0e","offset":65536}),
-        json!({"op":"list_runs","conversation":"c"}),
-        json!({"op":"reject_ledger_proposal","conversation":"c","run_id":"r","proposal_id":"p","diff_hash":"h","comment":"no"}),
-        json!({"op":"get_ledger_proposal","conversation":"c","run_id":"r"}),
-        json!({"op":"list_requirements","query":{"conversation":"c","run_id":"r"}}),
-        json!({"op":"get_ledger_entry","conversation":"c","run_id":"r","id":"e","revision":null}),
-        json!({"op":"get_ledger_diff","conversation":"c","run_id":"r","from_revision":0,"to_revision":1}),
-        json!({"op":"get_evidence","conversation":"c","run_id":"r","entry_id":null}),
-        json!({"op":"propose_ledger_change","change":{"conversation":"c","run_id":"r","expected_spec_revision":0,"operation_id":"op","reason":"test","entries":[]}}),
-        json!({"op":"apply_ledger_change","proposal_id":"p","diff_hash":"h","change":{"conversation":"c","run_id":"r","expected_spec_revision":0,"operation_id":"op","reason":"test","entries":[]}}),
-        json!({"op":"create_run","conversation":"c","goal":"goal"}),
-        json!({"op":"add_ledger_source","conversation":"c","run_id":"r","text":"source"}),
-        json!({"op":"get_ledger_source","conversation":"c","run_id":"r","source_id":"s"}),
+        json!({"op":"get_source","conversation":"c","source_id":"s"}),
         json!({"op":"identity"}),
         json!({"op":"get_config"}),
         json!({"op":"set_config","toml":"[policy]","expected_revision":"revision"}),
@@ -184,7 +174,6 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         Request::Terminal(_) => "terminal",
         Request::Session(_) => "session",
         Request::History(_) => "history",
-        Request::Ledger(_) => "ledger",
         Request::Conversation(_) => "conversation",
         Request::Control(_) => "control",
     };
@@ -199,19 +188,9 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         | "sessions" => "session",
         "task_rounds" | "task_round" | "history_content" | "history_messages" | "events"
         | "history" | "mail" => "history",
-        "list_runs"
-        | "reject_ledger_proposal"
-        | "get_ledger_proposal"
-        | "list_requirements"
-        | "get_ledger_entry"
-        | "get_ledger_diff"
-        | "get_evidence"
-        | "propose_ledger_change"
-        | "apply_ledger_change"
-        | "create_run"
-        | "add_ledger_source"
-        | "get_ledger_source" => "ledger",
-        "send_to_agent"
+        "add_source"
+        | "get_source"
+        | "send_to_agent"
         | "send"
         | "reject"
         | "resume"

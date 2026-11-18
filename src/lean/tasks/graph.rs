@@ -144,6 +144,13 @@ pub fn render_plan_document(markdown: &str, tasks: &[TaskContract]) -> String {
     let mut document = plan_document_start(trimmed);
     for (index, task) in tasks.iter().enumerate() {
         append_plan_task(&mut document, trimmed, index, task, &peers);
+        if !task.acceptance_criteria.is_empty() {
+            document.push_str(&format!("\nAcceptance criteria for `{}`:\n", task.id));
+            for criterion in &task.acceptance_criteria {
+                document.push_str(&format!("- **{}**: {}\n", criterion.id, criterion.text));
+            }
+            document.push('\n');
+        }
     }
     document.trim_end().to_owned()
 }

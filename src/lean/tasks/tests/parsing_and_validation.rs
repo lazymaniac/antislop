@@ -15,12 +15,12 @@ fn task_ids_reject_paths_and_empty_fragments() {
         "a b",
         "é",
     ] {
-        let task = json!({"id": id, "title": "Task", "goal": "Assess", "change_kind": "none", "kind": "analysis"});
+        let task = json!({"id": id, "title": "Task", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Assess", "change_kind": "none", "kind": "analysis"});
         let error = submitted(json!({"tasks": [task]})).unwrap_err().to_string();
         assert!(error.contains("invalid task id"), "{id:?}: {error}");
     }
     let mut task: TaskContract = serde_json::from_value(json!({
-        "id": "x".repeat(257), "title": "Task", "goal": "Assess",
+        "id": "x".repeat(257), "title": "Task", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Assess",
         "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "claims"}}))
     .unwrap();
     assert!(validate(&[task.clone()]).is_err());
@@ -53,7 +53,7 @@ fn saved_plans_keep_valid_ids_and_generated_options() {
         "task_1.v2",
     ];
     let saved = json!({"tasks": ids.iter().map(|id| json!({
-            "id": id, "title": "Task", "goal": "Assess", "change_kind": "code", "kind": "implementation"
+            "id": id, "title": "Task", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Assess", "change_kind": "code", "kind": "implementation"
         })).collect::<Vec<_>>()});
     let tasks = submitted(saved).unwrap();
     assert_eq!(
@@ -72,9 +72,9 @@ fn saved_plans_keep_valid_ids_and_generated_options() {
 #[test]
 fn planned_tasks_preserve_explicit_delivery_independently_of_work_kind() {
     let tasks = submitted(json!({"tasks":[
-        {"id":"t1","title":"Storage","goal":"Assess storage","change_kind": "none", "kind":"architecture"},
-        {"id":"t2","title":"TUI","goal":"Change the TUI","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
-        {"id":"t3","title":"Probe","goal":"Run the probe","depends_on":["t1"],"change_kind": "code", "kind":"analysis"}
+        {"id":"t1","title":"Storage","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Assess storage","change_kind": "none", "kind":"architecture"},
+        {"id":"t2","title":"TUI","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Change the TUI","depends_on":["t1"],"change_kind": "code", "kind":"implementation"},
+        {"id":"t3","title":"Probe","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run the probe","depends_on":["t1"],"change_kind": "code", "kind":"analysis"}
     ]}))
     .unwrap();
     assert_eq!(tasks[1].depends_on, ["t1"]);
@@ -90,7 +90,7 @@ fn planned_tasks_preserve_explicit_delivery_independently_of_work_kind() {
 
 #[test]
 fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
-    let base = json!({"id": "t1", "title": "Storage", "goal": "A detailed storage analysis.", "change_kind": "none", "kind": "analysis"});
+    let base = json!({"id": "t1", "title": "Storage", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "A detailed storage analysis.", "change_kind": "none", "kind": "analysis"});
     let parse = |task: &Value| submitted(json!({"tasks": [task]}));
     let plain = parse(&base).unwrap();
     assert!(plain[0].summary.is_none());
@@ -118,8 +118,7 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
 
 #[test]
 fn contracts_reject_removed_fields_and_missing_change_kind() {
-    let current =
-        json!({"id":"t1","title":"Task","goal":"Inspect","kind":"analysis","change_kind":"none"});
+    let current = json!({"id":"t1","title":"Task","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect","kind":"analysis","change_kind":"none"});
     assert!(serde_json::from_value::<TaskContract>(current.clone()).is_ok());
     for key in ["scope", "writes", "inputs"] {
         let mut old = current.clone();
@@ -141,13 +140,44 @@ fn contracts_reject_removed_fields_and_missing_change_kind() {
 
 #[test]
 fn a_plan_with_out_of_order_dependencies_is_ordered_and_a_cycle_is_rejected() {
-    let first = json!({"id": "consumer", "title": "Consumer", "goal": "Use it",
+    let first = json!({"id": "consumer", "title": "Consumer", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Use it",
         "change_kind": "none", "kind": "analysis", "depends_on": ["scout"]});
-    let second = json!({"id": "scout", "title": "Scout", "goal": "Find it", "change_kind": "none", "kind": "analysis"});
+    let second = json!({"id": "scout", "title": "Scout", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Find it", "change_kind": "none", "kind": "analysis"});
     let tasks = submitted(json!({"tasks": [first, second]})).unwrap();
     let ids: Vec<_> = tasks.iter().map(|task| task.id.as_str()).collect();
     assert_eq!(ids, ["scout", "consumer"]);
 
-    let cycle = |a: &str, b: &str| json!({"id": a, "title": a, "goal": "g", "change_kind": "none", "kind": "analysis", "depends_on": [b]});
+    let cycle = |a: &str, b: &str| json!({"id": a, "title": a, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis", "depends_on": [b]});
     assert!(submitted(json!({"tasks": [cycle("a", "b"), cycle("b", "a")]})).is_err());
+}
+
+#[test]
+fn local_criteria_are_required_unique_nonempty_and_distinct_from_runtime_checks() {
+    let mut value = serde_json::json!({"id":"t","title":"Export","goal":"Export locally","kind":"implementation","change_kind":"code"});
+    let check = |value: &serde_json::Value| {
+        let task: TaskContract = serde_json::from_value(value.clone()).unwrap();
+        super::super::validate(&[task])
+    };
+    assert!(check(&value).is_err());
+    for criteria in [
+        serde_json::json!([{"id":"goal","text":"x"}]),
+        serde_json::json!([{"id":"R001","text":"x"}]),
+        serde_json::json!([{"id":"C1","text":" "}]),
+        serde_json::json!([{"id":"C1","text":"x"},{"id":"C1","text":"y"}]),
+    ] {
+        value["acceptance_criteria"] = criteria;
+        assert!(check(&value).is_err(), "{value}");
+    }
+    value["acceptance_criteria"] =
+        serde_json::json!([{"id":"C1","text":"Do not upload records; preserve café 👩‍💻"}]);
+    assert!(check(&value).is_ok());
+    let task: TaskContract = serde_json::from_value(value.clone()).unwrap();
+    let prompt = super::super::obligations(&task);
+    assert!(
+        prompt
+            .iter()
+            .any(|(id, text)| id == "C1" && text.contains("café 👩‍💻"))
+    );
+    value["covers"] = serde_json::json!(["C1"]);
+    assert!(serde_json::from_value::<TaskContract>(value).is_err());
 }

@@ -344,39 +344,10 @@ fn agent_card_shows_recorded_branch() {
 }
 
 #[test]
-fn requirements_rounds_share_one_card_that_fits() {
-    let mut view = View::default();
-    for key in REQUIREMENTS_ROUNDS {
-        view.agents.insert(key.into(), Default::default());
-    }
-    let graph = Graph::new_with_viewport(
-        &view,
-        &Scope::default(),
-        &Default::default(),
-        GroupingMode::Dependency,
-        None,
-    );
-    let cards: Vec<_> = graph
-        .nodes
-        .iter()
-        .filter(|node| node.visible && requirements_round(&node.key).is_some())
-        .collect();
-    assert_eq!(cards.len(), 1);
-    for line in card_lines(
-        &view,
-        &cards[0].key,
-        usize::from(WIDTH - 4),
-        MAX_SUMMARY_LINES,
-    ) {
-        assert!(line.width() <= usize::from(WIDTH - 4), "{line}");
-    }
-}
-
-#[test]
 fn graph_includes_planning_agents_in_every_layout() {
     let mut view = View::default();
     view.agents
-        .insert(REQUIREMENTS_ROUNDS[0].into(), Default::default());
+        .insert(crate::lean::PLANNER.into(), Default::default());
     for key in ["planner", "options-planner", "requirements-planner"] {
         view.agents.insert(key.into(), Default::default());
     }
@@ -835,10 +806,6 @@ fn summary_only_search_finds_tasks_and_admin_descriptions_stay_fixed() {
             super::super::super::PLANNER,
             &["Turns agreed requirements", "into a task plan."],
         ),
-        (
-            "requirements-extraction-analyst",
-            &["Records requirements from", "your request and documents."],
-        ),
     ] {
         view.agents.insert(
             key.into(),
@@ -1286,9 +1253,9 @@ fn a_dependency_arrow_enters_beside_the_title_in_every_frame_of_a_growing_card()
 fn all_includes_every_supervision_edge() {
     let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
     view.agents
-        .insert(REQUIREMENTS_ROUNDS[0].into(), Default::default());
+        .insert(crate::lean::PLANNER.into(), Default::default());
     view.agents
-        .insert(super::super::super::PLANNER.into(), Default::default());
+        .insert("analysis-helper".into(), Default::default());
     let graph = Graph::new(&view);
     let all = graph.edge_routes(Relations::all());
     // The orchestrator supervises the session's agents; tasks stand in
@@ -1452,17 +1419,8 @@ fn reviewer_marker_waits_for_worker_before_animating_and_finishing() {
 #[test]
 fn workflow_places_preparation_before_tasks_and_acceptance_after_them() {
     let mut view = view(vec![task("t1", &[])]);
-    let preparation = [
-        ORCHESTRATOR,
-        REQUIREMENTS_ROUNDS[0],
-        crate::lean::PLANNER,
-        PLAN_REVIEWER,
-    ];
-    let acceptance = [
-        "requirements-audit-analyst",
-        "requirements-audit-reviewer",
-        AUDITOR,
-    ];
+    let preparation = [ORCHESTRATOR, crate::lean::PLANNER, PLAN_REVIEWER];
+    let acceptance = [AUDITOR];
     for key in preparation.into_iter().chain(acceptance) {
         view.agents.insert(key.into(), Default::default());
     }
@@ -1515,12 +1473,7 @@ fn workflow_places_preparation_before_tasks_and_acceptance_after_them() {
 #[test]
 fn orchestration_cards_follow_the_projected_turn_lifecycle() {
     let mut view = View::default();
-    let lifecycle = [
-        REQUIREMENTS_ROUNDS[0],
-        crate::lean::PLANNER,
-        PLAN_REVIEWER,
-        AUDITOR,
-    ];
+    let lifecycle = [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR];
     let visible = |view: &View| {
         Graph::new(view)
             .nodes
@@ -1562,41 +1515,10 @@ fn orchestration_cards_follow_the_projected_turn_lifecycle() {
             "payload": {"role": role, "provider": "codex"}
         }));
     }
-    assert_eq!(visible(&out_of_order), expected(&[]));
-}
-
-#[test]
-fn requirements_card_names_the_activity_without_a_fixed_round_count() {
-    let mut view = View::default();
-    let key = REQUIREMENTS_ROUNDS[0];
-    for running in [false, true] {
-        view.agents.insert(
-            key.into(),
-            super::super::view::Agent {
-                running,
-                activity: "turn finished".into(),
-                ..Default::default()
-            },
-        );
-        let graph = Graph::new(&view);
-        let node = graph.node(key).unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        draw_node(
-            &view,
-            &mut canvas,
-            node,
-            false,
-            None,
-            &Theme::new(true, false),
-            0,
-        );
-        let status = &canvas.lines()[1];
-        assert!(status.contains("extracting"), "{status}");
-        assert!(
-            !status.contains("/4") && !status.contains("round"),
-            "{status}"
-        );
-    }
+    assert_eq!(
+        visible(&out_of_order),
+        expected(&[crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR])
+    );
 }
 
 #[test]
@@ -1687,7 +1609,7 @@ fn a_narrow_folded_card_gives_its_title_the_room_its_marker_does_not_need() {
 #[test]
 fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
     let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
-    for key in [REQUIREMENTS_ROUNDS[0], "planner", PLAN_REVIEWER, AUDITOR] {
+    for key in [crate::lean::PLANNER, "planner", PLAN_REVIEWER, AUDITOR] {
         view.agents.insert(key.into(), Default::default());
     }
     let graph = Graph::new_with_viewport(

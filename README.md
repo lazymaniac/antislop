@@ -77,9 +77,11 @@ and the others watch until they take control from the palette.
 
 ## How a request runs
 
-1. The orchestrator gathers the requirements and asks only for missing product decisions.
+1. The orchestrator gathers the scope and asks only for missing product decisions.
+   The confirmed scope and original sources stay attached to the plan.
 2. A dedicated planner drafts tasks with explicit `change_kind` (`none`, `artifact`,
-   or `code`), goals and dependencies. These describe deliverables, not permissions.
+   or `code`), goals, dependencies and task-local acceptance criteria. These describe
+   deliverables, not permissions.
 3. Independent plan review checks coverage and dependencies. You accept the checked
    plan before it runs; rejected plans are corrected and reviewed again.
 4. Code tasks get dedicated local options and any configured quality gates.
@@ -88,7 +90,16 @@ and the others watch until they take control from the palette.
    continue as needed. Missing progress produces a notice rather than a hidden stop limit.
 6. Reviewed results are integrated while preserving user edits. Contract or dependency
    changes receive independent review; unavailable evidence is never invented.
-7. An independent final audit checks acceptance before the request is reported complete.
+7. One independent final audit checks the integrated result against the scope, original
+   sources and task criteria before the request is reported complete.
+
+Scope changes appear alongside the reviewed plan for your acceptance. Technical
+revisions within the accepted scope keep independent review. There is no separate
+requirements extraction, ledger browser or ledger approval step.
+
+This version uses runtime database schema 17. Older databases are rejected without
+modification or migration. Stop the daemon, archive the project runtime directory
+containing `core.db`, and restart both client and daemon to create fresh state.
 
 ## Build and test
 

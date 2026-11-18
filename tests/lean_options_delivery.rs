@@ -4,7 +4,7 @@ use serde_json::json;
 
 fn task(writes: bool) -> TaskContract {
     serde_json::from_value(json!({
-        "id": "writer", "title": "Writer", "goal": "Implement chosen variant",
+        "id": "writer", "title": "Writer", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Implement chosen variant",
         "change_kind": if writes { "code" } else { "none" }, "kind": "implementation",
         "depends_on": if writes { vec!["writer-options".to_owned()] } else { vec![] },
         "reviewer": {"summary": "Check selection"}}))
@@ -109,7 +109,7 @@ fn read_only_continuations_preserve_access_without_writer_binding() {
 fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
     let context = |kind: &str| -> TaskContract {
         serde_json::from_value(json!({
-            "id": "scout", "title": "Scout", "goal": "Map the project",
+            "id": "scout", "title": "Scout", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Map the project",
             "change_kind": "none", "kind": kind,  "reviewer": {"summary": "Check the map"}}))
         .unwrap()
     };

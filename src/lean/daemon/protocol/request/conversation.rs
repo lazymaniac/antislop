@@ -1,5 +1,14 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConversationRequest {
+    AddSource {
+        conversation: String,
+        text: String,
+    },
+    GetSource {
+        conversation: String,
+        source_id: String,
+    },
+
     Recover(crate::lean::TaskRecoveryRequest),
     Comment {
         conversation: String,
@@ -128,7 +137,6 @@ pub enum ConversationRequest {
         operation_id: Option<String>,
         revision: crate::lean::store::PlanRevision,
         request_ai_review: bool,
-        allow_uncovered: bool,
     },
     /// Selects the team template (rigor level) for a conversation.
     SelectTeam {

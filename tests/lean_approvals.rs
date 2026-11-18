@@ -64,6 +64,7 @@ fn events_of(core: &Core, conversation: &str, kind: &str) -> Vec<serde_json::Val
 #[test]
 fn an_agent_waits_for_the_users_answer_and_gets_the_chosen_key() {
     let dir = common::tempdir();
+    common::initialize_git_project(dir.path());
     let codex = fake_codex(dir.path());
     let mut dialog = codex.as_os_str().to_owned();
     dialog.push(".dialog.turn");
@@ -110,6 +111,7 @@ fn an_agent_waits_for_the_users_answer_and_gets_the_chosen_key() {
 #[test]
 fn the_mode_of_a_conversation_is_kept_and_announced() {
     let dir = common::tempdir();
+    common::initialize_git_project(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
     let conversation = core.start(dir.path()).unwrap();
     core.set_approval_mode(&conversation.id, "autonomous")

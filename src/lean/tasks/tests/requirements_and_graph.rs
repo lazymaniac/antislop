@@ -1,44 +1,6 @@
 use super::*;
 
 #[test]
-fn requirements_reach_only_reviewers_as_readable_id_and_text() {
-    let entry: crate::lean::ledger::LedgerEntry = serde_json::from_value(serde_json::json!({
-        "run_id":"run","version":1,"spec_revision":1,"original":"","status":"active",
-        "spec":{"id":"R1","source":{"source_id":"s","start":0,"end":0},
-            "interpretation":"Export works 👩‍💻",
-            "criteria":[
-                {"id":"C1","text":"CSV has a header"},
-                {"id":"C2","text":"Large files stream","mandatory":false}
-            ]}
-    }))
-    .unwrap();
-    let handoff = crate::lean::rounds::RoundHandoff {
-        round: 1,
-        change_kind: crate::lean::tasks::ChangeKind::None,
-        worktree: "/wt".into(),
-        report: None,
-        verdict: None,
-        files: vec![],
-        base: None,
-        result: None,
-        interrupted: false,
-        interruptions: vec![],
-        requirements: vec![entry],
-        comments: vec![],
-        protected_paths: vec![],
-        primary: "/primary".into(),
-    };
-    let reviewer = super::round_handoff_prompt(&handoff, true);
-    assert!(reviewer.contains(
-            "Requirements and acceptance criteria:\n- R1: Export works 👩‍💻\n  - C1: CSV has a header\n  - C2 (optional): Large files stream\n"
-        ));
-    assert!(!reviewer.contains("\"interpretation\""));
-    let worker = super::round_handoff_prompt(&handoff, false);
-    assert!(worker.contains("Requirements and acceptance criteria"));
-    assert!(worker.contains("CSV has a header"));
-}
-
-#[test]
 fn handoff_with_findings_repeats_neither_report_nor_task() {
     let mut handoff = crate::lean::rounds::RoundHandoff {
         round: 2,
@@ -51,7 +13,6 @@ fn handoff_with_findings_repeats_neither_report_nor_task() {
         result: None,
         interrupted: false,
         interruptions: vec![],
-        requirements: vec![],
         comments: vec![],
         protected_paths: vec![],
         primary: "/primary".into(),
@@ -74,10 +35,10 @@ fn contract(value: serde_json::Value) -> TaskContract {
 #[test]
 fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     let writer = contract(serde_json::json!({
-        "id":"w","title":"Writer","goal":"WRITER GOAL","change_kind": "code", "kind":"implementation",
+        "id":"w","title":"Writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"WRITER GOAL","change_kind": "code", "kind":"implementation",
         "reviewer":{"summary": "f"}}));
     let options = contract(serde_json::json!({
-        "id":"w-options","title":"Options for Writer","goal":"OPTIONS BOILERPLATE","change_kind": "none", "kind":"options",
+        "id":"w-options","title":"Options for Writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"OPTIONS BOILERPLATE","change_kind": "none", "kind":"options",
         "options_for":"w","reviewer":{"summary": "f"}}));
     let prompt = plan_review_prompt("/p", "request", &[options, writer]);
     assert!(prompt.contains("WRITER GOAL"));
@@ -95,11 +56,11 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
 #[test]
 fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     let same = contract(serde_json::json!({
-        "id":"a","title":"A","goal":"UNCHANGED GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
+        "id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"UNCHANGED GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let before = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"OLD GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
+        "id":"b","title":"B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"OLD GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let after = contract(serde_json::json!({
-        "id":"b","title":"B","goal":"NEW GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
+        "id":"b","title":"B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"NEW GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));
     let baseline = [&same, &before].map(|task| serde_json::to_value(task).unwrap());
     let plan = [same, after];
     let none = || ApprovedWork {
@@ -197,7 +158,7 @@ fn upstream_data_cannot_forge_boundaries_or_metadata_lines() {
 #[test]
 fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
     let report = contract(
-        serde_json::json!({"id":"report","title":"Report","goal":"Run existing cargo through ASDF_RUST_VERSION and report checks","kind":"analysis","change_kind":"artifact","outputs":["results/validation.json"]}),
+        serde_json::json!({"id":"report","title":"Report","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run existing cargo through ASDF_RUST_VERSION and report checks","kind":"analysis","change_kind":"artifact","outputs":["results/validation.json"]}),
     );
     for initial in [true, false] {
         let prompt = plan_revision_review_prompt(

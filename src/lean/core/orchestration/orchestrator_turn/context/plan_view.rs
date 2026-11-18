@@ -103,7 +103,7 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core.store.create_conversation("fixture").unwrap().id;
         let specs = ["failed", "stalled", "done"]
-            .map(|id| json!({"id":id,"title":id,"goal":"Check","change_kind": "none", "kind":"analysis"}));
+            .map(|id| json!({"id":id,"title":id,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Check","change_kind": "none", "kind":"analysis"}));
         let mut tasks = core.store.add_plan(&conversation, &specs).unwrap();
         for (task, state) in
             tasks
@@ -123,7 +123,7 @@ mod tests {
         core.store
             .add_plan(
                 &conversation,
-                &[json!({"id":"obsolete","title":"Draft","goal":"Draft","change_kind": "none", "kind":"analysis"})],
+                &[json!({"id":"obsolete","title":"Draft","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Draft","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap();
         tasks[0].feedback = Some(json!({"reason":"binary apply failed ".repeat(130_000)}));

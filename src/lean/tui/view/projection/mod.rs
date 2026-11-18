@@ -44,12 +44,6 @@ type Handler = fn(&mut View, &Value, &Value, String, &str);
 
 const HANDLERS: &[(&str, Handler)] = &[
     (
-        "ledger_approval_required",
-        conversation::on_ledger_approval_required,
-    ),
-    ("ledger_changed", conversation::on_ledger_changed),
-    ("ledger_proposal_rejected", conversation::on_ledger_changed),
-    (
         "user_decision_requested",
         conversation::on_user_decision_requested,
     ),
@@ -66,11 +60,14 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("turn_started", agents::on_turn_started),
     ("turn_finished", agents::on_turn_finished),
     ("graph_task", graph_task),
+    (
+        "scope_revision_resolved",
+        conversation::on_scope_revision_resolved,
+    ),
     ("graph_updated", graph_updated),
     ("plan_proposed", plan::on_plan_proposed),
     ("plan_rejected", plan::on_plan_rejected),
     ("plan_review", plan::on_plan_review),
-    ("requirements_failed", reviews::on_requirements_failed),
     ("plan_invalid", plan::on_plan_invalid),
     ("task", task),
     ("comment_replied", mail::on_comment_replied),

@@ -71,7 +71,7 @@ impl Content {
             .expect("directory sync hook mutex") = Some(std::sync::Arc::new(hook));
     }
 
-    fn path(&self, reference: &Reference) -> Result<PathBuf> {
+    pub(in crate::lean) fn path(&self, reference: &Reference) -> Result<PathBuf> {
         require(
             uuid::Uuid::parse_str(&reference.id).is_ok(),
             "invalid content reference",

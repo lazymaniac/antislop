@@ -116,7 +116,6 @@ fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()>
     {
         eprintln!("antislop: settled task checkouts were not removed: {error}");
     }
-    core.store.recover_approved_requirements()?;
     restore_conversations(core)?;
     // Confirm a runtime handoff before registering any plan runner. Otherwise
     // a runner can exit on the pending marker just as confirmation resumes it.
@@ -147,16 +146,10 @@ fn restore_conversations(core: &Arc<Core>) -> Result<()> {
 
 fn restore_conversation(core: &Arc<Core>, conversation: &str) -> Result<()> {
     core.store.finish_interview(conversation)?;
-    if core.unanswered(conversation)?.is_none() {
-        core.store.queue_requirements_format_repair(conversation)?;
-    }
     wake_pending_work(core, conversation)
 }
 
 fn wake_pending_work(core: &Arc<Core>, conversation: &str) -> Result<()> {
-    if core.store.has_pending_requirements_approval(conversation)? {
-        core.wake(conversation);
-    }
     if core.store.workflow(conversation)?.planning() && core.unanswered(conversation)?.is_some() {
         core.wake(conversation);
     }

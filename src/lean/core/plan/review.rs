@@ -75,7 +75,11 @@ fn review_setup<'a>(
     upto: u64,
 ) -> TurnSetup<'a> {
     TurnSetup {
-        session_policy: SessionPolicy::Role,
+        session_policy: if role == AUDITOR {
+            SessionPolicy::Independent
+        } else {
+            SessionPolicy::Role
+        },
         conversation,
         plan_id: plan_id.map(str::to_string),
         role: role.into(),

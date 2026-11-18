@@ -148,9 +148,7 @@ impl App {
         if self.interview_visible() {
             return true;
         }
-        if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
-            return true;
-        }
+
         self.help.is_some()
             || self.picker.is_some()
             || self.editor.is_some()
@@ -168,7 +166,7 @@ mod tests {
     #[test]
     fn conversation_picker_uses_goal_and_a_clear_empty_goal_fallback() {
         let named = conversation_title(
-            &serde_json::json!({"goal":"  Add   session deletion ","status":"done"}),
+            &serde_json::json!({"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"  Add   session deletion ","status":"done"}),
             "session-id",
             false,
         );

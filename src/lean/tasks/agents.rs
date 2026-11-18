@@ -322,8 +322,8 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         quality_gate: false,
         options_for: Some(task.id.clone()),
         id,
-        requirement_ids: task.requirement_ids.clone(),
-        criterion_ids: task.criterion_ids.clone(),
+
+        acceptance_criteria: task.acceptance_criteria.clone(),
         title: format!("Options for {}", task.title),
         summary: Some("Compare feasible approaches and select the best supported variant.".into()),
         goal: options_goal(task),
@@ -331,7 +331,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
 
         depends_on: task.depends_on.clone(),
         kind: WorkKind::Options,
-        covers: Vec::new(),
+
         reviewer: ReviewerSpec {
             summary: Some(
                 "Review the selection follows from feasible alternatives and evidence.".into(),

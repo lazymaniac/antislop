@@ -16,15 +16,7 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     match role {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
         "planner" => vec![SUBMIT_PLAN, TOOL, "read_evidence"],
-        "requirements-extraction-analyst" => vec!["submit_ledger"],
-        "requirements-audit-analyst" => {
-            vec!["submit_audit", "read_dependency_result", "read_evidence"]
-        }
-        "requirements-audit-reviewer" => vec![
-            "submit_audit_review",
-            "read_dependency_result",
-            "read_evidence",
-        ],
+        "auditor" => vec![REVIEW, "read_dependency_result", "read_evidence"],
         _ if plain_reviewer(role) => vec![REVIEW, "read_evidence"],
         _ => vec![TOOL],
     }
@@ -157,14 +149,7 @@ fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
 fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
         "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
-        "submit_ledger"
-        | "submit_audit"
-        | "submit_audit_review"
-        | "answer_agent"
-        | "defer_to_user"
-        | "decide_approval"
-        | "retry_task"
-        | "resume_task"
+        "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task"
         | "request_replan" => control_contract(name),
         _ => turn_contract(name, role, orchestrator),
     }
@@ -196,6 +181,7 @@ fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
     if name == "submit_plan" {
         let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a redeclared task retains existing work and is assessed before executor continuation; use revise_plan.replacements for unfinished successors"}});
         fields["team"] = json!({"enum": crate::lean::tasks::Team::ALL.map(crate::lean::tasks::Team::name), "description": format!("The team template that runs the plan (default feature):\n{}", crate::lean::tasks::team_catalog())});
+        fields["scope"] = json!({"type":"string","description":"Complete proposed scope in Markdown; omit to inherit the confirmed scope. Do not invent user obligations."});
         fields["team_reason"] = json!({"type": "string", "description": "Why this team fits the work; required for any team but feature"});
         if orchestrator {
             fields["addressed"] = schema::addressed();
@@ -207,9 +193,6 @@ fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
 
 fn control_contract(name: &str) -> ToolSpec {
     match name {
-        "submit_ledger" => (format!("Submit the requirements you extracted; this ends your turn. The runtime finds each quote in the sources and checks the requirements at once. {RETRY}"), json!({"entries":{"type":"array","items":schema::ledger_entry()}}), vec!["turn", "entries"]),
-        "submit_audit" => (format!("Submit the audit; this ends your turn. It approves unless a finding is critical, high or medium. {RETRY}"), schema::audit(), vec!["turn", "findings", "evidence"]),
-        "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn", "note", "assessments"]),
         "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":"Full revision request or dependency task UUID required for waiting dispositions"}}), vec!["turn", "request", "answer"]),
         "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn", "request", "explanation"]),
         "decide_approval" => ("Decide an agent CLI's approval dialog that the runtime put to you. Pick the id of the choice that lets the agent do what its task needs and nothing broader; refuse (the denying choice) what the task does not need. Use choice \"escalate_to_user\" only when you cannot judge it or it is outside the user's request; give the user the reason in explanation. Never ask the agent: the dialog is the agent CLI's own.".into(), json!({"request":{"type":"string","description":"The approval request id the runtime message names"},"choice":{"type":"string","description":"A choice id from the message, or escalate_to_user"},"explanation":{"type":"string","description":"Why, for the user; required with escalate_to_user"}}), vec!["turn", "request", "choice"]),

@@ -94,13 +94,11 @@ fn encode_revise_plan(request: Request) -> std::result::Result<WireRequest, Box<
             operation_id,
             revision,
             request_ai_review,
-            allow_uncovered,
         }) => Ok(WireRequest::RevisePlan {
             conversation,
             operation_id,
             revision,
             request_ai_review,
-            allow_uncovered,
         }),
         other => Err(Box::new(other)),
     }

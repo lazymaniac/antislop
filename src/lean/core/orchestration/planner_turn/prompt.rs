@@ -1,4 +1,3 @@
-use crate::lean::core::orchestration::planning_context::append_ledger;
 use crate::lean::core::orchestration::prompt_helpers::format_messages;
 use crate::lean::{Message, store::TeamGuidance, tasks};
 use std::path::Path;
@@ -13,7 +12,7 @@ pub(super) struct PlannerPrompt<'a> {
     pub(super) replaced: Option<&'a str>,
     /// The approved tasks of the plan that ran, which a new plan may keep.
     pub(super) keepable: Option<&'a str>,
-    pub(super) ledger_context: Option<&'a str>,
+    pub(super) scope_context: Option<&'a str>,
 }
 
 /// The requirements always lead, so a resumed session drafts from the current
@@ -43,7 +42,7 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     if let Some(keepable) = context.keepable {
         prompt.push_str(keepable);
     }
-    append_ledger(context.ledger_context, &mut prompt);
+    prompt.push_str(context.scope_context.unwrap_or_default());
     prompt.push_str("\nRuntime capability boundary: you are the planner. submit_plan submits a complete replacement draft, with keep for approved work. revise_plan is available ONLY to the orchestrator; request_replan does not delegate that capability. If the request requires an incremental revision of the accepted plan, report that mismatch with finish_turn so the orchestrator can call revise_plan itself. Never wait for unavailable tools or claim a revision was applied.\n");
     prompt
 }
@@ -67,7 +66,7 @@ mod tests {
             asked: &[],
             replaced: None,
             keepable: None,
-            ledger_context: None,
+            scope_context: None,
         });
         assert!(prompt.contains("Trusted team policy:"));
         assert!(prompt.contains("fewer quality gates than feature"));

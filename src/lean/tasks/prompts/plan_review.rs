@@ -159,7 +159,7 @@ pub fn audit_followup(request: &str, results: &str) -> String {
     )
 }
 
-const AUDIT_CHECKS: &str = "List every obligation in the request, each \
+const AUDIT_CHECKS: &str = "Inspect the integrated project, full original documents and relevant task results with read_dependency_result. Check each task acceptance criterion and the combined outcome. Reports alone do not prove code was integrated or checks passed. Search for obligations omitted from the plan. Do not change files. List every obligation in the request, each \
      qualifier included, and decide for each whether the results and the files \
      show it done and whether touched code was left in a cleaner, better state \
      than before. A missing, partial or unreviewed obligation is a high \

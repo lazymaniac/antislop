@@ -223,7 +223,7 @@ mod tests {
                 .store
                 .create_conversation(project.to_str().unwrap())
                 .unwrap();
-            let spec: TaskContract = serde_json::from_value(json!({"id":id,"title":summary,"goal":summary,"change_kind":"code","kind":"implementation"})).unwrap();
+            let spec: TaskContract = serde_json::from_value(json!({"id":id,"title":summary,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":summary,"change_kind":"code","kind":"implementation"})).unwrap();
             let mut task = core
                 .store
                 .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
@@ -335,7 +335,7 @@ mod tests {
             ".antislop/continuation-plan-review.md".to_owned(),
             ".antislop/appendix.md".to_owned(),
         ];
-        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Przygotuj raport i napraw błędne załączniki","goal":"Dostarcz analizę zgodnie z ustaleniami rozmowy","kind":"analysis","change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
+        let spec: TaskContract = serde_json::from_value(json!({"id":"report","title":"Przygotuj raport i napraw błędne załączniki","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Dostarcz analizę zgodnie z ustaleniami rozmowy","kind":"analysis","change_kind":"artifact","outputs":outputs,"delivery":"untracked"})).unwrap();
         let mut task = store
             .add_plan(&conversation.id, &[serde_json::to_value(&spec).unwrap()])
             .unwrap()

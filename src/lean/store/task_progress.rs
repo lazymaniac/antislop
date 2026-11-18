@@ -57,7 +57,7 @@ mod tests {
         let task = store
             .add_plan(
                 &conversation,
-                &[serde_json::json!({"id":"a","title":"A","goal":"g","change_kind": "none", "kind":"analysis"})],
+                &[serde_json::json!({"id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap()
             .remove(0);

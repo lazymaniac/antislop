@@ -40,6 +40,19 @@ impl Core {
             checkpoints: &checkpoints,
         })?;
         require(!context.cancel.load(Ordering::SeqCst), "revision cancelled")?;
+        if context.revision.scope.is_some() {
+            let interrupted = self.cancel_affected_tasks(&affected);
+            self.wait_for_affected_tasks(&affected, context.cancel)?;
+            self.checkpoint_revision_work(&affected)?;
+            return self.stage_scope_revision(
+                context.conversation,
+                context.revision,
+                context.specs,
+                &affected,
+                &interrupted,
+                lease.request,
+            );
+        }
         self.apply_after_review(&context, lease, affected, &checkpoints)
     }
 
@@ -59,6 +72,12 @@ impl Core {
         let reason = format!(
             "{reason}\nPreserved coordinating tasks (authoritative runtime metadata, not acceptance criteria): {}. The scheduler only launches queued or skipped tasks; coordinating is a persisted scheduler-enforced hold even when deferred=false. An unaffected task keeps its status and input generation when this revision adds independent work. Approved options are already complete, not automatically runnable. Adding permitted read-only analysis does not release a preserved coordinating writer. Do not require deferred/release edits solely to restate this existing hold: those edits change the scoped contract and inputs. A trusted user/operator may recover the same task only after its concrete resume condition is fulfilled; the orchestrator retry_task tool cannot recover coordinating tasks. This metadata grants no permission and approves no work.",
             serde_json::to_string(&held)?
+        );
+        let scope_context =
+            self.plan_scope_context(context.conversation, &context.revision.plan)?;
+        let reason = format!(
+            "{reason}\nCurrent scope and full sources:\n{scope_context}\nProposed scope: {}. Assess every preserved approved task against the proposed scope. Require redo or changed criteria for work that no longer satisfies it.",
+            context.revision.scope.as_deref().unwrap_or("unchanged")
         );
         let review = self
             .review(
@@ -142,7 +161,7 @@ impl Core {
         baseline: &[Task],
         specs: &[TaskContract],
         lease: &super::store::RevisionLease<'_>,
-        allow_uncovered: bool,
+
         is_accepted: bool,
     ) -> Result<()> {
         let operation = self.operation(conversation)?;
@@ -172,8 +191,6 @@ impl Core {
             specs,
             &affected,
             lease,
-            allow_uncovered,
-            false,
             is_accepted,
         )?;
         for id in affected {
@@ -209,17 +226,21 @@ impl Core {
         Ok(())
     }
 
-    fn cancel_affected_tasks(&self, affected: &BTreeSet<String>) {
+    fn cancel_affected_tasks(&self, affected: &BTreeSet<String>) -> BTreeSet<String> {
         let tasks = self
             .activity
             .task_cancels
             .lock()
             .expect("task cancel mutex");
+        let mut interrupted = BTreeSet::new();
         for id in affected {
-            if let Some((_, cancel)) = tasks.get(id) {
-                cancel.store(true, Ordering::SeqCst);
+            if let Some((_, cancel)) = tasks.get(id)
+                && !cancel.swap(true, Ordering::SeqCst)
+            {
+                interrupted.insert(id.clone());
             }
         }
+        interrupted
     }
 
     fn wait_for_affected_tasks(
@@ -317,7 +338,6 @@ fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
     new.summary = old.summary.clone();
     new.section = old.section.clone();
     new.reviewer = old.reviewer.clone();
-    new.covers = old.covers.clone();
     new == old
 }
 
@@ -419,11 +439,12 @@ mod tests {
             .store
             .add_plan(
                 &conversation.id,
-                &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
+                &[json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap()
             .remove(0);
         let revision = PlanRevision {
+            scope: None,
             plan: task.plan_id.clone(),
             base_revision: 0,
             reason: "Repair findings".into(),
@@ -487,7 +508,7 @@ mod tests {
             .store
             .create_conversation(project.to_str().unwrap())
             .unwrap();
-        let task=core.store.add_plan(&conversation.id,&[json!({"id":"work","title":"Work","goal":"Change source","change_kind": "code", "kind":"implementation"})]).unwrap().remove(0);
+        let task=core.store.add_plan(&conversation.id,&[json!({"id":"work","title":"Work","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Change source","change_kind": "code", "kind":"implementation"})]).unwrap().remove(0);
         let path = crate::lean::core::worktree::paths::worktree_path(&core.state, &task).unwrap();
         let branch =
             crate::lean::core::worktree::paths::worktree_branch(&core.state, &task).unwrap();

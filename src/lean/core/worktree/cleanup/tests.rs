@@ -30,8 +30,8 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>, String) {
         .add_plan(
             &conversation,
             &[
-                json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"}),
-                json!({"id":"other","title":"Other","goal":"Other","change_kind": "none", "kind":"analysis"}),
+                json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"}),
+                json!({"id":"other","title":"Other","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Other","change_kind": "none", "kind":"analysis"}),
             ],
         )
         .unwrap();
@@ -138,15 +138,15 @@ fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
     let current = checkout(&core, task, "g2", &commit);
     let old_view = checkout(&core, task, "review-g0-1", &commit);
     let current_view = checkout(&core, task, "observation-g2", &commit);
-    let run = core
+    let _run = core
         .store
-        .create_run(&conversation, "Changed inputs")
+        .create_scope(&conversation, "Changed inputs")
         .unwrap();
     core.store
         .db()
         .execute(
-            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,2)",
-            rusqlite::params![task.id, run.id],
+            "UPDATE task_inputs SET generation=2 WHERE task_id=?1",
+            rusqlite::params![task.id],
         )
         .unwrap();
     core.activity.task_cancels.lock().unwrap().insert(
@@ -244,12 +244,15 @@ fn old_writer_contracts_protect_uncommitted_ignored_artifacts() {
             rusqlite::params![task.id, previous.to_string()],
         )
         .unwrap();
-    let run = core.store.create_run(&conversation, "New inputs").unwrap();
+    let _run = core
+        .store
+        .create_scope(&conversation, "New inputs")
+        .unwrap();
     core.store
         .db()
         .execute(
-            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
-            rusqlite::params![task.id, run.id],
+            "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+            rusqlite::params![task.id],
         )
         .unwrap();
     core.queue_worktree_cleanup(&task.id);
@@ -315,9 +318,9 @@ fn deferred_cleanup_reservation_serializes_checkout_reuse_without_graph_locking(
     let (_directory, core, _conversation, tasks, commit) = fixture();
     let task = &tasks[0];
     let path = checkout(&core, task, "g0", &commit);
-    let run = core
+    let _run = core
         .store
-        .create_run(
+        .create_scope(
             &core.store.plan_conversation(&task.plan_id).unwrap(),
             "new inputs",
         )
@@ -325,8 +328,8 @@ fn deferred_cleanup_reservation_serializes_checkout_reuse_without_graph_locking(
     core.store
         .db()
         .execute(
-            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
-            rusqlite::params![task.id, run.id],
+            "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+            rusqlite::params![task.id],
         )
         .unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -435,12 +438,12 @@ fn durable_runtime_survives_checkout_cleanup_and_is_discovered_by_successor() {
 fn approval_keeps_only_the_runtime_generation_that_produced_the_result() {
     let (directory, core, conversation, tasks, _commit) = fixture();
     let mut task = tasks[0].clone();
-    let run = core.store.create_run(&conversation, "inputs").unwrap();
+    let _run = core.store.create_scope(&conversation, "inputs").unwrap();
     core.store
         .db()
         .execute(
-            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
-            [&task.id, &run.id],
+            "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+            rusqlite::params![&task.id],
         )
         .unwrap();
     let owner = core.state.join("task-state").join(&task.id);

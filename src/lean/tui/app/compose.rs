@@ -282,74 +282,9 @@ impl App {
         (plan, round, run)
     }
 
-    pub(in crate::lean::tui) fn return_to_main(&mut self) {
-        self.hide_ledger();
-        self.remember_details();
-        self.close_overlays();
-        self.preserve_comment_editor();
-        self.hide_config_editor();
-    }
-
-    fn hide_ledger(&mut self) {
-        if let Some(ledger) = &mut self.ledger_view {
-            ledger.visible = false;
-        }
-    }
-
-    fn remember_details(&mut self) {
-        if let Some(details) = self.details.take() {
-            self.details_scroll_memory
-                .insert((details.key.clone(), details.tab), details.scroll);
-            self.details_query_memory
-                .insert((details.key, details.tab), details.query);
-        }
-    }
-
-    fn close_overlays(&mut self) {
-        self.diff = None;
-        self.plan_view = None;
-        self.plan_history = None;
-        self.help = None;
-        self.picker = None;
-        self.unblock = None;
-        self.approval = None;
-        self.flow_editor = None;
-    }
-
-    fn preserve_comment_editor(&mut self) {
-        let Some(editor) = self.editor.take() else {
-            return;
-        };
-        let key = Self::comment_key(
-            &self.conversation,
-            self.view.plan.as_deref(),
-            &editor.target,
-        );
-        self.comment_draft_cursors.insert(
-            key.clone(),
-            (editor.input.cursor, editor.input.preferred_col),
-        );
-        self.comment_drafts.insert(key, editor.input.text);
-    }
-
-    fn hide_config_editor(&mut self) {
-        if let Some(editor) = &mut self.config_editor {
-            editor.visible = false;
-        }
-    }
-
     pub fn apply_update(&mut self, update: Update) {
         self.apply_update_inner(update);
-        if let Some(view) = self.ledger_view.as_mut()
-            && !view.pending
-            && let Some(run) = view.review_run.as_ref()
-            && self.view.requirements_approval_run.as_deref() == Some(run)
-        {
-            let run = view.review_run.take().expect("queued review");
-            self.return_to_main();
-            self.ledger_view.as_mut().unwrap().visible = true;
-            self.ledger_action(ledger::Action::Review(run));
-        }
+
         self.text_selection
             .invalidate_context(&self.selection_context());
     }

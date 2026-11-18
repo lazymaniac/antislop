@@ -89,7 +89,7 @@ pub fn install_probe_cli(path: &Path, source: &str) {
         "prompt = sys.argv[-1]",
         &format!(
             "prompt = sys.argv[-1]\n{}",
-            include_str!("../support/ledger_cli.py")
+            include_str!("../support/task_cli.py")
         ),
         1,
     );

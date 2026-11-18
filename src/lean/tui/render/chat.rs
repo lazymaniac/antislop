@@ -58,9 +58,7 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn phase_action(&self) -> Option<(&'static str, Command)> {
-        if self.view.requirements_approval_run.is_some() {
-            Some(("Review requirements changes · F2", Command::Requirements))
-        } else if self.view.interview_question.is_some() && !self.interview_visible() {
+        if self.view.interview_question.is_some() && !self.interview_visible() {
             Some(("Answer scope question · F3", Command::InterviewQuestion))
         } else if self.view.plan_proposed() {
             Some(("Review & accept proposed plan · Ctrl+L", Command::Plan))

@@ -5,6 +5,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
         context,
         request,
         &[
+            sources,
             send,
             addressed_send,
             reject_plan,
@@ -111,6 +112,10 @@ fn resume_plan(context: &Context<'_>, request: Request) -> Result<Route> {
             revision_token,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
+            require(
+                core.store.pending_scope_revision(&plan)?.is_none() || revision_token.is_some(),
+                "scope amendment acceptance requires its reviewed revision_token",
+            )?;
             if let Some(expected) = &revision_token {
                 match core.plan_revision_token(&conversation, &plan) {
                     Ok(current) => require(expected == &current, "stale_revision")?,
@@ -220,7 +225,6 @@ fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
             operation_id,
             revision,
             request_ai_review,
-            allow_uncovered,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &revision.plan)?;
@@ -228,13 +232,7 @@ fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
                 .as_deref()
                 .filter(|id| !id.is_empty())
                 .map_or_else(crate::id, str::to_owned);
-            core.apply_user_revision(
-                &conversation,
-                &key,
-                revision,
-                request_ai_review,
-                allow_uncovered,
-            )?
+            core.apply_user_revision(&conversation, &key, revision, request_ai_review)?
         }),
         Request::Conversation(ConversationRequest::SelectTeam {
             conversation,
@@ -252,5 +250,26 @@ fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
             json!({"team": parsed.name(), "reason": reason})
         }),
         request => Route::Unmatched(request),
+    })
+}
+
+fn sources(context: &Context<'_>, request: Request) -> Result<Route> {
+    Ok(match request {
+        Request::Conversation(ConversationRequest::AddSource { conversation, text }) => {
+            validate_project_conversation(context.core, context.project, &conversation)?;
+            Route::Handled(json!(
+                context.core.store.register_source(&conversation, &text)?
+            ))
+        }
+        Request::Conversation(ConversationRequest::GetSource {
+            conversation,
+            source_id,
+        }) => {
+            validate_project_conversation(context.core, context.project, &conversation)?;
+            Route::Handled(
+                json!({"text":context.core.store.source_text(&conversation,&source_id)?}),
+            )
+        }
+        other => Route::Unmatched(other),
     })
 }

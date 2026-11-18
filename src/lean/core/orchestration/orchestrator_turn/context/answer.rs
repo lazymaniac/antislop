@@ -42,6 +42,10 @@ pub(super) fn finish(
             ),
         );
     }
+    let scope = match &result {
+        crate::lean::turn_result::TurnResult::Plan { scope, .. } => scope.clone(),
+        _ => None,
+    };
     let addressed = result.addressed().map(<[u64]>::to_vec);
     let text = result.text();
     let (plan, awaiting_decision) = submitted_plan(core, context, result, submitted)?;
@@ -49,7 +53,7 @@ pub(super) fn finish(
     core.store
         .add_message(context.conversation, ORCHESTRATOR, &text)?;
     finish_interview(core, context, cancel)?;
-    handle_plan_answer(core, context, text, plan, addressed, cancel)
+    handle_plan_answer(core, context, text, plan, addressed, scope, cancel)
 }
 
 /// Reminders sent for one audit report before a malformed answer stands.
@@ -226,10 +230,12 @@ fn handle_plan_answer(
     text: String,
     plan: Option<Result<Vec<TaskContract>>>,
     addressed: Option<Vec<u64>>,
+    scope: Option<String>,
     cancel: &AtomicBool,
 ) -> Result<()> {
     core.handle_plan_answer(
         PlanAnswer {
+            scope,
             conversation: context.conversation,
             project: &context.project,
             config: &context.config,
@@ -273,7 +279,7 @@ mod tests {
             .store
             .add_plan(
                 &conversation,
-                &[json!({"id":"implementation","title":"Implementation","goal":"Deliver the request","change_kind":"code","kind":"implementation"})],
+                &[json!({"id":"implementation","title":"Implementation","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Deliver the request","change_kind":"code","kind":"implementation"})],
             )
             .unwrap()
             .remove(0);

@@ -204,8 +204,8 @@ mod tests {
             quality_gate: false,
             options_for: None,
             id: id.into(),
-            requirement_ids: Vec::new(),
-            criterion_ids: Vec::new(),
+
+            acceptance_criteria: Vec::new(),
             title: id.into(),
             goal: "Read the code and report".into(),
             summary: None,
@@ -217,7 +217,7 @@ mod tests {
             },
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
-            covers: Vec::new(),
+
             reviewer: ReviewerSpec::default(),
         }
     }

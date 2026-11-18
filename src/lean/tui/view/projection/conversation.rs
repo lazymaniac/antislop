@@ -1,39 +1,6 @@
 use super::*;
 use serde_json::Value;
 
-pub(super) fn on_ledger_approval_required(
-    view: &mut View,
-    event: &Value,
-    payload: &Value,
-    key: String,
-    turn: &str,
-) {
-    let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
-    let _ = (event, &key, turn, &text);
-    view.requirements_approval_event = view.after;
-    view.requirements_approval_run = payload["run"].as_str().map(str::to_owned);
-}
-
-pub(super) fn on_ledger_changed(
-    view: &mut View,
-    event: &Value,
-    payload: &Value,
-    key: String,
-    turn: &str,
-) {
-    let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
-    let _ = (event, &key, turn, &text);
-    if view.requirements_approval_run.as_deref() == payload["run"].as_str() {
-        view.requirements_approval_run = None;
-    }
-    if event["kind"] == "ledger_proposal_rejected" {
-        view.requirements_progress = Some((
-            false,
-            "Requirements rejected. Preparing a revised proposal for review.".into(),
-        ));
-    }
-}
-
 pub(super) fn on_user_decision_requested(
     view: &mut View,
     event: &Value,
@@ -280,4 +247,30 @@ fn record_agent_message(view: &mut View, author: &str, payload: &Value) {
     );
     view.push(Style::default(), message_text(payload));
     view.push(Style::default(), "");
+}
+
+pub(super) fn on_scope_revision_resolved(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    view.plan_doc = payload["document"].as_str().unwrap_or_default().into();
+    view.tasks = super::plan::proposed_tasks(payload);
+    view.task_meta = super::plan::proposed_task_meta(payload);
+    view.task_rows.clear();
+    view.plan_head_revision = payload["revision"].as_i64().unwrap_or(0);
+    for task in &mut view.tasks {
+        task.status = "queued".into();
+    }
+    view.requirements_progress = Some((
+        false,
+        if payload["accepted"] == true {
+            "Scope amendment accepted."
+        } else {
+            "Scope amendment rejected; accepted plan preserved."
+        }
+        .into(),
+    ));
 }

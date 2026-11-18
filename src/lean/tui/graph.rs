@@ -71,30 +71,10 @@ pub(super) fn expanded_tab_names(view: &View, key: &str) -> &'static [&'static s
     }
 }
 
-/// Current extraction and historical requirements roles share one card.
-/// These are role addresses, not a fixed number of rounds to execute.
-const REQUIREMENTS_ROUNDS: [&str; 4] = [
-    "requirements-extraction-analyst",
-    "requirements-extraction-reviewer",
-    "requirements-options-analyst",
-    "requirements-options-reviewer",
-];
-const REQUIREMENTS_NAME: &str = "requirements";
-
-fn requirements_round(key: &str) -> Option<usize> {
-    REQUIREMENTS_ROUNDS.iter().position(|role| *role == key)
-}
-
 /// The members of the agent a card stands for: the card's own key for most
 /// agents, every round present for the requirements agent.
-fn card_members<'a>(view: &'a View, key: &'a str) -> Vec<&'a str> {
-    if requirements_round(key).is_none() {
-        return vec![key];
-    }
-    REQUIREMENTS_ROUNDS
-        .into_iter()
-        .filter(|role| view.agents.contains_key(*role))
-        .collect()
+fn card_members<'a>(_view: &'a View, key: &'a str) -> Vec<&'a str> {
+    vec![key]
 }
 
 /// The round the requirements agent is in: the last one running, else the
@@ -121,26 +101,15 @@ pub(in crate::lean::tui) fn agent_heading(view: &View, key: &str) -> String {
 }
 
 fn node_name(key: &str) -> String {
-    if requirements_round(key).is_some() {
-        REQUIREMENTS_NAME.into()
-    } else {
-        match key {
-            "requirements-audit-analyst" => "requirements audit".into(),
-            "requirements-audit-reviewer" => "audit reviewer".into(),
-            _ => agent_name(key),
-        }
-    }
+    agent_name(key)
 }
 
 /// Workflow order, independent of agent creation time or alphabetical order.
 fn workflow_stage(key: &str) -> u8 {
     match key {
         ORCHESTRATOR => 0,
-        _ if requirements_round(key).is_some() => 1,
         crate::lean::PLANNER => 2,
         PLAN_REVIEWER => 3,
-        "requirements-audit-analyst" => 5,
-        "requirements-audit-reviewer" => 6,
         AUDITOR => 7,
         _ => 4,
     }
@@ -296,13 +265,6 @@ fn task_card<'a>(view: &'a View, key: &str) -> Option<(&'a TaskRow, Role)> {
 /// rounds share one card and so do the two agents of an options task.
 /// Role addresses in events and storage stay intact.
 pub fn card_key(view: &View, key: &str) -> String {
-    if requirements_round(key).is_some() {
-        return REQUIREMENTS_ROUNDS
-            .into_iter()
-            .find(|role| view.agents.contains_key(*role))
-            .unwrap_or(key)
-            .to_owned();
-    }
     match task_card(view, key) {
         Some((task, Role::Pair)) => format!("worker:{}", task.id),
         _ => key.to_owned(),

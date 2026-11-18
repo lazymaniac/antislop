@@ -154,6 +154,7 @@ impl<'a> Scheduler<'a> {
             .lock()
             .expect("revision mutex")
             .contains(&task.id)
+            && !self.core.store.scope_holds_task(&task.id).unwrap_or(true)
             && self.is_runnable(task, id)
     }
 
@@ -349,9 +350,9 @@ mod tests {
             .unwrap()
             .id;
         let mut tasks = core.store.add_plan(&conversation, &[
-            json!({"id":"future","title":"Future","goal":"Preserve future obligation","change_kind": "code", "kind":"implementation","deferred":true}),
-            json!({"id":"consumer","title":"Consumer","goal":"Wait for future result","change_kind": "none", "kind":"analysis","depends_on":["future"]}),
-            json!({"id":"diagnose","title":"Diagnose","goal":"Inspect current files","change_kind": "none", "kind":"analysis"})
+            json!({"id":"future","title":"Future","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Preserve future obligation","change_kind": "code", "kind":"implementation","deferred":true}),
+            json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Wait for future result","change_kind": "none", "kind":"analysis","depends_on":["future"]}),
+            json!({"id":"diagnose","title":"Diagnose","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect current files","change_kind": "none", "kind":"analysis"})
         ]).unwrap();
         tasks.sort_by_key(|task| match task.spec["id"].as_str() {
             Some("future") => 0,

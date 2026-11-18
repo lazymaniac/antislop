@@ -79,9 +79,9 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [
-  {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "goal": "Assess storage",
+  {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Assess storage",
    "change_kind": "none", "kind": "architecture", "reviewer": {"summary": "Review the storage findings."}},
-  {"id": "t2", "title": "TUI", "goal": "Assess TUI", "depends_on": ["t1"],
+  {"id": "t2", "title": "TUI", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Assess TUI", "depends_on": ["t1"],
    "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "claims"}}]}
 if "The plan finished. Results of each task follow." in prompt and "Address each new user comment" not in prompt:
     answer = "summary: " + ("fixed report" if "fixed report" in prompt else "missing")
@@ -136,7 +136,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     )
     .unwrap();
     for script in [&codex, &agy] {
-        support::install_ledger_protocol(script);
+        support::install_task_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         common::interactive(script);
@@ -404,7 +404,7 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
         .unwrap();
     assert!(
         reply.text.starts_with("summary: fixed report\n")
-            && reply.text.contains("\nAudit response:\n"),
+            && reply.text.contains("\nAudit status: complete"),
         "{}",
         reply.text
     );
@@ -529,15 +529,15 @@ fn malformed_plans_retry_until_corrected_or_explicitly_cancelled() {
 import os
 if not os.path.exists('format-error-sent') or {persistent}:
     open('format-error-sent','w').close()
-    _ledger_emit('Draft ready.\n```plan\n{{"tasks":[{{"id":"t1","goal":"Text with an unescaped "quote""}}]}}\n```')
+    _fixture_emit('Draft ready.\n```plan\n{{"tasks":[{{"id":"t1","acceptance_criteria":[{{"id":"C1","text":"The task goal is verified"}}],"goal":"Text with an unescaped "quote""}}]}}\n```')
 "#,
             persistent = if persistent { "True" } else { "False" }
         );
         let hook = if missing {
             hook.lines()
                 .map(|line| {
-                    if line.trim_start().starts_with("_ledger_emit(") {
-                        "    _ledger_emit('```ledger\\n{\"entries\":[]}\\n```')"
+                    if line.trim_start().starts_with("_fixture_emit(") {
+                        "    _fixture_emit('```plan\\n{\"tasks\":[]}\\n```')"
                     } else {
                         line
                     }
@@ -548,7 +548,7 @@ if not os.path.exists('format-error-sent') or {persistent}:
             hook
         };
 
-        std::fs::write(&codex, source.replace(marker, &format!("if '[planner blocker]' in prompt:\n    _ledger_emit('The planner could not submit a valid plan.')\n{hook}\n{marker}"))).unwrap();
+        std::fs::write(&codex, source.replace(marker, &format!("if '[planner blocker]' in prompt:\n    _fixture_emit('The planner could not submit a valid plan.')\n{hook}\n{marker}"))).unwrap();
         let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
         core.send(&conversation.id, "Assess storage and TUI")
@@ -587,120 +587,9 @@ if not os.path.exists('format-error-sent') or {persistent}:
                     .filter(|e| e.kind == "turn_started"
                         && e.payload["role"] == "requirements-extraction-analyst")
                     .count(),
-                1
+                0
             );
         }
-    }
-}
-
-/// A planner can only end its turn by submitting a plan, so after a restart
-/// the one answer still waiting for repair is a requirements analysis that
-/// lost its ledger.
-#[test]
-fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message() {
-    use antislop::lean::store::{Store, TurnStatus};
-    use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let state = dir.path().join("state");
-    std::fs::create_dir(&state).unwrap();
-    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
-    let (codex, agy) = fake_clis(dir.path());
-    let store = Store::open(&state.join("core.db")).unwrap();
-    let conversation = store
-        .create_conversation(dir.path().to_str().unwrap())
-        .unwrap();
-    let message = store
-        .add_message(&conversation.id, "user", "Assess storage and TUI")
-        .unwrap();
-    store
-        .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
-        .unwrap();
-    support::confirm_scope_store(&store, &conversation.id).unwrap();
-    let turn = store
-        .start_turn(&conversation.id, "planner", "codex", message.seq, None)
-        .unwrap();
-    store.set_session(&turn.id, "orch").unwrap();
-    let plan = json!({"type": "plan", "document": "Plan", "tasks": [
-        {"id": "t1", "title": "Inspect", "goal": "Inspect the project", "change_kind": "none", "kind": "analysis"}]});
-    store
-        .append_event(
-            &conversation.id,
-            Some(&turn.id),
-            None,
-            "agent_final",
-            &json!({"text": plan.to_string()}),
-        )
-        .unwrap();
-    store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
-    store
-        .append_event(
-            &conversation.id,
-            None,
-            None,
-            "requirements_failed",
-            &json!({"error":"the requirements analyst ended its turn without submit_ledger"}),
-        )
-        .unwrap();
-    drop(store);
-    let core = Core::open(&state, config(&codex, &agy)).unwrap();
-    wait_idle(&core, &conversation.id);
-    assert!(
-        !core.store.latest_plan(&conversation.id).unwrap().is_empty(),
-        "{:?}",
-        core.store.events_since(&conversation.id, 0, 2000).unwrap()
-    );
-    assert!(
-        core.store
-            .events_since(&conversation.id, 0, 2000)
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "turn_started"
-                && event.payload["role"] == "requirements-extraction-analyst")
-    );
-    assert_eq!(
-        core.store
-            .messages_by(&conversation.id, "user", 0)
-            .unwrap()
-            .len(),
-        2
-    );
-}
-
-#[test]
-fn repairing_json_after_requirements_extraction_reuses_the_ledger() {
-    let dir = tempfile::tempdir().unwrap();
-    let (codex, agy) = fake_clis(dir.path());
-    let source = std::fs::read_to_string(&codex).unwrap();
-    let marker = "def _ledger_answer(answer):";
-    assert!(source.contains(marker));
-    let hook = r#"def _ledger_answer(answer):
-    if 'The runtime binds this plan to the active requirements run' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-ledger-format-error'):
-        open('post-ledger-format-error','w').close()
-        return '```plan\n{"tasks":[{unquoted: "bad"}]}\n```'
-"#;
-    std::fs::write(&codex, source.replace(marker, hook)).unwrap();
-    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
-    core.send(&conversation.id, "Assess storage and TUI")
-        .unwrap();
-    wait_idle(&core, &conversation.id);
-    assert!(dir.path().join("post-ledger-format-error").exists());
-    assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
-    let refused = std::fs::read_to_string(dir.path().join("codex.rejections")).unwrap();
-    assert_eq!(refused.lines().count(), 1, "{refused}");
-    let events = core.store.events_since(&conversation.id, 0, 2000).unwrap();
-    for (role, expected) in [
-        ("requirements-extraction-analyst", 1),
-        ("requirements-extraction-reviewer", 0),
-    ] {
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.kind == "turn_started" && e.payload["role"] == role)
-                .count(),
-            expected,
-            "{role} must not repeat during JSON repair"
-        );
     }
 }
 
@@ -732,13 +621,13 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     base, snapshot = re.search(r'Current task contracts for plan ([-\w]+):\n([^\n]+)', prompt).groups()
     snapshot = json.loads(snapshot)
     snapshot = snapshot['tasks']
-    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'covers', 'section', 'summary')
+    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'acceptance_criteria', 'section', 'summary')
     def planned_task(task):
         return {key: task[key] for key in planned if task.get(key) is not None}
     first = snapshot[0]
     extra = planned_task(first)
     extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', change_kind='none', depends_on=['t1'],
-                 covers=first.get('requirement_ids', []) + first.get('criterion_ids', []))
+                 acceptance_criteria=first['acceptance_criteria'])
     gate = planned_task(next(task for task in snapshot if task['id'] == 't2'))
     gate['depends_on'] = ['extra']
     import os,urllib.request
@@ -818,7 +707,7 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
         .position(|role| **role == format!("worker:{}", finished[2].id))
         .unwrap();
     assert!(extra < downstream);
-    // The first draft already uses the ledger; extending the running graph
+    // The first draft already has its scope; extending the running graph
     // preserves that plan rather than adding a replacement.
     assert_eq!(
         core.store
@@ -834,9 +723,9 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let plan = serde_json::json!({"tasks": [
-        {"id":"t11", "title":"Implement", "goal":"Implement change", "change_kind": "code", "kind":"implementation"},
-        {"id":"t12", "title":"Review", "goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
-        {"id":"t13", "title":"Report", "goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
+        {"id":"t11", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
     ]});
     let source = std::fs::read_to_string(&codex).unwrap().replace(
         "if \"The plan finished. Results of each task follow.\" in prompt and \"Address each new user comment\" not in prompt:",
@@ -871,7 +760,7 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
 }
 
 #[test]
-fn the_first_planner_sees_the_extracted_requirements() {
+fn the_first_planner_uses_the_confirmed_scope_without_extraction() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
@@ -883,27 +772,15 @@ fn the_first_planner_sees_the_extracted_requirements() {
         .store
         .events_since(&conversation.id, 0, 10_000)
         .unwrap();
-    let extracted = events
-        .iter()
-        .position(|event| {
-            event.kind == "ledger_review"
-                && event.payload["kind"] == "extraction"
-                && event.payload["approved"] == true
-        })
-        .unwrap();
-    let planner = events
-        .iter()
-        .position(|event| event.kind == "turn_started" && event.payload["role"] == "planner")
-        .unwrap();
-    assert!(extracted < planner);
     assert!(!events.iter().any(|event| {
-        event.kind == "notice"
-            && event.payload["text"]
+        event.kind.starts_with("ledger_")
+            || event.payload["role"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("plan ledger mapping rejected"))
+                .is_some_and(|role| role.starts_with("requirements-"))
     }));
     let calls = std::fs::read_to_string(dir.path().join(CALLS)).unwrap();
-    assert!(calls.contains("acceptance criterion ids"));
+    assert!(calls.contains("Collected requirements"));
+    assert!(calls.contains("acceptance_criteria"));
     assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
 }
 
@@ -930,7 +807,7 @@ fn a_task_a_revision_changes_waits_for_its_review_instead_of_starting_on_the_old
 if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
     import re, os, urllib.request
     snapshot = json.loads(re.search(r'Current task contracts for plan [-\w]+:\n([^\n]+)', prompt).group(1))['tasks']
-    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'covers', 'section', 'summary')
+    planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'acceptance_criteria', 'section', 'summary')
     t2 = {key: value for key, value in next(t for t in snapshot if t['id'] == 't2').items() if key in planned and value is not None}
     t2['goal'] = 'Assess TUI again'
     body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Sharpen the TUI assessment','tasks':[t2],'retire':[]}}}

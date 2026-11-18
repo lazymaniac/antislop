@@ -4,7 +4,6 @@ pub(super) const SELECTION_HELP: &str =
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     InterviewQuestion,
-    Requirements,
     Config,
     Reject,
     Plan,

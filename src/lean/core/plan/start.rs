@@ -107,10 +107,11 @@ impl Core {
             .map(serde_json::from_value)
             .collect::<std::result::Result<Vec<TaskContract>, _>>()?;
         tasks::validate(&specs)?;
-        let run = self.store.plan_run(plan_id)?.ok_or_else(|| {
-            Error::Invalid("integrity error: plan has no requirements run".into())
-        })?;
-        self.validate_ledger_plan(conversation, plan_id, &run)?;
+        let run = self
+            .store
+            .plan_scope_id(plan_id)?
+            .ok_or_else(|| Error::Invalid("integrity error: plan has no scope".into()))?;
+        self.store.scope(conversation, &run)?;
         for task in self.store.plan(plan_id)? {
             self.store.assert_task_inputs(&task)?;
         }

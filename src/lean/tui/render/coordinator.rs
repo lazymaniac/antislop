@@ -16,7 +16,7 @@ impl App {
         }
         self.sync_native_views();
         self.sync_approval();
-        if super::ledger::draw_history_or_ledger(self, frame) {
+        if super::plan_history::draw_plan_history(self, frame) {
             return;
         }
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {

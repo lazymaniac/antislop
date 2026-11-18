@@ -178,11 +178,14 @@ impl Core {
     }
 
     pub fn plan_revision_token(&self, _conversation: &str, plan_id: &str) -> Result<String> {
+        if let Some(request) = self.store.pending_scope_revision(plan_id)? {
+            return self.store.scope_revision_token(&request);
+        }
         let tasks = self.store.plan(plan_id)?;
-        let revision = match self.store.plan_run(plan_id)? {
-            Some(id) => Some(self.store.run(_conversation, &id)?.spec_revision),
-            None => None,
-        };
+        let revision = (
+            self.store.plan_revision(plan_id)?,
+            self.store.plan_scope_id(plan_id)?,
+        );
         Ok(crate::hash(
             format!("{}:{revision:?}", task_state_digest(&tasks)).as_bytes(),
         ))
@@ -254,25 +257,13 @@ impl Core {
         conversation: &str,
         active_plan: &Option<String>,
     ) -> Result<&'static str> {
-        let Some(run) = active_plan
-            .as_deref()
-            .map(|plan| self.store.plan_run(plan))
-            .transpose()?
-            .flatten()
-        else {
-            return Ok("requirements_pending");
+        let Some(plan) = active_plan else {
+            return Ok("audit_pending");
         };
-        let fingerprint = self.ledger_fingerprint(conversation);
-        let complete = fingerprint
-            .and_then(|fingerprint| {
-                self.store
-                    .requirements_gaps(conversation, &run, &fingerprint)
-            })
-            .is_ok_and(|gaps| gaps.is_empty());
-        Ok(if complete {
+        Ok(if self.final_audit_current(conversation, plan)? {
             "done"
         } else {
-            "requirements_pending"
+            "audit_pending"
         })
     }
 

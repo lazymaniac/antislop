@@ -103,14 +103,12 @@ fn decode_revise_plan(wire: WireRequest) -> std::result::Result<Request, Box<Wir
             operation_id,
             revision,
             request_ai_review,
-            allow_uncovered,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::RevisePlan {
                 conversation,
                 operation_id,
                 revision,
                 request_ai_review,
-                allow_uncovered,
             },
         )),
         other => Err(Box::new(other)),

@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::OptionalExtension;
 
 impl RevisionApply<'_> {
     pub(super) fn review_lease(
@@ -6,22 +7,43 @@ impl RevisionApply<'_> {
         tx: &rusqlite::Transaction<'_>,
         lease: &RevisionLease<'_>,
     ) -> Result<()> {
-        if !self.run.is_empty() {
-            let current = tx.query_row(
-                "SELECT spec_revision FROM runs WHERE id=?1",
-                [&self.run],
-                |row| row.get::<_, i64>(0),
-            )?;
-            crate::require(
-                current == lease.requirement_revision,
-                "requirements changed during revision review",
-            )?;
-        }
         let changed = tx.execute(
             "UPDATE plan_heads SET revision=revision+1 WHERE plan_id=?1 AND revision=?2",
             params![self.revision.plan, self.revision.base_revision],
         )?;
-        crate::require(changed == 1, "stale plan revision")
+        crate::require(changed == 1, "stale plan revision")?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT scope_id FROM plan_scopes WHERE plan_id=?1 ORDER BY revision DESC LIMIT 1",
+                [&self.revision.plan],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let scope = if self.revision.scope.is_some() {
+            crate::require(
+                lease.accepted_scope,
+                "scope change requires acceptance of the reviewed plan",
+            )?;
+            let (scope,base):(String,String)=tx.query_row("SELECT scope_id,base_scope FROM scope_revision_proposals WHERE request=?1 AND state='awaiting_acceptance'",[lease.request],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            crate::require(
+                current.as_deref() == Some(base.as_str()),
+                "scope changed since review",
+            )?;
+            tx.execute(
+                "UPDATE scope_revision_proposals SET state='accepted' WHERE request=?1",
+                [lease.request],
+            )?;
+            Some(scope)
+        } else {
+            current
+        };
+        if let Some(scope) = scope {
+            tx.execute(
+                "INSERT INTO plan_scopes VALUES(?1,?2,?3)",
+                params![self.revision.plan, self.revision.base_revision + 1, scope],
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn update_removed_tasks(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
@@ -49,7 +71,6 @@ impl RevisionApply<'_> {
         let reworded =
             old.is_some_and(|task| !self.affected.contains(&id) && !same_contract(task, spec));
         save_task_row(tx, self, old, &id, position as i64, &encoded, reworded)?;
-        save_task_inputs(tx, self, old, spec, &id)?;
         save_task_contract(tx, self, old, &id, &encoded, reworded)
     }
 
@@ -77,11 +98,8 @@ impl RevisionApply<'_> {
         tx: &rusqlite::Transaction<'_>,
         lease: &RevisionLease<'_>,
     ) -> Result<()> {
-        if !self.run.is_empty() {
-            tx.execute("UPDATE runs SET state='active' WHERE id=?1", [&self.run])?;
-        }
         let changed = tx.execute(
-            "UPDATE plan_revision_jobs SET status='applied',error=NULL WHERE id=?1 AND status='reviewing'",
+            "UPDATE plan_revision_jobs SET status='applied',error=NULL WHERE id=?1 AND status IN ('reviewing','awaiting_acceptance')",
             [lease.request],
         )?;
         crate::require(changed == 1, "revision receipt is no longer active")
@@ -131,20 +149,6 @@ fn save_task_row(
     Ok(())
 }
 
-fn save_task_inputs(
-    tx: &rusqlite::Transaction<'_>,
-    apply: &RevisionApply<'_>,
-    old: Option<&Task>,
-    spec: &TaskContract,
-    id: &str,
-) -> Result<()> {
-    if old.is_none() || apply.affected.contains(id) {
-        tx.execute("DELETE FROM task_ledger_inputs WHERE task_id=?1", [id])?;
-        insert_revision_ledger_links(tx, id, spec, &apply.entries)?;
-    }
-    Ok(())
-}
-
 fn save_task_contract(
     tx: &rusqlite::Transaction<'_>,
     apply: &RevisionApply<'_>,
@@ -162,18 +166,6 @@ fn save_task_contract(
         record_contract_event(tx, apply, id, version)?;
     }
     Ok(())
-}
-
-pub(super) fn validate_revision_coverage(
-    specs: &[TaskContract],
-    entries: &[crate::lean::ledger::LedgerEntry],
-) -> Result<()> {
-    let mut covered = std::collections::HashSet::new();
-    for spec in specs {
-        crate::lean::ledger::validate_task_links(spec, entries)?;
-        covered.extend(spec.criterion_ids.iter().cloned());
-    }
-    crate::lean::ledger::validate_criterion_coverage(entries, &covered)
 }
 
 fn review_task_snapshot(tx: &rusqlite::Transaction<'_>, old: &Task) -> Result<()> {
@@ -279,30 +271,8 @@ fn insert_revision_task(
         "proposed"
     };
     tx.execute("INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![id, apply.conversation, apply.revision.plan, position, encoded, target_status, now_ms()])?;
-    if !apply.run.is_empty() {
-        tx.execute(
-            "INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2)",
-            params![id, apply.run],
-        )?;
-    }
-    Ok(())
-}
+    tx.execute("INSERT INTO task_inputs(task_id) VALUES(?1)", [id])?;
 
-fn insert_revision_ledger_links(
-    tx: &rusqlite::Transaction<'_>,
-    task_id: &str,
-    spec: &TaskContract,
-    entries: &[crate::lean::ledger::LedgerEntry],
-) -> Result<()> {
-    for entry in entries
-        .iter()
-        .filter(|entry| spec.requirement_ids.contains(&entry.spec.id))
-    {
-        tx.execute(
-            "INSERT INTO task_ledger_inputs VALUES(?1,?2,?3)",
-            params![task_id, entry.spec.id, entry.version],
-        )?;
-    }
     Ok(())
 }
 

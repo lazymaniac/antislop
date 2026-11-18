@@ -19,7 +19,7 @@ fn apply(
             specs,
             affected,
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )
@@ -67,6 +67,7 @@ fn inserting_a_task_before_completed_work_reassesses_the_retained_result() {
     let mut downstream: TaskContract = serde_json::from_value(baseline[1].spec.clone()).unwrap();
     downstream.depends_on = vec!["middle".into()];
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Insert a new prerequisite".into(),
@@ -124,6 +125,7 @@ fn replacement_inherits_unfinished_work_but_cannot_replace_completed_work() {
     let mut next: TaskContract = serde_json::from_value(baseline[1].spec.clone()).unwrap();
     next.id = "successor".into();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Continue partial work under a new contract".into(),
@@ -181,7 +183,7 @@ fn replanning_preserves_unintegrated_checkpoints_without_approving_them() {
             .add_plan(&conversation, &[tasks[0].spec.clone()])
             .unwrap();
         store
-            .link_plan_run(&conversation, &next[0].plan_id, &run)
+            .bind_plan_scope(&conversation, &next[0].plan_id, &run)
             .unwrap();
         store.queue_plan(&conversation, &next[0].plan_id).unwrap();
         let continued = store.task_by_id(&next[0].id).unwrap().unwrap();
@@ -205,7 +207,7 @@ fn replanning_prefers_the_latest_unfinished_checkpoint_over_an_older_exact_contr
     changed["goal"] = "Repair the existing instrument".into();
     let mut recent = store.add_plan(&conversation, &[changed]).unwrap().remove(0);
     store
-        .link_plan_run(&conversation, &recent.plan_id, &run)
+        .bind_plan_scope(&conversation, &recent.plan_id, &run)
         .unwrap();
     recent.status = "coordinating".into();
     recent.report = Some("Latest repair needs source review".into());
@@ -216,7 +218,7 @@ fn replanning_prefers_the_latest_unfinished_checkpoint_over_an_older_exact_contr
         .add_plan(&conversation, &[original[0].spec.clone()])
         .unwrap();
     store
-        .link_plan_run(&conversation, &next[0].plan_id, &run)
+        .bind_plan_scope(&conversation, &next[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &next[0].plan_id).unwrap();
     let continued = store.task_by_id(&next[0].id).unwrap().unwrap();
@@ -250,10 +252,7 @@ fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement(
         .add_plan(&conversation, &[previous[0].spec.clone()])
         .unwrap();
     store
-        .link_plan_run(&conversation, &next[0].plan_id, &run)
-        .unwrap();
-    store
-        .bind_task_ledger(&conversation, &run, &next[0].plan_id)
+        .bind_plan_scope(&conversation, &next[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &next[0].plan_id).unwrap();
     let baseline = store.plan(&next[0].plan_id).unwrap();
@@ -262,6 +261,7 @@ fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement(
     successor.goal =
         "Recover and assess the existing technical repair; source audit is separate".into();
     let revision = PlanRevision {
+        scope: None,
         plan: next[0].plan_id.clone(),
         base_revision: 0,
         reason: "Recover code omitted by the earlier replan".into(),
@@ -361,14 +361,12 @@ fn a_checkpoint_that_changed_during_review_cannot_partially_apply_a_revision() {
         .add_plan(&conversation, &[old[0].spec.clone()])
         .unwrap();
     store
-        .link_plan_run(&conversation, &baseline[0].plan_id, &run)
-        .unwrap();
-    store
-        .bind_task_ledger(&conversation, &run, &baseline[0].plan_id)
+        .bind_plan_scope(&conversation, &baseline[0].plan_id, &run)
         .unwrap();
     let mut successor: TaskContract = serde_json::from_value(old[1].spec.clone()).unwrap();
     successor.id = "recover".into();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Recover existing code".into(),
@@ -394,7 +392,7 @@ fn a_checkpoint_that_changed_during_review_cannot_partially_apply_a_revision() {
             &specs,
             &BTreeSet::new(),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )

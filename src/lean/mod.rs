@@ -14,7 +14,6 @@ mod feasibility;
 pub mod git;
 pub mod interview;
 mod launch;
-pub mod ledger;
 mod mail;
 pub mod mcp;
 pub mod native;
@@ -28,6 +27,7 @@ pub mod projects;
 mod reliability_tests;
 pub mod risks;
 mod rounds;
+pub mod scope;
 pub mod store;
 mod task_failure;
 pub mod tasks;
@@ -240,6 +240,7 @@ fn wake_locked(core: &Arc<Core>, conversation: &str) {
 
 /// Who runs a turn, where, and with what access.
 struct PlanProposal<'a> {
+    scope: Option<&'a str>,
     config: &'a Config,
     specs: &'a [TaskContract],
 }

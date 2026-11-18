@@ -71,7 +71,6 @@ impl App {
         self.details = None;
         self.diff = None;
         self.plan_view = None;
-        self.ledger_view = None;
         self.editor = None;
         self.flow_editor = None;
         self.graph_link_source = None;

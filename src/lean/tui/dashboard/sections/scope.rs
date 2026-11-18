@@ -62,14 +62,18 @@ fn append_requirements(
     theme: &Theme,
     width: usize,
 ) {
-    let ids = spec
-        .and_then(|spec| spec["requirement_ids"].as_array())
-        .map(|ids| ids.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    if !ids.is_empty() {
+    for criterion in spec
+        .and_then(|s| s["acceptance_criteria"].as_array())
+        .into_iter()
+        .flatten()
+    {
         lines.extend(para(
             theme,
-            &format!("serves requirements {}", ids.join(", ")),
+            &format!(
+                "{}: {}",
+                criterion["id"].as_str().unwrap_or("?"),
+                criterion["text"].as_str().unwrap_or_default()
+            ),
             width,
             theme.dim(),
         ));

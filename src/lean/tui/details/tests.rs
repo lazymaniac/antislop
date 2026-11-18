@@ -101,7 +101,7 @@ fn footer_numbers_match_each_keys_visible_tabs() {
 
 fn reviewer_task(extra: Value) -> Value {
     let mut task = serde_json::json!({
-        "spec": {"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis"},
+        "spec": {"id": "t1", "title": "T", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis"},
     });
     task.as_object_mut()
         .unwrap()
@@ -113,7 +113,7 @@ fn reviewer_task(extra: Value) -> Value {
 fn checks_show_live_progress_before_any_verdict() {
     let task = reviewer_task(serde_json::json!({"checks": [
         {"id": "goal", "state": "settled", "status": "ok", "note": "a.rs:3"},
-        {"id": "R085", "state": "checking", "status": null, "note": ""},
+        {"id": "C1", "state": "checking", "status": null, "note": ""},
     ]}));
     let rows = check_rows(&task);
     assert_eq!(rows[0].state, "settled");
@@ -377,9 +377,6 @@ fn every_agent_exposes_results_and_keeps_reviewer_output_separate() {
         "planner",
         "plan-reviewer",
         "auditor",
-        "requirements-extraction-analyst",
-        "requirements-audit-analyst",
-        "requirements-audit-reviewer",
         "comment-orchestrator",
         "worker:t1",
         "reviewer:t1",
@@ -751,9 +748,6 @@ fn result_tab_names_describe_the_roles_deliverable() {
         ("orchestrator", "Response"),
         ("plan-reviewer", "Review"),
         ("auditor", "Audit"),
-        ("requirements-extraction-analyst", "Requirements"),
-        ("requirements-audit-analyst", "Audit"),
-        ("requirements-audit-reviewer", "Audit review"),
     ] {
         assert_eq!(tab_name(key, RESULT), name);
         assert_eq!(

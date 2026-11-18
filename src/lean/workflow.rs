@@ -4,9 +4,6 @@ use crate::{Result, require};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
-#[path = "workflow/repair.rs"]
-mod repair;
-
 #[cfg(test)]
 #[path = "workflow/tests.rs"]
 mod tests;
@@ -48,14 +45,6 @@ impl Store {
         )
         .unwrap();
         assert!(self.finish_interview(conversation).unwrap());
-    }
-
-    pub(crate) fn queue_requirements_format_repair(&self, conversation: &str) -> Result<bool> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        let queued = repair::queue_requirements_format_repair(&tx, conversation)?;
-        tx.commit()?;
-        Ok(queued)
     }
 
     pub fn workflow(&self, conversation: &str) -> Result<Workflow> {

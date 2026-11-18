@@ -6,7 +6,7 @@ mod tests {
 
     fn task() -> TaskContract {
         serde_json::from_value(
-            json!({"id":"local","title":"API","goal":"Define API","change_kind": "code", "kind":"implementation"}),
+            json!({"id":"local","title":"API","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Define API","change_kind": "code", "kind":"implementation"}),
         )
         .unwrap()
     }

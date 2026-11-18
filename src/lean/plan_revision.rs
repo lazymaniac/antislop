@@ -9,6 +9,8 @@ pub struct PlanRevision {
     pub plan: String,
     pub base_revision: i64,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     pub tasks: Vec<TaskContract>,
     pub retire: Vec<String>,
     /// Approved tasks whose work must be done again. Without it an approved
@@ -119,6 +121,13 @@ impl PlanRevision {
 
 fn require_revision_reason(revision: &PlanRevision) -> Result<()> {
     crate::require(
+        revision
+            .scope
+            .as_deref()
+            .is_none_or(|scope| !scope.trim().is_empty()),
+        "scope must not be empty",
+    )?;
+    crate::require(
         !revision.reason.trim().is_empty(),
         "revision.reason is required",
     )
@@ -158,7 +167,7 @@ fn same_contract(task: &Task, spec: &TaskContract) -> bool {
 }
 
 pub(in crate::lean) struct RevisionLease<'a> {
-    pub requirement_revision: i64,
+    pub accepted_scope: bool,
     pub request: &'a str,
 }
 

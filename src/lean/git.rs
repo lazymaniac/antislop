@@ -119,7 +119,7 @@ pub enum CommitPurpose {
     DependencySnapshot,
     ArtifactInputSnapshot,
     SourceInputSnapshot,
-    RequirementsSnapshot,
+    FinalAuditSnapshot,
     #[cfg(test)]
     TestFixture,
 }
@@ -138,7 +138,7 @@ impl CommitPurpose {
             Self::DependencySnapshot => "chore: snapshot dependency changes",
             Self::ArtifactInputSnapshot => "chore: snapshot artifact inputs",
             Self::SourceInputSnapshot => "chore: snapshot source inputs",
-            Self::RequirementsSnapshot => "chore: snapshot requirements changes",
+            Self::FinalAuditSnapshot => "chore: snapshot integrated result for audit",
             #[cfg(test)]
             Self::TestFixture => "chore: update test fixture",
         }
@@ -169,7 +169,7 @@ fn is_runtime_subject(subject: &str) -> bool {
         DependencySnapshot,
         ArtifactInputSnapshot,
         SourceInputSnapshot,
-        RequirementsSnapshot,
+        FinalAuditSnapshot,
     ]
     .iter()
     .any(|purpose| purpose.subject() == subject)

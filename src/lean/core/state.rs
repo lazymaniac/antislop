@@ -252,16 +252,6 @@ impl Activity {
         Some(cancel)
     }
 
-    /// Asks the processes of `tasks` that run to stop.
-    pub(in crate::lean) fn cancel_tasks<'a>(&self, tasks: impl IntoIterator<Item = &'a String>) {
-        let flags = self.task_cancels.lock().expect("task cancel mutex");
-        for task in tasks {
-            if let Some((_, flag)) = flags.get(task) {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
-    }
-
     /// Whether a plan is running in `conversation`.
     pub(in crate::lean) fn plan_running(&self, conversation: &str) -> bool {
         has(&self.plans, conversation)
@@ -351,7 +341,7 @@ mod scope_tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let task=core.store.add_plan(&conversation,&[json!({"id":"writer","title":"Writer","goal":"Create result","change_kind":"code","kind":"implementation"})]).unwrap().remove(0);
+        let task=core.store.add_plan(&conversation,&[json!({"id":"writer","title":"Writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create result","change_kind":"code","kind":"implementation"})]).unwrap().remove(0);
         let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
         let source = core.locks.source(&conversation);
         let held = source.lock().unwrap();

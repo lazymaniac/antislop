@@ -97,7 +97,7 @@ else:
     print(json.dumps({'event':'init','conversation_id':'workflow-review'}))
     print(json.dumps({'event':'result','result':{'conversation_id':'workflow-review','status':'SUCCESS','response':answer,'usage':{}}}))
 "#).unwrap();
-        support::install_ledger_protocol(&script);
+        support::install_task_protocol(&script);
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         common::interactive(&script);
@@ -309,6 +309,34 @@ fn checked_plan_starts_only_after_the_user_accepts_the_reviewed_plan() {
             .as_deref(),
         Some(plan)
     );
+
+    let events = core
+        .store
+        .events_since(&conversation.id, 0, 10_000)
+        .unwrap();
+    assert!(!events.iter().any(|event| {
+        event.kind.starts_with("ledger_")
+            || event.payload["role"]
+                .as_str()
+                .is_some_and(|role| role.starts_with("requirements-"))
+    }));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "turn_started" && event.payload["role"] == "auditor")
+            .count(),
+        1
+    );
+    assert!(
+        proposed["document"]
+            .as_str()
+            .unwrap()
+            .contains("Acceptance criteria for")
+    );
+    assert_eq!(
+        proposed["scope"]["summary"],
+        core.store.workflow(&conversation.id).unwrap().summary
+    );
 }
 
 #[test]
@@ -336,7 +364,7 @@ print(json.dumps({'type':'turn.completed'}))
         )
         .unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
-        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Inspect evidence"}})]).unwrap().remove(0);
+        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect source","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Inspect evidence"}})]).unwrap().remove(0);
         if phase == "implementation" {
             core.store
                 .queue_plan(&conversation.id, &task.plan_id)

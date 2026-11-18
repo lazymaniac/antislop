@@ -5,13 +5,20 @@ pub const GOAL_CHECK: &str = "goal";
 
 /// What a task's reviewer must account for in its verdict, with ids: the
 /// task's goal (`goal`), each acceptance criterion assigned to it (by its
-/// ledger id) and its kind's share of the risk catalog (`R001`…). Nothing
+/// task-local id) and its kind's share of the risk catalog (`R001`…). Nothing
 /// else: no generated risks and no checks the runtime adds on its own.
 pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
-    std::iter::once((GOAL_CHECK.to_owned(), format!("The goal is met: {}", task.goal)))
-        .chain(task.criterion_ids.iter().map(|id|(id.clone(),format!("Evaluate assigned criterion {id} against this task's local deliverable; for options assess the proposed approach, not future implementation"))))
-        .chain(crate::lean::risks::for_kind(task.kind))
-        .collect()
+    std::iter::once((
+        GOAL_CHECK.to_owned(),
+        format!("The goal is met: {}", task.goal),
+    ))
+    .chain(
+        task.acceptance_criteria
+            .iter()
+            .map(|criterion| (criterion.id.clone(), criterion.text.clone())),
+    )
+    .chain(crate::lean::risks::for_kind(task.kind))
+    .collect()
 }
 
 /// How the catalog risks bind: as failures to rule out for this task's goal,

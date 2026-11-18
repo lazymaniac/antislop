@@ -136,6 +136,7 @@ impl Store {
     }
 
     /// The result the latest turn of `role` recorded through its tool.
+    #[cfg(test)]
     pub(in crate::lean) fn latest_role_result(
         &self,
         conversation: &str,

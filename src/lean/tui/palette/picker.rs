@@ -29,7 +29,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
-            "Rigor: feature · full ceremony (requirements + plan review + audit)".into(),
+            "Rigor: feature · full ceremony (plan review + quality gates + audit)".into(),
             Action::Run(Command::SelectTeam(Team::Feature)),
         ),
         (
@@ -92,7 +92,7 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
         (
             Team::Feature,
             "feature",
-            "full ceremony · requirements + plan review + final audit",
+            "full ceremony · plan review + quality gates + final audit",
         ),
         (
             Team::Refactoring,
@@ -150,7 +150,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
-            "/feature · full rigor (requirements + plan review + final audit)".into(),
+            "/feature · full rigor (plan review + quality gates + final audit)".into(),
             Action::Run(Command::SelectTeam(Team::Feature)),
         ),
         (
@@ -208,10 +208,6 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
         (
             "/reject · reject proposed plan (F7)".into(),
             Action::Run(Command::Reject),
-        ),
-        (
-            "/requirements · open requirements ledger (F2)".into(),
-            Action::Run(Command::Requirements),
         ),
         (
             "/unblock · unblock or recover stopped task (F5)".into(),

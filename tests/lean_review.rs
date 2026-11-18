@@ -30,7 +30,7 @@ def say(session, answer, covered=True):
 def verdict(approved, findings=()):
     return "```verdict\n" + json.dumps({"approved": approved, "findings": list(findings)}) + "\n```"
 def task(id, title, depends=()):
-    return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
+    return {"id": id, "title": title, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "depends_on": list(depends),
             "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({"tasks": list(tasks)}) + "\n```"
@@ -42,7 +42,7 @@ fn open(dir: &Path, orchestrator: &str, agent: &str) -> Arc<Core> {
     let write = |name: &str, body: String| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
-        support::install_ledger_protocol(&path);
+        support::install_task_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         common::interactive(&path);

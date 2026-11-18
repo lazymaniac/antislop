@@ -7,7 +7,6 @@ impl App {
     /// Typed text is always chat.
     pub fn run_workflow(&mut self, command: Command) {
         match command {
-            Command::Requirements => self.open_ledger(),
             Command::InterviewQuestion => self.open_interview_answer(),
             Command::Plans => self.open_plan_history(),
             Command::Plan => self.open_current_plan(),
@@ -68,7 +67,7 @@ impl App {
             match flow_editor::toggle_dependency_edge_revision(&self.view, &source_id, &target.id) {
                 Ok((revision, message)) => {
                     self.notice = Some(format!("✓ {message}"));
-                    self.send_flow_revision(revision, false, true, target.id, target.title);
+                    self.send_flow_revision(revision, false, target.id, target.title);
                 }
                 Err(error) => self.notice = Some(format!("✗ {error}")),
             }
@@ -152,7 +151,7 @@ impl App {
         };
         match flow_editor::toggle_hold_revision(&self.view, &task) {
             Ok((revision, request_ai_review)) => {
-                self.send_flow_revision(revision, request_ai_review, false, task.id, task.title);
+                self.send_flow_revision(revision, request_ai_review, task.id, task.title);
             }
             Err(error) => self.notice = Some(format!("✗ {error}")),
         }
@@ -179,7 +178,7 @@ impl App {
         &self,
         revision: crate::lean::store::PlanRevision,
         request_ai_review: bool,
-        allow_uncovered: bool,
+
         task_id: String,
         task_title: String,
     ) {
@@ -196,7 +195,6 @@ impl App {
                         operation_id: Some(crate::id()),
                         revision: rev_for_req,
                         request_ai_review,
-                        allow_uncovered,
                     },
                 ))
                 .map_err(|error| error.to_string());

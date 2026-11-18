@@ -2,7 +2,7 @@
 //! in-place, add dependent tasks, split tasks, hold/unhold (`deferred`), or
 //! retire tasks directly from the Graph without waiting for an LLM replan.
 //! Supports both Fast-Path (instant deterministic DAG save) and optional AI
-//! Plan Review, with interactive requirement coverage warnings.
+//! Plan Review, with task-local acceptance criteria.
 
 use super::editor::InputBuffer;
 use super::theme::Theme;
@@ -117,7 +117,6 @@ pub enum FlowEditorOutcome {
     Submit {
         revision: PlanRevision,
         request_ai_review: bool,
-        allow_uncovered: bool,
     },
 }
 
@@ -132,7 +131,7 @@ pub struct FlowEditor {
     pub change_kind: ChangeKind,
     pub depends_input: InputBuffer,
     pub outputs_input: InputBuffer,
-    pub covers_input: InputBuffer,
+    pub criteria_input: InputBuffer,
     pub deferred: bool,
     pub request_ai_review: bool,
     pub split_title_a: InputBuffer,
@@ -141,10 +140,6 @@ pub struct FlowEditor {
     pub split_goal_b: InputBuffer,
     pub sending: bool,
     pub error: Option<String>,
-    pub coverage_warning: Option<String>,
-    pub pending_revision: Option<PlanRevision>,
-    pub pending_ai_review: bool,
-    pub close_on_warning_cancel: bool,
 }
 
 impl FlowEditor {
@@ -167,7 +162,13 @@ impl FlowEditor {
             change_kind: task.change_kind,
             depends_input: InputBuffer::with_text(task.depends_on.join(", ")),
             outputs_input: InputBuffer::with_text(meta.outputs.join(", ")),
-            covers_input: InputBuffer::with_text(meta.covers.join(", ")),
+            criteria_input: InputBuffer::with_text(
+                meta.acceptance_criteria
+                    .iter()
+                    .map(|c| format!("{}: {}", c.id, c.text))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
             deferred: meta.deferred,
             request_ai_review: false,
             split_title_a: InputBuffer::new(),
@@ -176,10 +177,6 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
-            coverage_warning: None,
-            pending_revision: None,
-            pending_ai_review: false,
-            close_on_warning_cancel: false,
         }
     }
 
@@ -190,10 +187,16 @@ impl FlowEditor {
         } else {
             after_id.to_owned()
         };
-        let inherited_covers = view
+        let inherited_criteria = view
             .task_meta
             .get(after_id)
-            .map(|meta| meta.covers.join(", "))
+            .map(|meta| {
+                meta.acceptance_criteria
+                    .iter()
+                    .map(|c| format!("{}: {}", c.id, c.text))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
             .unwrap_or_default();
         Self {
             mode: FlowEditMode::AddDependent {
@@ -207,7 +210,7 @@ impl FlowEditor {
             change_kind: ChangeKind::Code,
             depends_input: InputBuffer::with_text(depends),
             outputs_input: InputBuffer::new(),
-            covers_input: InputBuffer::with_text(inherited_covers),
+            criteria_input: InputBuffer::with_text(inherited_criteria),
             deferred: false,
             request_ai_review: false,
             split_title_a: InputBuffer::new(),
@@ -216,10 +219,6 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
-            coverage_warning: None,
-            pending_revision: None,
-            pending_ai_review: false,
-            close_on_warning_cancel: false,
         }
     }
 
@@ -255,7 +254,7 @@ impl FlowEditor {
             change_kind: task.change_kind,
             depends_input: InputBuffer::new(),
             outputs_input: InputBuffer::new(),
-            covers_input: InputBuffer::new(),
+            criteria_input: InputBuffer::new(),
             deferred: false,
             request_ai_review: false,
             split_title_a: InputBuffer::new(),
@@ -264,30 +263,7 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
-            coverage_warning: None,
-            pending_revision: None,
-            pending_ai_review: false,
-            close_on_warning_cancel: false,
         }
-    }
-
-    pub fn coverage_warning_modal(
-        task_id: String,
-        task_title: String,
-        revision: PlanRevision,
-        request_ai_review: bool,
-        warning: String,
-    ) -> Self {
-        let mut editor = Self::retire_task(&TaskRow {
-            id: task_id,
-            title: task_title,
-            ..TaskRow::default()
-        });
-        editor.coverage_warning = Some(warning);
-        editor.pending_revision = Some(revision);
-        editor.pending_ai_review = request_ai_review;
-        editor.close_on_warning_cancel = true;
-        editor
     }
 
     fn field_count(&self) -> usize {
@@ -306,10 +282,6 @@ impl FlowEditor {
                 return FlowEditorOutcome::Close;
             }
             return FlowEditorOutcome::None;
-        }
-
-        if self.coverage_warning.is_some() {
-            return self.warning_key(key);
         }
 
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -348,32 +320,6 @@ impl FlowEditor {
         FlowEditorOutcome::None
     }
 
-    fn warning_key(&mut self, key: KeyEvent) -> FlowEditorOutcome {
-        match key.code {
-            KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
-                if let Some(revision) = self.pending_revision.clone() {
-                    self.coverage_warning = None;
-                    self.sending = true;
-                    return FlowEditorOutcome::Submit {
-                        revision,
-                        request_ai_review: self.pending_ai_review,
-                        allow_uncovered: true,
-                    };
-                }
-                FlowEditorOutcome::Close
-            }
-            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
-                self.coverage_warning = None;
-                if self.close_on_warning_cancel {
-                    FlowEditorOutcome::Close
-                } else {
-                    FlowEditorOutcome::None
-                }
-            }
-            _ => FlowEditorOutcome::None,
-        }
-    }
-
     fn edit_field_key(&mut self, key: KeyEvent, has_id_field: bool) {
         let index = if has_id_field {
             self.field
@@ -404,7 +350,7 @@ impl FlowEditor {
             },
             5 => self.depends_input.edit_key(key),
             6 => self.outputs_input.edit_key(key),
-            7 => self.covers_input.edit_key(key),
+            7 => self.criteria_input.edit_key(key),
             8 => {
                 if matches!(
                     key.code,
@@ -447,13 +393,10 @@ impl FlowEditor {
         match self.build_revision(view) {
             Ok((revision, request_ai_review)) => {
                 self.error = None;
-                self.pending_revision = Some(revision.clone());
-                self.pending_ai_review = request_ai_review;
                 self.sending = true;
                 FlowEditorOutcome::Submit {
                     revision,
                     request_ai_review,
-                    allow_uncovered: false,
                 }
             }
             Err(error) => {
@@ -483,6 +426,7 @@ impl FlowEditor {
                 }
                 Ok((
                     PlanRevision {
+                        scope: None,
                         plan,
                         base_revision,
                         reason: format!("Direct UI flow edit of task {original_id}"),
@@ -518,6 +462,7 @@ impl FlowEditor {
                 }
                 Ok((
                     PlanRevision {
+                        scope: None,
                         plan,
                         base_revision,
                         reason: format!("Added dependent task {new_id} after {after_id} via UI"),
@@ -582,6 +527,7 @@ impl FlowEditor {
                 replacements.insert(id_b, original_id.clone());
                 Ok((
                     PlanRevision {
+                        scope: None,
                         plan,
                         base_revision,
                         reason: format!("Split task {original_id} into two steps via UI"),
@@ -624,7 +570,28 @@ impl FlowEditor {
                 "Dla change_kind = artifact podaj przynajmniej jedną ścieżkę w Outputs.".into(),
             );
         }
-        let covers = split_csv(&self.covers_input.text);
+        let acceptance_criteria = self
+            .criteria_input
+            .text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let (id, text) = line
+                    .split_once(':')
+                    .ok_or("Kryterium musi mieć format C1: opis")?;
+                if id.trim().is_empty() || text.trim().is_empty() {
+                    return Err("Podaj identyfikator i opis kryterium");
+                }
+                Ok(crate::lean::tasks::AcceptanceCriterion {
+                    id: id.trim().into(),
+                    text: text.trim().into(),
+                })
+            })
+            .collect::<Result<Vec<_>, &str>>()
+            .map_err(str::to_owned)?;
+        if acceptance_criteria.is_empty() {
+            return Err("Podaj przynajmniej jedno kryterium akceptacji".into());
+        }
         let meta = view.task_meta.get(id).cloned().unwrap_or_default();
         let kind = WORK_KINDS
             .get(self.kind_index)
@@ -635,8 +602,7 @@ impl FlowEditor {
             quality_gate: meta.quality_gate,
             options_for: meta.options_for,
             id: id.to_owned(),
-            requirement_ids: Vec::new(),
-            criterion_ids: Vec::new(),
+
             title: title.to_owned(),
             goal,
             summary: None,
@@ -647,7 +613,7 @@ impl FlowEditor {
             delivery: None,
             depends_on,
             kind,
-            covers,
+            acceptance_criteria,
             reviewer: ReviewerSpec {
                 summary: Some(format!("Verify {title}")),
             },
@@ -659,10 +625,7 @@ impl FlowEditor {
         if area.width < 12 || area.height < 5 {
             return;
         }
-        if let Some(warning) = &self.coverage_warning {
-            self.draw_coverage_warning(frame, area, warning, theme);
-            return;
-        }
+
         match &self.mode {
             FlowEditMode::Edit { original_id } => {
                 self.draw_contract_form(
@@ -692,43 +655,6 @@ impl FlowEditor {
                 self.draw_retire_confirm(frame, area, task_id, task_title, theme);
             }
         }
-    }
-
-    fn draw_coverage_warning(&self, frame: &mut Frame, area: Rect, warning: &str, theme: &Theme) {
-        let width = area.width.saturating_sub(4).clamp(12, 76);
-        let height = 11.min(area.height);
-        let boxed = centered_rect(area, width, height);
-        frame.render_widget(Clear, boxed);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme.warning())
-            .title(" ! Ostrzeżenie o pokryciu wymagań (Coverage Warning) ");
-        let inner = block.inner(boxed);
-        frame.render_widget(block, boxed);
-        let text_w = usize::from(inner.width.saturating_sub(2)).max(1);
-        let mut lines = vec![
-            Line::from(Span::styled(
-                truncate(
-                    "Edycja pozostawia obowiązkowe kryteria bez przypisanego zadania:",
-                    text_w,
-                ),
-                theme.title().add_modifier(Modifier::BOLD),
-            )),
-            Line::raw(""),
-        ];
-        for wrapped in super::view::wrap(&clean(warning), text_w)
-            .into_iter()
-            .take(4)
-        {
-            lines.push(Line::from(Span::styled(wrapped, theme.warning())));
-        }
-        lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled(" [Enter / y] Zapisz mimo to ", theme.button()),
-            Span::raw("  "),
-            Span::styled(" [Esc / n] Wróć do edycji ", theme.dim()),
-        ]));
-        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn draw_retire_confirm(
@@ -903,7 +829,7 @@ impl FlowEditor {
         rows.push(("Dostawa (←/→)   ", change_str.to_owned()));
         rows.push(("Zależności (ID) ", self.depends_input.text.clone()));
         rows.push(("Pliki wyjściowe ", self.outputs_input.text.clone()));
-        rows.push(("Kryteria (R1..) ", self.covers_input.text.clone()));
+        rows.push(("Kryteria (C1: opis) ", self.criteria_input.text.clone()));
         rows.push(("Status (Space)  ", hold_str.to_owned()));
         rows.push(("Tryb zapisu     ", mode_str.to_owned()));
 
@@ -966,8 +892,8 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
         quality_gate: meta.quality_gate,
         options_for: meta.options_for,
         id: row.id.clone(),
-        requirement_ids: Vec::new(),
-        criterion_ids: Vec::new(),
+
+        acceptance_criteria: meta.acceptance_criteria,
         title: row.title.clone(),
         goal,
         summary: None,
@@ -978,7 +904,7 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
         delivery: None,
         depends_on: row.depends_on.clone(),
         kind: parse_work_kind(&row.kind),
-        covers: meta.covers,
+
         reviewer: ReviewerSpec {
             summary: Some(format!("Verify {}", row.title)),
         },
@@ -1005,6 +931,7 @@ pub fn toggle_hold_revision(
     };
     Ok((
         PlanRevision {
+            scope: None,
             plan,
             base_revision: view.plan_head_revision,
             reason: format!("{action} task {} via UI fast-path", task.id),
@@ -1059,6 +986,7 @@ fn build_retire_revision(
     }
     Ok((
         PlanRevision {
+            scope: None,
             plan: plan.to_owned(),
             base_revision,
             reason: format!("Retired task {task_id} via UI Flow Editor"),
@@ -1107,6 +1035,7 @@ pub fn toggle_dependency_edge_revision(
         contract.depends_on.retain(|d| d != from_id);
         return Ok((
             PlanRevision {
+                scope: None,
                 plan,
                 base_revision,
                 reason: format!("Unlinked dependency {from_id} ↛ {to_id} via UI"),
@@ -1127,6 +1056,7 @@ pub fn toggle_dependency_edge_revision(
         contract.depends_on.retain(|d| d != to_id);
         return Ok((
             PlanRevision {
+                scope: None,
                 plan,
                 base_revision,
                 reason: format!("Unlinked dependency {to_id} ↛ {from_id} via UI"),
@@ -1151,6 +1081,7 @@ pub fn toggle_dependency_edge_revision(
     contract.depends_on.push(from_id.to_owned());
     Ok((
         PlanRevision {
+            scope: None,
             plan,
             base_revision,
             reason: format!("Linked dependency {from_id} → {to_id} via UI"),
@@ -1380,7 +1311,7 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 mod tests {
     use super::*;
     use crate::lean::tasks::Team;
-    use crate::lean::tui::{App, Command, Focus, Kind, Update};
+    use crate::lean::tui::{App, Command, Focus, Kind};
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
 
@@ -1395,19 +1326,19 @@ mod tests {
                     {
                         "id": "t1",
                         "title": "Implement core",
-                        "goal": "Core implementation",
+                        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Core implementation",
                         "kind": "implementation",
                         "change_kind": "code",
-                        "covers": ["R1.1"],
+
                         "depends_on": []
                     },
                     {
                         "id": "t2",
                         "title": "Run tests",
-                        "goal": "Verify behavior",
+                        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Verify behavior",
                         "kind": "testing",
                         "change_kind": "none",
-                        "covers": ["R1.2"],
+
                         "depends_on": ["t1"],
                         "quality_gate": true
                     }
@@ -1503,58 +1434,6 @@ mod tests {
         assert_eq!(rev_retire.tasks.len(), 1);
         assert_eq!(rev_retire.tasks[0].id, "t2");
         assert!(rev_retire.tasks[0].depends_on.is_empty());
-    }
-
-    #[test]
-    fn coverage_warning_modal_allows_user_to_confirm_or_return_to_editing() {
-        let mut app = App::test_app();
-        app.view = sample_view_with_plan();
-        app.focus = Focus::Graph;
-        app.selected = "worker:t1".into();
-        app.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
-        assert!(app.flow_editor.is_some());
-
-        let (revision, _) = app
-            .flow_editor
-            .as_ref()
-            .unwrap()
-            .build_revision(&app.view)
-            .unwrap();
-        app.apply_update(Update::PlanRevisionResult {
-            conversation: app.conversation.clone(),
-            generation: app.generation,
-            revision: revision.clone(),
-            request_ai_review: false,
-            task_id: "t1".into(),
-            task_title: "Implement core".into(),
-            reply: Ok(json!({
-                "status": "coverage_warning",
-                "warning": "Criterion R1.1 is not covered by any active task."
-            })),
-        });
-
-        let editor = app.flow_editor.as_ref().unwrap();
-        assert!(editor.coverage_warning.as_deref().unwrap().contains("R1.1"));
-
-        // Esc cancels warning and returns to the editor form without losing draft
-        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(app.flow_editor.is_some());
-        assert!(app.flow_editor.as_ref().unwrap().coverage_warning.is_none());
-
-        // Trigger warning again and confirm with 'y' -> submits with allow_uncovered: true
-        let editor = app.flow_editor.as_mut().unwrap();
-        editor.coverage_warning = Some("Criterion R1.1 uncovered".into());
-        editor.pending_revision = Some(revision);
-        let outcome = editor.key(
-            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
-            &app.view,
-        );
-        match outcome {
-            FlowEditorOutcome::Submit {
-                allow_uncovered, ..
-            } => assert!(allow_uncovered),
-            other => panic!("expected Submit with allow_uncovered=true, got {other:?}"),
-        }
     }
 
     #[test]

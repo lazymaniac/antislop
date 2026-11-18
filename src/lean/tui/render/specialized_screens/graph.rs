@@ -649,7 +649,7 @@ fn graph_title(relations: &str, filtered: bool, grouping: &str, width: u16) -> S
     let cards = if filtered { "some" } else { "all" };
     [
         format!(
-            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) · flow: e/a/S/l · wb: w "
+            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) · flow: e/a/S/l "
         ),
         format!(
             " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) "
@@ -735,7 +735,10 @@ mod tests {
     #[test]
     fn graph_title_drops_its_keys_before_cutting_a_word() {
         let full = graph_title("DRM", false, "dependencies", 200);
-        assert!(full.contains("groups: dependencies (g)"));
+        assert_eq!(
+            full,
+            " team · relations: DRM (1-4) · cards: all (f) · groups: dependencies (g) · flow: e/a/S/l "
+        );
         // A phone-wide panel: the keys go, every word stays whole.
         let narrow = graph_title("DRM", false, "dependencies", 68);
         assert_eq!(

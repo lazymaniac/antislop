@@ -21,7 +21,7 @@ pub(super) fn on_plan_proposed(
         (false, "Plan received.".into())
     });
     view.plan = payload["plan"].as_str().map(str::to_owned);
-    view.plan_head_revision = 0;
+    view.plan_head_revision = payload["base_revision"].as_i64().unwrap_or(0);
     view.plan_doc = payload["document"].as_str().unwrap_or_default().to_owned();
     view.tasks = proposed_tasks(payload);
     view.task_meta = proposed_task_meta(payload);
@@ -31,7 +31,7 @@ pub(super) fn on_plan_proposed(
     publish_plan_summary(view, payload);
 }
 
-fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
+pub(super) fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
     payload["tasks"]
         .as_array()
         .into_iter()
@@ -44,27 +44,17 @@ fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
 }
 
 pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
-    let mut covers = strings(&task["covers"]);
-    for req in strings(&task["requirement_ids"]) {
-        if !covers.contains(&req) {
-            covers.push(req);
-        }
-    }
-    for crit in strings(&task["criterion_ids"]) {
-        if !covers.contains(&crit) {
-            covers.push(crit);
-        }
-    }
     TaskMeta {
         deferred: task["deferred"].as_bool().unwrap_or(false),
         outputs: strings(&task["outputs"]),
-        covers,
+        acceptance_criteria: serde_json::from_value(task["acceptance_criteria"].clone())
+            .unwrap_or_default(),
         quality_gate: task["quality_gate"].as_bool().unwrap_or(false),
         options_for: task["options_for"].as_str().map(clean_line),
     }
 }
 
-fn proposed_task_meta(payload: &Value) -> HashMap<String, TaskMeta> {
+pub(super) fn proposed_task_meta(payload: &Value) -> HashMap<String, TaskMeta> {
     payload["tasks"]
         .as_array()
         .into_iter()

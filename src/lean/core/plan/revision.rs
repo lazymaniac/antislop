@@ -4,11 +4,11 @@ use crate::lean::*;
 
 mod acceptance;
 mod review;
+mod scope;
 
 struct PreparedRevision {
     baseline: Vec<Task>,
     specs: Vec<TaskContract>,
-    requirement_revision: i64,
     receipt: serde_json::Value,
 }
 
@@ -52,8 +52,10 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         request_key: &str,
-        revision: PlanRevision,
+        mut revision: PlanRevision,
     ) -> Result<serde_json::Value> {
+        self.include_scope_sources(conversation, &mut revision)?;
+        self.supersede_scope_revision(conversation, &revision.plan, request_key)?;
         let registration = self.reserve_revision(conversation, request_key, &revision)?;
         if !registration.fresh {
             return self.store.revision_job(&registration.request);
@@ -67,12 +69,13 @@ impl Core {
         request_key: &str,
         mut revision: PlanRevision,
         request_ai_review: bool,
-        allow_uncovered: bool,
     ) -> Result<serde_json::Value> {
+        self.include_scope_sources(conversation, &mut revision)?;
+        self.supersede_scope_revision(conversation, &revision.plan, request_key)?;
         let baseline = self.store.plan(&revision.plan)?;
         require(!baseline.is_empty(), "plan has no tasks")?;
         self.normalize_user_revision_tasks(conversation, &mut revision, &baseline)?;
-        if request_ai_review {
+        if request_ai_review || revision.scope.is_some() {
             return self.submit_revision(conversation, request_key, revision);
         }
         require(
@@ -94,28 +97,14 @@ impl Core {
         }
         let specs = self.revised_specs(&revision, &baseline)?;
         self.store.revision_checkpoints(conversation, &revision)?;
-        if !allow_uncovered
-            && let Some(warning) =
-                self.store
-                    .check_user_revision_coverage(conversation, &revision.plan, &specs)?
-        {
-            return Ok(json!({
-                "status": "coverage_warning",
-                "warning": warning,
-            }));
-        }
         let registration = self.reserve_revision(conversation, request_key, &revision)?;
         if !registration.fresh {
             return self.store.revision_job(&registration.request);
         }
         let request = registration.request.clone();
-        let requirement_revision = match self.store.plan_run(&revision.plan)? {
-            Some(run) => self.store.run(conversation, &run)?.spec_revision,
-            None => 0,
-        };
         drop(registration);
         let lease = crate::lean::store::RevisionLease {
-            requirement_revision,
+            accepted_scope: false,
             request: &request,
         };
         if let Err(error) = self.apply_direct_revision(
@@ -124,7 +113,6 @@ impl Core {
             &baseline,
             &specs,
             &lease,
-            allow_uncovered,
             is_accepted,
         ) {
             let _ = self
@@ -143,25 +131,25 @@ impl Core {
         }))
     }
 
+    fn include_scope_sources(&self, conversation: &str, revision: &mut PlanRevision) -> Result<()> {
+        if let Some(id) = self.store.plan_scope_id(&revision.plan)?
+            && !self.store.scope_documents_current(conversation, &id)?
+            && revision.scope.is_none()
+        {
+            revision.scope = Some(self.store.scope(conversation, &id)?.summary);
+        }
+        Ok(())
+    }
+
     fn normalize_user_revision_tasks(
         &self,
-        conversation: &str,
+        _conversation: &str,
         revision: &mut PlanRevision,
         baseline: &[Task],
     ) -> Result<()> {
-        let entries = match self.store.plan_run(&revision.plan)? {
-            Some(run) => self.store.ledger_entries(conversation, &run, None)?,
-            None => Vec::new(),
-        };
-        let replacements = revision.replacements.clone();
         for spec in &mut revision.tasks {
             if let Some(old_task) = baseline.iter().find(|old| old.spec["id"] == spec.id) {
                 let old_spec: TaskContract = serde_json::from_value(old_task.spec.clone())?;
-                if spec.covers.is_empty() && spec.requirement_ids.is_empty() {
-                    spec.requirement_ids = old_spec.requirement_ids;
-                    spec.criterion_ids = old_spec.criterion_ids;
-                    spec.covers = old_spec.covers;
-                }
                 if spec
                     .reviewer
                     .summary
@@ -189,36 +177,6 @@ impl Core {
                     spec.summary = old_spec.summary;
                 }
             } else {
-                if spec.covers.is_empty() && spec.requirement_ids.is_empty() {
-                    if let Some(replaced_id) = replacements.get(&spec.id)
-                        && let Some(old_task) =
-                            baseline.iter().find(|old| old.spec["id"] == *replaced_id)
-                        && let Ok(old_spec) =
-                            serde_json::from_value::<TaskContract>(old_task.spec.clone())
-                    {
-                        spec.requirement_ids = old_spec.requirement_ids;
-                        spec.criterion_ids = old_spec.criterion_ids;
-                    }
-                    if spec.requirement_ids.is_empty() {
-                        for dep in &spec.depends_on {
-                            if let Some(parent) = baseline.iter().find(|old| old.spec["id"] == *dep)
-                                && let Ok(parent_spec) =
-                                    serde_json::from_value::<TaskContract>(parent.spec.clone())
-                                && !parent_spec.requirement_ids.is_empty()
-                            {
-                                spec.requirement_ids = parent_spec.requirement_ids;
-                                break;
-                            }
-                        }
-                    }
-                    if spec.requirement_ids.is_empty()
-                        && let Some(active) = entries.iter().find(|entry| {
-                            entry.spec.disposition == crate::lean::ledger::Disposition::Active
-                        })
-                    {
-                        spec.requirement_ids.push(active.spec.id.clone());
-                    }
-                }
                 if spec
                     .reviewer
                     .summary
@@ -229,9 +187,6 @@ impl Core {
                 {
                     spec.reviewer.summary = Some(format!("Verify {}", spec.title));
                 }
-            }
-            if !spec.covers.is_empty() && !entries.is_empty() {
-                crate::lean::ledger::resolve_covers(spec, &entries)?;
             }
         }
         Ok(())
@@ -357,11 +312,21 @@ impl Core {
             .lock()
             .expect("revision jobs mutex")
             .remove(owner);
+        let waiting = self
+            .store
+            .pending_scope_revision(&revision.plan)
+            .ok()
+            .flatten()
+            .is_some();
         let mut text = match &outcome {
+            Ok(()) if waiting => {
+                format!("Plan revision {request} reviewed; scope change awaits your acceptance.")
+            }
             Ok(()) => format!("Plan revision {request} applied."),
             Err(error) => format!("Plan revision {request} rejected: {error}"),
         };
         if outcome.is_ok()
+            && !waiting
             && let Err(error) = self.maybe_continue_plan(owner, &revision.plan)
         {
             text.push_str(&format!(" Execution was not resumed: {error}"));
@@ -421,22 +386,20 @@ impl Core {
 
     fn prepared_revision(
         &self,
-        conversation: &str,
+        _conversation: &str,
         request: &str,
         revision: &PlanRevision,
         baseline: Vec<Task>,
         specs: Vec<TaskContract>,
     ) -> Result<PreparedRevision> {
-        let run = self
-            .store
-            .plan_run(&revision.plan)?
-            .ok_or_else(|| Error::Invalid("plan has no requirements".into()))?;
-        let requirement_revision = self.store.run(conversation, &run)?.spec_revision;
+        require(
+            self.store.plan_scope_id(&revision.plan)?.is_some(),
+            "plan has no scope",
+        )?;
         let receipt = self.store.revision_job(request)?;
         Ok(PreparedRevision {
             baseline,
             specs,
-            requirement_revision,
             receipt,
         })
     }
@@ -462,7 +425,7 @@ fn run_revision_worker(
         core.review_and_apply_revision(
             context,
             &crate::lean::store::RevisionLease {
-                requirement_revision: prepared.requirement_revision,
+                accepted_scope: false,
                 request: &request,
             },
         )
@@ -477,7 +440,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn contract(writes: bool, _paths: &[&str]) -> TaskContract {
-        serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","change_kind": if writes { "code" } else { "none" }, "kind":"implementation","reviewer":{"summary": "Check local behavior"}})).unwrap()
+        serde_json::from_value(json!({"id":"local","title":"Local","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect local behavior","change_kind": if writes { "code" } else { "none" }, "kind":"implementation","reviewer":{"summary": "Check local behavior"}})).unwrap()
     }
 
     #[test]
@@ -487,6 +450,7 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let session = core.store.create_conversation(".").unwrap();
         let revision = PlanRevision {
+            scope: None,
             plan: crate::id(),
             base_revision: 0,
             reason: "race with session deletion".into(),
@@ -559,9 +523,9 @@ mod tests {
             .add_plan(
                 &conversation,
                 &[
-                    json!({"id":"a","title":"A","goal":"Inspect A","change_kind": "none", "kind":"analysis"}),
-                    json!({"id":"b","title":"B","goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":["a"]}),
-                    json!({"id":"c","title":"C","goal":"Inspect C","change_kind": "none", "kind":"analysis"}),
+                    json!({"id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect A","change_kind": "none", "kind":"analysis"}),
+                    json!({"id":"b","title":"B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":["a"]}),
+                    json!({"id":"c","title":"C","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect C","change_kind": "none", "kind":"analysis"}),
                 ],
             )
             .unwrap();
@@ -607,7 +571,7 @@ mod tests {
             .unwrap()
             .id;
         let owner: TaskContract = serde_json::from_value(json!({
-            "id":"writer", "title":"Writer", "goal":"Implement selected behavior",
+            "id":"writer", "title":"Writer", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement selected behavior",
             "change_kind":"code", "kind":"implementation", "outputs":["old.txt"]
         }))
         .unwrap();
@@ -675,6 +639,7 @@ mod tests {
             )
             .unwrap();
         let revision = PlanRevision {
+            scope: None,
             plan: plan.clone(),
             base_revision: 0,
             reason: "Check missing requirement binding".into(),
@@ -687,13 +652,10 @@ mod tests {
             let error = core
                 .submit_revision(&conversation, key, revision.clone())
                 .unwrap_err();
-            assert!(
-                error.to_string().contains("plan has no requirements"),
-                "{error}"
-            );
+            assert!(error.to_string().contains("plan has no scope"), "{error}");
             let (state,reason):(String,String)=core.store.db().query_row("SELECT status,error FROM plan_revision_jobs WHERE conversation_id=?1 AND request_key=?2",rusqlite::params![conversation,key],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
             assert_eq!(state, "rejected");
-            assert!(reason.contains("plan has no requirements"));
+            assert!(reason.contains("plan has no scope"));
         }
         assert!(core.revisions.jobs.lock().unwrap().is_empty());
     }
@@ -713,8 +675,8 @@ mod tests {
             .add_plan(
                 &conversation,
                 &[
-                    json!({"id":"t1","title":"Task 1","goal":"First step","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check t1"}}),
-                    json!({"id":"t2","title":"Task 2","goal":"Second step","change_kind":"none","kind":"analysis","depends_on":["t1"],"reviewer":{"summary":"Check t2"}}),
+                    json!({"id":"t1","title":"Task 1","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"First step","change_kind":"none","kind":"analysis","reviewer":{"summary":"Check t1"}}),
+                    json!({"id":"t2","title":"Task 2","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Second step","change_kind":"none","kind":"analysis","depends_on":["t1"],"reviewer":{"summary":"Check t2"}}),
                 ],
             )
             .unwrap();
@@ -723,13 +685,14 @@ mod tests {
         let edited: TaskContract = serde_json::from_value(json!({
             "id": "t1",
             "title": "Updated Task 1",
-            "goal": "Refined first step",
+            "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Refined first step",
             "change_kind": "none",
             "kind": "analysis",
             "deferred": true
         }))
         .unwrap();
         let revision = PlanRevision {
+            scope: None,
             plan: plan.clone(),
             base_revision: 0,
             reason: "Hold and refine t1 from UI".into(),
@@ -739,7 +702,7 @@ mod tests {
             replacements: Default::default(),
         };
         let reply = core
-            .apply_user_revision(&conversation, "ui-edit-1", revision, false, false)
+            .apply_user_revision(&conversation, "ui-edit-1", revision, false)
             .unwrap();
         assert_eq!(reply["status"], "applied");
         assert_eq!(reply["revision"], 1);

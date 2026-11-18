@@ -7,6 +7,7 @@ pub(in crate::lean) struct PlanAnswer<'a> {
     pub(in crate::lean) project: &'a Path,
     pub(in crate::lean) config: &'a Config,
     pub(in crate::lean) text: &'a str,
+    pub(in crate::lean) scope: Option<String>,
     pub(in crate::lean) plan: Option<Result<Vec<TaskContract>>>,
     pub(in crate::lean) addressed: Option<&'a [u64]>,
     pub(in crate::lean) is_comment: bool,
@@ -28,6 +29,7 @@ impl Core {
                 answer.project,
                 answer.text,
                 PlanProposal {
+                    scope: answer.scope.as_deref(),
                     config: answer.config,
                     specs: &specs,
                 },

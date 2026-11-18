@@ -1,5 +1,4 @@
 use super::*;
-use crate::lean::ledger::Run;
 
 #[path = "helpers/recording.rs"]
 mod recording;
@@ -9,78 +8,52 @@ use recording::*;
 mod review;
 
 impl Core {
-    /// The requirements run a new plan is bound to, extracted first if the
-    /// ledger lags behind the conversation; `None` when that failed.
-    pub(in crate::lean) fn planning_requirements(
-        self: &Arc<Self>,
-        conversation: &str,
-        addressed: Option<&[u64]>,
-        cancel: &AtomicBool,
-    ) -> Result<Option<Run>> {
-        record_addressed_comments(&self.store, conversation, addressed)?;
-        let feedback_before = self
-            .store
-            .count_since_requirements_reset(conversation, "requirements-reviewer")?;
-        match self.ensure_requirements(conversation, cancel) {
-            Ok(run) => Ok(Some(run)),
-            Err(error) => {
-                let retrying = self
-                    .store
-                    .count_since_requirements_reset(conversation, "requirements-reviewer")?
-                    > feedback_before;
-                record_requirements_failure(&self.store, conversation, &error, retrying)?;
-                Ok(None)
-            }
-        }
-    }
-
-    /// The tasks with the requirements and criteria they cover resolved
-    /// against `run`; `None` when one names neither, and the planner is asked
-    /// for the plan again.
-    pub(super) fn covered_plan(
-        &self,
-        conversation: &str,
-        run: &Run,
-        specs: &[TaskContract],
-    ) -> Result<Option<Vec<TaskContract>>> {
-        let entries = self.store.ledger_entries(conversation, &run.id, None)?;
-        let mut resolved = specs.to_vec();
-        for spec in &mut resolved {
-            if let Err(error) = crate::lean::ledger::resolve_covers(spec, &entries) {
-                // Kept as a sent-back draft, like one the ledger binding
-                // refuses, so the correction revises it.
-                let (_, plan) = self.persist_proposed_tasks(conversation, specs)?;
-                self.store.link_plan_run(conversation, &plan, &run.id)?;
-                self.store
-                    .set_plan_status(&plan, status::PROPOSED, status::REVISED)?;
-                self.notice(
-                    conversation,
-                    &format!("plan ledger mapping rejected: {error}"),
-                );
-                self.retry_plan_from_ledger(conversation, &run.id, &error)?;
-                return Ok(None);
-            }
-        }
-
-        Ok(Some(resolved))
-    }
-
     pub(super) fn prepare_plan(
         &self,
         conversation: &str,
         specs: &[TaskContract],
-        run: &Run,
-    ) -> Result<Option<PreparedPlan>> {
+        scope: Option<&str>,
+    ) -> Result<PreparedPlan> {
+        let inherited = self
+            .store
+            .latest_plan(conversation)?
+            .first()
+            .map(|task| self.store.plan_scope_id(&task.plan_id))
+            .transpose()?
+            .flatten();
+        let scope_id = match (scope, inherited) {
+            (Some(summary), Some(id))
+                if self.store.scope(conversation, &id)?.summary == summary
+                    && self.store.scope_documents_current(conversation, &id)? =>
+            {
+                id
+            }
+            (Some(summary), _) => self.store.create_scope(conversation, summary)?.id,
+            (None, Some(id))
+                if self.store.scope(conversation, &id)?.summary
+                    == self.store.workflow(conversation)?.summary
+                    && self.store.scope_documents_current(conversation, &id)? =>
+            {
+                id
+            }
+            (None, Some(_)) => {
+                self.store
+                    .create_scope(conversation, &self.store.workflow(conversation)?.summary)?
+                    .id
+            }
+            (None, None) => {
+                self.store
+                    .create_scope(conversation, &self.store.workflow(conversation)?.summary)?
+                    .id
+            }
+        };
         let (tasks, id) = self.persist_proposed_tasks(conversation, specs)?;
-        self.store.link_plan_run(conversation, &id, &run.id)?;
-        if self.bind_proposed_plan(conversation, &id, &run.id)? {
-            return Ok(None);
-        }
-        Ok(Some(PreparedPlan {
+        self.store.bind_plan_scope(conversation, &id, &scope_id)?;
+        Ok(PreparedPlan {
             id,
             tasks,
             answered: self.store.last_orchestration_answered(conversation)?,
-        }))
+        })
     }
 
     fn persist_proposed_tasks(
@@ -97,37 +70,6 @@ impl Core {
         Ok((tasks, plan_id))
     }
 
-    fn bind_proposed_plan(&self, conversation: &str, plan: &str, run: &str) -> Result<bool> {
-        let Err(error) = self.store.bind_task_ledger(conversation, run, plan) else {
-            return Ok(false);
-        };
-        self.store
-            .set_plan_status(plan, status::PROPOSED, status::REVISED)?;
-        self.notice(
-            conversation,
-            &format!("plan ledger mapping rejected: {error}"),
-        );
-        self.retry_plan_from_ledger(conversation, run, &error)?;
-        Ok(true)
-    }
-
-    fn retry_plan_from_ledger(
-        &self,
-        conversation: &str,
-        run: &str,
-        error: &dyn std::fmt::Display,
-    ) -> Result<()> {
-        self.store.add_message(
-            conversation,
-            "requirements-planner",
-            &format!(
-                "Regenerate the task plan from the reviewed ledger. {error}. {}",
-                self.ledger_context(conversation, run)?
-            ),
-        )?;
-        Ok(())
-    }
-
     pub(super) fn publish_plan(
         self: &Arc<Self>,
         conversation: &str,
@@ -141,12 +83,40 @@ impl Core {
         self.resolve_plan_comments(conversation, addressed, plan, checked)?;
         let waiting = (!checked).then_some("the plan reviewer did not approve this plan");
         let revision_token = self.plan_revision_token(conversation, &plan.id)?;
+        let scope_id = self
+            .store
+            .plan_scope_id(&plan.id)?
+            .ok_or_else(|| Error::Invalid("plan has no scope".into()))?;
+        let scope = self.store.scope(conversation, &scope_id)?;
+        let previous = self
+            .store
+            .accepted_plan(conversation)?
+            .map(|id| self.store.plan_scope_id(&id))
+            .transpose()?
+            .flatten()
+            .map(|id| self.store.scope(conversation, &id))
+            .transpose()?;
+        let document = match previous.as_ref().filter(|old| old.id != scope.id) {
+            Some(old) => format!(
+                "# Scope change\n\n## Previously accepted\n{}\nOriginal documents: {}\n\n## Proposed scope\n{}\nOriginal documents: {}\n\n{}",
+                old.summary,
+                old.source_ids.len(),
+                scope.summary,
+                scope.source_ids.len(),
+                text
+            ),
+            None => format!("# Scope\n\n{}\n\n{}", scope.summary, text),
+        };
+        let mut payload =
+            plan_event_payload(&document, plan, specs, review, waiting, revision_token)?;
+        payload["scope"] = json!(scope);
+        payload["previous_scope"] = json!(previous);
         self.store.append_event(
             conversation,
             None,
             Some(&plan.id),
             "plan_proposed",
-            &plan_event_payload(text, plan, specs, review, waiting, revision_token)?,
+            &payload,
         )?;
         Ok(())
     }
@@ -176,7 +146,7 @@ pub(super) struct PreparedPlan {
     answered: u64,
 }
 
-fn record_addressed_comments(
+pub(super) fn record_addressed_comments(
     store: &Store,
     conversation: &str,
     addressed: Option<&[u64]>,
@@ -190,26 +160,5 @@ fn record_addressed_comments(
             &json!({"ids": ids, "upto_message": store.last_orchestration_answered(conversation)?}),
         )?;
     }
-    Ok(())
-}
-
-fn record_requirements_failure(
-    store: &Store,
-    conversation: &str,
-    error: &dyn std::fmt::Display,
-    retrying: bool,
-) -> Result<()> {
-    let retry = if retrying {
-        "Requirements review feedback was sent to the orchestrator. Correcting requirements and regenerating the plan automatically."
-    } else {
-        "Requirements preparation stopped. Review the failure above; for a proposed scope change, open /requirements and press p to review the exact diff. Otherwise send a message to retry."
-    };
-    store.append_event(
-        conversation,
-        None,
-        None,
-        "requirements_failed",
-        &json!({"error": error.to_string(), "retrying": retrying, "retry": retry}),
-    )?;
     Ok(())
 }

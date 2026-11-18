@@ -5,6 +5,14 @@ from the commits since the last tag with `packaging/changelog.sh`.
 
 ## Unreleased
 
+- Plans retain their agreed scope and original sources; each task carries its own
+  acceptance criteria. Scope changes are accepted with the reviewed plan.
+- Remove the requirements ledger, its extraction stage and browser, and the
+  additional compliance audit and audit review. One final audit checks the
+  integrated result against the full request.
+- Runtime schema 17 requires fresh state after archiving an older runtime directory;
+  existing databases are left untouched and are not migrated.
+
 - `antislop doctor` checks the configuration, the state directory and that
   every profile's CLI launches; a plan no longer starts while a CLI it needs
   is missing, and the refusal names the profiles that would launch.

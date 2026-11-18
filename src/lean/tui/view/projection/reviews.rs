@@ -1,37 +1,6 @@
 use super::*;
 use serde_json::Value;
 
-pub(super) fn on_requirements_failed(
-    view: &mut View,
-    event: &Value,
-    payload: &Value,
-    key: String,
-    turn: &str,
-) {
-    let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
-    let _ = (event, &key, turn, &text);
-    if payload["retrying"] == true {
-        view.requirements_progress = Some((false, text("retry").to_owned()));
-        view.push(
-            Style::default(),
-            format!("{}\n{}", text("error"), text("retry")),
-        );
-        return;
-    }
-    view.requirements_progress = Some((true, format!("{} — {}", text("error"), text("retry"))));
-    let message = format!("{}\n{}", text("error"), text("retry"));
-    view.cards.push(TranscriptCard::System {
-        title: "Requirements preparation failed".into(),
-        meta: String::new(),
-        text: message.clone(),
-        tone: crate::lean::tui::theme::Tone::Failed,
-    });
-    view.push(
-        Style::default().fg(crate::lean::tui::theme::ayu::RED),
-        message,
-    );
-}
-
 pub(super) fn on_paused(view: &mut View, event: &Value, payload: &Value, key: String, turn: &str) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);

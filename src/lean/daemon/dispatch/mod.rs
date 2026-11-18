@@ -62,9 +62,7 @@ fn route_request(context: &Context<'_>, request: Request) -> Result<Value> {
 }
 
 fn ensure_accepting(core: &Core, request: &Request) -> Result<()> {
-    use super::{
-        ControlRequest as C, ConversationRequest as Q, LedgerRequest as L, SessionRequest as S,
-    };
+    use super::{ControlRequest as C, ConversationRequest as Q, SessionRequest as S};
     let supervision = matches!(
         request,
         Request::Conversation(
@@ -84,13 +82,6 @@ fn ensure_accepting(core: &Core, request: &Request) -> Result<()> {
             request,
             Request::Control(C::Start | C::StartIn { .. } | C::SetConfig { .. })
                 | Request::Session(S::DeleteSession { .. })
-                | Request::Ledger(
-                    L::RejectLedgerProposal { .. }
-                        | L::ProposeLedgerChange { .. }
-                        | L::ApplyLedgerChange { .. }
-                        | L::CreateRun { .. }
-                        | L::AddLedgerSource { .. }
-                )
         );
     require(
         !super::activation::pending(core) || !changes_work,
@@ -115,7 +106,6 @@ fn route_all(context: &Context<'_>, request: Request) -> Result<Route> {
         context,
         request,
         &[
-            ledger::route,
             config::route,
             control::route,
             planning::route,
@@ -159,7 +149,7 @@ mod tests {
                 &[json!({
                     "id":"writer",
                     "title":"Write result",
-                    "goal":"Create the session result",
+                    "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create the session result",
                     "kind":"writing",
                     "change_kind":"artifact",
                     "outputs":["brief.md"],
@@ -216,7 +206,6 @@ mod config;
 mod control;
 mod conversation;
 mod history;
-mod ledger;
 mod planning;
 mod terminal;
 

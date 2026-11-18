@@ -199,11 +199,6 @@ impl App {
     }
 
     fn handle_modal_mouse(&mut self, mouse: event::MouseEvent) -> bool {
-        if let Some(view) = self.ledger_view.as_mut().filter(|view| view.visible) {
-            let action = view.mouse(mouse);
-            self.ledger_action(action);
-            return true;
-        }
         self.update_selection_context();
         if self.modal_blocks_mouse() {
             self.click_graph_filters(mouse);

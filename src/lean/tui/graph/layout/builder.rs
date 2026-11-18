@@ -83,9 +83,6 @@ fn task_index(view: &View) -> HashMap<&str, usize> {
 }
 
 fn extra_agents(view: &View) -> Vec<&str> {
-    let first_round = REQUIREMENTS_ROUNDS
-        .into_iter()
-        .find(|role| view.agents.contains_key(*role));
     let mut agents: Vec<_> = view
         .agents
         .keys()
@@ -95,49 +92,25 @@ fn extra_agents(view: &View) -> Vec<&str> {
                 && !key.starts_with("worker:")
                 && !key.starts_with("reviewer:")
         })
-        .filter(|key| requirements_round(key).is_none() || Some(*key) == first_round)
         .collect();
     agents.sort_unstable();
     agents
 }
 
 fn admin_agents<'a>(view: &View, extra: &[&'a str], builder: &Graph) -> Vec<(&'a str, bool)> {
-    let visible = |key| scope_matches(view, &builder.scope, key);
-    let requirements = extra
-        .iter()
-        .copied()
-        .find(|key| requirements_round(key).is_some());
-    let has_planner = requirements.is_some() && view.agents.contains_key(crate::lean::PLANNER);
-    let has_plan_reviewer = has_planner && view.agents.contains_key(PLAN_REVIEWER);
-    let mut agents = vec![(ORCHESTRATOR, visible(ORCHESTRATOR))];
-    if let Some(key) = requirements {
-        agents.push((key, visible(key)));
-    }
-    if has_planner {
-        agents.push((crate::lean::PLANNER, visible(crate::lean::PLANNER)));
-    }
-    if has_plan_reviewer {
-        agents.push((PLAN_REVIEWER, visible(PLAN_REVIEWER)));
-    }
-    agents.extend(extra.iter().filter_map(|&key| {
-        let later_requirements_review = matches!(
-            key,
-            "requirements-audit-analyst" | "requirements-audit-reviewer"
-        );
-        let additional_planner = key != crate::lean::PLANNER
-            && key != PLAN_REVIEWER
-            && key != ORCHESTRATOR
-            && key != AUDITOR
-            && requirements_round(key).is_none()
-            && !later_requirements_review;
-        if later_requirements_review && has_plan_reviewer || additional_planner && has_planner {
-            Some((key, visible(key)))
-        } else {
-            None
+    let mut agents = vec![(
+        ORCHESTRATOR,
+        scope_matches(view, &builder.scope, ORCHESTRATOR),
+    )];
+    for key in [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR] {
+        if view.agents.contains_key(key) {
+            agents.push((key, scope_matches(view, &builder.scope, key)));
         }
-    }));
-    if has_plan_reviewer && view.agents.contains_key(AUDITOR) {
-        agents.push((AUDITOR, visible(AUDITOR)));
+    }
+    for key in extra {
+        if !agents.iter().any(|(known, _)| known == key) {
+            agents.push((key, scope_matches(view, &builder.scope, key)));
+        }
     }
     agents.sort_by_key(|(key, _)| (workflow_stage(key), *key));
     agents

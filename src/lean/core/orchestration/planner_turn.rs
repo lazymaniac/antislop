@@ -1,4 +1,4 @@
-use crate::lean::core::orchestration::planning_context::planning_ledger_context;
+use crate::lean::core::orchestration::planning_context::planning_scope_context;
 use crate::lean::core::plan::answer::PlanAnswer;
 use crate::lean::*;
 use prompt::{PlannerPrompt, planner_prompt_text};
@@ -15,7 +15,7 @@ struct PlannerTurnContext<'a> {
     asked: Vec<store::Message>,
     requirements: String,
     team_guidance: Option<store::TeamGuidance>,
-    ledger_context: Option<String>,
+    scope_context: Option<String>,
     keepable: Option<String>,
     replaced: Option<String>,
 }
@@ -27,37 +27,11 @@ impl Core {
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        if !self.planning_requirements_ready(conversation, upto, cancel)? {
-            return Ok(());
-        }
         let context = self.planner_turn_context(conversation, upto)?;
         let Some(answer) = self.run_planner_turn(&context, cancel)? else {
             return Ok(());
         };
         self.handle_planner_answer(&context, &answer, cancel)
-    }
-
-    fn planning_requirements_ready(
-        self: &Arc<Self>,
-        conversation: &str,
-        upto: u64,
-        cancel: &AtomicBool,
-    ) -> Result<bool> {
-        if self
-            .planning_requirements(conversation, None, cancel)?
-            .is_some()
-        {
-            return Ok(true);
-        }
-        if self
-            .unanswered(conversation)?
-            .is_some_and(|next| next > upto)
-        {
-            return Ok(false);
-        }
-        Err(Error::Invalid(
-            "requirements are not ready for planning".into(),
-        ))
     }
 
     fn planner_turn_context<'a>(
@@ -72,7 +46,7 @@ impl Core {
         let requirements = self.store.workflow(conversation)?.summary;
         let team_guidance = self.store.team_guidance(conversation)?;
         announce_planner_draft(&self.store, conversation)?;
-        let ledger_context = planning_ledger_context(self, conversation)?;
+        let scope_context = planning_scope_context(self, conversation)?;
         let keepable = self.keepable_tasks_note(conversation)?;
         let replaced = self.replaced_graph(conversation, &asked)?;
         Ok(PlannerTurnContext {
@@ -84,7 +58,7 @@ impl Core {
             asked,
             requirements,
             team_guidance,
-            ledger_context,
+            scope_context,
             keepable,
             replaced,
         })
@@ -135,6 +109,10 @@ impl Core {
             .add_message(context.conversation, ORCHESTRATOR, &text)?;
         self.handle_plan_answer(
             PlanAnswer {
+                scope: match crate::lean::turn_result::TurnResult::decode(answer) {
+                    crate::lean::turn_result::TurnResult::Plan { scope, .. } => scope,
+                    _ => None,
+                },
                 conversation: context.conversation,
                 project: &context.project,
                 config: &context.config,
@@ -179,7 +157,7 @@ fn authored_contracts<'a>(
         "change_kind",
         "outputs",
         "delivery",
-        "covers",
+        "acceptance_criteria",
         "section",
         "summary",
     ];
@@ -232,7 +210,7 @@ fn planner_prompt(context: &PlannerTurnContext<'_>, first: bool) -> String {
         asked: &context.asked,
         replaced: context.replaced.as_deref(),
         keepable: context.keepable.as_deref(),
-        ledger_context: context.ledger_context.as_deref(),
+        scope_context: context.scope_context.as_deref(),
     })
 }
 
@@ -326,8 +304,11 @@ impl Core {
         )?;
         let run = self
             .store
-            .planning_run(conversation)?
-            .map(|run| (run.id, run.spec_revision));
+            .latest_plan(conversation)?
+            .first()
+            .map(|task| self.store.plan_scope_id(&task.plan_id))
+            .transpose()?
+            .flatten();
         let reason_key = reason
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -351,7 +332,7 @@ mod tests {
     use crate::config::Config;
 
     fn task() -> serde_json::Value {
-        json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}})
+        json!({"id":"t1","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}})
     }
 
     #[test]
@@ -584,7 +565,7 @@ mod replan_blocker_tests {
         core.store
             .add_plan(
                 &conversation,
-                &[json!({"id":"analysis","title":"Analysis","goal":"Report","change_kind": "none", "kind":"analysis"})],
+                &[json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap();
         assert_eq!(
@@ -636,10 +617,10 @@ mod authored_contract_tests {
     #[test]
     fn the_planner_sees_only_authored_tasks_and_fields_it_may_submit() {
         let specs = [
-            json!({"id":"a","title":"A","goal":"g","kind":"implementation","change_kind":"code",
-                "quality_gate":false,"options_for":null,"requirement_ids":["r"],"criterion_ids":[],
+            json!({"id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","kind":"implementation","change_kind":"code",
+                "quality_gate":false,"options_for":null,
                 "reviewer":{"summary":"x"},"depends_on":["a-options","b"]}),
-            json!({"id":"b","title":"B","goal":"g","kind":"analysis","change_kind":"none","depends_on":[]}),
+            json!({"id":"b","title":"B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","kind":"analysis","change_kind":"none","depends_on":[]}),
             json!({"id":"a-options","options_for":"a","quality_gate":false,"depends_on":[]}),
             json!({"id":"gate","quality_gate":true,"depends_on":["a"]}),
         ];

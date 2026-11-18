@@ -57,7 +57,7 @@ mod tests {
             .unwrap()
             .id;
         let tasks = core.store.add_plan(&conversation, &[json!({
-            "id":"inspect", "title":"Inspect", "goal":"Inspect the project", "change_kind": "none", "kind":"analysis"
+            "id":"inspect", "title":"Inspect", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect the project", "change_kind": "none", "kind":"analysis"
         })]).unwrap();
         let plan = &tasks[0].plan_id;
         assert!(

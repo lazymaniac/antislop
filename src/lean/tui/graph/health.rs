@@ -214,7 +214,7 @@ fn describe_agent(view: &View, key: &str) -> String {
     let agent = round.or(Some(key)).and_then(|round| view.agents.get(round));
     let working = health(view, key) == Health::Working;
     let doing = taskinfo::doing(view, round.unwrap_or(key));
-    let text = requirements_label(round, &activity_label(agent, working));
+    let text = activity_label(agent, working);
     match doing {
         Some(doing) => format!("{text} · {doing}"),
         None => text,
@@ -233,19 +233,6 @@ fn activity_label(agent: Option<&super::super::view::Agent>, working: bool) -> S
     } else {
         activity.to_owned()
     }
-}
-
-fn requirements_label(round: Option<&str>, activity: &str) -> String {
-    let Some(index) = round.and_then(requirements_round) else {
-        return activity.to_owned();
-    };
-    let phase = match index {
-        0 => "extracting",
-        1 => "checking extraction",
-        2 => "comparing options",
-        _ => "checking options",
-    };
-    format!("{phase} · {activity}")
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {

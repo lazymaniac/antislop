@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WireRequest {
+    AddSource {
+        conversation: String,
+        text: String,
+    },
+    GetSource {
+        conversation: String,
+        source_id: String,
+    },
+
     ActivateRuntime {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
@@ -122,64 +131,6 @@ pub(crate) enum WireRequest {
         conversation: String,
         id: String,
         offset: u64,
-    },
-
-    ListRuns {
-        conversation: String,
-    },
-    RejectLedgerProposal {
-        conversation: String,
-        run_id: String,
-        proposal_id: String,
-        diff_hash: String,
-        comment: String,
-    },
-    GetLedgerProposal {
-        conversation: String,
-        run_id: String,
-    },
-
-    ListRequirements {
-        query: crate::lean::ledger::LedgerQuery,
-    },
-    GetLedgerEntry {
-        conversation: String,
-        run_id: String,
-        id: String,
-        revision: Option<i64>,
-    },
-    GetLedgerDiff {
-        conversation: String,
-        run_id: String,
-        from_revision: i64,
-        to_revision: i64,
-    },
-    GetEvidence {
-        conversation: String,
-        run_id: String,
-        entry_id: Option<String>,
-    },
-    ProposeLedgerChange {
-        change: crate::lean::ledger::LedgerChange,
-    },
-    ApplyLedgerChange {
-        proposal_id: String,
-        diff_hash: String,
-        change: crate::lean::ledger::LedgerChange,
-    },
-    CreateRun {
-        conversation: String,
-        goal: String,
-    },
-    AddLedgerSource {
-        conversation: String,
-        run_id: String,
-        text: String,
-    },
-    GetLedgerSource {
-        conversation: String,
-        run_id: String,
-        source_id: String,
     },
 
     Identity,
@@ -322,8 +273,6 @@ pub(crate) enum WireRequest {
         revision: crate::lean::store::PlanRevision,
         #[serde(default)]
         request_ai_review: bool,
-        #[serde(default)]
-        allow_uncovered: bool,
     },
     SelectTeam {
         conversation: String,

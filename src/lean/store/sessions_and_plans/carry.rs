@@ -5,7 +5,7 @@ type Row = (String, Value, Option<String>);
 
 /// Each task of `plan_id` whose contract matches an approved task of the
 /// conversation's approved history takes over its original report. The same
-/// requirements retain approval; new requirements queue a reviewer-only review. A writer's
+/// scope retains approval; a new scope queue a reviewer-only review. A writer's
 /// approved change is already in the project. Unfinished work keeps its
 /// checkpoint and is reassessed without inheriting approval.
 /// `feedback.carried_from` names the task whose turns produced the result.
@@ -15,7 +15,7 @@ pub(super) fn carry_approved(
     conversation: &str,
     plan_id: &str,
 ) -> Result<Option<String>> {
-    let Some((_source, same_requirements)) = source_plan(tx, conversation, plan_id)? else {
+    let Some((_source, same_scope)) = source_plan(tx, conversation, plan_id)? else {
         return Ok(None);
     };
     let approved = rows(
@@ -30,10 +30,10 @@ pub(super) fn carry_approved(
     )?;
     let (kept, repeated) =
         carry_plan_tasks(tx, plan_id, &approved, std::path::Path::new(&project))?;
-    let why = if same_requirements {
+    let why = if same_scope {
         "their contracts changed since approval"
     } else {
-        "the requirements changed since their approval"
+        "the scope changed since their approval"
     };
     Ok(carry_notice(&kept, &repeated, why))
 }
@@ -61,11 +61,9 @@ fn carry_plan_tasks(
         let source_changes = source_changes(tx, old, project, &mut current_source)?;
         let unchanged_sources = source_changes.is_empty();
         let unchanged_dependencies = dependencies_are_current(tx, plan_id, old)?;
-        let unchanged_requirements:bool=tx.query_row("SELECT t.status='approved' AND coalesce(a.run_id=b.run_id,0) FROM tasks t LEFT JOIN plan_runs a ON a.plan_id=t.plan_id LEFT JOIN plan_runs b ON b.plan_id=?2 WHERE t.id=?1",params![old.0,plan_id],|r|r.get(0))?;
-        let compatible = unchanged_contract
-            && unchanged_sources
-            && unchanged_dependencies
-            && unchanged_requirements;
+        let unchanged_scope:bool=tx.query_row("SELECT t.status='approved' AND coalesce(a.scope_id=b.scope_id,0) FROM tasks t LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) a ON a.plan_id=t.plan_id LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) b ON b.plan_id=?2 WHERE t.id=?1",params![old.0,plan_id],|r|r.get(0))?;
+        let compatible =
+            unchanged_contract && unchanged_sources && unchanged_dependencies && unchanged_scope;
         if !compatible {
             let fields = spec
                 .as_object()
@@ -74,7 +72,7 @@ fn carry_plan_tasks(
                 .filter(|key| old.1[*key] != spec[*key])
                 .cloned()
                 .collect::<Vec<_>>();
-            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) SELECT conversation_id,plan_id,'task_reassessment_required',?2,?3 FROM tasks WHERE id=?1",params![id,serde_json::json!({"task":id,"source":old.0,"contract_fields":fields,"changed_paths":source_changes.iter().take(12).collect::<Vec<_>>(),"changed_path_count":source_changes.len(),"dependency_producer_changed":!unchanged_dependencies,"requirements_changed":!unchanged_requirements}).to_string(),now_ms()])?;
+            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) SELECT conversation_id,plan_id,'task_reassessment_required',?2,?3 FROM tasks WHERE id=?1",params![id,serde_json::json!({"task":id,"source":old.0,"contract_fields":fields,"changed_paths":source_changes.iter().take(12).collect::<Vec<_>>(),"changed_path_count":source_changes.len(),"dependency_producer_changed":!unchanged_dependencies,"scope_changed":!unchanged_scope}).to_string(),now_ms()])?;
         }
         carry(tx, &id, old, compatible)?;
         if compatible {
@@ -90,8 +88,8 @@ fn carry_plan_tasks(
             if !unchanged_dependencies {
                 reasons.push("dependency producer changed");
             }
-            if !unchanged_requirements {
-                reasons.push("requirements need reassessment");
+            if !unchanged_scope {
+                reasons.push("scope needs reassessment");
             }
             repeated.push(format!("{name} ({})", reasons.join(", ")));
         }
@@ -170,9 +168,9 @@ fn source_plan(
 ) -> Result<Option<(String, bool)>> {
     Ok(tx
         .query_row(
-            "SELECT t.plan_id, coalesce(a.run_id=b.run_id, 0) FROM tasks t
-               LEFT JOIN plan_runs a ON a.plan_id=t.plan_id
-               LEFT JOIN plan_runs b ON b.plan_id=?2
+            "SELECT t.plan_id, coalesce(a.scope_id=b.scope_id, 0) FROM tasks t
+               LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) a ON a.plan_id=t.plan_id
+               LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) b ON b.plan_id=?2
              WHERE t.conversation_id=?1 AND t.plan_id<>?2 AND (t.status IN ('approved','stale') OR (t.status IN ('coordinating','failed','cancelled','needs_user','waiting','queued') AND (t.report IS NOT NULL OR t.result IS NOT NULL)))
              ORDER BY t.created_ms DESC, t.rowid DESC LIMIT 1",
             params![conversation, plan_id],
@@ -204,9 +202,7 @@ fn same_contract(old: &Value, new: &Value) -> bool {
         let mut spec = spec.clone();
         if let Some(object) = spec.as_object_mut() {
             for field in [
-                "requirement_ids",
-                "criterion_ids",
-                "covers",
+                "acceptance_criteria",
                 "scope",
                 "title",
                 "summary",
@@ -228,7 +224,7 @@ fn carry(
     tx: &rusqlite::Transaction<'_>,
     id: &str,
     (source, _, feedback): &Row,
-    same_requirements: bool,
+    same_scope: bool,
 ) -> Result<()> {
     let integrated: bool = tx.query_row(
         "SELECT status='approved' FROM tasks WHERE id=?1",
@@ -247,7 +243,7 @@ fn carry(
     if !integrated {
         feedback["continuation_review"] = true.into();
     }
-    if !same_requirements {
+    if !same_scope {
         feedback["resume_role"] = "reviewer".into();
         feedback["compatibility_review"] = true.into();
     }
@@ -261,7 +257,7 @@ fn carry(
            verdict=CASE WHEN ?4='approved' THEN (SELECT verdict FROM tasks WHERE id=?2) ELSE NULL END,
            feedback=?3, base=CASE WHEN ?5 THEN NULL ELSE (SELECT base FROM tasks WHERE id=?2) END, result=CASE WHEN ?5 THEN NULL ELSE (SELECT result FROM tasks WHERE id=?2) END
          WHERE id=?1",
-        params![id, source, feedback.to_string(), if same_requirements { "approved" } else { "queued" }, integrated],
+        params![id, source, feedback.to_string(), if same_scope { "approved" } else { "queued" }, integrated],
     )?;
     Ok(())
 }

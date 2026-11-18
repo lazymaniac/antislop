@@ -170,7 +170,7 @@ pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
 /// Stable identity of the integrated files, including uncommitted content.
 /// Git's copied index reuses unchanged objects; no repository text enters SQLite.
 pub fn integrated_fingerprint(project: &Path) -> Result<String> {
-    let snapshot = snapshot(project, CommitPurpose::RequirementsSnapshot)?;
+    let snapshot = snapshot(project, CommitPurpose::FinalAuditSnapshot)?;
     ok(project, &["rev-parse", &format!("{snapshot}^{{tree}}")])
 }
 

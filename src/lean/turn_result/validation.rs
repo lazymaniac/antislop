@@ -117,15 +117,6 @@ impl TurnResult {
             } => format!("{report}\n\nResume when: {resume_condition}"),
             Self::NeedsInput { checkpoint, .. } => checkpoint.clone(),
             Self::Question { question } => question.transcript(),
-            Self::Ledger { extraction } => {
-                format!("Extracted {} requirement(s).", extraction.entries.len())
-            }
-            Self::Audit { findings, evidence } => format!(
-                "Audit: {} finding(s), {} piece(s) of evidence.",
-                findings.len(),
-                evidence.len()
-            ),
-            Self::AuditReview { note, .. } => note.clone(),
         }
     }
 }

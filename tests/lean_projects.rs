@@ -21,6 +21,7 @@ fn write_executable(path: &Path, body: &str) {
 fn project(root: &Path, name: &str) -> PathBuf {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).unwrap();
+    common::initialize_git_project(&dir);
     write_executable(
         &dir.join("codex"),
         &format!(

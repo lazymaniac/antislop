@@ -13,7 +13,7 @@ fn authorize(core: &Core, conversation: &str, plan: &str) {
 #[test]
 fn orchestrator_reads_its_accepted_plan_while_newer_rejected_drafts_exist() {
     let (_directory, core, conversation) = core();
-    let spec = json!({"id":"inventory","title":"Inventory","goal":"Report","change_kind": "none", "kind":"analysis"});
+    let spec = json!({"id":"inventory","title":"Inventory","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"});
     let mut source = core
         .store
         .add_plan(&conversation, std::slice::from_ref(&spec))
@@ -110,8 +110,8 @@ fn orchestrator_reads_its_accepted_plan_while_newer_rejected_drafts_exist() {
 fn approved_dependency_exposes_complete_earlier_rounds_after_a_carried_amendment() {
     let (_directory, core, conversation) = core();
     let specs = [
-        json!({"id":"inventory","title":"Inventory","goal":"Report","change_kind": "none", "kind":"analysis"}),
-        json!({"id":"consumer","title":"Consumer","goal":"Read inventory","change_kind": "none", "kind":"analysis","depends_on":["inventory"]}),
+        json!({"id":"inventory","title":"Inventory","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read inventory","change_kind": "none", "kind":"analysis","depends_on":["inventory"]}),
     ];
     let mut source = core
         .store
@@ -249,15 +249,15 @@ fn approved_dependency_exposes_complete_earlier_rounds_after_a_carried_amendment
 #[test]
 fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
     let (_directory, core, conversation) = core();
-    let run = core.store.create_run(&conversation, "Analyze").unwrap();
-    let spec = json!({"id":"analysis","title":"Analysis","goal":"Deliver text","change_kind": "none", "kind":"analysis"});
+    let run = core.store.create_scope(&conversation, "Analyze").unwrap();
+    let spec = json!({"id":"analysis","title":"Analysis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Deliver text","change_kind": "none", "kind":"analysis"});
     let mut task = core
         .store
         .add_plan(&conversation, std::slice::from_ref(&spec))
         .unwrap()
         .remove(0);
     core.store
-        .link_plan_run(&conversation, &task.plan_id, &run.id)
+        .bind_plan_scope(&conversation, &task.plan_id, &run.id)
         .unwrap();
     let full = (1..=16)
         .map(|i| format!("Problem {i}: {}\n", "ą🦀".repeat(500)))
@@ -270,7 +270,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
     // Same authored id in a newer, unrelated run must not change the result.
     let other_run = core
         .store
-        .create_run(&conversation, "Other requirements")
+        .create_scope(&conversation, "Other requirements")
         .unwrap();
     let mut other = core
         .store
@@ -278,7 +278,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
         .unwrap()
         .remove(0);
     core.store
-        .link_plan_run(&conversation, &other.plan_id, &other_run.id)
+        .bind_plan_scope(&conversation, &other.plan_id, &other_run.id)
         .unwrap();
     other.report = Some("Unrelated report".into());
     other.status = status::APPROVED.into();
@@ -286,7 +286,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
     core.store
         .test_completion(&other, other.report.as_deref().unwrap());
     authorize(&core, &conversation, &other.plan_id);
-    for role in ["requirements-audit-analyst", "requirements-audit-reviewer"] {
+    for role in ["auditor"] {
         let turn = core
             .store
             .start_turn(&conversation, role, "fixture", 0, Some(&task.plan_id))
@@ -368,7 +368,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
             .is_err()
         );
     }
-    let role = "requirements-extraction-analyst";
+    let role = "unrelated-role";
     let turn = core
         .store
         .start_turn(&conversation, role, "fixture", 0, Some(&task.plan_id))
@@ -389,9 +389,9 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
 fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_access() {
     let (_directory, core, conversation) = core();
     let specs = [
-        json!({"id":"consumer-options","title":"Options","goal":"Choose","change_kind": "none", "kind":"options","options_for":"consumer"}),
-        json!({"id":"unrelated-options","title":"Other options","goal":"Choose","change_kind": "none", "kind":"options","options_for":"other"}),
-        json!({"id":"consumer","title":"Consume","goal":"Apply selected approach","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"consumer-options","title":"Options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Choose","change_kind": "none", "kind":"options","options_for":"consumer"}),
+        json!({"id":"unrelated-options","title":"Other options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Choose","change_kind": "none", "kind":"options","options_for":"other"}),
+        json!({"id":"consumer","title":"Consume","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Apply selected approach","change_kind": "none", "kind":"analysis"}),
     ];
     let tasks = core.store.add_plan(&conversation, &specs).unwrap();
     for source in &tasks[..2] {
@@ -471,10 +471,10 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
 fn approved_transitive_results_are_readable_but_siblings_and_foreign_results_are_not() {
     let (_directory, core, conversation) = core();
     let specs = [
-        json!({"id":"measurement-path","title":"Measurement","goal":"Report","change_kind": "none", "kind":"analysis"}),
-        json!({"id":"baseline","title":"Baseline","goal":"Measure","change_kind": "none", "kind":"analysis","depends_on":["measurement-path"]}),
-        json!({"id":"synthesis","title":"Synthesis","goal":"Use measurements","change_kind": "none", "kind":"analysis","depends_on":["baseline"]}),
-        json!({"id":"sibling","title":"Sibling","goal":"Unrelated","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"measurement-path","title":"Measurement","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis"}),
+        json!({"id":"baseline","title":"Baseline","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Measure","change_kind": "none", "kind":"analysis","depends_on":["measurement-path"]}),
+        json!({"id":"synthesis","title":"Synthesis","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Use measurements","change_kind": "none", "kind":"analysis","depends_on":["baseline"]}),
+        json!({"id":"sibling","title":"Sibling","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Unrelated","change_kind": "none", "kind":"analysis"}),
     ];
     let mut tasks = core.store.add_plan(&conversation, &specs).unwrap();
     let report = (1..=16)

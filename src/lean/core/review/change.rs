@@ -128,6 +128,9 @@ impl Core {
         plan_id: &str,
         reason: Option<&str>,
     ) -> Result<()> {
+        if self.reject_scope_revision(conversation, plan_id, reason)? {
+            return Ok(());
+        }
         self.store.conversation(conversation)?;
         let changed = self
             .store

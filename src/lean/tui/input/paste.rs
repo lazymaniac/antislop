@@ -20,10 +20,7 @@ impl App {
         if self.plan_history.is_some() || self.help.is_some() {
             return true;
         }
-        if self.ledger_view.as_ref().is_some_and(|view| view.visible) && self.picker.is_none() {
-            self.ledger_view.as_mut().unwrap().paste(text);
-            return true;
-        }
+
         if let Some(editor) = self.config_editor.as_mut().filter(|editor| editor.visible) {
             editor.paste(text);
             return true;

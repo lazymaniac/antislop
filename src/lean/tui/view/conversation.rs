@@ -64,9 +64,10 @@ impl View {
             return Stage::Executing;
         }
         if !self.tasks.is_empty()
-            && self.agents.iter().any(|(key, agent)| {
-                agent.running && (key == super::AUDITOR || key.starts_with("requirements-audit-"))
-            })
+            && self
+                .agents
+                .iter()
+                .any(|(key, agent)| agent.running && key == super::AUDITOR)
         {
             return Stage::Audit;
         }

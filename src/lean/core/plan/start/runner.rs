@@ -43,6 +43,10 @@ impl Core {
             self.clear_running_plan(conversation);
             return Ok(true);
         }
+        if self.store.pending_scope_revision(plan_id)?.is_some() {
+            self.clear_running_plan(conversation);
+            return Ok(true);
+        }
         if self.has_runnable_dependents(plan_id)? {
             return Ok(false);
         }
@@ -87,6 +91,10 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<bool> {
         let graph = self.locks.graph();
+        if self.store.pending_scope_revision(plan_id)?.is_some() {
+            self.clear_running_plan(conversation);
+            return Ok(true);
+        }
         if self.has_runnable_dependents(plan_id)? {
             return Ok(false);
         }
@@ -225,15 +233,6 @@ impl Core {
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        // A registered source may outlive an interrupted planning pass. Refresh
-        // its coverage before coordinating, without forcing a replacement plan.
-        if let Err(error) = self.refresh_requirements_if_needed(conversation, cancel) {
-            self.notice(
-                conversation,
-                &format!("could not refresh requirements source coverage: {error}"),
-            );
-            return Err(error);
-        }
         if self.planner_owns_turn(conversation, upto)? {
             self.planner_turn(conversation, upto, cancel)
         } else {
@@ -344,7 +343,7 @@ mod deferred_tests {
             .store
             .add_plan(
                 &conversation,
-                &[json!({"id":"bad","title":"Bad","goal":"Do work","change_kind": "none", "kind":"analysis"})],
+                &[json!({"id":"bad","title":"Bad","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Do work","change_kind": "none", "kind":"analysis"})],
             )
             .unwrap()
             .remove(0);
@@ -394,7 +393,7 @@ mod deferred_tests {
             .create_conversation(dir.path().to_str().unwrap())
             .unwrap()
             .id;
-        let mut tasks = core.store.add_plan(&conversation, &[json!({"id":"future","title":"Future","goal":"Preserve future work","change_kind": "code", "kind":"implementation","deferred":true})]).unwrap();
+        let mut tasks = core.store.add_plan(&conversation, &[json!({"id":"future","title":"Future","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Preserve future work","change_kind": "code", "kind":"implementation","deferred":true})]).unwrap();
         tasks[0].status = status::QUEUED.into();
         core.store.update_task(&tasks[0]).unwrap();
         // Suppress only notification delivery; no real provider is started by the test.

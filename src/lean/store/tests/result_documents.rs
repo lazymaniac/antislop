@@ -15,7 +15,7 @@ fn declared_text_outputs_survive_reopen_and_remain_distinct() {
             &[json!({
                 "id":"writer",
                 "title":"Write documents",
-                "goal":"Create two deliverables",
+                "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create two deliverables",
                 "kind":"writing",
                 "change_kind":"artifact",
                 "outputs":["brief.md", "notes.txt"],
@@ -161,7 +161,7 @@ fn undeclared_report_paths_cannot_become_result_documents() {
             &[json!({
                 "id":"writer",
                 "title":"Write a document",
-                "goal":"Create a deliverable",
+                "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create a deliverable",
                 "kind":"writing",
                 "change_kind":"artifact",
                 "outputs":["deliverable.md"],
@@ -199,7 +199,7 @@ fn publication_racing_session_delete_never_resurrects_or_leaks_content() {
             &[json!({
                 "id":"writer",
                 "title":"Write a document",
-                "goal":"Create a deliverable",
+                "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create a deliverable",
                 "kind":"writing",
                 "change_kind":"artifact",
                 "outputs":["deliverable.md"],
@@ -263,8 +263,8 @@ fn paused_directory_sync_does_not_block_an_independent_publication() {
         .add_plan(
             &conversation.id,
             &[
-                json!({"id":"first","title":"First","goal":"Write first","kind":"writing","change_kind":"artifact","outputs":["first.md"],"reviewer":{"summary":"Review"}}),
-                json!({"id":"second","title":"Second","goal":"Write second","kind":"writing","change_kind":"artifact","outputs":["second.md"],"reviewer":{"summary":"Review"}}),
+                json!({"id":"first","title":"First","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write first","kind":"writing","change_kind":"artifact","outputs":["first.md"],"reviewer":{"summary":"Review"}}),
+                json!({"id":"second","title":"Second","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write second","kind":"writing","change_kind":"artifact","outputs":["second.md"],"reviewer":{"summary":"Review"}}),
             ],
         )
         .unwrap();
@@ -354,7 +354,7 @@ fn deletion_during_directory_sync_keeps_lease_then_collects_orphan_without_resur
     let task = store
         .add_plan(
             &conversation.id,
-            &[json!({"id":"writer","title":"Write","goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
+            &[json!({"id":"writer","title":"Write","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
         )
         .unwrap()
         .remove(0);
@@ -426,7 +426,7 @@ fn directory_sync_failure_is_reported_and_published_orphan_is_collected() {
     let task = store
         .add_plan(
             &conversation.id,
-            &[json!({"id":"writer","title":"Write","goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
+            &[json!({"id":"writer","title":"Write","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
         )
         .unwrap()
         .remove(0);
@@ -463,7 +463,7 @@ fn idempotency_read_failure_after_directory_sync_collects_published_orphan() {
     let task = store
         .add_plan(
             &conversation.id,
-            &[json!({"id":"writer","title":"Write","goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
+            &[json!({"id":"writer","title":"Write","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write a document","kind":"writing","change_kind":"artifact","outputs":["deliverable.md"],"reviewer":{"summary":"Review"}})],
         )
         .unwrap()
         .remove(0);

@@ -1,7 +1,7 @@
 mod chat;
 mod coordinator;
-mod ledger;
 mod overlays;
+mod plan_history;
 mod specialized_dashboard;
 mod specialized_dashboard_cards;
 mod specialized_details;

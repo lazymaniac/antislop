@@ -21,26 +21,18 @@ pub(super) fn recovery_fixture() -> (tempfile::TempDir, Arc<Core>, String, Task,
         .interview_summary(&conversation, &message.text, message.seq)
         .unwrap();
     core.store.confirm_scope_for_test(&conversation);
-    let run = core.store.create_run(&conversation, &message.text).unwrap();
-    let source = core
+    let run = core
         .store
-        .register_message_source(&conversation, &run.id, message.seq)
+        .create_scope(&conversation, &message.text)
         .unwrap();
-    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"recovery-fixture","reason":"Synthetic recovery scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":message.text,"criteria":[{"id":"R1.accept","text":"Validate results without changing the contract"}]}]})).unwrap();
-    core.store
-        .apply_ledger_change(&change, &core.state, true)
-        .unwrap();
-    let spec = json!({"id":"integration-gate","title":"Integration","goal":"Validate","change_kind": "none", "kind":"analysis","requirement_ids":["R1"],"criterion_ids":["R1.accept"]});
+    let spec = json!({"id":"integration-gate","title":"Integration","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Validate","change_kind": "none", "kind":"analysis",});
     let mut accepted = core
         .store
         .add_plan(&conversation, &[spec])
         .unwrap()
         .remove(0);
     core.store
-        .link_plan_run(&conversation, &accepted.plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation, &run.id, &accepted.plan_id)
+        .bind_plan_scope(&conversation, &accepted.plan_id, &run.id)
         .unwrap();
     accepted.status = status::FAILED.into();
     core.store.update_task(&accepted).unwrap();

@@ -85,17 +85,13 @@ impl Store {
         let transaction = connection.unchecked_transaction()?;
         initialize_base_tables(&transaction)?;
         initialize_plan_tables(&transaction)?;
-        transaction.execute_batch(include_str!("../ledger/schema.sql"))?;
+        transaction.execute_batch(include_str!("../scope/schema.sql"))?;
         Self::initialize_history(&transaction)?;
         Self::initialize_run_context(&transaction)?;
         transaction.execute_batch(include_str!("agent_runtime.sql"))?;
         transaction.pragma_update(None, "user_version", SCHEMA)?;
         transaction.commit()?;
         Ok(())
-    }
-
-    pub(in crate::lean) fn decode_content(&self, text: &str) -> Result<String> {
-        self.content.decode(text)
     }
 
     pub(in crate::lean) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -193,7 +189,7 @@ impl Store {
     pub fn conversation_goal(&self, conversation: &str) -> Result<String> {
         let db = self.db();
         let goal: Option<String> = db.query_row(
-            "SELECT goal FROM runs WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1",
+            "SELECT s.summary FROM plan_scopes b JOIN scopes s ON s.id=b.scope_id JOIN plans p ON p.id=b.plan_id WHERE p.conversation_id=?1 ORDER BY p.created_ms DESC,p.rowid DESC,b.revision DESC LIMIT 1",
             [conversation],
             |row| row.get(0),
         ).optional()?;
@@ -227,7 +223,6 @@ impl Store {
             |row| row.get(0),
         )?;
         crate::require(!running, "stop this session's work before deleting it")?;
-        tx.execute("DELETE FROM ledger_source_coverage WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM result_evidence WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM agent_answer_waits WHERE request IN (SELECT id FROM agent_questions WHERE conversation_id=?1)", [conversation])?;
         tx.execute(
@@ -237,23 +232,17 @@ impl Store {
         tx.execute("DELETE FROM agent_results WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM agent_evidence WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM turn_inputs WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_turns WHERE turn_id IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_reviews WHERE producer_turn IN (SELECT id FROM turns WHERE conversation_id=?1) OR reviewer_turn IN (SELECT id FROM turns WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM requirements_resumptions WHERE message IN (SELECT seq FROM messages WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_rejections WHERE comment_message IN (SELECT seq FROM messages WHERE conversation_id=?1) OR resume_message IN (SELECT seq FROM messages WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_rejections WHERE proposal_id IN (SELECT id FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1))", [conversation])?;
-        tx.execute("DELETE FROM ledger_source_coverage WHERE source_id IN (SELECT ls.id FROM ledger_sources ls JOIN runs r ON r.id=ls.run_id WHERE r.conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_evidence WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_relations WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_criteria WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_versions WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_entries WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_proposal_tasks WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_decisions WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_sources WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_reviews WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM task_ledger_inputs WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
+        tx.execute("DELETE FROM scope_revision_proposals WHERE request IN (SELECT id FROM plan_revision_jobs WHERE conversation_id=?1)",[conversation])?;
+        tx.execute("DELETE FROM plan_scopes WHERE plan_id IN (SELECT id FROM plans WHERE conversation_id=?1)",[conversation])?;
+        tx.execute("DELETE FROM scope_documents WHERE scope_id IN (SELECT id FROM scopes WHERE conversation_id=?1)",[conversation])?;
+        tx.execute(
+            "DELETE FROM scopes WHERE conversation_id=?1",
+            [conversation],
+        )?;
+        tx.execute(
+            "DELETE FROM conversation_sources WHERE conversation_id=?1",
+            [conversation],
+        )?;
         tx.execute("DELETE FROM task_inputs WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM task_result_sources WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1) OR producer_task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM task_source_revisions WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
@@ -261,12 +250,6 @@ impl Store {
         tx.execute("DELETE FROM task_resume_results WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1) OR source_task IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM task_contracts WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
         tx.execute("DELETE FROM integration_attempts WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)", [conversation])?;
-        tx.execute("DELETE FROM ledger_proposal_tasks WHERE proposal_id IN (SELECT id FROM ledger_proposals WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?1))", [conversation])?;
-        tx.execute("DELETE FROM plan_runs WHERE plan_id IN (SELECT id FROM plans WHERE conversation_id=?1)", [conversation])?;
-        tx.execute(
-            "DELETE FROM planning_runs WHERE conversation_id=?1",
-            [conversation],
-        )?;
         tx.execute(
             "DELETE FROM plan_revision_jobs WHERE conversation_id=?1",
             [conversation],
@@ -315,7 +298,6 @@ impl Store {
             "DELETE FROM checks WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?1)",
             [conversation],
         )?;
-        tx.execute("DELETE FROM runs WHERE conversation_id=?1", [conversation])?;
         tx.execute("DELETE FROM tasks WHERE conversation_id=?1", [conversation])?;
         tx.execute("DELETE FROM turns WHERE conversation_id=?1", [conversation])?;
         tx.execute("DELETE FROM plans WHERE conversation_id=?1", [conversation])?;
@@ -358,7 +340,7 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         let seq = insert_message(&tx, conversation, author, &stored_text)?;
-        maybe_start_requirements_checkpoint(&tx, conversation, author, text, seq)?;
+        maybe_restart_workflow(&tx, conversation, author, text)?;
         if author == "user" {
             super::Store::record_scope_confirmation_answer(&tx, conversation, text, seq)?;
         }
@@ -400,12 +382,11 @@ fn insert_message_event(
     Ok(())
 }
 
-fn maybe_start_requirements_checkpoint(
+fn maybe_restart_workflow(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
     author: &str,
     text: &str,
-    sequence: u64,
 ) -> Result<()> {
     // An answer to an open decision continues the current goal.
     if author != "user"
@@ -415,7 +396,12 @@ fn maybe_start_requirements_checkpoint(
         return Ok(());
     }
     if restart_completed_workflow(tx, conversation)? > 0 {
-        create_requirements_run(tx, conversation, text, sequence)?;
+        append_run_event(
+            tx,
+            conversation,
+            "workflow",
+            serde_json::json!({"phase":"interview","summary":""}),
+        )?;
     }
     Ok(())
 }
@@ -435,69 +421,6 @@ fn restart_completed_workflow(tx: &rusqlite::Transaction<'_>, conversation: &str
              ORDER BY seq DESC LIMIT 1),1)=1",
         [conversation],
     )?)
-}
-
-fn create_requirements_run(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-    text: &str,
-    sequence: u64,
-) -> Result<()> {
-    let run_id = crate::id();
-    insert_requirements_run(tx, conversation, text, sequence, &run_id)?;
-    link_planning_run(tx, conversation, &run_id)?;
-    append_requirements_events(tx, conversation, &run_id)
-}
-
-fn insert_requirements_run(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-    text: &str,
-    sequence: u64,
-    run_id: &str,
-) -> Result<()> {
-    tx.execute(
-        "INSERT INTO runs(id,conversation_id,goal,created_ms,start_message) VALUES(?1,?2,?3,?4,?5)",
-        params![
-            run_id,
-            conversation,
-            crate::lean::tasks::bound(text, 1000),
-            now_ms(),
-            sequence as i64
-        ],
-    )?;
-    Ok(())
-}
-
-fn link_planning_run(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-    run_id: &str,
-) -> Result<()> {
-    tx.execute(
-        "INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id",
-        params![conversation, run_id],
-    )?;
-    Ok(())
-}
-
-fn append_requirements_events(
-    tx: &rusqlite::Transaction<'_>,
-    conversation: &str,
-    run_id: &str,
-) -> Result<()> {
-    append_run_event(
-        tx,
-        conversation,
-        "run_created",
-        serde_json::json!({"run": run_id}),
-    )?;
-    append_run_event(
-        tx,
-        conversation,
-        "workflow",
-        serde_json::json!({"phase": "interview", "summary": ""}),
-    )
 }
 
 fn append_run_event(

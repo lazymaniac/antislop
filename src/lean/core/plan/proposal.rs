@@ -1,5 +1,4 @@
 use crate::lean::core::task::feedback_helpers::review_json;
-use crate::lean::ledger::Run;
 use helpers::PreparedPlan;
 
 #[path = "proposal/helpers.rs"]
@@ -69,15 +68,16 @@ impl Core {
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let PlanProposal { config, specs } = proposal;
-        let Some((run, specs)) =
-            self.prepare_proposal(conversation, addressed, cancel, specs, config)?
+        let PlanProposal {
+            config,
+            specs,
+            scope,
+        } = proposal;
+        let Some(specs) = self.prepare_proposal(conversation, addressed, cancel, specs, config)?
         else {
             return Ok(());
         };
-        let Some(plan) = self.prepare_plan(conversation, &specs, &run)? else {
-            return Ok(());
-        };
+        let plan = self.prepare_plan(conversation, &specs, scope)?;
         self.complete_proposal(ProposalPublication {
             conversation,
             project,
@@ -94,18 +94,13 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         addressed: Option<&[u64]>,
-        cancel: &AtomicBool,
+        _cancel: &AtomicBool,
         specs: &[TaskContract],
         config: &Config,
-    ) -> Result<Option<(Run, Vec<TaskContract>)>> {
-        let Some(run) = self.planning_requirements(conversation, addressed, cancel)? else {
-            return Ok(None);
-        };
-        let Some(specs) = self.covered_plan(conversation, &run, specs)? else {
-            return Ok(None);
-        };
-        match checked_team_plan(&specs, config, self.store.team(conversation)?) {
-            Ok(specs) => Ok(Some((run, specs))),
+    ) -> Result<Option<Vec<TaskContract>>> {
+        helpers::record_addressed_comments(&self.store, conversation, addressed)?;
+        match checked_team_plan(specs, config, self.store.team(conversation)?) {
+            Ok(specs) => Ok(Some(specs)),
             Err(message) => {
                 self.record_plan_lint(conversation, &message)?;
                 Ok(None)

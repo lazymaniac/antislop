@@ -19,13 +19,13 @@ impl Core {
 
     fn append_run_revision(
         &self,
-        conversation: &str,
+        _conversation: &str,
         plan_id: &str,
         data: &mut String,
     ) -> Result<()> {
-        if let Some(run) = self.store.plan_run(plan_id)? {
-            let revision = self.store.run(conversation, &run)?.spec_revision;
-            data.push_str(&revision.to_string());
+        data.push_str(&self.store.plan_revision(plan_id)?.to_string());
+        if let Some(id) = self.store.plan_scope_id(plan_id)? {
+            data.push_str(&id);
         }
         Ok(())
     }

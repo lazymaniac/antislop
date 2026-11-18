@@ -202,31 +202,6 @@ impl Core {
         self.record_result(turn, result)
     }
 
-    pub(super) fn audit_tool(
-        &self,
-        conversation: &str,
-        role: &str,
-        turn: &str,
-        tool: &str,
-        args: &Value,
-    ) -> Result<Value> {
-        let result = match tool {
-            "submit_ledger" if role == "requirements-extraction-analyst" => TurnResult::Ledger {
-                extraction: self.submitted_extraction(conversation, args)?,
-            },
-            "submit_audit" if role == "requirements-audit-analyst" => {
-                let (findings, evidence) = self.submitted_audit(conversation, args)?;
-                TurnResult::Audit { findings, evidence }
-            }
-            "submit_audit_review" if role == "requirements-audit-reviewer" => {
-                let (note, assessments) = self.submitted_audit_review(conversation, args)?;
-                TurnResult::AuditReview { note, assessments }
-            }
-            _ => return Err(Error::Invalid("tool is unavailable for this role".into())),
-        };
-        self.record_result(turn, result)
-    }
-
     pub(super) fn revision_tool(
         self: &Arc<Self>,
         conversation: &str,
@@ -264,6 +239,11 @@ impl Core {
         Ok((
             request_key,
             super::store::PlanRevision {
+                scope: if args["scope"].is_null() {
+                    None
+                } else {
+                    Some(required_text(args, "scope")?)
+                },
                 plan,
                 base_revision,
                 reason: required_text(args, "reason")?,

@@ -29,63 +29,6 @@ impl App {
         }
     }
 
-    pub(super) fn apply_ledger(&mut self, update: Update) {
-        let Update::Ledger {
-            conversation,
-            request_id,
-            kind,
-            reply,
-        } = update
-        else {
-            unreachable!("update routed to wrong handler");
-        };
-        let active = conversation == self.conversation;
-        let Some(view) = self
-            .ledger_reply_view(&conversation)
-            .filter(|view| view.request_id == request_id)
-        else {
-            return;
-        };
-        let decided = reply.is_ok() && matches!(kind.as_str(), "applied" | "rejected");
-        let refresh = reply.is_ok() && matches!(kind.as_str(), "created" | "runs");
-        let load_detail = reply.is_ok() && kind == "page";
-        view.reply(&kind, reply);
-        let load_detail = load_detail
-            && view.preview.is_none()
-            && view.editing.is_none()
-            && view.detail.is_none()
-            && view.selected_entry().is_some();
-        self.finish_ledger_decision(&conversation, active, decided);
-        if refresh && active {
-            self.ledger_action(ledger::Action::Fetch);
-        } else if load_detail && active {
-            // Coverage (tasks and evidence) loads with the record, not on demand.
-            self.ledger_action(ledger::Action::Detail);
-        }
-    }
-
-    fn ledger_reply_view(&mut self, conversation: &str) -> Option<&mut ledger::LedgerView> {
-        if conversation == self.conversation {
-            self.ledger_view.as_mut()
-        } else {
-            self.conversation_states
-                .get_mut(conversation)?
-                .ledger_view
-                .as_mut()
-        }
-    }
-
-    fn finish_ledger_decision(&mut self, conversation: &str, active: bool, decided: bool) {
-        if !decided {
-            return;
-        }
-        if active {
-            self.return_to_main();
-        } else if let Some(state) = self.conversation_states.get_mut(conversation) {
-            clear_background_ledger_review(state, conversation);
-        }
-    }
-
     pub(super) fn apply_config(&mut self, update: Update) {
         let Update::Config {
             project,
@@ -204,27 +147,6 @@ impl App {
             unreachable!("update routed to wrong handler");
         };
         self.notice = Some(text);
-    }
-}
-
-fn clear_background_ledger_review(state: &mut ConversationState, conversation: &str) {
-    state.diff = None;
-    state.plan_view = None;
-    if let Some(details) = state.details.take() {
-        state
-            .details_scroll_memory
-            .insert((details.key.clone(), details.tab), details.scroll);
-        state
-            .details_query_memory
-            .insert((details.key, details.tab), details.query);
-    }
-    if let Some(editor) = state.editor.take() {
-        let key = App::comment_key(conversation, None, &editor.target);
-        state.comment_draft_cursors.insert(
-            key.clone(),
-            (editor.input.cursor, editor.input.preferred_col),
-        );
-        state.comment_drafts.insert(key, editor.input.text);
     }
 }
 

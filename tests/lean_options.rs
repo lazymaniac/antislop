@@ -17,7 +17,7 @@ use std::{
 };
 
 fn writer(id: &str) -> Value {
-    json!({"id":id,"title":id,"goal":"Implement selected format","change_kind": "code", "kind":"implementation","reviewer":{"summary": "selected format"}})
+    json!({"id":id,"title":id,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement selected format","change_kind": "code", "kind":"implementation","reviewer":{"summary": "selected format"}})
 }
 
 fn run(
@@ -483,7 +483,7 @@ fn shared_analysis_never_substitutes_for_dedicated_options() {
     let mut x = writer("x");
     x["depends_on"] = json!(["shared", "w"]);
     let (stored, calls, _) = run(
-        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","change_kind": "none", "kind":"options","reviewer":{"summary": "selection"}},w,x]}),
+        json!({"tasks":[{"id":"shared","title":"shared","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Compare formats","change_kind": "none", "kind":"options","reviewer":{"summary": "selection"}},w,x]}),
         false,
         REPORT,
         "A",
@@ -593,7 +593,7 @@ fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
 #[test]
 fn read_only_plan_runs_without_generated_options_or_quality_writers() {
     for gates in [false, true] {
-        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "change_kind": "none", "kind":"analysis",   "reviewer":{"summary": "read-only findings"}});
+        let input = json!({"id":"inspect", "title":"Inspect files", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read the repository contract", "change_kind": "none", "kind":"analysis",   "reviewer":{"summary": "read-only findings"}});
         let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), gates, REPORT, "A", "");
         assert_eq!(
             stored.len(),
@@ -856,7 +856,7 @@ fn small_change_policy_boundaries_match_core_scheduled_graph() {
     }
 
     let (stored, calls, events) = run_scenario_with_team(
-        json!({"tasks":[{"id":"inspect","title":"Inspect","goal":"Read only","change_kind":"none","kind":"analysis","reviewer":{"summary":"report findings"}}]}),
+        json!({"tasks":[{"id":"inspect","title":"Inspect","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read only","change_kind":"none","kind":"analysis","reviewer":{"summary":"report findings"}}]}),
         (true, true, Some(tasks::Team::SmallChange)),
         REPORT,
         "A",

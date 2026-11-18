@@ -1,5 +1,4 @@
 use super::*;
-use crate::lean::ledger::LedgerChange;
 use crate::lean::status;
 use crate::lean::store::RevisionLease;
 use crate::lean::tasks::TaskContract;
@@ -17,36 +16,15 @@ fn fixture_for(dependent: bool) -> (tempfile::TempDir, Store, String, String, Ve
         .create_conversation(dir.path().to_str().unwrap())
         .unwrap()
         .id;
-    let message = store
+    let _message = store
         .add_message(&conversation, "user", "Deliver local behavior")
         .unwrap();
     let run = store
-        .create_run(&conversation, "Deliver local behavior")
+        .create_scope(&conversation, "Deliver local behavior")
         .unwrap();
-    let source = store
-        .register_message_source(&conversation, &run.id, message.seq)
-        .unwrap();
-    let entry=serde_json::from_value(json!({"id":"r","source":{"source_id":source.id,"start":0,"end":22},"interpretation":"Deliver local behavior","criteria":[{"id":"r.accept","text":"Behavior is checked","mandatory":true}]})).unwrap();
+    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect A","change_kind": "none", "kind":"analysis","reviewer":{"summary": "Check A"}}),json!({"id":"b","title":"B","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"reviewer":{"summary": "Check B"}})]).unwrap();
     store
-        .apply_ledger_change(
-            &LedgerChange {
-                conversation: conversation.clone(),
-                run_id: run.id.clone(),
-                expected_spec_revision: 0,
-                operation_id: crate::id(),
-                reason: "Accepted scope".into(),
-                entries: vec![entry],
-            },
-            dir.path(),
-            true,
-        )
-        .unwrap();
-    let tasks=store.add_plan(&conversation,&[json!({"id":"a","title":"A","goal":"Inspect A","change_kind": "none", "kind":"analysis","requirement_ids":["r"],"criterion_ids":["r.accept"],"reviewer":{"summary": "Check A"}}),json!({"id":"b","title":"B","goal":"Inspect B","change_kind": "none", "kind":"analysis","depends_on":if dependent {vec!["a"]} else {vec![]},"requirement_ids":["r"],"reviewer":{"summary": "Check B"}})]).unwrap();
-    store
-        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
-        .unwrap();
-    store
-        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
+        .bind_plan_scope(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
     (dir, store, conversation, run.id, tasks)
 }
@@ -62,6 +40,7 @@ fn a_reworded_approved_task_takes_its_new_contract_and_keeps_its_result() {
         .collect();
     specs[0].goal = "Inspect A; the /tmp socket fallback is allowed".into();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Record an approved exception".into(),
@@ -81,7 +60,7 @@ fn a_reworded_approved_task_takes_its_new_contract_and_keeps_its_result() {
             &specs,
             &BTreeSet::new(),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )
@@ -104,6 +83,7 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
         .collect();
     specs[0].goal = "Inspect revised A".into();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Clarify local contract".into(),
@@ -118,7 +98,7 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
     assert!(fresh);
     let affected = BTreeSet::from([baseline[0].id.clone()]);
     let lease = RevisionLease {
-        requirement_revision: 1,
+        accepted_scope: false,
         request: &request,
     };
     store
@@ -181,13 +161,14 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
 }
 
 #[test]
-fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
-    let (_dir, store, conversation, run, baseline) = fixture();
+fn changed_inputs_rollback_revision_and_restart_preserves_proposal() {
+    let (_dir, store, conversation, _scope, baseline) = fixture();
     let specs: Vec<TaskContract> = baseline
         .iter()
         .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
         .collect();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Review".into(),
@@ -201,7 +182,10 @@ fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
         .unwrap();
     store
         .db()
-        .execute("UPDATE runs SET spec_revision=2 WHERE id=?1", [run])
+        .execute(
+            "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
+            [&baseline[0].id],
+        )
         .unwrap();
     let error = store
         .apply_plan_revision(
@@ -211,12 +195,12 @@ fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
             &specs,
             &BTreeSet::new(),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )
         .unwrap_err();
-    assert!(error.to_string().contains("requirements changed"));
+    assert!(error.to_string().contains("task inputs changed"));
     assert_eq!(store.plan_revision(&revision.plan).unwrap(), 0);
     store.interrupt_revision_jobs().unwrap();
     assert_eq!(
@@ -244,9 +228,10 @@ fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
 }
 
 #[test]
-fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
+fn reviewed_revision_can_retire_tasks_but_cannot_introduce_a_cycle() {
     let (_dir, store, conversation, _, baseline) = fixture();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Retire".into(),
@@ -268,16 +253,17 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
                 &specs,
                 &BTreeSet::from([baseline[0].id.clone()]),
                 &RevisionLease {
-                    requirement_revision: 1,
+                    accepted_scope: false,
                     request: &request
                 }
             )
-            .is_err()
+            .is_ok()
     );
-    assert_eq!(store.plan_revision(&revision.plan).unwrap(), 0);
+    assert_eq!(store.plan_revision(&revision.plan).unwrap(), 1);
     let mut cycle: TaskContract = serde_json::from_value(baseline[0].spec.clone()).unwrap();
     cycle.depends_on = vec!["a".into()];
     let revision = PlanRevision {
+        scope: None,
         tasks: vec![cycle],
         retire: vec![],
         redo: vec![],
@@ -293,6 +279,7 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
     let mut task: TaskContract = serde_json::from_value(baseline[0].spec.clone()).unwrap();
     task.goal = "Inventory the sources. Read-only inspection only: no commands.".into();
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Narrow access".into(),
@@ -305,6 +292,7 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
     assert!(error.contains("nothing is pasted"), "{error}");
     task.goal = "Inventory the sources by reading them; no builds or tests.".into();
     let revision = PlanRevision {
+        scope: None,
         tasks: vec![task],
         ..revision
     };
@@ -347,6 +335,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
     tasks[1].status = "approved".into();
     store.update_task(&tasks[1]).unwrap();
     let revision = PlanRevision {
+        scope: None,
         plan: tasks[0].plan_id.clone(),
         base_revision: 0,
         reason: "Retire supporting work without removing acceptance coverage".into(),
@@ -367,7 +356,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
             &specs,
             &BTreeSet::from([tasks[1].id.clone()]),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )
@@ -401,6 +390,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
     let baseline = store.plan(&revision.plan).unwrap();
     let replacement: TaskContract = serde_json::from_value(tasks[1].spec.clone()).unwrap();
     let next = PlanRevision {
+        scope: None,
         plan: revision.plan.clone(),
         base_revision: 1,
         reason: "Explicitly restore supporting work under a fresh execution identity".into(),
@@ -421,7 +411,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
             &specs,
             &BTreeSet::new(),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )
@@ -488,8 +478,7 @@ fn an_accepted_plan_keeps_approved_tasks_whose_contracts_did_not_change() {
         .add_plan(&conversation, &[first[0].spec.clone(), changed])
         .unwrap();
     let plan = second[0].plan_id.clone();
-    store.link_plan_run(&conversation, &plan, &run).unwrap();
-    store.bind_task_ledger(&conversation, &run, &plan).unwrap();
+    store.bind_plan_scope(&conversation, &plan, &run).unwrap();
     store.queue_plan(&conversation, &plan).unwrap();
 
     let tasks = store.plan(&plan).unwrap();
@@ -517,10 +506,7 @@ fn an_accepted_plan_keeps_approved_tasks_whose_contracts_did_not_change() {
         .add_plan(&conversation, &[first[0].spec.clone()])
         .unwrap();
     store
-        .link_plan_run(&conversation, &third[0].plan_id, &run)
-        .unwrap();
-    store
-        .bind_task_ledger(&conversation, &run, &third[0].plan_id)
+        .bind_plan_scope(&conversation, &third[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &third[0].plan_id).unwrap();
     let kept = &store.plan(&third[0].plan_id).unwrap()[0];
@@ -538,13 +524,13 @@ fn approved_work_answered_other_requirements_runs_again() {
     first[0].status = "approved".into();
     store.update_task(&first[0]).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(3));
-    let other = store.create_run(&conversation, "Other behavior").unwrap();
+    let other = store.create_scope(&conversation, "Other behavior").unwrap();
     let second = store
         .add_plan(&conversation, &[first[0].spec.clone()])
         .unwrap();
     let plan = second[0].plan_id.clone();
     store
-        .link_plan_run(&conversation, &plan, &other.id)
+        .bind_plan_scope(&conversation, &plan, &other.id)
         .unwrap();
     store.queue_plan(&conversation, &plan).unwrap();
 
@@ -573,13 +559,13 @@ fn changed_requirements_recheck_the_original_report_without_repeating_the_worker
     store.update_task(&first[0]).unwrap();
     store.test_completion(&first[0], first[0].report.as_deref().unwrap());
     let other = store
-        .create_run(&conversation, "Assess extra acceptance criteria")
+        .create_scope(&conversation, "Assess extra acceptance criteria")
         .unwrap();
     let second = store
         .add_plan(&conversation, &[first[0].spec.clone()])
         .unwrap();
     store
-        .link_plan_run(&conversation, &second[0].plan_id, &other.id)
+        .bind_plan_scope(&conversation, &second[0].plan_id, &other.id)
         .unwrap();
     store.queue_plan(&conversation, &second[0].plan_id).unwrap();
     let task = store.task_by_id(&second[0].id).unwrap().unwrap();
@@ -642,7 +628,7 @@ fn a_changed_project_input_outside_legacy_scope_invalidates_a_report() {
     current_spec.as_object_mut().unwrap().remove("scope");
     let second = store.add_plan(&conversation, &[current_spec]).unwrap();
     store
-        .link_plan_run(&conversation, &second[0].plan_id, &run)
+        .bind_plan_scope(&conversation, &second[0].plan_id, &run)
         .unwrap();
     store.queue_plan(&conversation, &second[0].plan_id).unwrap();
     let task = store.task_by_id(&second[0].id).unwrap().unwrap();
@@ -682,6 +668,7 @@ fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation(
     analysis.depends_on = vec![specs[1].id.clone()];
     specs.push(analysis.clone());
     let revision = PlanRevision {
+        scope: None,
         plan: baseline[0].plan_id.clone(),
         base_revision: 0,
         reason: "Provide concrete reviewed guidance without releasing the held writer".into(),
@@ -701,7 +688,7 @@ fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation(
             &specs,
             &BTreeSet::new(),
             &RevisionLease {
-                requirement_revision: 1,
+                accepted_scope: false,
                 request: &request,
             },
         )

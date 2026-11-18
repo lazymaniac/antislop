@@ -279,32 +279,7 @@ mod tests {
             .unwrap();
         let run = core
             .store
-            .create_run(&conversation.id, request_text)
-            .unwrap();
-        let source = core
-            .store
-            .register_message_source(&conversation.id, &run.id, request.seq)
-            .unwrap();
-        let entry = serde_json::from_value(json!({
-            "id":"R1",
-            "source":{"source_id":source.id,"start":0,"end":request_text.len()},
-            "interpretation":request_text,
-            "criteria":[{"id":"R1.1","text":"Declared result is written"}]
-        }))
-        .unwrap();
-        core.store
-            .apply_ledger_change(
-                &ledger::LedgerChange {
-                    conversation: conversation.id.clone(),
-                    run_id: run.id.clone(),
-                    expected_spec_revision: 0,
-                    operation_id: crate::id(),
-                    reason: "Declare the requested output".into(),
-                    entries: vec![entry],
-                },
-                &core.state,
-                true,
-            )
+            .create_scope(&conversation.id, request_text)
             .unwrap();
         let mut task = core
             .store
@@ -313,11 +288,11 @@ mod tests {
                 &[json!({
                     "id":"writer",
                     "title":"Write outputs",
-                    "goal":"Create the declared text file",
+                    "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create the declared text file",
                     "kind":"writing",
                     "change_kind":"artifact",
-                    "requirement_ids":["R1"],
-                    "criterion_ids":["R1.1"],
+
+
                     "outputs":["brief.md", "image.md"],
                     "reviewer":{"summary":"Check outputs"}
                 })],
@@ -325,10 +300,7 @@ mod tests {
             .unwrap()
             .remove(0);
         core.store
-            .link_plan_run(&conversation.id, &task.plan_id, &run.id)
-            .unwrap();
-        core.store
-            .bind_task_ledger(&conversation.id, &run.id, &task.plan_id)
+            .bind_plan_scope(&conversation.id, &task.plan_id, &run.id)
             .unwrap();
         let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
         let worktree = directory.path().join("writer");
@@ -392,7 +364,7 @@ mod tests {
                 &[json!({
                     "id":"writer",
                     "title":"Write output",
-                    "goal":"Create the declared text file",
+                    "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Create the declared text file",
                     "kind":"writing",
                     "change_kind":"artifact",
                     "delivery":"untracked",

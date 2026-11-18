@@ -117,6 +117,6 @@ fn insert_revision_job(
 }
 
 fn require_no_review(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
-    let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM plan_revision_jobs WHERE conversation_id=?1 AND status='reviewing')",[conversation],|r|r.get(0))?;
+    let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM plan_revision_jobs WHERE conversation_id=?1 AND status IN ('reviewing','awaiting_acceptance'))",[conversation],|r|r.get(0))?;
     crate::require(!busy, "another plan revision is still under review")
 }

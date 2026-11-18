@@ -29,38 +29,16 @@ fn untracked_report_overrides_local_commits_and_conflicts_keep_the_worktree() {
                 .unwrap()
                 .id;
             let text = "Write analysis report";
-            let message = core.store.add_message(&conversation, "user", text).unwrap();
-            let run = core.store.create_run(&conversation, text).unwrap();
-            let source = core
-                .store
-                .register_message_source(&conversation, &run.id, message.seq)
-                .unwrap();
-            let entry = serde_json::from_value(json!({"id":"R1","source":{"source_id":source.id,"start":0,"end":text.len()},"interpretation":text,"criteria":[{"id":"R1.1","text":"Report delivered"}]})).unwrap();
-            core.store
-                .apply_ledger_change(
-                    &ledger::LedgerChange {
-                        conversation: conversation.clone(),
-                        run_id: run.id.clone(),
-                        expected_spec_revision: 0,
-                        operation_id: crate::id(),
-                        reason: "Source requirement".into(),
-                        entries: vec![entry],
-                    },
-                    &core.state,
-                    true,
-                )
-                .unwrap();
-            let spec: TaskContract=serde_json::from_value(json!({"id":"report","title":"Report","goal":"Write analysis","kind":"analysis","change_kind":"artifact","outputs":[output],"delivery":"untracked","requirement_ids":["R1"],"criterion_ids":["R1.1"]})).unwrap();
+            let _message = core.store.add_message(&conversation, "user", text).unwrap();
+            let run = core.store.create_scope(&conversation, text).unwrap();
+            let spec: TaskContract=serde_json::from_value(json!({"id":"report","title":"Report","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write analysis","kind":"analysis","change_kind":"artifact","outputs":[output],"delivery":"untracked",})).unwrap();
             let mut task = core
                 .store
                 .add_plan(&conversation, &[serde_json::to_value(&spec).unwrap()])
                 .unwrap()
                 .remove(0);
             core.store
-                .link_plan_run(&conversation, &task.plan_id, &run.id)
-                .unwrap();
-            core.store
-                .bind_task_ledger(&conversation, &run.id, &task.plan_id)
+                .bind_plan_scope(&conversation, &task.plan_id, &run.id)
                 .unwrap();
             let worktree =
                 crate::lean::core::worktree::paths::worktree_path(&core.state, &task).unwrap();

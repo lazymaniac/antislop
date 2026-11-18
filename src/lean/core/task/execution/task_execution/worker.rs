@@ -321,7 +321,7 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core.start(&project).unwrap();
         let spec: TaskContract = serde_json::from_value(json!({
-            "id":"accept-repair", "title":"Accept repair", "goal":"Inspect the existing repair",
+            "id":"accept-repair", "title":"Accept repair", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect the existing repair",
             "change_kind": "none", "kind":"analysis"}))
         .unwrap();
         let mut task = core
@@ -350,16 +350,16 @@ mod tests {
         );
         assert_eq!(git::head(&project).unwrap(), base);
         let owner_spec: TaskContract = serde_json::from_value(json!({
-            "id":"recover", "title":"Recover", "goal":"Continue the saved repair",
+            "id":"recover", "title":"Recover", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Continue the saved repair",
             "change_kind": "code", "kind":"implementation"}))
         .unwrap();
         let options_spec: TaskContract = serde_json::from_value(json!({
-            "id":"recover-options", "title":"Options", "goal":"Assess recovery",
+            "id":"recover-options", "title":"Options", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Assess recovery",
             "change_kind": "none", "kind":"options", "options_for":"recover"
         }))
         .unwrap();
         let isolated_spec: TaskContract = serde_json::from_value(json!({
-            "id":"isolated", "title":"Isolated", "goal":"Keep another task isolated",
+            "id":"isolated", "title":"Isolated", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Keep another task isolated",
             "change_kind": "code", "kind":"implementation"
         }))
         .unwrap();
@@ -474,12 +474,12 @@ mod tests {
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core.start(&project).unwrap();
         let owner_spec: TaskContract = serde_json::from_value(json!({
-            "id":"owner", "title":"Owner", "goal":"Implement the selected change",
+            "id":"owner", "title":"Owner", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement the selected change",
             "change_kind":"code", "kind":"implementation"
         }))
         .unwrap();
         let options_spec: TaskContract = serde_json::from_value(json!({
-            "id":"owner-options", "title":"Options", "goal":"Select an approach",
+            "id":"owner-options", "title":"Options", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Select an approach",
             "change_kind":"none", "kind":"options", "options_for":"owner"
         }))
         .unwrap();
@@ -493,9 +493,9 @@ mod tests {
                 ],
             )
             .unwrap();
-        let run = core
+        let _run = core
             .store
-            .create_run(&conversation.id, "Options with current task inputs")
+            .create_scope(&conversation.id, "Options with current task inputs")
             .unwrap();
         let owner = tasks
             .iter()
@@ -504,8 +504,8 @@ mod tests {
         core.store
             .db()
             .execute(
-                "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
-                rusqlite::params![owner.id, run.id],
+                "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+                rusqlite::params![owner.id],
             )
             .unwrap();
         let options = tasks
@@ -515,8 +515,8 @@ mod tests {
         core.store
             .db()
             .execute(
-                "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,0)",
-                rusqlite::params![options.id, run.id],
+                "UPDATE task_inputs SET generation=0 WHERE task_id=?1",
+                rusqlite::params![options.id],
             )
             .unwrap();
         let current = core.store.plan(&tasks[0].plan_id).unwrap();
@@ -623,7 +623,7 @@ mod tests {
                 .create_conversation(dir.path().to_str().unwrap())
                 .unwrap()
                 .id;
-            let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","goal":"Inspect saved code","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
+            let mut task=core.store.add_plan(&conversation,&[json!({"id":"work","title":"Work","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect saved code","change_kind": "none", "kind":"analysis"})]).unwrap().remove(0);
             let worker = format!("worker:{}", task.id);
             let reviewer = format!("reviewer:{}", task.id);
             let turn = core

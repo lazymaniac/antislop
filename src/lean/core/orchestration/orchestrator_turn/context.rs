@@ -1,5 +1,5 @@
 use super::prompt::{PromptContext, orchestrator_prompt_text};
-use crate::lean::core::orchestration::planning_context::planning_ledger_context;
+use crate::lean::core::orchestration::planning_context::planning_scope_context;
 use crate::lean::core::orchestration::unanswered::includes_comment;
 use crate::lean::*;
 
@@ -26,7 +26,7 @@ pub(super) struct OrchestrationContext<'a> {
     editable_graph: bool,
     graph_json: String,
     history: Vec<store::Message>,
-    ledger_context: Option<String>,
+    scope_context: Option<String>,
     decision: Option<Option<crate::lean::interview::Question>>,
     audit_response: Option<AuditResponse>,
 }
@@ -52,7 +52,7 @@ pub(super) fn prepare<'a>(
     let config = core.config_snapshot();
     let project = PathBuf::from(core.store.conversation(conversation)?.project);
     let view = plan_view::load(core, conversation)?;
-    let (history, ledger_context) = history_context(core, conversation, request.answered)?;
+    let (history, scope_context) = history_context(core, conversation, request.answered)?;
     let audit_response = audit_response(core, conversation)?;
     Ok(OrchestrationContext {
         conversation,
@@ -70,7 +70,7 @@ pub(super) fn prepare<'a>(
         graph: view.graph,
         graph_json: view.graph_json,
         history,
-        ledger_context,
+        scope_context,
         decision: core.store.open_user_decision(conversation)?,
         audit_response,
     })
@@ -195,7 +195,7 @@ fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -
         graph_json: &context.graph_json,
         interviewing: context.interviewing,
         workflow: &context.workflow,
-        ledger_context: context.ledger_context.as_deref(),
+        scope_context: context.scope_context.as_deref(),
         decision: context.decision.as_ref(),
         audit_response: context.audit_response.as_ref(),
     })
@@ -237,6 +237,6 @@ fn history_context(
     answered: u64,
 ) -> Result<(Vec<store::Message>, Option<String>)> {
     let history = core.store.recent_messages_through(conversation, answered)?;
-    let ledger = planning_ledger_context(core, conversation)?;
-    Ok((history, ledger))
+    let scope = planning_scope_context(core, conversation)?;
+    Ok((history, scope))
 }

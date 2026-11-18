@@ -15,11 +15,11 @@ fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     std::fs::write(
         &codex,
         r#"#!/usr/bin/env python3
-import json, sys
+import json, sys, os
 prompt = sys.argv[-1]
 prompt = prompt.split("\nCurrent task contracts for plan ",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
-    return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
+    return {"id": id, "title": title, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "depends_on": list(depends),
               "change_kind": ("code" if writes else "none"), "kind": "implementation" if writes else "analysis",
             "reviewer": {"summary": "f"}}
 plans = {
@@ -37,14 +37,6 @@ import re
 requests = re.findall(r'\[user\]\n([^\n]+)', prompt)
 request = requests[-1] if requests else prompt.splitlines()[-1]
 name = next((name for name in sorted(plans, key=len, reverse=True) if name in request), None)
-# A plan the ledger mapping sends back for regeneration names no scenario: repeat the last one.
-import os
-last = os.path.join(os.path.dirname(sys.argv[0]), "last-plan")
-if name:
-    with open(last, "w") as f:
-        f.write(name)
-elif "Regenerate the task plan from the reviewed ledger" in prompt and os.path.exists(last):
-    name = open(last).read()
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
 if "Tasks need coordination while the rest of the plan keeps running" in prompt:
     open(os.path.join(os.path.dirname(sys.argv[0]), "told-while-running"), "w").close()
@@ -144,7 +136,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
     )
     .unwrap();
     for script in [&codex, &agy] {
-        support::install_ledger_protocol(script);
+        support::install_task_protocol(script);
         support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
@@ -312,6 +304,16 @@ fn reviewed_plans_require_acceptance_and_keep_distinct_results() {
         .id;
     let first = propose(&core, &conversation, "first");
     wait_idle(&core, &conversation);
+    // A completed request starts a new interview. Settle that fixture scope
+    // before asking for the next independently reviewed plan.
+    let request = core
+        .store
+        .add_message(&conversation, "user", "second")
+        .unwrap();
+    core.store
+        .interview_summary(&conversation, "second", request.seq)
+        .unwrap();
+    support::confirm_scope(&core, &conversation).unwrap();
     let second = propose(&core, &conversation, "second");
     assert_ne!(first, second);
 
@@ -330,14 +332,14 @@ fn reviewed_plans_require_acceptance_and_keep_distinct_results() {
 }
 
 #[test]
-fn tasks_without_a_requirements_run_cannot_resume_after_restart() {
+fn tasks_without_a_scope_cannot_resume_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
-    let spec = json!({"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis",
+    let spec = json!({"id": "t1", "title": "T", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis",
                       "reviewer": {"summary": "f"}});
     let mut second = spec.clone();
     second["id"] = json!("t2");
@@ -360,12 +362,12 @@ fn tasks_without_a_requirements_run_cannot_resume_after_restart() {
         core.resume_plan(&conversation, &tasks[0].plan_id)
             .unwrap_err()
             .to_string()
-            .contains("integrity error: plan has no requirements run")
+            .contains("integrity error: plan has no scope")
     );
 }
 
 #[test]
-fn autonomous_plan_without_requirements_cannot_resume() {
+fn autonomous_plan_without_scope_cannot_resume() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
@@ -373,7 +375,7 @@ fn autonomous_plan_without_requirements_cannot_resume() {
     let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
-    let spec = json!({"id": "t1", "title": "T", "goal": "g", "change_kind": "none", "kind": "analysis",
+    let spec = json!({"id": "t1", "title": "T", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis",
                       "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
@@ -392,7 +394,7 @@ fn autonomous_plan_without_requirements_cannot_resume() {
         core.resume_plan(&conversation, &tasks[0].plan_id)
             .unwrap_err()
             .to_string()
-            .contains("integrity error: plan has no requirements run")
+            .contains("integrity error: plan has no scope")
     );
 }
 
@@ -402,36 +404,25 @@ fn test_freshness_token_staleness_and_rejection() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let message = core
+    let _message = core
         .store
         .add_message(&conversation, "user", "Check freshness token")
         .unwrap();
     let run = core
         .store
-        .create_run(&conversation, "Check freshness token")
-        .unwrap();
-    let source = core
-        .store
-        .register_message_source(&conversation, &run.id, message.seq)
-        .unwrap();
-    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"freshness-scope","reason":"test scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":"Check freshness token","criteria":[{"id":"R1.accept","text":"Reject stale tokens without changes"}]}]})).unwrap();
-    core.store
-        .apply_ledger_change(&change, &dir.path().join("state"), true)
+        .create_scope(&conversation, "Check freshness token")
         .unwrap();
     let spec = json!({
-        "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
+
         "id": "t1",
         "title": "T1",
-        "goal": "g",
+        "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g",
         "change_kind": "none", "kind": "analysis",
 
         "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
     core.store
-        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
+        .bind_plan_scope(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
     let plan = &tasks[0].plan_id;
     let task_id = &tasks[0].id;
@@ -1076,10 +1067,17 @@ fn test_mechanical_audit_gate_prevents_false_success() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
-    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
+    let spec1 = json!({"id": "t1", "title": "Done", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
+    let spec2 = json!({"id": "t2", "title": "Blocked", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "analysis", "reviewer": {"summary": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
     let plan = &tasks[0].plan_id;
+    let scope = core
+        .store
+        .create_scope(&conversation, "Verify both tasks")
+        .unwrap();
+    core.store
+        .bind_plan_scope(&conversation, plan, &scope.id)
+        .unwrap();
 
     // t1 approved, t2 needs_user
     let mut t1 = tasks[0].clone();
@@ -1209,82 +1207,29 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
     )
     .unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let message = core
+    let _message = core
         .store
         .add_message(&conversation, "user", "Check restart")
         .unwrap();
     let run = core
         .store
-        .create_run(&conversation, "Check restart")
+        .create_scope(&conversation, "Check restart")
         .unwrap();
-    let source = core
-        .store
-        .register_message_source(&conversation, &run.id, message.seq)
-        .unwrap();
-    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"restart-scope","reason":"test scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":"Check restart","criteria":[{"id":"R1.accept","text":"Restart a running agent"}]}]})).unwrap();
-    core.store
-        .apply_ledger_change(&change, &dir.path().join("state"), true)
-        .unwrap();
-    let revision = core
-        .store
-        .run(&conversation, &run.id)
-        .unwrap()
-        .spec_revision;
-    let mut review_turns = Vec::new();
-    for role in [
-        "requirements-extraction-analyst",
-        "requirements-extraction-reviewer",
-    ] {
-        let turn = core
-            .store
-            .start_turn(&conversation, role, "mock", 0, None)
-            .unwrap();
-        core.store.set_session(&turn.id, &antislop::id()).unwrap();
-        core.store
-            .finish_turn(&turn.id, antislop::lean::store::TurnStatus::Done, None)
-            .unwrap();
-        core.store
-            .bind_ledger_turn(
-                &conversation,
-                &run.id,
-                &turn.id,
-                revision,
-                "extraction",
-                std::slice::from_ref(&source.id),
-            )
-            .unwrap();
-        review_turns.push(turn.id);
-    }
-    core.store
-        .record_ledger_review(
-            &conversation,
-            &run.id,
-            revision,
-            "extraction",
-            &review_turns[0],
-            &review_turns[1],
-            "",
-            true,
-            "checked restart requirement",
-        )
-        .unwrap();
+
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
     let tasks = core
         .store
         .add_plan(
             &conversation,
             &[json!({
-                "id": "a1", "title": "First plan", "goal": "Check restart", "change_kind": "none", "kind": "analysis",
-                 "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
+                "id": "a1", "title": "First plan", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Check restart", "change_kind": "none", "kind": "analysis",
+
                 "reviewer": {"summary": "Check restart"}})],
         )
         .unwrap();
     let plan = tasks[0].plan_id.clone();
     core.store
-        .link_plan_run(&conversation, &plan, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation, &run.id, &plan)
+        .bind_plan_scope(&conversation, &plan, &run.id)
         .unwrap();
     core.store.queue_plan(&conversation, &plan).unwrap();
     core.resume_plan(&conversation, &plan).unwrap();

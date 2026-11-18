@@ -369,10 +369,10 @@ mod tests {
             .id;
         let dependencies: Vec<_> = (0..70).map(|index| format!("source-{index}")).collect();
         let mut specs: Vec<_> = dependencies.iter().map(|id| json!({
-            "id":id,"title":"Source","goal":"Provide evidence","kind":"analysis","change_kind":"none"
+            "id":id,"title":"Source","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Provide evidence","kind":"analysis","change_kind":"none"
         })).collect();
         specs.push(
-            json!({"id":"consumer","title":"Consumer","goal":"Assess evidence", "kind":"analysis",
+            json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Assess evidence", "kind":"analysis",
             "change_kind":"none","depends_on":dependencies}),
         );
         let plan = core.store.add_plan(&conversation, &specs).unwrap();

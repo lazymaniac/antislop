@@ -197,90 +197,9 @@ def addressed_of(text):
     return [{"id": item["id"], "how": item.get("how") or "addressed"} for item in listed], without(text, block)
 
 
-def source_text(prompt, source_id):
-    """The full text of a user source as the extraction prompt shows it."""
-    marker = "Full user source " + source_id + ":\n"
-    if marker not in prompt:
-        return None
-    rest = prompt.split(marker, 1)[1]
-    return re.split(r"\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)", rest, maxsplit=1)[0].rstrip("\n")
-
-
-SUBMITTED_ENTRY = ("id", "interpretation", "qualifiers", "parent", "depends_on", "mandatory", "criteria")
-
-
-def ledger_args(payload, prompt):
-    """`submit_ledger` arguments from a fixture's ```ledger block: each byte
-    range becomes the quote it covers."""
-    entries = []
-    for entry in payload.get("entries") or []:
-        submitted = {key: entry[key] for key in SUBMITTED_ENTRY if key in entry and entry[key] is not None}
-        if "quote" in entry:
-            submitted["quote"] = entry["quote"]
-        elif isinstance(entry.get("source"), dict):
-            span = entry["source"]
-            text = source_text(prompt, span.get("source_id", "")) or ""
-            submitted["quote"] = text.encode()[span.get("start", 0) : span.get("end", 0)].decode(errors="replace")
-        submitted.setdefault("criteria", [])
-        entries.append(submitted)
-    return {"entries": entries}
-
-
-def audit_args(payload):
-    """`submit_audit` arguments from a fixture's ```compliance block."""
-    findings = [
-        {"severity": f.get("severity") or "high", "issue": f.get("issue") or "Fixture finding", "where": f.get("where") or "audit"}
-        for f in (payload.get("findings") or [])
-    ]
-    if payload.get("approved") is False and not findings:
-        findings.append({"severity": "high", "issue": "The fixture rejected the audit", "where": "audit"})
-    evidence = []
-    for item in payload.get("evidence") or []:
-        proposal = {"criterion_id": item["criterion_id"], "task_id": item["task_id"], "result": item.get("result") or ""}
-        if item.get("artifact"):
-            proposal["artifact"] = item["artifact"]
-        evidence.append(proposal)
-    return {"findings": findings, "evidence": evidence}
-
-
-def audit_review_args(payload, prompt):
-    """`submit_audit_review` arguments from a ```compliance_verdict block;
-    each assessment names the proposal by the id the prompt gave it."""
-    listed = re.search(r"Proposed evidence \(assess each by its id\):\n(.*)\n", prompt)
-    ids = [item["id"] for item in json.loads(listed.group(1))] if listed else []
-    assessments = []
-    for index, assessment in enumerate(payload.get("assessments") or []):
-        evidence = assessment.get("evidence")
-        if isinstance(evidence, dict):
-            evidence = evidence.get("id")
-        if not isinstance(evidence, str):
-            evidence = ids[index] if index < len(ids) else "E%d" % (index + 1)
-        assessments.append({"evidence": evidence, "approved": bool(assessment.get("approved")), "note": assessment.get("note") or "Checked"})
-    if payload.get("approved") is False:
-        assessed = {a["evidence"] for a in assessments}
-        for a in assessments:
-            a["approved"] = False
-        assessments += [{"evidence": i, "approved": False, "note": "The fixture rejected it"} for i in ids if i not in assessed]
-    return {"note": payload.get("note") or "Reviewed", "assessments": assessments}
-
-
 def words_result(text, prompt=""):
     """How a role without a task ends its turn with an answer written for the
     earlier fenced blocks."""
-    for tool, tag in (("submit_ledger", "ledger"), ("submit_audit", "compliance"), ("submit_audit_review", "compliance_verdict")):
-        if tool in tools:
-            block = fenced(text, tag)
-            try:
-                payload = json.loads(block.group(1)) if block else {}
-            except ValueError:
-                payload = {}
-            if not isinstance(payload, dict):
-                payload = {}
-            if tool == "submit_ledger":
-                return tool, ledger_args(payload, prompt)
-            if tool == "submit_audit":
-                return tool, audit_args(payload)
-            return tool, audit_review_args(payload, prompt)
     if "review" in tools:
         block = fenced(text, "verdict") or fenced(text, "json")
         try:
@@ -352,22 +271,16 @@ def task_result(text, prompt):
                         "commit_message": COMMIT_MESSAGE}
 
 
-PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary")
+PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary", "acceptance_criteria")
 
 
 def planned_task(task):
     """A fixture's task contract as a planner submits it: what to do and
-    where, and the requirements it covers in place of explicit links."""
+    where, and the task-local checks its reviewer must assess."""
     if not isinstance(task, dict):
         return task
     planned = {key: task[key] for key in PLANNED if key in task and task[key] is not None}
-    covers = []
-    for key in ("covers", "requirement_ids", "criterion_ids"):
-        for item in task.get(key) or []:
-            if item not in covers:
-                covers.append(item)
-    if covers:
-        planned["covers"] = covers
+    planned.setdefault("acceptance_criteria", [{"id":"C1","text":task["goal"]}])
     return planned
 
 
@@ -576,7 +489,7 @@ def main():
         resume = seen or resume
         refused = finish(turn, text, seen, prompt)
         while refused is not None:
-            # First, since fixtures cut the prompt at the ledger context.
+            # First, since fixtures may cut the prompt at appended runtime context.
             retry = "%s was refused: %s\n\n%s" % (refused[0], refused[1], prompt)
             done = run_fixture(retry, turn)
             again, _ = answer_of(done.stdout)

@@ -12,19 +12,11 @@ impl Core {
             "plan does not belong to conversation",
         )?;
         require(
-            self.store.plan_run(plan_id)?.is_some(),
-            "integrity error: plan has no requirements run",
+            self.store.plan_scope_id(plan_id)?.is_some(),
+            "integrity error: plan has no scope",
         )?;
-        if let Some(run) = self.store.plan_run(plan_id)?
-            && self.store.extraction_needs_refresh(conversation, &run)?
-        {
-            self.store.add_message(conversation, RUNTIME,
-                "Resume requested: refresh requirements source coverage before continuing the accepted plan. Preserve existing requirements and checkpoints; operational comments are not new acceptance criteria.")?;
-            self.wake(conversation);
-            return Err(Error::Invalid(
-                "requirements source coverage refresh queued; resume after the check completes"
-                    .into(),
-            ));
+        if self.store.pending_scope_revision(plan_id)?.is_some() {
+            return self.accept_scope_revision(conversation, plan_id);
         }
         let tasks = self.store.plan(plan_id)?;
         if !tasks.is_empty()

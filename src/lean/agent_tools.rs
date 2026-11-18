@@ -65,9 +65,6 @@ impl Core {
                 self.orchestrator_tool(conversation, role, turn, tool, args)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),
-            "submit_ledger" | "submit_audit" | "submit_audit_review" => {
-                self.audit_tool(conversation, role, turn, tool, args)
-            }
             "revise_plan" | "request_replan" => self.revision_tool(conversation, role, tool, args),
             _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
         }

@@ -91,12 +91,10 @@ impl App {
             .map(|key| details.composer_recipient(key))
     }
     pub(in crate::lean::tui) fn native_focused(&self) -> bool {
-        !self.ledger_view.as_ref().is_some_and(|v| v.visible)
-            && self.details.as_ref().is_some_and(|details| {
-                details.native_focus
-                    && (self.graph_native_key().is_some() || details.terminal_visible())
-            })
-            && self.native_key_role().is_some()
+        self.details.as_ref().is_some_and(|details| {
+            details.native_focus
+                && (self.graph_native_key().is_some() || details.terminal_visible())
+        }) && self.native_key_role().is_some()
     }
     pub(in crate::lean::tui) fn native_send(&mut self, input: Input) {
         if let Some(role) = self.native_key_role() {

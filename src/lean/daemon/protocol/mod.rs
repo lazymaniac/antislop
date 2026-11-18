@@ -5,8 +5,7 @@ mod wire;
 mod wire_serde_impl;
 pub(crate) use envelope::RequestEnvelope;
 pub use request::{
-    ControlRequest, ConversationRequest, HistoryRequest, LedgerRequest, Request, SessionRequest,
-    TerminalRequest,
+    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionRequest, TerminalRequest,
 };
 pub(crate) use wire::WireRequest;
 

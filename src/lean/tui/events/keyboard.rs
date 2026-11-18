@@ -10,9 +10,6 @@ impl App {
         }
         self.sync_interview();
         self.sync_approval();
-        if let Some(result) = self.route_ledger(key) {
-            return result;
-        }
         if let Some(result) = self.route_selection_and_config(key) {
             return result;
         }
@@ -62,29 +59,6 @@ impl App {
         } else {
             self.native_send(crate::lean::terminal::Input::Key { event: key });
         }
-    }
-
-    fn route_ledger(&mut self, key: KeyEvent) -> Option<bool> {
-        if !self.ledger_view.as_ref().is_some_and(|view| view.visible) {
-            return None;
-        }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
-            self.open_conversation_picker();
-            return Some(true);
-        }
-        if self.picker.is_some() {
-            return Some(self.picker_key(key));
-        }
-        let action = self
-            .ledger_view
-            .as_mut()
-            .unwrap()
-            .key(key, &self.conversation);
-        if !self.ledger_view.as_ref().unwrap().visible {
-            self.return_to_main();
-        }
-        self.ledger_action(action);
-        Some(true)
     }
 
     fn route_selection_and_config(&mut self, key: KeyEvent) -> Option<bool> {
@@ -163,15 +137,8 @@ impl App {
             flow_editor::FlowEditorOutcome::Submit {
                 revision,
                 request_ai_review,
-                allow_uncovered,
             } => {
-                self.send_flow_revision(
-                    revision,
-                    request_ai_review,
-                    allow_uncovered,
-                    task_id,
-                    task_title,
-                );
+                self.send_flow_revision(revision, request_ai_review, task_id, task_title);
             }
         }
         Some(true)
@@ -290,7 +257,6 @@ impl App {
             // Ctrl+I reaches here only where the terminal tells it from Tab.
             KeyCode::Char('t' | 'i') if control => self.open_details("conversation".into()),
             KeyCode::Char('l') if control => self.run_workflow(Command::Plan),
-            KeyCode::F(2) => self.run_workflow(Command::Requirements),
             KeyCode::F(3) => self.run_workflow(Command::InterviewQuestion),
             KeyCode::F(4) => self.run_workflow(Command::Plans),
             KeyCode::F(5) => self.run_workflow(Command::TaskActions),

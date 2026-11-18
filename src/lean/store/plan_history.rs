@@ -15,9 +15,9 @@ impl Store {
         let status = plan_history_status(&tasks);
         let (turns, agents) = plan_history_sessions(&db, conversation, plan_id, &tasks)?;
         let (reports, verdicts) = plan_history_outcomes(&tasks);
-        let run_id = plan_history_run(&db, plan_id)?;
+        let scope_id = plan_history_scope(&db, plan_id)?;
         Ok(PlanHistory {
-            run_id,
+            scope_id,
             id: plan_id.to_string(),
             conversation_id: conversation.to_string(),
             created_ms,
@@ -103,10 +103,10 @@ fn plan_history_turn_rows(
         .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-fn plan_history_run(db: &rusqlite::Connection, plan_id: &str) -> Result<Option<String>> {
+fn plan_history_scope(db: &rusqlite::Connection, plan_id: &str) -> Result<Option<String>> {
     Ok(db
         .query_row(
-            "SELECT run_id FROM plan_runs WHERE plan_id=?1",
+            "SELECT scope_id FROM plan_scopes WHERE plan_id=?1 ORDER BY revision DESC LIMIT 1",
             [plan_id],
             |row| row.get(0),
         )

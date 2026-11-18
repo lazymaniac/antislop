@@ -72,61 +72,20 @@ impl App {
     }
 
     fn apply_active_event_batch(&mut self, events: &[Value], idle: bool) {
-        let (manual_plan, requirements_review) = self.apply_view_events(events);
-        self.update_ledger_approval(requirements_review);
+        let manual_plan = self.apply_view_events(events);
         self.view.idle = idle;
-        self.refresh_visible_ledger(events);
         self.refetch_stale_details();
         self.open_pending_plan(manual_plan);
     }
 
-    fn apply_view_events(&mut self, events: &[Value]) -> (bool, bool) {
+    fn apply_view_events(&mut self, events: &[Value]) -> bool {
         let mut manual_plan = false;
-        let mut requirements_review = false;
         for event in events {
             manual_plan |=
                 event["kind"] == "plan_proposed" && event["payload"]["automatic"] != true;
-            requirements_review |= event["kind"] == "ledger_approval_required";
             self.view.apply(event);
         }
-        (manual_plan, requirements_review)
-    }
-
-    fn update_ledger_approval(&mut self, required: bool) {
-        if !required {
-            return;
-        }
-        let Some(run) = self.view.requirements_approval_run.clone() else {
-            return;
-        };
-        let view = self.ledger_view.get_or_insert_with(ledger::LedgerView::new);
-        if view.approval_event == self.view.requirements_approval_event {
-            return;
-        }
-        view.approval_event = self.view.requirements_approval_event;
-        view.review_run = Some(run);
-        if ledger_read_is_stale(view) {
-            view.request_id = view.request_id.wrapping_add(1);
-            view.pending = false;
-        }
-    }
-
-    fn refresh_visible_ledger(&mut self, events: &[Value]) {
-        if !events.iter().any(is_ledger_refresh_event) {
-            return;
-        }
-        let Some(ledger) = self.ledger_view.as_mut().filter(|view| view.visible) else {
-            return;
-        };
-        if ledger_scope_changed(ledger, events) {
-            ledger.scope_epoch = ledger.scope_epoch.wrapping_add(1);
-            ledger.stale = ledger.preview.is_some();
-            ledger.error =
-                Some("Scope changed; draft preserved. Ctrl+R reloads the proposal.".into());
-        }
-        if ledger.editing.is_none() && ledger.preview.is_none() {
-            self.ledger_action(ledger::Action::Fetch);
-        }
+        manual_plan
     }
 
     fn open_pending_plan(&mut self, saw_manual_plan: bool) {
@@ -168,34 +127,4 @@ fn save_delivery_failure(composer: &mut details::Composer, event: &Value) {
     };
     let error = composer.error.clone().expect("delivery error");
     composer.delivery_failure = Some((ids.iter().filter_map(Value::as_u64).collect(), error));
-}
-
-fn ledger_read_is_stale(view: &ledger::LedgerView) -> bool {
-    view.pending
-        && (view.pending_read
-            || !matches!(
-                view.pending_kind.as_str(),
-                "applied" | "rejected" | "preview" | "created"
-            ))
-}
-
-fn is_ledger_refresh_event(event: &Value) -> bool {
-    matches!(
-        event["kind"].as_str(),
-        Some(
-            "ledger_changed" | "ledger_evidence" | "ledger_review" | "ledger_source_added" | "task"
-        )
-    )
-}
-
-fn ledger_scope_changed(view: &ledger::LedgerView, events: &[Value]) -> bool {
-    let review_run = view.pending_run.as_deref().or_else(|| {
-        view.proposed_change
-            .as_ref()
-            .map(|change| change.run_id.as_str())
-    });
-    events.iter().any(|event| {
-        event["kind"] == "ledger_changed"
-            && review_run.is_none_or(|run| event["payload"]["run"].as_str() == Some(run))
-    })
 }

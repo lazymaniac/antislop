@@ -32,7 +32,7 @@ def verdict(approved):
     coverage = {{i: {{"status": "ok", "note": "checked"}} for i in ids}}
     return "```verdict\n" + json.dumps({{"approved": approved, "findings": [], "coverage": coverage}}) + "\n```"
 def task(id, title, depends=()):
-    return {{"id": id, "title": title, "goal": "g", "depends_on": list(depends),
+    return {{"id": id, "title": title, "acceptance_criteria":[{{"id":"C1","text":"The task goal is verified"}}],"goal": "g", "depends_on": list(depends),
             "change_kind": "none", "kind": "analysis", "reviewer": {{"focus": "f"}}}}
 def plan(*tasks):
     return "Plan.\n```plan\n" + json.dumps({{"tasks": list(tasks)}}) + "\n```"
@@ -44,7 +44,7 @@ def message(to, kind, text):
     let write = |name: &str, body: String| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
-        support::install_ledger_protocol(&path);
+        support::install_task_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         common::interactive(&path);
@@ -86,7 +86,7 @@ def message(to, kind, text):
         .fold(text, |text, (from, to)| text.replace(from, to));
     let project = dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    // The requirements audit fingerprints the integrated tree, which needs a repository.
+    // The final audit fingerprints the integrated tree, which needs a repository.
     for args in [
         &["init", "--quiet", "-b", "main"][..],
         &["commit", "--quiet", "--allow-empty", "-m", "init"][..],
@@ -376,190 +376,6 @@ else:
         .messages_by(&conversation, "orchestrator", 0)
         .unwrap();
     assert!(said.iter().all(|m| !m.text.contains("```comments")));
-}
-
-// Start with a persisted draft, so the comment revision is the first proposal
-// to encounter the global requirements/options gate (not per-task options).
-fn deferred_comment_revision(current_list: bool, new_user_input: bool) {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        &r#"
-import re
-ids = re.findall(r"user comment #(\d+) on", prompt)
-regenerated = "Regenerate the task plan from the reviewed ledger" in _ledger_prompt
-def claim(n):
-    return "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[n]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Revised parser"))
-if not ids:
-    answer = "Noted."
-elif regenerated:
-    # The regenerated plan restates the claim only when the agent lists comments again.
-    answer = claim(1) if CURRENT_LIST else plan(task("t1", "Revised parser"))
-else:
-    answer = claim(0)
-"#
-        .replace("CURRENT_LIST", if current_list { "True" } else { "False" }),
-        "    answer = verdict(True)",
-    );
-    // The existing ledger fixture supplies real protocol responses. Only gate
-    // the regenerated plan the ledger mapping asks for (the first proposal
-    // carries no requirement ids); requirements still run in production.
-    let codex = dir.path().join("codex");
-    let source = std::fs::read_to_string(&codex).unwrap();
-    let source = source.replace(
-        "if len(_ledger_context)==2:\n    prompt = _ledger_context[0].rstrip()",
-        r#"if 'Regenerate the task plan from the reviewed ledger' in _ledger_prompt:
-    open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()
-    import time
-    deadline = time.monotonic() + 15
-    while not _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'release-next-plan')):
-        if time.monotonic() >= deadline:
-            raise RuntimeError('next plan was not released by test within 15 seconds')
-        time.sleep(0.01)
-if len(_ledger_context)==2:
-    prompt = _ledger_context[0].rstrip()"#,
-    );
-    assert!(source.contains("next-plan-started"));
-    std::fs::write(&codex, source).unwrap();
-    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    core.store
-        .add_message(&conversation, "user", "plan it")
-        .unwrap();
-    let original = core
-        .store
-        .add_plan(
-            &conversation,
-            &[serde_json::json!({
-                "id":"t1", "title":"Parser", "goal":"g", "change_kind": "none", "kind":"analysis",
-                "reviewer":{"summary": "f"}})],
-        )
-        .unwrap()[0]
-        .plan_id
-        .clone();
-    let ids: Vec<u64> = ["first remark", "second remark"]
-        .iter()
-        .enumerate()
-        .map(|(n, text)| {
-            core.comment_scoped(
-                &conversation,
-                Some(&original),
-                &format!("plan:{original}:line:{}", n + 1),
-                text,
-            )
-            .unwrap()
-            .id
-        })
-        .collect();
-    core.review_comments(&conversation, &original).unwrap();
-    wait_until("the ledger mapping must defer the comment proposal", || {
-        dir.path().join("next-plan-started").exists() || core.is_idle(&conversation)
-    });
-    assert!(
-        dir.path().join("next-plan-started").exists(),
-        "{:#?}",
-        core.store.events_since(&conversation, 0, 1000).unwrap()
-    );
-    let claims = events(&core, &conversation, "plan_comments_addressed");
-    assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["ids"], serde_json::json!([ids[0]]));
-    let boundary = claims[0]["upto_message"].as_u64().unwrap();
-    assert_eq!(
-        boundary,
-        core.store
-            .last_orchestration_answered(&conversation)
-            .unwrap()
-    );
-    let comments = core.store.comments(&conversation, "open").unwrap();
-    assert_eq!(comments.iter().map(|c| c.id).collect::<Vec<_>>(), ids);
-    assert!(comments.iter().all(|c| c.message <= boundary));
-    assert_eq!(
-        core.store.pending_plan_comment_ids(&conversation).unwrap(),
-        Some(vec![ids[0]])
-    );
-    assert!(events(&core, &conversation, "plan_proposed").is_empty());
-    // The rejected first proposal stays as a revised row; no new plan is live.
-    let live: Vec<String> = core
-        .store
-        .plans_page(&conversation, 0, 20)
-        .unwrap()
-        .plans
-        .into_iter()
-        .filter(|plan| plan.status != "revised")
-        .map(|plan| plan.id)
-        .collect();
-    assert_eq!(live, std::slice::from_ref(&original));
-    let options_messages = core
-        .store
-        .messages_by(&conversation, "requirements-planner", 0)
-        .unwrap();
-    assert_eq!(
-        options_messages.len(),
-        1,
-        "the ledger mapping requested a fresh plan"
-    );
-    assert!(options_messages[0].seq > boundary);
-    if new_user_input {
-        // Persist actual user input while the next agent is already running.
-        // This must invalidate the earlier selective claim immediately.
-        core.store
-            .add_message(&conversation, "user", "new planning instruction")
-            .unwrap();
-        assert_eq!(
-            core.store.pending_plan_comment_ids(&conversation).unwrap(),
-            None
-        );
-    }
-    std::fs::write(dir.path().join("release-next-plan"), "continue").unwrap();
-    wait_until("checked replacement plan", || core.is_idle(&conversation));
-    assert_ne!(
-        core.store.latest_plan(&conversation).unwrap()[0].plan_id,
-        original
-    );
-    assert!(!events(&core, &conversation, "plan_proposed").is_empty());
-    let resolved: Vec<u64> = core
-        .store
-        .comments(&conversation, "resolved")
-        .unwrap()
-        .iter()
-        .map(|c| c.id)
-        .collect();
-    let open: Vec<u64> = core
-        .store
-        .comments(&conversation, "open")
-        .unwrap()
-        .iter()
-        .map(|c| c.id)
-        .collect();
-    if new_user_input {
-        // Without a selective claim, the normal checked-plan rule applies.
-        assert_eq!(resolved, ids);
-        assert!(open.is_empty());
-    } else {
-        let selected = usize::from(current_list);
-        assert_eq!(resolved, vec![ids[selected]]);
-        assert_eq!(open, vec![ids[1 - selected]]);
-    }
-    assert_eq!(
-        core.store.pending_plan_comment_ids(&conversation).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn deferred_options_proposal_preserves_selective_comment_claim() {
-    deferred_comment_revision(false, false);
-}
-
-#[test]
-fn deferred_options_proposal_prefers_the_current_explicit_comment_list() {
-    deferred_comment_revision(true, false);
-}
-
-#[test]
-fn deferred_options_comment_claim_expires_on_new_user_input() {
-    deferred_comment_revision(false, true);
 }
 
 #[test]

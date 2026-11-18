@@ -40,7 +40,8 @@ pub(super) fn scope(request: &Request) -> Option<(&str, Access)> {
             (&message.conversation, Access::Change)
         }
         Request::Conversation(
-            C::Comment { conversation, .. }
+            C::AddSource { conversation, .. }
+            | C::Comment { conversation, .. }
             | C::Send { conversation, .. }
             | C::Reject { conversation, .. }
             | C::Resume { conversation, .. }

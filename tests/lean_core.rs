@@ -236,7 +236,7 @@ fn diff_comments_are_delivered_to_the_validated_worker_once_with_location() {
             &[serde_json::json!({
                 "id": "local-task",
                 "title": "Implement feature",
-                "goal": "Change source",
+                "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Change source",
                 "kind": "implementation",
                 "change_kind": "code",
                 "reviewer": {"summary": "Check the change"}
@@ -1212,8 +1212,10 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     let dir = common::tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("proj").unwrap();
-    let specs = [json!({"id": "t1", "title": "x", "goal": "g",
-        "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "f"}})];
+    let specs = [
+        json!({"id": "t1", "title": "x", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g",
+        "change_kind": "code", "kind": "implementation", "reviewer": {"summary": "f"}}),
+    ];
     let mut task = store.add_plan(&conversation.id, &specs).unwrap().remove(0);
 
     let obligations = vec![("R1".to_owned(), "risk".to_owned())];

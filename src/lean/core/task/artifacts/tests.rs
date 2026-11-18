@@ -32,9 +32,9 @@ fn fixture(output: &str, without_receipt: bool) -> Fixture {
     let core = Core::open(&directory.path().join("state"), config).unwrap();
     let conversation = core.start(&project).unwrap().id;
     let values = [
-        json!({"id":"report","title":"Report","goal":"Write report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output]}),
-        json!({"id":"correction","title":"Correction","goal":"Correct report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output],"depends_on":["report"]}),
-        json!({"id":"other-correction","title":"Correction","goal":"Correct report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output],"depends_on":["report"]}),
+        json!({"id":"report","title":"Report","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output]}),
+        json!({"id":"correction","title":"Correction","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Correct report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output],"depends_on":["report"]}),
+        json!({"id":"other-correction","title":"Correction","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Correct report","kind":"analysis","change_kind":"artifact","delivery":"untracked","outputs":[output],"depends_on":["report"]}),
     ];
     let specs = values
         .iter()

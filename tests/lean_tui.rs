@@ -3353,12 +3353,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
 
     // 1. Stable, deterministic positions based on dependency topology
     let mut view = View::default();
-    for role in [
-        "requirements-extraction-analyst",
-        antislop::lean::PLANNER,
-        PLAN_REVIEWER,
-        AUDITOR,
-    ] {
+    for role in [antislop::lean::PLANNER, PLAN_REVIEWER, AUDITOR] {
         view.agents.insert(role.into(), Default::default());
     }
     view.tasks = vec![
@@ -7676,7 +7671,7 @@ fn dashboard_screen(
         "plan_proposed",
         json!({"plan": "p1", "tasks": [
             {"change_kind":"none","id": "t1", "title": "Store", "summary": "Fix the storage path.",
-             "goal": "Make the storage layer atomic.\nNever lose a write on crash.",
+             "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Make the storage layer atomic.\nNever lose a write on crash.",
              "reviewer": {"summary": "Check it.", "focus": "Crash safety.",
                           "risks": ["Torn writes", "Lock inversion"]}},
             {"change_kind":"none","id": "t2", "title": "API", "depends_on": ["t1"]}
@@ -7718,8 +7713,8 @@ fn dashboard_screen(
     details.tab = tab;
     details.task = Some(json!({
         "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",
-        "spec": {"id": "t1", "title": "Store", "goal": "g", "change_kind": "code", "kind": "implementation",
-                 "requirement_ids": ["Q1"],
+        "spec": {"id": "t1", "title": "Store", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "code", "kind": "implementation",
+
                  "reviewer": {"summary": "Crash safety."}},
         "checks": [{"id": "R1", "state": "settled", "status": "issue", "note": "fsync missing"},
                    {"id": "R2", "state": "checking"}],
@@ -7770,7 +7765,7 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
         "[Worker]",
         "Goal",
         "Make the storage layer atomic",
-        "serves requirements Q1",
+        "C1: The task goal is verified",
         "Session · worker",
     ] {
         assert!(worker.contains(needle), "{needle}\n{worker}");
@@ -7898,19 +7893,19 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
                 {
                     "id": "t1",
                     "title": "Build parser",
-                    "goal": "Implement parser",
+                    "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Implement parser",
                     "kind": "implementation",
                     "change_kind": "code",
-                    "covers": ["R1.1"],
+
                     "depends_on": []
                 },
                 {
                     "id": "t2",
                     "title": "Add CLI flags",
-                    "goal": "Wire CLI flags",
+                    "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Wire CLI flags",
                     "kind": "implementation",
                     "change_kind": "code",
-                    "covers": ["R1.2"],
+
                     "depends_on": ["t1"]
                 }
             ]
@@ -7940,7 +7935,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let req2 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
     assert_eq!(req2["op"], "revise_plan");
     assert_eq!(req2["request_ai_review"], false);
-    assert_eq!(req2["allow_uncovered"], true);
+    assert!(req2.get("allow_uncovered").is_none());
     assert_eq!(req2["revision"]["tasks"][0]["id"], "t2");
     assert_eq!(req2["revision"]["tasks"][0]["depends_on"], json!([]));
     let _ = rx_updates.recv_timeout(Duration::from_secs(2));

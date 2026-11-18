@@ -71,42 +71,7 @@ impl Core {
             &json!({"phase": "planning", "summary": prompt, "upto_message": message.seq}),
         )?;
 
-        let run = self.store.create_run(conversation, prompt)?;
-        let source = self
-            .store
-            .register_message_source(conversation, &run.id, message.seq)?;
-        let change = serde_json::from_value(json!({
-            "conversation": conversation,
-            "run_id": run.id,
-            "expected_spec_revision": 0,
-            "operation_id": format!("direct-{}", crate::id()),
-            "reason": "Direct execution scope",
-            "entries": [{
-                "id": "R1",
-                "source": {
-                    "source_id": source.id,
-                    "start": 0,
-                    "end": prompt.len(),
-                },
-                "interpretation": prompt,
-                "criteria": [{
-                    "id": "R1.accept",
-                    "text": prompt,
-                }]
-            }]
-        }))?;
-        self.store.apply_ledger_change(&change, &self.state, true)?;
-        self.store.bind_ledger_turn(
-            conversation,
-            &run.id,
-            &turn.id,
-            1,
-            "extraction",
-            &[source.id],
-        )?;
-        self.store
-            .accept_extraction(conversation, &run.id, 1, &turn.id)?;
-
+        let scope = self.store.create_scope(conversation, prompt)?;
         let first_line = prompt.lines().next().unwrap_or(prompt).trim();
         let title: String = unicode_segmentation::UnicodeSegmentation::graphemes(first_line, true)
             .take(64)
@@ -121,8 +86,11 @@ impl Core {
             quality_gate: false,
             options_for: None,
             id: task_id.clone(),
-            requirement_ids: vec!["R1".into()],
-            criterion_ids: vec!["R1.accept".into()],
+
+            acceptance_criteria: vec![tasks::AcceptanceCriterion {
+                id: "C1".into(),
+                text: prompt.into(),
+            }],
             title: if title.is_empty() {
                 "Direct task".into()
             } else {
@@ -137,7 +105,7 @@ impl Core {
             delivery: None,
             depends_on: Vec::new(),
             kind: WorkKind::Implementation,
-            covers: vec!["R1.accept".into()],
+
             reviewer: tasks::ReviewerSpec {
                 summary: Some("Verify that the direct change satisfies the request.".into()),
             },
@@ -149,9 +117,8 @@ impl Core {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let added = self.store.add_plan(conversation, &values)?;
         let plan_id = added[0].plan_id.clone();
-        self.store.link_plan_run(conversation, &plan_id, &run.id)?;
         self.store
-            .bind_task_ledger(conversation, &run.id, &plan_id)?;
+            .bind_plan_scope(conversation, &plan_id, &scope.id)?;
         self.store.append_event(
             conversation,
             None,

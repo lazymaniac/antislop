@@ -12,17 +12,17 @@ fn completed_followup_restarts_interview_without_erasing_history() {
         .interview_summary(&conversation.id, "First scope", first.seq)
         .unwrap();
     store.confirm_scope_for_test(&conversation.id);
-    let run = store.create_run(&conversation.id, "First goal").unwrap();
-    store
-        .select_planning_run(&conversation.id, &run.id)
-        .unwrap();
+    let run = store.create_scope(&conversation.id, "First goal").unwrap();
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
+    store
+        .bind_plan_scope(&conversation.id, plan, &run.id)
+        .unwrap();
     store.queue_plan(&conversation.id, plan).unwrap();
     // A message while work remains must not reset its workflow.
     store
@@ -47,10 +47,10 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     assert_eq!(workflow.phase, "interview");
     assert!(workflow.summary.is_empty());
     assert_eq!(workflow.upto_message, 0);
-    let next_run = store.planning_run(&conversation.id).unwrap().unwrap();
-    assert_ne!(next_run.id, run.id);
-    assert_eq!(next_run.goal, "Next goal");
-    assert!(store.run(&conversation.id, &run.id).is_ok());
+    assert_eq!(
+        store.scope(&conversation.id, &run.id).unwrap().summary,
+        "First goal"
+    );
     assert_eq!(store.plan(plan).unwrap()[0].status, "approved");
     store
         .add_message(&conversation.id, "user", "Next constraint")
@@ -70,17 +70,17 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
         .interview_summary(&conversation.id, "First scope", first.seq)
         .unwrap();
     store.confirm_scope_for_test(&conversation.id);
-    let run = store.create_run(&conversation.id, "First goal").unwrap();
-    store
-        .select_planning_run(&conversation.id, &run.id)
-        .unwrap();
+    let run = store.create_scope(&conversation.id, "First goal").unwrap();
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Deliver behavior","change_kind": "code", "kind":"implementation","reviewer":{"summary": "Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;
+    store
+        .bind_plan_scope(&conversation.id, plan, &run.id)
+        .unwrap();
     store.queue_plan(&conversation.id, plan).unwrap();
     store.set_plan_status(plan, "queued", "approved").unwrap();
     let audit = |approved: bool| {
@@ -97,8 +97,8 @@ fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
     let still_open = |text: &str| {
         store.add_message(&conversation.id, "user", text).unwrap();
         let workflow = store.workflow(&conversation.id).unwrap();
-        let current = store.planning_run(&conversation.id).unwrap().unwrap();
-        workflow.phase == "implementation" && current.id == run.id
+        workflow.phase == "implementation"
+            && store.plan_scope_id(plan).unwrap().as_deref() == Some(run.id.as_str())
     };
     audit(false);
     assert!(still_open("Fix what the audit found"));
@@ -166,62 +166,6 @@ fn every_conversation_begins_in_its_interview() {
     let workflow = store.workflow(&conversation.id).unwrap();
     assert!(workflow.interviewing() && workflow.summary.is_empty());
     assert!(store.workflow("missing").is_err());
-}
-
-#[test]
-fn malformed_requirements_retry_is_idempotent_without_a_count_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("state.db")).unwrap();
-    let conversation = store.create_conversation("project").unwrap();
-    store
-        .add_message(&conversation.id, "user", "Keep the same requirements")
-        .unwrap();
-    for _attempt in 0..5 {
-        store
-            .append_event(
-                &conversation.id,
-                None,
-                None,
-                "requirements_failed",
-                &serde_json::json!({"error":"the requirements analyst ended its turn without submit_ledger"}),
-            )
-            .unwrap();
-        assert!(
-            store
-                .queue_requirements_format_repair(&conversation.id)
-                .unwrap()
-        );
-        assert!(
-            !store
-                .queue_requirements_format_repair(&conversation.id)
-                .unwrap()
-        );
-    }
-    assert_eq!(
-        store
-            .messages_by(&conversation.id, "requirements-format-repair", 0)
-            .unwrap()
-            .len(),
-        5
-    );
-    store
-        .add_message(&conversation.id, "user", "Retry preparation")
-        .unwrap();
-    store
-        .append_event(
-            &conversation.id,
-            None,
-            None,
-            "requirements_failed",
-            &serde_json::json!({"error":"requirements proposal awaits user approval"}),
-        )
-        .unwrap();
-    // An approval blocker must not be treated as a malformed response.
-    assert!(
-        !store
-            .queue_requirements_format_repair(&conversation.id)
-            .unwrap()
-    );
 }
 
 #[test]
@@ -293,7 +237,7 @@ fn every_planning_cycle_awaits_its_own_first_plan() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
+    let task = serde_json::json!({"id":"t1","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}});
     let settle = |request: &str| {
         let message = store
             .add_message(&conversation.id, "user", request)

@@ -154,7 +154,7 @@ pub struct PendingApproval {
 pub struct TaskMeta {
     pub deferred: bool,
     pub outputs: Vec<String>,
-    pub covers: Vec<String>,
+    pub acceptance_criteria: Vec<crate::lean::tasks::AcceptanceCriterion>,
     pub quality_gate: bool,
     pub options_for: Option<String>,
 }
@@ -175,8 +175,6 @@ pub struct View {
     pub scope_confirmation_summary: Option<String>,
     pub user_decision: bool,
     pub requirements_summary: String,
-    pub requirements_approval_run: Option<String>,
-    pub requirements_approval_event: u64,
     pub requirements_progress: Option<(bool, String)>,
     latest_user_message: u64,
     pub comment_scopes: HashMap<u64, (Option<u64>, Option<String>)>,
@@ -396,61 +394,6 @@ mod tests {
         assert_eq!(view.agents["worker:implementation"].turns, 3);
         assert_eq!(view.task_rows["extra-uuid"], 1);
         assert_eq!(view.plan_revision_token.as_deref(), Some("new"));
-    }
-
-    #[test]
-    fn requirements_approval_survives_replay_until_its_run_changes() {
-        let mut view = View::default();
-        view.apply(&event(
-            1,
-            None,
-            "ledger_approval_required",
-            json!({"run":"r1"}),
-        ));
-        assert_eq!(view.requirements_approval_run.as_deref(), Some("r1"));
-        view.apply(&event(2, None, "ledger_changed", json!({"run":"r2"})));
-        assert_eq!(view.requirements_approval_run.as_deref(), Some("r1"));
-        view.apply(&event(3, None, "ledger_changed", json!({"run":"r1"})));
-        assert!(view.requirements_approval_run.is_none());
-    }
-
-    #[test]
-    fn requirements_failure_shows_raw_reason_and_retry_guidance() {
-        let mut view = View::default();
-        view.apply(&event(
-            1,
-            None,
-            "requirements_failed",
-            json!({
-                "error": "entry p has unknown or incompatible parent r",
-                "retry": "Send a message to retry planning."
-            }),
-        ));
-        assert!(view.cards.iter().any(|card| matches!(card,
-            TranscriptCard::System { title, text, tone: super::super::theme::Tone::Failed, .. }
-                if title == "Requirements preparation failed"
-                    && text.contains("incompatible parent r")
-                    && text.contains("Send a message to retry planning.")
-        )));
-    }
-
-    #[test]
-    fn requirements_rejection_keeps_automatic_repair_in_progress() {
-        let mut view = View::default();
-        view.apply(&event(
-            1,
-            None,
-            "requirements_failed",
-            json!({"error":"missing criterion", "retrying":true,
-                "retry":"Regenerating the plan automatically."}),
-        ));
-        assert_eq!(
-            view.requirements_progress,
-            Some((false, "Regenerating the plan automatically.".into()))
-        );
-        assert!(!view.cards.iter().any(|card| matches!(card,
-            TranscriptCard::System { title, .. } if title == "Requirements preparation failed"
-        )));
     }
 
     #[test]
@@ -945,7 +888,7 @@ mod tests {
                 None,
                 "plan_proposed",
                 json!({"tasks": [{"change_kind":"none",
-                    "id": "t1", "title": "Storage", "summary": summary, "goal": "Full goal",
+                    "id": "t1", "title": "Storage", "summary": summary, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Full goal",
                     "reviewer": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
                 }]}),
             ));
@@ -1230,7 +1173,8 @@ mod tests {
             ..TaskRow::default()
         });
         assert_eq!(view.stage(), Stage::Done);
-        for role in ["requirements-audit-analyst", "requirements-audit-reviewer"] {
+        {
+            let role = AUDITOR;
             view.agents.insert(
                 role.into(),
                 Agent {

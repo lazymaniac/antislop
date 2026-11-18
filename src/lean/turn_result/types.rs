@@ -1,6 +1,6 @@
 // Typed task results. Prose is evidence, never a control protocol.
 use crate::lean::{
-    interview, ledger,
+    interview,
     tasks::{PlannedTask, Verdict},
 };
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,8 @@ pub enum TurnResult {
     },
     /// A task graph from `submit_plan`, already checked in the turn.
     Plan {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
         document: String,
         tasks: Vec<PlannedTask>,
         /// Approved tasks of the plan that ran, kept with their results.
@@ -53,22 +55,6 @@ pub enum TurnResult {
     NeedsInput {
         request: String,
         checkpoint: String,
-    },
-    /// The requirements `submit_ledger` extracted, ranges and run filled in
-    /// by the runtime.
-    Ledger {
-        extraction: ledger::Extraction,
-    },
-    /// The audit of `submit_audit`; it approves unless a finding blocks.
-    Audit {
-        findings: Vec<serde_json::Value>,
-        evidence: Vec<ledger::AuditEvidence>,
-    },
-    /// The assessments of `submit_audit_review`, by the evidence ids the
-    /// runtime gave the audit's proposals.
-    AuditReview {
-        note: String,
-        assessments: Vec<ledger::AuditAssessment>,
     },
 }
 

@@ -346,8 +346,8 @@ mod tests {
             .add_plan(
                 &conversation,
                 &[
-                    json!({"id":"inventory","title":"Inventory","goal":"List inputs","change_kind":"none","kind":"analysis"}),
-                    json!({"id":"consumer","title":"Consumer","goal":"Use inventory","change_kind":"none","kind":"analysis","depends_on":["inventory"]}),
+                    json!({"id":"inventory","title":"Inventory","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"List inputs","change_kind":"none","kind":"analysis"}),
+                    json!({"id":"consumer","title":"Consumer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Use inventory","change_kind":"none","kind":"analysis","depends_on":["inventory"]}),
                 ],
             )
             .unwrap();

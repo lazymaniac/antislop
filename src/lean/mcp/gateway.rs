@@ -26,10 +26,6 @@ pub(crate) const ASK_USER: &str = "ask_user";
 pub(crate) const SUBMIT_REQUIREMENTS: &str = "submit_requirements";
 /// Ends a review turn with its findings; the runtime derives the verdict.
 pub(crate) const REVIEW: &str = "review";
-/// The tools that end a requirements analyst's turn with its result; the
-/// runtime derives source ranges and evidence identities.
-pub(crate) const LEDGER_RESULTS: [&str; 3] =
-    ["submit_ledger", "submit_audit", "submit_audit_review"];
 /// The tools that end a task turn with its result.
 pub(crate) const TASK_RESULTS: [&str; 4] = ["complete", "select", REVIEW, "report_blocker"];
 pub(crate) const TOOLS: &[&str] = &[
@@ -54,9 +50,6 @@ pub(crate) const TOOLS: &[&str] = &[
     "resume_task",
     "revise_plan",
     "request_replan",
-    "submit_ledger",
-    "submit_audit",
-    "submit_audit_review",
 ];
 
 /// Whether a successful call of `name` ends the turn.
@@ -65,7 +58,6 @@ pub(super) fn is_terminal(name: &str) -> bool {
         name,
         TOOL | SUBMIT_PLAN | WAIT | ASK_USER | SUBMIT_REQUIREMENTS
     ) || TASK_RESULTS.contains(&name)
-        || LEDGER_RESULTS.contains(&name)
 }
 
 /// The typed result a terminal call records, where the arguments alone
@@ -74,7 +66,7 @@ pub(super) fn terminal_result(
     name: &str,
     args: &Value,
 ) -> Result<super::super::turn_result::TurnResult> {
-    if name == WAIT || LEDGER_RESULTS.contains(&name) {
+    if name == WAIT {
         Err(invalid(format!("{name} needs the runtime's handler")))
     } else {
         super::super::turn_result::tool_result(name, args)
