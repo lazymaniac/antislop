@@ -67,13 +67,23 @@ fn finalization_adds_options_with_and_without_required_gates() {
             assert_eq!(specs.len(), 2);
             assert!(!tasks::missing_quality_agents(&specs).is_empty());
         }
-        for writer in specs.iter().filter(|spec| spec.change_kind.has_delivery()) {
+        for writer in specs
+            .iter()
+            .filter(|spec| spec.change_kind.has_delivery() && !spec.quality_gate)
+        {
             assert!(writer.depends_on.iter().any(|id| {
                 specs.iter().any(|spec| {
                     spec.id == *id
                         && spec.kind == WorkKind::Options
                         && !spec.change_kind.has_delivery()
                 })
+            }));
+        }
+        for gate in specs.iter().filter(|spec| spec.quality_gate) {
+            assert!(!gate.depends_on.iter().any(|id| {
+                specs
+                    .iter()
+                    .any(|spec| spec.id == *id && spec.options_for.as_deref() == Some(&gate.id))
             }));
         }
     }

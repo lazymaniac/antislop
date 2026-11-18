@@ -9,7 +9,7 @@ pub(in crate::lean) fn writer_base_scratch(state: &Path, plan_id: &str, spec_id:
         .join(format!("base-{}", crate::hash(key.as_bytes())))
 }
 
-/// Add options after quality gates so every writer, including gates, is covered.
+/// Add options prerequisites for eligible writers, excluding quality gates.
 #[cfg(test)]
 pub(in crate::lean) fn finalize_plan(
     specs: Vec<TaskContract>,
