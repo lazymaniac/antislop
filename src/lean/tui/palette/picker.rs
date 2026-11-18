@@ -330,7 +330,23 @@ impl Picker {
             conversations: Vec::new(),
             projects: Vec::new(),
             confirm_delete: false,
+            recommendation: None,
         }
+    }
+
+    pub fn rigor(view: &View) -> Self {
+        let mut picker = Self::new(Kind::Rigor);
+        picker.selected = picker
+            .items(view)
+            .iter()
+            .position(|(_, action)| {
+                *action == Action::Run(Command::SelectTeam(view.active_rigor()))
+            })
+            .unwrap_or_default();
+        if view.team_recommended {
+            picker.recommendation = Some((view.active_rigor(), view.team_reason.clone()));
+        }
+        picker
     }
 
     /// The entries matching what was typed, each word anywhere in the label.
@@ -390,12 +406,20 @@ impl Picker {
     pub fn draw_with_cursor(&mut self, frame: &mut Frame, view: &View, show_cursor: bool) {
         let items = self.items(view);
         self.selected = self.selected.min(items.len().saturating_sub(1));
-        let Some(layout) = PickerLayout::new(frame.area(), items.len(), self.selected) else {
+        let header_rows = if self.recommendation.is_some() {
+            1 + usize::from(frame.area().height.saturating_sub(5).min(2))
+        } else {
+            1
+        };
+        let Some(layout) = PickerLayout::new(frame.area(), items.len(), self.selected, header_rows)
+        else {
             return;
         };
         let lines = self.draw_lines(&items, layout);
         let title = if self.kind == Kind::Conversations && self.confirm_delete {
             " delete session? y confirm · n/Esc cancel "
+        } else if self.recommendation.is_some() {
+            " Recommended rigor · Enter confirm · Esc close "
         } else {
             picker_title(self.kind, layout.width)
         };
@@ -406,10 +430,31 @@ impl Picker {
     }
 
     fn draw_lines(&self, items: &[(String, Action)], layout: PickerLayout) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::raw(truncate(
+        let mut lines = Vec::new();
+        if let Some((team, reason)) = &self.recommendation
+            && layout.header_rows >= 2
+        {
+            lines.push(Line::raw(truncate(
+                &format!("Orchestrator recommends: {}", team.name()),
+                layout.inner,
+            )));
+            if layout.header_rows >= 3 {
+                let reason = if reason.trim().is_empty() {
+                    "Default rigor for this plan."
+                } else {
+                    reason
+                };
+                let reason = truncate(reason, layout.inner);
+                lines.push(Line::styled(
+                    truncate(&format!("Reason: {reason}"), layout.inner),
+                    dim(),
+                ));
+            }
+        }
+        lines.push(Line::raw(truncate(
             &format!("> {}", self.query),
             layout.inner,
-        ))];
+        )));
         if items.is_empty() {
             lines.push(Line::styled(
                 truncate(
@@ -424,11 +469,16 @@ impl Picker {
     }
 
     fn place_cursor(&self, frame: &mut Frame, layout: PickerLayout) {
-        if layout.box_area.width < 3 || layout.box_area.height < 2 {
+        if layout.box_area.width < 3
+            || usize::from(layout.box_area.height) <= layout.header_rows + 1
+        {
             return;
         }
         let col = (2 + self.query.width()).min(layout.inner.saturating_sub(1)) as u16;
-        frame.set_cursor_position((layout.box_area.x + 1 + col, layout.box_area.y + 1));
+        frame.set_cursor_position((
+            layout.box_area.x + 1 + col,
+            layout.box_area.y + layout.header_rows as u16,
+        ));
     }
 }
 

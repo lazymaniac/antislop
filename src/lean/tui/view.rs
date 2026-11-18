@@ -166,6 +166,7 @@ pub struct TaskMeta {
 pub struct View {
     pub team: Option<crate::lean::tasks::Team>,
     pub team_reason: String,
+    pub team_recommended: bool,
     pub plan_head_revision: i64,
     pub task_meta: HashMap<String, TaskMeta>,
     pub workflow_phase: Option<String>,

@@ -31,13 +31,13 @@ impl TeamGuidance {
     pub(in crate::lean) fn write_guidance_section(&self, prompt: &mut String) {
         let policy = match self.origin {
             TeamOrigin::User => {
-                "The user explicitly selected this rigor team. Preserve it; do not change it in submit_plan."
+                "The user explicitly selected this rigor team. Preserve it; do not change it in submit_plan or add agents from other rigor teams."
             }
             TeamOrigin::Unknown => {
                 "This legacy team has an unverified origin. Preserve it; do not replace it without a new explicit user selection."
             }
             TeamOrigin::Planner => {
-                "This planner-selected team has fewer quality gates than feature. Reject the plan if the work needs more checking than this team runs."
+                "The orchestrator already selected this rigor team. Preserve it across plan changes; only an explicit user selection may change it. Review within its gates; do not require agents from another rigor team."
             }
         };
         let metadata = serde_json::json!({
@@ -109,7 +109,7 @@ impl Store {
     }
 
     /// The team template the conversation's plans run with (`feature` until
-    /// the planner chooses another).
+    /// the orchestrator makes its initial recommendation).
     pub(in crate::lean) fn team(&self, conversation: &str) -> Result<crate::lean::tasks::Team> {
         let name: Option<String> = self
             .db()
@@ -182,17 +182,13 @@ impl Store {
                 _ => return Err(Error::Invalid(format!("invalid team origin `{origin}`"))),
             };
             let team = crate::lean::tasks::Team::parse(&team)?;
-            if origin == TeamOrigin::Planner && team == crate::lean::tasks::Team::default() {
-                return Ok(None);
-            }
-            Ok(Some(TeamGuidance {
+            Ok(TeamGuidance {
                 team,
                 origin,
                 reason,
-            }))
+            })
         })
         .transpose()
-        .map(Option::flatten)
     }
 
     /// Records the user's team choice; a change is an event with its reason.
@@ -205,7 +201,7 @@ impl Store {
         self.save_team(conversation, team, reason, TeamOrigin::User)
     }
 
-    /// Records a planner-selected team without changing the source of a user's choice.
+    /// Records the initial recommendation without replacing an existing choice.
     pub(in crate::lean) fn select_planned_team(
         &self,
         conversation: &str,
@@ -223,12 +219,14 @@ impl Store {
         origin: TeamOrigin,
     ) -> Result<()> {
         // Store a choice and its provenance atomically. A planner update cannot
-        // overwrite a user or unknown legacy choice that raced its earlier read.
+        // overwrite any saved choice that raced its earlier read.
         let user_selected = origin == TeamOrigin::User;
-        let changed = self.db().execute(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let changed = tx.execute(
             "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(conversation_id) DO UPDATE SET team=excluded.team,reason=excluded.reason,version=excluded.version,updated_ms=excluded.updated_ms,user_selected=excluded.user_selected,origin=excluded.origin
-             WHERE (?6=1 OR teams.origin NOT IN ('user','unknown'))
+             WHERE ?6=1
                AND (teams.team<>excluded.team OR teams.reason<>excluded.reason OR teams.user_selected<>excluded.user_selected OR teams.origin<>excluded.origin)",
             params![
                 conversation,
@@ -243,13 +241,13 @@ impl Store {
         if changed == 0 {
             return Ok(());
         }
-        self.append_event(
-            conversation,
-            None,
-            None,
-            "team_selected",
-            &serde_json::json!({"team": team.name(), "reason": reason, "version": crate::lean::tasks::TEAM_VERSION}),
+        let payload = serde_json::json!({"team": team.name(), "reason": reason,
+            "version": crate::lean::tasks::TEAM_VERSION, "origin": origin.database_value()});
+        tx.execute(
+            "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'team_selected',?2,?3)",
+            params![conversation, payload.to_string(), now_ms()],
         )?;
+        tx.commit()?;
         Ok(())
     }
 

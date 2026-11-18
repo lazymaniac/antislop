@@ -10,6 +10,7 @@ impl App {
         }
         self.sync_interview();
         self.sync_approval();
+        self.sync_rigor_recommendation();
         if let Some(result) = self.route_selection_and_config(key) {
             return result;
         }

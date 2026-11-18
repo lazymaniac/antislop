@@ -79,6 +79,7 @@ impl Core {
             "{reason}\nCurrent scope and full sources:\n{scope_context}\nProposed scope: {}. Assess every preserved approved task against the proposed scope. Require redo or changed criteria for work that no longer satisfies it.",
             context.revision.scope.as_deref().unwrap_or("unchanged")
         );
+        let team_guidance = self.store.team_guidance(context.conversation)?;
         let review = self
             .review(
                 context.conversation,
@@ -87,7 +88,7 @@ impl Core {
                 &context.project,
                 context.cancel,
                 |initial, request| {
-                    tasks::plan_revision_review_prompt(
+                    let mut prompt = tasks::plan_revision_review_prompt(
                         &context.project.to_string_lossy(),
                         request,
                         context.specs,
@@ -98,7 +99,11 @@ impl Core {
                         },
                         &reason,
                         initial,
-                    )
+                    );
+                    if let Some(guidance) = &team_guidance {
+                        guidance.write_guidance_section(&mut prompt);
+                    }
+                    prompt
                 },
             )?
             .map_err(Error::Invalid)?;

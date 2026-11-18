@@ -129,10 +129,29 @@ impl Core {
             self.cancel_proposed_plan(&plan.id)?;
             return Ok(());
         }
+        let _graph = self.locks.graph();
         if self.requeue_rejected_plan(conversation, &plan.id, &review)? {
             return Ok(());
         }
+        // A recommendation may have been replaced while plan review was
+        // running. Never publish or accept its obsolete gate pipeline.
+        if self
+            .store
+            .plan(&plan.id)?
+            .iter()
+            .any(|task| task.status != status::PROPOSED)
+        {
+            return Ok(());
+        }
+        let current_specs = checked_team_plan(specs, config, self.store.team(conversation)?)
+            .map_err(Error::Invalid)?;
+        if current_specs != specs {
+            self.cancel_proposed_plan(&plan.id)?;
+            self.record_plan_lint(conversation, "The user changed rigor during planning. Redraft with the selected rigor team and its gates.")?;
+            return Ok(());
+        }
         self.publish_plan(conversation, text, addressed, plan, specs, &review)?;
+        drop(_graph);
         // A cancel that arrived after the review but before the activated plan
         // registered its own flag would otherwise be lost.
         if cancel.load(Ordering::SeqCst) {

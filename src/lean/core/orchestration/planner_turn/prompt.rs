@@ -69,7 +69,7 @@ mod tests {
             scope_context: None,
         });
         assert!(prompt.contains("Trusted team policy:"));
-        assert!(prompt.contains("fewer quality gates than feature"));
+        assert!(prompt.contains("Preserve it across plan changes"));
         assert!(prompt.contains(r#""team":"small-change""#));
         assert!(prompt.contains(r#""origin":"planner""#));
         assert!(prompt.contains(

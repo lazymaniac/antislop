@@ -20,6 +20,7 @@ impl App {
         }
         self.sync_native_views();
         self.sync_approval();
+        self.sync_rigor_recommendation();
         if super::plan_history::draw_plan_history(self, frame) {
             return;
         }

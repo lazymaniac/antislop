@@ -672,6 +672,101 @@ mod tests {
     }
 
     #[test]
+    fn small_change_revisions_keep_the_selected_gates_for_existing_and_new_writers() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_planned_team(&conversation, tasks::Team::SmallChange, "contained fix")
+            .unwrap();
+        let writer: TaskContract = serde_json::from_value(json!({
+            "id":"writer", "title":"Writer", "goal":"Fix contained behavior", "kind":"implementation", "change_kind":"code",
+            "acceptance_criteria":[{"id":"C1","text":"The behavior works"}]
+        })).unwrap();
+        let initial = crate::lean::core::plan::proposal::checked_team_plan(
+            std::slice::from_ref(&writer),
+            &config,
+            tasks::Team::SmallChange,
+        )
+        .unwrap();
+        // Publication's rigor check must be idempotent for a generated graph.
+        assert_eq!(
+            crate::lean::core::plan::proposal::checked_team_plan(
+                &initial,
+                &config,
+                tasks::Team::SmallChange
+            )
+            .unwrap(),
+            initial
+        );
+        let baseline = core
+            .store
+            .add_plan(
+                &conversation,
+                &initial
+                    .iter()
+                    .map(|spec| serde_json::to_value(spec).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let mut new_writer = writer.clone();
+        new_writer.id = "new-writer".into();
+        new_writer.depends_on = vec!["writer".into()];
+        let mut revision = PlanRevision {
+            plan: baseline[0].plan_id.clone(),
+            base_revision: 0,
+            reason: "Add a follow-up fix".into(),
+            scope: None,
+            tasks: vec![new_writer],
+            retire: vec![],
+            redo: vec![],
+            replacements: Default::default(),
+        };
+        for _ in 0..2 {
+            let revised = core.revised_specs(&revision, &baseline).unwrap();
+            let gates = revised
+                .iter()
+                .filter(|spec| spec.quality_gate)
+                .map(|spec| spec.kind)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                gates,
+                tasks::Team::SmallChange.gates().iter().copied().collect()
+            );
+            assert_eq!(
+                core.store.team(&conversation).unwrap(),
+                tasks::Team::SmallChange
+            );
+            revision.tasks[0].goal.push_str(" with updated details");
+        }
+        // Changing rigor explicitly cancels a stale pending proposal, so its
+        // old gate pipeline cannot be accepted while a replacement is drafted.
+        core.activity.start_orchestrator(&conversation).unwrap();
+        core.select_rigor(
+            &conversation,
+            tasks::Team::Feature,
+            "User wants full checks",
+        )
+        .unwrap();
+        assert_eq!(
+            core.store.user_selected_team(&conversation).unwrap(),
+            Some(tasks::Team::Feature)
+        );
+        assert!(
+            core.store
+                .plan(&revision.plan)
+                .unwrap()
+                .iter()
+                .all(|task| task.status == status::CANCELLED)
+        );
+    }
+
+    #[test]
     fn preparation_failure_releases_the_durable_revision_slot() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();

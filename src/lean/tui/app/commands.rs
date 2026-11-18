@@ -26,7 +26,13 @@ impl App {
             Command::SwitchConversation => self.open_conversation_picker(),
             Command::Projects => self.open_projects_picker(),
             Command::SelectTeam(team) => self.apply_rigor_team(team),
-            Command::OpenRigorPicker => self.picker = Some(Picker::new(Kind::Rigor)),
+            Command::OpenRigorPicker => {
+                if self.view.team_recommended {
+                    self.rigor_recommendations_shown
+                        .insert(self.conversation.clone());
+                }
+                self.picker = Some(Picker::rigor(&self.view));
+            }
             Command::EditTask => self.open_flow_edit(),
             Command::AddDependentTask => self.open_flow_add_dependent(),
             Command::SplitTask => self.open_flow_split(),
@@ -81,8 +87,39 @@ impl App {
         }
     }
 
+    pub(in crate::lean::tui) fn sync_rigor_recommendation(&mut self) {
+        if !self.view.team_recommended
+            || self.observer
+            || self
+                .rigor_recommendations_shown
+                .contains(&self.conversation)
+            || self.native_focused()
+            || self.picker.is_some()
+            || self.help.is_some()
+            || self.editor.is_some()
+            || self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.editing || details.searching)
+            || self.flow_editor.is_some()
+            || self
+                .config_editor
+                .as_ref()
+                .is_some_and(|editor| editor.visible)
+            || self.plan_history.is_some()
+            || self.unblock.is_some()
+            || self.graph_filters.is_some()
+            || self.approval.is_some()
+            || self.interview_visible()
+        {
+            return;
+        }
+        self.rigor_recommendations_shown
+            .insert(self.conversation.clone());
+        self.picker = Some(Picker::rigor(&self.view));
+    }
+
     pub fn apply_rigor_team(&mut self, team: crate::lean::tasks::Team) {
-        self.view.team = Some(team);
         let name = team.name().to_owned();
         self.send_command(Some("workflow rigor updated"), move |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::SelectTeam {

@@ -76,6 +76,7 @@ impl App {
         self.view.idle = idle;
         self.refetch_stale_details();
         self.open_pending_plan(manual_plan);
+        self.sync_rigor_recommendation();
     }
 
     fn apply_view_events(&mut self, events: &[Value]) -> bool {

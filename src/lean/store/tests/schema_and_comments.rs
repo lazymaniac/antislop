@@ -249,16 +249,28 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
             .filter(|event| event.kind == "team_selected")
             .count()
     };
-    store.select_team(id, Team::Feature, "").unwrap();
+    store
+        .select_planned_team(id, Team::SmallChange, "contained fix")
+        .unwrap();
+    store
+        .select_planned_team(id, Team::Feature, "redraft with more gates")
+        .unwrap();
+    assert_eq!(store.team(id).unwrap(), Team::SmallChange);
+    assert_eq!(
+        store.team_guidance(id).unwrap().unwrap().reason,
+        "contained fix"
+    );
     assert_eq!(selected(&store), 1);
     store.select_team(id, Team::Feature, "").unwrap();
-    assert_eq!(selected(&store), 1);
+    assert_eq!(selected(&store), 2);
+    store.select_team(id, Team::Feature, "").unwrap();
+    assert_eq!(selected(&store), 2);
     for _ in 0..2 {
         store
             .select_team(id, Team::SmallChange, "one-line typo fix")
             .unwrap();
     }
-    assert_eq!(selected(&store), 2);
+    assert_eq!(selected(&store), 3);
     assert_eq!(store.team(id).unwrap(), Team::SmallChange);
     assert_eq!(
         store.team_guidance(id).unwrap().unwrap().reason,

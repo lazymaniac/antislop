@@ -246,7 +246,7 @@ fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
             } else {
                 reason
             };
-            core.store.select_team(&conversation, parsed, &reason)?;
+            core.select_rigor(&conversation, parsed, &reason)?;
             json!({"team": parsed.name(), "reason": reason})
         }),
         request => Route::Unmatched(request),

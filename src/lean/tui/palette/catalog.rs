@@ -115,4 +115,5 @@ pub struct Picker {
     pub conversations: Vec<ConversationItem>,
     pub projects: Vec<ProjectItem>,
     pub confirm_delete: bool,
+    pub recommendation: Option<(crate::lean::tasks::Team, String)>,
 }

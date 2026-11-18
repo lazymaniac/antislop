@@ -155,6 +155,7 @@ impl Core {
             TurnResult::Plan { keep, .. } => keep.clone(),
             _ => Vec::new(),
         };
+        let _graph = self.locks.graph();
         let selected_by_user = self.store.user_selected_team(conversation)?;
         let saved_origin = self.store.team_origin(conversation)?;
         let (submitted_team, explicit_team) = match args["team"].as_str() {
@@ -170,33 +171,22 @@ impl Core {
                 ),
             )?;
         }
-        let team = if let Some(team) = selected_by_user {
-            team
-        } else if saved_origin == Some(crate::lean::store::TeamOrigin::Unknown) {
+        // A recommendation is selected once per conversation. Redrafting a
+        // plan cannot silently turn it into a different rigor team.
+        let team = if saved_origin.is_some() {
             self.store.team(conversation)?
-        } else if let Some(team) = submitted_team {
-            team
         } else {
-            self.store.team(conversation)?
+            submitted_team.unwrap_or_default()
         };
         let reason = args["team_reason"].as_str().unwrap_or_default().trim();
-        if explicit_team
-            && selected_by_user.is_none()
-            && saved_origin != Some(crate::lean::store::TeamOrigin::Unknown)
-        {
+        if explicit_team && saved_origin.is_none() {
             require(
                 team == crate::lean::tasks::Team::default() || !reason.is_empty(),
                 "team_reason is required with a team other than `feature`: say why this work needs no more gates",
             )?;
         }
         self.check_submitted_plan(conversation, tasks, &keep, team)?;
-        // The default is still a resolved orchestration choice. Persist it so
-        // the conversation projection can show the selected mode before the
-        // plan is handed off for review and execution.
-        if selected_by_user.is_none()
-            && saved_origin != Some(crate::lean::store::TeamOrigin::Unknown)
-            && (explicit_team || team == crate::lean::tasks::Team::default())
-        {
+        if saved_origin.is_none() {
             self.store.select_planned_team(conversation, team, reason)?;
         }
         self.record_result(turn, result)

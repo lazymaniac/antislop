@@ -111,6 +111,27 @@ fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
             .find(|event| event.kind == "team_selected")
             .expect("the default team choice is projected");
         assert_eq!(selected.payload["team"], expected_team.name());
+        assert_eq!(selected.payload["origin"], "planner");
+
+        // A new draft, even with another explicit recommendation, uses the
+        // existing team and does not emit another recommendation popup.
+        args["team"] = json!("security-fix");
+        args["team_reason"] = json!("The revised plan suggests more gates");
+        core.agent_tool(&conversation, PLANNER, &turn.id, "submit_plan", &args)
+            .unwrap();
+        assert_eq!(core.store.team(&conversation).unwrap(), expected_team);
+        let guidance = core.store.team_guidance(&conversation).unwrap().unwrap();
+        assert_eq!(guidance.team, expected_team);
+        assert!(guidance.reason != "The revised plan suggests more gates");
+        assert_eq!(
+            core.store
+                .events_since(&conversation, 0, 100)
+                .unwrap()
+                .iter()
+                .filter(|event| event.kind == "team_selected")
+                .count(),
+            1
+        );
     }
 }
 

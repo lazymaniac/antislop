@@ -78,6 +78,7 @@ pub(super) fn on_team_selected(
         && let Ok(team) = crate::lean::tasks::Team::parse(name)
     {
         view.team = Some(team);
+        view.team_recommended = payload["origin"] == "planner";
         view.team_reason = payload["reason"]
             .as_str()
             .unwrap_or_default()
