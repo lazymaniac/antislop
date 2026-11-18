@@ -36,19 +36,19 @@ fn options_inherit_writer_context_and_precede_it() {
 }
 
 #[test]
-fn options_cover_all_writers_including_gates_deterministically() {
+fn options_cover_code_writers_but_exclude_quality_gates_deterministically() {
     let mut second = options_test_task("second", true);
     second.depends_on.push("first".into());
     let input = with_required_agents(vec![options_test_task("first", true), second]);
     let full = with_options(input.clone());
     assert_eq!(full, with_options(input));
-    assert_eq!(full.len(), 14); // Eight original tasks, six writers/options.
+    assert_eq!(full.len(), 10); // Two authored writers, six gates and two options tasks.
     validate(&full).unwrap(); // Also proves no cycles or forward references.
     assert_eq!(with_options(with_required_agents(full.clone())), full);
     for (index, writer) in full
         .iter()
         .enumerate()
-        .filter(|(_, task)| task.change_kind.has_delivery())
+        .filter(|(_, task)| task.change_kind.has_delivery() && !task.quality_gate)
     {
         let options = &full[index - 1];
         assert_eq!(options.kind, WorkKind::Options);
@@ -58,9 +58,57 @@ fn options_cover_all_writers_including_gates_deterministically() {
             writer.depends_on[..writer.depends_on.len() - 1]
         );
     }
+    for gate in full.iter().filter(|task| task.quality_gate) {
+        assert!(!gate.depends_on.iter().any(|dependency| {
+            full.iter()
+                .any(|task| task.id == *dependency && task.options_for.is_some())
+        }));
+        assert!(
+            !full
+                .iter()
+                .any(|task| task.options_for.as_deref() == Some(&gate.id))
+        );
+    }
     let restored: Vec<TaskContract> =
         serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
     assert_eq!(with_options(restored), full);
+}
+
+#[test]
+fn refreshing_a_legacy_gate_options_task_removes_it_and_its_edges() {
+    let mut gate = options_test_task("static-analysis", true);
+    let legacy = super::super::with_options(vec![gate.clone()]);
+    let mut plan = legacy;
+    plan.iter_mut()
+        .find(|task| task.id == "static-analysis")
+        .unwrap()
+        .quality_gate = true;
+    gate.quality_gate = true;
+    plan.push(options_test_task("consumer", false));
+    plan.iter_mut()
+        .find(|task| task.id == "consumer")
+        .unwrap()
+        .depends_on
+        .push("static-analysis-options".into());
+
+    let refreshed = super::super::refresh_existing_options(plan);
+
+    assert!(
+        !refreshed
+            .iter()
+            .any(|task| task.id == "static-analysis-options")
+    );
+    assert!(
+        !refreshed
+            .iter()
+            .any(|task| task.options_for.as_deref() == Some("static-analysis"))
+    );
+    let consumer = refreshed.iter().find(|task| task.id == "consumer").unwrap();
+    assert!(consumer.depends_on.is_empty());
+    assert_eq!(
+        refreshed.iter().find(|task| task.id == "static-analysis"),
+        Some(&gate)
+    );
 }
 
 #[test]

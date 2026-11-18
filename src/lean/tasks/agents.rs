@@ -241,8 +241,9 @@ pub fn without_options(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     tasks
 }
 
-/// Add a direct, read-only options prerequisite to every writer lacking one.
-/// Run after optional quality gates, including when required gates are disabled.
+/// Add a direct, read-only options prerequisite to each eligible writer.
+/// Runtime-owned quality gates are excluded because their checks and repairs
+/// are defined by the gate contract itself.
 /// Input order is preserved; valid plans remain topologically ordered.
 pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let previous: std::collections::BTreeMap<_, _> = tasks
@@ -261,7 +262,7 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
         if let Some(own_options) = previous.get(&task.id) {
             task.depends_on.retain(|id| id != own_options);
         }
-        if task.changes_code() {
+        if eligible_for_options(&task) {
             let mut prerequisite = options_task(&task, &mut ids);
             if let Some(id) = previous.get(&task.id) {
                 prerequisite.id = id.clone();
@@ -280,7 +281,7 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let mut ids = tasks.iter().map(|t| t.id.clone()).collect::<BTreeSet<_>>();
     let writers = tasks
         .iter()
-        .filter(|task| task.options_for.is_none() && task.changes_code())
+        .filter(|task| task.options_for.is_none() && eligible_for_options(task))
         .map(|task| (task.id.as_str(), task))
         .collect::<HashMap<_, _>>();
     let old_ids = tasks
@@ -310,6 +311,10 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
             .retain(|id| !old_ids.contains(id) || remaining.contains(id));
     }
     result
+}
+
+fn eligible_for_options(task: &TaskContract) -> bool {
+    task.changes_code() && !task.quality_gate
 }
 
 fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract {
