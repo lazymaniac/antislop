@@ -720,17 +720,74 @@ fn a_team_runs_only_its_own_gates_and_options() {
         feature
     );
 
-    assert!(
-        tasks::Team::Research
-            .misfit(std::slice::from_ref(&writer))
-            .is_some()
-    );
+    let misfit = tasks::Team::Research
+        .misfit(std::slice::from_ref(&writer))
+        .unwrap();
+    assert!(misfit.contains("`code-review`"));
     assert!(tasks::Team::SmallChange.misfit(&[writer]).is_none());
     assert_eq!(
         tasks::Team::parse("security-fix").unwrap(),
         tasks::Team::SecurityFix
     );
     assert!(tasks::Team::parse("everything").is_err());
+}
+
+#[test]
+fn code_review_team_round_trips_and_adds_no_code_gates_or_options() {
+    let team = tasks::Team::CodeReview;
+    assert_eq!(team.name(), "code-review");
+    assert_eq!(tasks::Team::parse("code-review").unwrap(), team);
+    let encoded = serde_json::to_string(&team).unwrap();
+    assert_eq!(encoded, "\"code-review\"");
+    assert_eq!(serde_json::from_str::<tasks::Team>(&encoded).unwrap(), team);
+    assert_eq!(team.gates(), &[]);
+    assert!(!team.options());
+
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement", "goal": "Make the requested code change",
+        "change_kind": "code", "kind": "implementation",
+        "acceptance_criteria": [{"id": "C1", "text": "The change is implemented"}]
+    }))
+    .unwrap();
+    let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+    assert_eq!(plan, vec![writer]);
+    assert!(
+        plan.iter()
+            .all(|task| !task.quality_gate && task.kind != WorkKind::Options)
+    );
+    assert!(team.misfit(&plan).is_none());
+    assert!(tasks::Team::Research.misfit(&plan).is_some());
+    assert!(tasks::Team::Document.misfit(&plan).is_some());
+
+    let catalog = tasks::team_catalog();
+    assert!(catalog.contains("`code-review`: reviewing code changes without generated gates; gates: no gates; options: no"));
+    for (team, gates) in [
+        (
+            tasks::Team::SmallChange,
+            vec![WorkKind::StaticAnalysis, WorkKind::Testing],
+        ),
+        (tasks::Team::Feature, tasks::GATE_KINDS.to_vec()),
+        (
+            tasks::Team::Refactoring,
+            vec![
+                WorkKind::Refactoring,
+                WorkKind::StaticAnalysis,
+                WorkKind::Testing,
+                WorkKind::Integration,
+            ],
+        ),
+        (
+            tasks::Team::SecurityFix,
+            vec![
+                WorkKind::StaticAnalysis,
+                WorkKind::Testing,
+                WorkKind::Security,
+                WorkKind::Integration,
+            ],
+        ),
+    ] {
+        assert_eq!(team.gates(), gates, "{} gates changed", team.name());
+    }
 }
 
 #[test]

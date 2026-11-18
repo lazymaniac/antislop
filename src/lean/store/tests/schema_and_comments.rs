@@ -306,6 +306,40 @@ fn default_and_nondefault_team_choices_are_recorded_once_and_deleted_with_the_se
 }
 
 #[test]
+fn code_review_choice_persists_as_the_active_user_selected_team() {
+    use crate::lean::tasks::Team;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation = {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store
+            .select_team(&conversation.id, Team::CodeReview, "Review-only run")
+            .unwrap();
+        assert_eq!(store.team(&conversation.id).unwrap(), Team::CodeReview);
+        assert_eq!(
+            store.user_selected_team(&conversation.id).unwrap(),
+            Some(Team::CodeReview)
+        );
+        let event = store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "team_selected")
+            .unwrap();
+        assert_eq!(event.payload["team"], "code-review");
+        conversation
+    };
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.team(&conversation.id).unwrap(), Team::CodeReview);
+    assert_eq!(
+        reopened.user_selected_team(&conversation.id).unwrap(),
+        Some(Team::CodeReview)
+    );
+}
+
+#[test]
 fn migrating_legacy_team_keeps_unknown_until_a_new_explicit_choice() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();

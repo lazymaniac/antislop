@@ -23,6 +23,8 @@ pub enum Team {
     Refactoring,
     /// A vulnerability closed.
     SecurityFix,
+    /// Code changes reviewed without generated quality gates or option tasks.
+    CodeReview,
     /// Findings, no code change.
     Research,
     /// A document or other artifact, no code change.
@@ -30,11 +32,12 @@ pub enum Team {
 }
 
 impl Team {
-    pub const ALL: [Team; 6] = [
+    pub const ALL: [Team; 7] = [
         Team::SmallChange,
         Team::Feature,
         Team::Refactoring,
         Team::SecurityFix,
+        Team::CodeReview,
         Team::Research,
         Team::Document,
     ];
@@ -45,6 +48,7 @@ impl Team {
             Team::Feature => "feature",
             Team::Refactoring => "refactoring",
             Team::SecurityFix => "security-fix",
+            Team::CodeReview => "code-review",
             Team::Research => "research",
             Team::Document => "document",
         }
@@ -70,6 +74,7 @@ impl Team {
             Team::Feature => &GATE_KINDS,
             Team::Refactoring => &[Refactoring, StaticAnalysis, Testing, Integration],
             Team::SecurityFix => &[StaticAnalysis, Testing, Security, Integration],
+            Team::CodeReview => &[],
             Team::Research | Team::Document => &[],
         }
     }
@@ -96,6 +101,7 @@ impl Team {
             Team::Feature => "new behaviour",
             Team::Refactoring => "structure changed, behaviour kept",
             Team::SecurityFix => "closing a vulnerability",
+            Team::CodeReview => "reviewing code changes without generated gates",
             Team::Research => "findings without code changes",
             Team::Document => "a document or other artifact, no code",
         };
@@ -113,9 +119,9 @@ impl Team {
     /// Why `tasks` cannot be run by this team, if they cannot.
     pub fn misfit(self, tasks: &[TaskContract]) -> Option<String> {
         let code = tasks.iter().find(|task| task.changes_code())?;
-        self.gates().is_empty().then(|| {
+        matches!(self, Team::Research | Team::Document).then(|| {
             format!(
-                "team `{}` changes no code, but task `{}` does; choose `small-change`, `feature`, `refactoring` or `security-fix`",
+                "team `{}` changes no code, but task `{}` does; choose `small-change`, `feature`, `refactoring`, `security-fix` or `code-review`",
                 self.name(),
                 code.id
             )
