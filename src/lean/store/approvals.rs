@@ -218,11 +218,22 @@ impl Store {
         reason: &str,
         origin: TeamOrigin,
     ) -> Result<()> {
-        // Store a choice and its provenance atomically. A planner update cannot
-        // overwrite any saved choice that raced its earlier read.
-        let user_selected = origin == TeamOrigin::User;
         let mut db = self.db();
         let tx = db.transaction()?;
+        Self::save_team_tx(&tx, conversation, team, reason, origin)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn save_team_tx(
+        tx: &rusqlite::Transaction<'_>,
+        conversation: &str,
+        team: crate::lean::tasks::Team,
+        reason: &str,
+        origin: TeamOrigin,
+    ) -> Result<()> {
+        // The choice, its provenance, event and generated graph share one commit.
+        let user_selected = origin == TeamOrigin::User;
         let changed = tx.execute(
             "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(conversation_id) DO UPDATE SET team=excluded.team,reason=excluded.reason,version=excluded.version,updated_ms=excluded.updated_ms,user_selected=excluded.user_selected,origin=excluded.origin
@@ -247,7 +258,6 @@ impl Store {
             "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'team_selected',?2,?3)",
             params![conversation, payload.to_string(), now_ms()],
         )?;
-        tx.commit()?;
         Ok(())
     }
 

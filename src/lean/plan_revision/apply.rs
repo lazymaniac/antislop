@@ -53,13 +53,62 @@ impl Store {
         };
         let mut db = self.db();
         let tx = db.transaction()?;
-        apply.review_lease(&tx, lease)?;
-        apply.update_removed_tasks(&tx)?;
-        for (position, spec) in specs.iter().enumerate() {
-            apply.save_task(&tx, position, spec)?;
-        }
-        apply.record_graph(&tx)?;
+        apply.review_lease(&tx, Some(lease))?;
+        apply.save_graph(&tx)?;
         apply.finish(&tx, lease)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// A user-selected rigor updates the existing generated graph atomically,
+    /// with no planner request or independent revision review.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::lean) fn apply_plan_rigor(
+        &self,
+        conversation: &str,
+        revision: &PlanRevision,
+        baseline: &[Task],
+        specs: &[TaskContract],
+        affected: &std::collections::BTreeSet<String>,
+        selection: (crate::lean::tasks::Team, &str),
+        is_accepted: bool,
+    ) -> Result<()> {
+        let apply = RevisionApply {
+            conversation,
+            revision,
+            baseline,
+            specs,
+            affected,
+            is_accepted,
+        };
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let accepted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
+            params![revision.plan, conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(
+            accepted == is_accepted,
+            "plan acceptance changed during rigor update; retry the selection",
+        )?;
+        let current: bool = tx.query_row(
+            "SELECT (SELECT plan_id FROM tasks WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1)=?2
+             AND (?3 OR NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=?2 AND status NOT IN ('proposed','superseded')))",
+            params![conversation, revision.plan, is_accepted], |row| row.get(0),
+        )?;
+        crate::require(
+            current,
+            "plan changed during rigor update; retry the selection",
+        )?;
+        apply.review_lease(&tx, None)?;
+        apply.save_graph(&tx)?;
+        Self::save_team_tx(
+            &tx,
+            conversation,
+            selection.0,
+            selection.1,
+            crate::lean::store::TeamOrigin::User,
+        )?;
         tx.commit()?;
         Ok(())
     }

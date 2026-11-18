@@ -73,11 +73,17 @@ impl Core {
             specs,
             scope,
         } = proposal;
-        let Some(specs) = self.prepare_proposal(conversation, addressed, cancel, specs, config)?
-        else {
-            return Ok(());
+        let (specs, plan) = {
+            // Selection either precedes finalization or updates these same rows.
+            let _graph = self.locks.graph();
+            let Some(specs) =
+                self.prepare_proposal(conversation, addressed, cancel, specs, config)?
+            else {
+                return Ok(());
+            };
+            let plan = self.prepare_plan(conversation, &specs, scope)?;
+            (specs, plan)
         };
-        let plan = self.prepare_plan(conversation, &specs, scope)?;
         self.complete_proposal(ProposalPublication {
             conversation,
             project,
@@ -133,24 +139,7 @@ impl Core {
         if self.requeue_rejected_plan(conversation, &plan.id, &review)? {
             return Ok(());
         }
-        // A recommendation may have been replaced while plan review was
-        // running. Never publish or accept its obsolete gate pipeline.
-        if self
-            .store
-            .plan(&plan.id)?
-            .iter()
-            .any(|task| task.status != status::PROPOSED)
-        {
-            return Ok(());
-        }
-        let current_specs = checked_team_plan(specs, config, self.store.team(conversation)?)
-            .map_err(Error::Invalid)?;
-        if current_specs != specs {
-            self.cancel_proposed_plan(&plan.id)?;
-            self.record_plan_lint(conversation, "The user changed rigor during planning. Redraft with the selected rigor team and its gates.")?;
-            return Ok(());
-        }
-        self.publish_plan(conversation, text, addressed, plan, specs, &review)?;
+        self.publish_plan(conversation, text, addressed, plan, &review)?;
         drop(_graph);
         // A cancel that arrived after the review but before the activated plan
         // registered its own flag would otherwise be lost.

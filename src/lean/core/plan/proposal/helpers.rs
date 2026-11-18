@@ -76,9 +76,23 @@ impl Core {
         text: &str,
         addressed: Option<&[u64]>,
         plan: &PreparedPlan,
-        specs: &[TaskContract],
         review: &std::result::Result<Verdict, String>,
     ) -> Result<()> {
+        // Rigor can change while review is running. The authored plan remains
+        // the same; publish its current generated checks instead of old rows.
+        let tasks = self.store.plan(&plan.id)?;
+        if tasks.iter().any(|task| task.status != status::PROPOSED) {
+            return Ok(());
+        }
+        let specs = tasks
+            .iter()
+            .map(|task| serde_json::from_value(task.spec.clone()))
+            .collect::<std::result::Result<Vec<TaskContract>, _>>()?;
+        let plan = &PreparedPlan {
+            id: plan.id.clone(),
+            tasks,
+            answered: plan.answered,
+        };
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
         self.resolve_plan_comments(conversation, addressed, plan, checked)?;
         let waiting = (!checked).then_some("the plan reviewer did not approve this plan");
@@ -108,7 +122,8 @@ impl Core {
             None => format!("# Scope\n\n{}\n\n{}", scope.summary, text),
         };
         let mut payload =
-            plan_event_payload(&document, plan, specs, review, waiting, revision_token)?;
+            plan_event_payload(&document, plan, &specs, review, waiting, revision_token)?;
+        payload["base_revision"] = json!(self.store.plan_revision(&plan.id)?);
         payload["scope"] = json!(scope);
         payload["previous_scope"] = json!(previous);
         self.store.append_event(
@@ -161,4 +176,97 @@ pub(super) fn record_addressed_comments(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publication_uses_the_new_rigor_when_selection_changes_during_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let writer: TaskContract = serde_json::from_value(json!({
+            "id":"writer", "title":"Contained fix", "goal":"Fix the contained behavior", "kind":"implementation", "change_kind":"code",
+            "acceptance_criteria":[{"id":"C1","text":"The requested behavior works"}]
+        })).unwrap();
+        let specs = checked_team_plan(std::slice::from_ref(&writer), &config, tasks::Team::Feature)
+            .unwrap();
+        let original = core
+            .prepare_plan(&conversation, &specs, Some("Fix the contained behavior"))
+            .unwrap();
+        let authored_id = original
+            .tasks
+            .iter()
+            .find(|task| task.spec["id"] == "writer")
+            .unwrap()
+            .id
+            .clone();
+        core.store
+            .select_planned_team(
+                &conversation,
+                tasks::Team::Feature,
+                "Initial recommendation",
+            )
+            .unwrap();
+
+        // The reviewer retains its original snapshot while the user picks a
+        // different set of generated checks. Publication must use current rows.
+        core.select_rigor(&conversation, tasks::Team::SmallChange, "Contained fix")
+            .unwrap();
+        let review: Verdict = serde_json::from_value(json!({"approved":true})).unwrap();
+        core.publish_plan(
+            &conversation,
+            "# Contained fix",
+            None,
+            &original,
+            &Ok(review),
+        )
+        .unwrap();
+        let current = core.store.plan(&original.id).unwrap();
+        assert!(current.iter().any(|task| task.id == authored_id));
+        let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+        let proposal = events
+            .iter()
+            .find(|event| event.kind == "plan_proposed")
+            .unwrap();
+        assert_eq!(proposal.payload["plan"], original.id);
+        assert_eq!(
+            proposal.payload["tasks"],
+            json!(current.iter().map(|task| &task.spec).collect::<Vec<_>>())
+        );
+        assert_eq!(proposal.payload["review"]["approved"], true);
+        let mut view = crate::lean::tui::view::View::default();
+        for event in &events {
+            view.apply(&serde_json::to_value(event).unwrap());
+        }
+        assert_eq!(view.team, Some(tasks::Team::SmallChange));
+        assert_eq!(
+            view.plan_head_revision,
+            core.store.plan_revision(&original.id).unwrap()
+        );
+        assert_eq!(
+            view.tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            current
+                .iter()
+                .map(|task| task.spec["id"].as_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.kind == "plan_rejected" || event.kind == "turn_started")
+        );
+        assert!(core.is_idle(&conversation));
+    }
 }

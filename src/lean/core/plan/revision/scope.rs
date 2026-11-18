@@ -87,10 +87,10 @@ impl Core {
             &revision,
             &baseline,
             &specs,
-            &crate::lean::store::RevisionLease {
+            review::DirectRevision::Reviewed(&crate::lean::store::RevisionLease {
                 request: &request,
                 accepted_scope: true,
-            },
+            }),
             true,
         )?;
         self.publish_scope_resolution(conversation, plan, &request, true)?;

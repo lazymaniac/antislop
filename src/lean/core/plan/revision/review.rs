@@ -11,6 +11,11 @@ pub(super) struct ReviewContext<'a> {
     pub(super) project: PathBuf,
 }
 
+pub(super) enum DirectRevision<'a> {
+    Reviewed(&'a super::store::RevisionLease<'a>),
+    Rigor(tasks::Team, &'a str),
+}
+
 struct ReviewData<'a> {
     context: &'a ReviewContext<'a>,
     approved: &'a ApprovedRevisionWork,
@@ -165,7 +170,7 @@ impl Core {
         revision: &PlanRevision,
         baseline: &[Task],
         specs: &[TaskContract],
-        lease: &super::store::RevisionLease<'_>,
+        change: DirectRevision<'_>,
 
         is_accepted: bool,
     ) -> Result<()> {
@@ -189,15 +194,26 @@ impl Core {
         let _graph = self.locks.graph();
         let _integration = self.locks.integration();
         require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
-        self.store.apply_plan_revision_with_options(
-            conversation,
-            revision,
-            baseline,
-            specs,
-            &affected,
-            lease,
-            is_accepted,
-        )?;
+        match change {
+            DirectRevision::Reviewed(lease) => self.store.apply_plan_revision_with_options(
+                conversation,
+                revision,
+                baseline,
+                specs,
+                &affected,
+                lease,
+                is_accepted,
+            )?,
+            DirectRevision::Rigor(team, reason) => self.store.apply_plan_rigor(
+                conversation,
+                revision,
+                baseline,
+                specs,
+                &affected,
+                (team, reason),
+                is_accepted,
+            )?,
+        }
         for id in affected {
             self.queue_worktree_cleanup(&id);
         }

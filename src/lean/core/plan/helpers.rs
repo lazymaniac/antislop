@@ -38,34 +38,3 @@ pub(in crate::lean) fn finalize_team_plan(
         tasks::without_options(specs)
     }
 }
-
-impl Core {
-    /// An explicit choice replaces the recommendation. A pending plan built
-    /// under the old rigor must be redrafted before it can be accepted.
-    pub(in crate::lean) fn select_rigor(
-        self: &Arc<Self>,
-        conversation: &str,
-        team: tasks::Team,
-        reason: &str,
-    ) -> Result<()> {
-        let _graph = self.locks.graph();
-        let previous = self.store.team(conversation)?;
-        self.store.select_team(conversation, team, reason)?;
-        if previous != team {
-            let latest = self.store.latest_plan(conversation)?;
-            if let Some(plan) = latest.first()
-                && latest.iter().all(|task| task.status == status::PROPOSED)
-            {
-                self.reject_plan(
-                    conversation,
-                    &plan.plan_id,
-                    Some(&format!(
-                        "User changed rigor from `{}` to `{}`. Redraft the plan using only the selected team's gates. {reason}",
-                        previous.name(), team.name()
-                    )),
-                )?;
-            }
-        }
-        Ok(())
-    }
-}

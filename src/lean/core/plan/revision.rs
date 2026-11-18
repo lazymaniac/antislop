@@ -48,6 +48,63 @@ impl<'a> RevisionRegistration<'a> {
 }
 
 impl Core {
+    /// Change generated checks in the existing graph without invoking planning.
+    pub(in crate::lean) fn select_rigor(
+        self: &Arc<Self>,
+        conversation: &str,
+        team: tasks::Team,
+        reason: &str,
+    ) -> Result<()> {
+        let changing = self.locks.turn(conversation, "rigor-change");
+        let _changing = changing.lock().expect("conversation rigor change");
+        let (baseline, revision, specs, accepted) = {
+            let _graph = self.locks.graph();
+            let baseline = self.store.latest_plan(conversation)?;
+            let Some(plan) = baseline.first() else {
+                return self.store.select_team(conversation, team, reason);
+            };
+            let accepted =
+                self.store.accepted_plan(conversation)?.as_deref() == Some(&plan.plan_id);
+            if self.store.team(conversation)? == team
+                || (!accepted && baseline.iter().any(|task| task.status != status::PROPOSED))
+            {
+                return self.store.select_team(conversation, team, reason);
+            }
+            let current = baseline
+                .iter()
+                .map(|task| serde_json::from_value(task.spec.clone()))
+                .collect::<std::result::Result<Vec<TaskContract>, _>>()?;
+            let specs = super::proposal::checked_team_plan(&current, &self.config_snapshot(), team)
+                .map_err(Error::Invalid)?;
+            if current == specs {
+                return self.store.select_team(conversation, team, reason);
+            }
+            let revision = PlanRevision {
+                plan: plan.plan_id.clone(),
+                base_revision: self.store.plan_revision(&plan.plan_id)?,
+                reason: format!("Rigor changed to `{}`: {reason}", team.name()),
+                scope: None,
+                tasks: Vec::new(),
+                retire: Vec::new(),
+                redo: Vec::new(),
+                replacements: Default::default(),
+            };
+            (baseline, revision, specs, accepted)
+        };
+        self.apply_direct_revision(
+            conversation,
+            &revision,
+            &baseline,
+            &specs,
+            review::DirectRevision::Rigor(team, reason),
+            accepted,
+        )?;
+        if accepted {
+            self.maybe_continue_plan(conversation, &revision.plan)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::lean) fn submit_revision(
         self: &Arc<Self>,
         conversation: &str,
@@ -112,7 +169,7 @@ impl Core {
             &revision,
             &baseline,
             &specs,
-            &lease,
+            review::DirectRevision::Reviewed(&lease),
             is_accepted,
         ) {
             let _ = self
@@ -744,25 +801,187 @@ mod tests {
             );
             revision.tasks[0].goal.push_str(" with updated details");
         }
-        // Changing rigor explicitly cancels a stale pending proposal, so its
-        // old gate pipeline cannot be accepted while a replacement is drafted.
-        core.activity.start_orchestrator(&conversation).unwrap();
+        let writer_id = baseline
+            .iter()
+            .find(|task| task.spec["id"] == "writer")
+            .unwrap()
+            .id
+            .clone();
+        for team in [
+            tasks::Team::Feature,
+            tasks::Team::SecurityFix,
+            tasks::Team::Refactoring,
+            tasks::Team::SmallChange,
+        ] {
+            core.select_rigor(&conversation, team, "User changed quality checks")
+                .unwrap();
+            let current = core.store.plan(&revision.plan).unwrap();
+            let specs = current
+                .iter()
+                .map(|task| serde_json::from_value::<TaskContract>(task.spec.clone()).unwrap())
+                .collect::<Vec<_>>();
+            tasks::validate(&specs).unwrap();
+            assert_eq!(
+                core.store.latest_plan(&conversation).unwrap()[0].plan_id,
+                revision.plan
+            );
+            let current_writer = current.iter().find(|task| task.id == writer_id).unwrap();
+            let mut contract: TaskContract =
+                serde_json::from_value(current_writer.spec.clone()).unwrap();
+            contract.depends_on.clear();
+            assert_eq!(contract, writer);
+            assert!(current.iter().all(|task| task.status == status::PROPOSED));
+            let gates = specs
+                .iter()
+                .filter(|spec| spec.quality_gate)
+                .map(|spec| spec.kind)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(gates, team.gates().iter().copied().collect());
+            assert_eq!(
+                specs
+                    .iter()
+                    .any(|spec| spec.options_for.as_deref() == Some("writer")),
+                team.options()
+            );
+        }
+        let snapshot = core.store.plan(&revision.plan).unwrap();
+        let head = core.store.plan_revision(&revision.plan).unwrap();
         core.select_rigor(
             &conversation,
-            tasks::Team::Feature,
-            "User wants full checks",
+            tasks::Team::SmallChange,
+            "Confirm existing rigor",
         )
         .unwrap();
+        assert_eq!(core.store.plan(&revision.plan).unwrap(), snapshot);
+        assert_eq!(core.store.plan_revision(&revision.plan).unwrap(), head);
+        let error = core
+            .select_rigor(&conversation, tasks::Team::Research, "Switch to research")
+            .unwrap_err();
+        assert!(error.to_string().contains("changes no code"), "{error}");
         assert_eq!(
-            core.store.user_selected_team(&conversation).unwrap(),
-            Some(tasks::Team::Feature)
+            core.store.team(&conversation).unwrap(),
+            tasks::Team::SmallChange
+        );
+        assert_eq!(core.store.plan(&revision.plan).unwrap(), snapshot);
+
+        // Failed persistence rolls back both the graph and the selected rigor.
+        core.store.db().execute_batch("CREATE TRIGGER fail_rigor BEFORE UPDATE ON teams BEGIN SELECT RAISE(ABORT,'rigor write failed'); END;").unwrap();
+        let events_before = core
+            .store
+            .events_since(&conversation, 0, 1000)
+            .unwrap()
+            .len();
+        let error = core
+            .select_rigor(&conversation, tasks::Team::Feature, "Full checks")
+            .unwrap_err();
+        assert!(error.to_string().contains("rigor write failed"), "{error}");
+        assert_eq!(
+            core.store.team(&conversation).unwrap(),
+            tasks::Team::SmallChange
+        );
+        assert_eq!(core.store.plan(&revision.plan).unwrap(), snapshot);
+        assert_eq!(core.store.plan_revision(&revision.plan).unwrap(), head);
+        let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+        assert_eq!(events.len(), events_before);
+        assert!(events.iter().all(|event| !matches!(
+            event.kind.as_str(),
+            "plan_rejected" | "plan_invalid" | "turn_started" | "message"
+        )));
+        assert!(core.is_idle(&conversation));
+        assert_eq!(
+            core.store
+                .db()
+                .query_row(
+                    "SELECT count(*) FROM plans WHERE conversation_id=?1",
+                    [&conversation],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn rigor_change_preserves_completed_authored_work_in_an_accepted_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_planned_team(&conversation, tasks::Team::SmallChange, "Contained fix")
+            .unwrap();
+        let specs = crate::lean::core::plan::proposal::checked_team_plan(
+            &[contract(true, &[])],
+            &config,
+            tasks::Team::SmallChange,
+        )
+        .unwrap();
+        let mut baseline = core
+            .store
+            .add_plan(
+                &conversation,
+                &specs
+                    .iter()
+                    .map(|spec| serde_json::to_value(spec).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let plan = baseline[0].plan_id.clone();
+        for task in &mut baseline {
+            task.status = status::QUEUED.into();
+            core.store.update_task(task).unwrap();
+        }
+        let writer = baseline
+            .iter_mut()
+            .find(|task| task.spec["id"] == "local")
+            .unwrap();
+        writer.status = status::APPROVED.into();
+        writer.report = Some("Completed implementation".into());
+        writer.base = Some("base-checkpoint".into());
+        writer.result = Some("completed-checkpoint".into());
+        core.store.update_task(writer).unwrap();
+        let writer = core.store.task_by_id(&writer.id).unwrap().unwrap();
+        core.store
+            .db()
+            .execute(
+                "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
+                rusqlite::params![plan, conversation],
+            )
+            .unwrap();
+        // Keep scheduling separate from this graph-update assertion.
+        core.activity
+            .plans
+            .lock()
+            .unwrap()
+            .insert(conversation.clone(), Arc::new(AtomicBool::new(false)));
+        core.select_rigor(&conversation, tasks::Team::Feature, "Full checks")
+            .unwrap();
+        assert_eq!(core.store.task_by_id(&writer.id).unwrap().unwrap(), writer);
+        let current = core.store.plan(&plan).unwrap();
+        assert!(
+            current
+                .iter()
+                .any(|task| task.spec["quality_gate"] == true && task.status == status::QUEUED)
         );
         assert!(
+            current
+                .iter()
+                .all(|task| task.status != status::PROPOSED && task.status != status::CANCELLED)
+        );
+        assert_eq!(core.store.accepted_plan(&conversation).unwrap(), Some(plan));
+        assert!(
             core.store
-                .plan(&revision.plan)
+                .events_since(&conversation, 0, 1000)
                 .unwrap()
                 .iter()
-                .all(|task| task.status == status::CANCELLED)
+                .all(|event| !matches!(
+                    event.kind.as_str(),
+                    "plan_rejected" | "turn_started" | "message"
+                ))
         );
     }
 

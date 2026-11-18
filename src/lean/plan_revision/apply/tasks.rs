@@ -5,7 +5,7 @@ impl RevisionApply<'_> {
     pub(super) fn review_lease(
         &self,
         tx: &rusqlite::Transaction<'_>,
-        lease: &RevisionLease<'_>,
+        lease: Option<&RevisionLease<'_>>,
     ) -> Result<()> {
         let changed = tx.execute(
             "UPDATE plan_heads SET revision=revision+1 WHERE plan_id=?1 AND revision=?2",
@@ -20,6 +20,9 @@ impl RevisionApply<'_> {
             )
             .optional()?;
         let scope = if self.revision.scope.is_some() {
+            let lease = lease.ok_or_else(|| {
+                Error::Invalid("scope change requires a reviewed revision".into())
+            })?;
             crate::require(
                 lease.accepted_scope,
                 "scope change requires acceptance of the reviewed plan",
@@ -44,6 +47,14 @@ impl RevisionApply<'_> {
             )?;
         }
         Ok(())
+    }
+
+    pub(super) fn save_graph(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        self.update_removed_tasks(tx)?;
+        for (position, spec) in self.specs.iter().enumerate() {
+            self.save_task(tx, position, spec)?;
+        }
+        self.record_graph(tx)
     }
 
     pub(super) fn update_removed_tasks(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
