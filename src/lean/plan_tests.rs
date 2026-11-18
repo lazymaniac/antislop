@@ -387,7 +387,10 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
         .map(|task| task.kind)
         .collect();
     assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
-    for writer in finalized.iter().filter(|task| task.changes_code()) {
+    for writer in finalized
+        .iter()
+        .filter(|task| task.changes_code() && !task.quality_gate)
+    {
         let options = finalized
             .iter()
             .find(|task| task.options_for.as_deref() == Some(writer.id.as_str()))
@@ -417,6 +420,23 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
             gate.depends_on
                 .iter()
                 .any(|dependency| dependency == "writer")
+        );
+        assert!(
+            finalized
+                .iter()
+                .all(|task| task.options_for.as_deref() != Some(gate.id.as_str())),
+            "quality gate {} must not have an options task",
+            gate.id
+        );
+        assert!(
+            gate.depends_on.iter().all(|dependency| {
+                finalized
+                    .iter()
+                    .find(|task| task.id == *dependency)
+                    .is_none_or(|task| task.options_for.is_none())
+            }),
+            "quality gate {} must not depend on an options task",
+            gate.id
         );
     }
 
@@ -663,7 +683,7 @@ fn a_team_runs_only_its_own_gates_and_options() {
         .collect();
     let code_writers: Vec<_> = small
         .iter()
-        .filter(|spec| spec.options_for.is_none() && spec.changes_code())
+        .filter(|spec| spec.options_for.is_none() && spec.changes_code() && !spec.quality_gate)
         .collect();
     assert_eq!(options.len(), code_writers.len());
     assert!(options.iter().all(|option| {
@@ -673,6 +693,22 @@ fn a_team_runs_only_its_own_gates_and_options() {
                 .any(|writer| writer.id == *owner && writer.depends_on.contains(&option.id))
         })
     }));
+    for gate in small.iter().filter(|spec| spec.quality_gate) {
+        assert!(
+            options
+                .iter()
+                .all(|option| option.options_for.as_deref() != Some(gate.id.as_str())),
+            "quality gate {} must not have an options task",
+            gate.id
+        );
+        assert!(
+            gate.depends_on
+                .iter()
+                .all(|dependency| { options.iter().all(|option| option.id != *dependency) }),
+            "quality gate {} must not depend on an options task",
+            gate.id
+        );
+    }
     tasks::validate(&small).unwrap();
     assert_eq!(
         small,

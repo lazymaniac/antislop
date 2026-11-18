@@ -212,7 +212,28 @@ fn automatically_added_quality_gates_have_distinct_concise_summaries() {
         "change_kind": "code", "kind": "implementation",  "reviewer": {"summary": "Check the storage change."}}))
     .unwrap();
     let full = with_options(with_required_agents(vec![task]));
-    assert_eq!(full.len(), 12);
+    assert_eq!(full.len(), 8);
+    let options = full
+        .iter()
+        .filter(|task| task.options_for.is_some())
+        .collect::<Vec<_>>();
+    let writers = full
+        .iter()
+        .filter(|task| task.changes_code() && !task.quality_gate)
+        .collect::<Vec<_>>();
+    assert_eq!(options.len(), writers.len());
+    for gate in full.iter().filter(|task| task.quality_gate) {
+        assert!(
+            options
+                .iter()
+                .all(|option| option.options_for.as_deref() != Some(gate.id.as_str()))
+        );
+        assert!(
+            gate.depends_on
+                .iter()
+                .all(|dependency| options.iter().all(|option| option.id != *dependency))
+        );
+    }
     for task in full.iter().filter(|task| task.id != "t1") {
         let summary = task.summary.as_deref().unwrap();
         let reviewer_summary = task.reviewer.summary.as_deref().unwrap();

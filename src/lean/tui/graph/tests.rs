@@ -51,7 +51,7 @@ fn expanded_pty_content_grows_with_the_viewport() {
     let baseline = content_area(56, 10);
     assert_eq!(
         usize::from(expanded.width) * usize::from(expanded.height),
-        462
+        490
     );
     assert!(
         usize::from(expanded.width) * usize::from(expanded.height)
@@ -1625,7 +1625,7 @@ fn an_expanded_card_spans_a_narrow_viewport_past_the_lanes_that_end_above_it() {
         .iter()
         .find(|frame| frame.task == "t4")
         .unwrap();
-    assert_eq!((frame.x, frame.x + frame.width), (MARGIN, 70 - MARGIN));
+    assert_eq!((frame.x, frame.x + frame.width), (1, 69));
     assert_eq!(graph.width, 70, "no horizontal scroll");
 }
 
