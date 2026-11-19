@@ -94,6 +94,9 @@ pub struct AcceptanceCriterion {
 pub struct TaskContract {
     #[serde(default)]
     pub quality_gate: bool,
+    /// Runtime-generated final assembler; planner-authored values are cleared.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub integration_batch: bool,
     #[serde(default)]
     pub options_for: Option<String>,
     pub id: String,

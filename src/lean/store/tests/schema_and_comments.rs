@@ -340,6 +340,41 @@ fn code_review_choice_persists_as_the_active_user_selected_team() {
 }
 
 #[test]
+fn no_quality_gates_choice_persists_as_the_active_user_selected_team() {
+    use crate::lean::tasks::Team;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let conversation = {
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store
+            .select_team(
+                &conversation.id,
+                Team::NoQualityGates,
+                "No generated quality pipeline",
+            )
+            .unwrap();
+        let event = store
+            .events_since(&conversation.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "team_selected")
+            .unwrap();
+        assert_eq!(event.payload["team"], "no-quality-gates");
+        conversation
+    };
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.team(&conversation.id).unwrap(),
+        Team::NoQualityGates
+    );
+    assert_eq!(
+        reopened.user_selected_team(&conversation.id).unwrap(),
+        Some(Team::NoQualityGates)
+    );
+}
+
+#[test]
 fn migrating_legacy_team_keeps_unknown_until_a_new_explicit_choice() {
     use crate::lean::tasks::Team;
     let dir = tempfile::tempdir().unwrap();

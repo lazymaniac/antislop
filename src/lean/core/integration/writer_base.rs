@@ -2,6 +2,27 @@ use crate::lean::core::plan::helpers::writer_base_scratch;
 use crate::lean::*;
 
 impl Core {
+    pub(in crate::lean) fn initial_plan_anchor(
+        &self,
+        plan_id: &str,
+        project: &Path,
+    ) -> Result<String> {
+        let mut record = self.plan_base_record(plan_id)?;
+        if let Some(base) = &record.base
+            && git::tree_identity(project, base).is_ok()
+        {
+            return Ok(base.clone());
+        }
+        let base = if git::uncommitted(project)?.is_empty() {
+            git::head(project)?
+        } else {
+            git::snapshot(project, git::CommitPurpose::WorkspaceSnapshot)?
+        };
+        record.base = Some(base.clone());
+        self.save_plan_base_record(plan_id, &record)?;
+        Ok(base)
+    }
+
     pub(in crate::lean) fn writer_base(
         &self,
         plan_id: &str,
@@ -65,20 +86,7 @@ impl Core {
     /// afterwards begin from the project that holds that result, since the
     /// result of a conflict repair no longer applies to the old commit.
     fn plan_base(&self, plan_id: &str, project: &Path) -> Result<String> {
-        let mut record = self.plan_base_record(plan_id)?;
-        if let Some(pinned) = &record.base
-            && git::tree_identity(project, pinned).is_ok()
-        {
-            return Ok(pinned.clone());
-        }
-        let base = if git::uncommitted(project)?.is_empty() {
-            git::head(project)?
-        } else {
-            git::snapshot(project, git::CommitPurpose::WorkspaceSnapshot)?
-        };
-        record.base = Some(base.clone());
-        self.save_plan_base_record(plan_id, &record)?;
-        Ok(base)
+        self.initial_plan_anchor(plan_id, project)
     }
 
     /// Records that a task's result landed in the project, which releases

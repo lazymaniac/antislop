@@ -20,6 +20,24 @@ pub(in crate::lean) fn writer_worktree(
         git::is_repository(project),
         "tasks that change files need the project to be a git repository: run `git init` and commit first",
     )?;
+    if spec.integration_batch {
+        let base = core.initial_plan_anchor(&task.plan_id, project)?;
+        let path = worktree_path(&core.state, task)?;
+        let start = task.result.clone().unwrap_or_else(|| base.clone());
+        let branch = worktree_branch(&core.state, task)?;
+        if let Ok(tip) = git::ok(
+            project,
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        ) && tip != start
+            && git::tree_identity(project, &tip).ok() == git::tree_identity(project, &start).ok()
+        {
+            git::add_worktree(project, &path, &branch, &tip)?;
+        } else {
+            git::add_worktree(project, &path, &branch, &start)?;
+        }
+        task.base = Some(base);
+        return Ok(Some(path));
+    }
     let artifacts = if spec.delivery == Some(tasks::DeliveryMode::Untracked) {
         core.prepare_artifact_outputs(task, spec, project)?
     } else {

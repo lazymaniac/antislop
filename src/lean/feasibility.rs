@@ -202,6 +202,7 @@ mod tests {
             delivery: None,
             deferred: false,
             quality_gate: false,
+            integration_batch: false,
             options_for: None,
             id: id.into(),
 

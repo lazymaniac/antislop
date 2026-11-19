@@ -302,7 +302,7 @@ src
       PreparedPlan(C{id,tasks,answered})
     proposal.rs
      checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > checked_team_plan
-     checked_team_plan(specs,config,team):std::result::Result<Vec<TaskContract>,String> ~44 > {validate_code_review,finalize_team}_plan,is_review_only,check,message
+     checked_team_plan(specs,config,team):std::result::Result<Vec<TaskContract>,String> ~47 > {validate_code_review,finalize_team}_plan,is_review_only,check,message
      - is_review_kind
     report
      - task_{result,findings},apply_audit_gates,unapproved_task_ids,audit_text
@@ -383,17 +383,17 @@ src
        is_recheck(core,conversation,task,worker,reviewer):Result<bool> > completed_task_output,pending_mail
        run(input):Result<Option<String>> > completed_task_output,run_worker_round
        task_directories(core,task,spec,project,worktree):Result<(PathBuf,Vec<PathBuf>)> > task_worktree
-       writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~60 > has_delivery,prepare_artifact_outputs,writer_base,combine_saved_checkpoint,worktree_path
+       writer_worktree(core,task,spec,project):Result<Option<PathBuf>> ~78 > has_delivery,initial_plan_anchor,worktree_path,prepare_artifact_outputs,writer_base,combine_saved_checkpoint
        WorkerRound(C{core,conversation,task,cancel,spec,workdir,project_text,add_dirs,upstream,worker,round,state,recheck})
        - run_worker_turn,worker_{setup,dirs},continuation
      task_execution.rs
       Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
        run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,gate_approval,{review,settle}_round
        new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
-       run():Result<()> > resume_approved_writer,integrate_approved,round_state,run_round,exhausted
-       - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,
-         dependents_invalidated,resumed_progress
-      - RoundState,Prepared
+       run():Result<()> > run_batch_integration,resume_approved_writer,integrate_approved,round_state,run_round,exhausted
+       - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,assemble_batch,
+         repair_batch_conflict,dependents_invalidated,resumed_progress
+      - RoundState,Prepared,BatchDelta,apply_batch_delta
     feedback_helpers
      event_files(files):Vec<String>
      land(task,outcome,source,detail,commit,on_branch,files) > current_feedback,integration_record
@@ -938,10 +938,11 @@ src
     agent_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > require_open_agent_turn,evidence_tool,read_dependency_result,{task_result,finish,interview,orchestrator,submit_plan,revision}_tool
     repair_integration(&Arc<Self>,conversation,task,spec,worktree,onto,change,outcome,files,cancel):Result<()> > Repair.new
     integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > operation,lock_cancellable,defer_agent_work
+    initial_plan_anchor(plan_id,project):Result<String> > {plan,save_plan}_base_record
     writer_base(plan_id,spec,project):Result<String> > plan_conversation,operation,task_in_plan_by_id,session_worktree,plan_{base,base_record},writer_{dependency_changes,base_scratch}
     record_plan_landing(plan_id,task,result):Result<()> > {plan,save_plan}_base_record
     submit_addressed(&Arc<Self>,conversation,text,explicit_to):Result<serde_json::Value> > direct_execute,address,dispatch_addressed
-    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~118 > add_message,{start,finish}_turn,create_scope,TaskContract,add_plan,bind_plan_scope,plan_revision_token,activate_reviewed_plan
+    direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~119 > add_message,{start,finish}_turn,create_scope,TaskContract,add_plan,bind_plan_scope,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
     settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,as_str,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
@@ -1094,7 +1095,7 @@ src
     terminal_resize(conversation,role,handle,columns,rows):Result<()> > size,invalid,lock,require
     terminal_detach(conversation,role,handle):Result<()> > remove,lock
     - revision_view,plan_base_path,refresh_delivered_tasks,{conversation,approved_plan}_status,replaced_graph,
-      planner_submitted_plan,record_{comment_reply,plan_lint},run_report_audit,require_revision_review,
+      planner_submitted_plan,record_{comment_reply,plan_lint},{persist_plan,run_report}_audit,require_revision_review,
       {spawn,finish}_revision_worker,prepare_{revision,revision_contents},ensure_revision_accepted,prepared_revision,
       wait_for_revision_jobs,finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,
       {clear_agent,reserve,run_code}_review,unchanged_recovery_request,cleanup_{view_path,task_worktrees_with_hook},
@@ -1634,16 +1635,17 @@ src
      DependencyReport(C{id,title,report})
      - worker_{prompt_opening,prompt_closing,checks,change_rules},has_options_prerequisite
    templates
+    finalize_no_quality_gates(specs):Vec<TaskContract> ~51 > TaskContract
     is_report_only_review_task(task):bool
     team_catalog():String
-    Team(E{SmallChange,Feature,Refactoring,SecurityFix,CodeReview,Research,Document})
+    Team(E{SmallChange,Feature,Refactoring,SecurityFix,CodeReview,NoQualityGates,Research,Document})
      name():&'static str
      parse(name):crate::Result<Self>
      gates():&'static [WorkKind]
      options():bool
      summary():String > gates
      misfit(tasks):Option<String>
-    = TEAM_VERSION=2,CODE_REVIEW_{REVIEWER_SUMMARY,PLANNING_RULES},ALL
+    = TEAM_VERSION=3,CODE_REVIEW_REVIEWER_SUMMARY,{CODE_REVIEW,NO_QUALITY_GATES}_PLANNING_RULES,ALL
    validation
     check_comments_text(comments):String
     obligations(task):Vec<(String,String)> > for_kind
@@ -1660,7 +1662,7 @@ src
     has_delivery():bool
    DeliveryMode(E{Untracked})
    ReviewerSpec(C{summary})
-   TaskContract(C{quality_gate,options_for,id,acceptance_criteria,title,goal,summary,section,deferred,change_kind,outputs,delivery,depends_on,kind,reviewer})
+   TaskContract(C{quality_gate,integration_batch,options_for,id,acceptance_criteria,title,goal,summary,section,deferred,change_kind,outputs,delivery,depends_on,kind,reviewer})
     require_not_deferred():Result<()>
     change_kind():ChangeKind
     changes_code():bool > change_kind
@@ -2825,7 +2827,7 @@ src
     PanelFocus(E{Chat,Graph})
     PendingApproval(C{request,role,provider,summary,orchestrator,options})
     ProgressEntry(C{text,agent})
-    TaskMeta(C{deferred,outputs,acceptance_criteria,quality_gate,options_for})
+    TaskMeta(C{deferred,integration_batch,outputs,acceptance_criteria,quality_gate,options_for})
     TaskRow(C{id,uuid,title,summary,reviewer_summary,section,kind,goal,depends_on,parallel_with,change_kind,focus,risks,status,round,activity,reason,revision_token,effect,effect_cut,obligations,integration})
     TranscriptCard(E{Message,Plan,System,Comment})
     View(C{team,team_{reason,recommended},plan_head_revision,task_meta,workflow_phase,session_branch,interview_question,scope_confirmation_summary,user_decision,requirements_{summary,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,agents,links,mailbox,comments,comment_progress,reviews,paused,autonomous,approvals,messages,cards,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
@@ -3023,6 +3025,6 @@ src
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_worktree,confirm_scope,install_task_options_protocol
    pty_shim.py:*ask,without,planned_task,call,finish,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 138,479 LOC · input 1,247,116 · output 44,088 tokens · state 5e071b01dcaf · targets AGENTS.md
+· 139,242 LOC · input 1,254,854 · output 44,179 tokens · state b9c204a72b2f · targets AGENTS.md
 ```
 <!-- hologram:end -->

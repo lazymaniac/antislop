@@ -70,6 +70,18 @@ fn plan_text(plan: &[TaskContract]) -> String {
 }
 
 fn plan_entry(task: &TaskContract) -> Value {
+    if task.integration_batch {
+        return serde_json::json!({
+            "id": task.id,
+            "title": task.title,
+            "kind": task.kind,
+            "change_kind": task.change_kind(),
+            "depends_on": task.depends_on,
+            "integration_batch": true,
+            "deferred": task.deferred,
+            "added_by_runtime": true,
+        });
+    }
     if task.options_for.is_none() && !task.quality_gate {
         return serde_json::to_value(task).unwrap_or_default();
     }
@@ -87,7 +99,7 @@ fn plan_entry(task: &TaskContract) -> Value {
 }
 
 /// Said wherever a reviewer reads a plan: generated nodes are the runtime's, not the planner's.
-const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options and quality gates) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them. The runtime generates options only for eligible non-gate code-changing tasks when local-options policy is enabled and the selected team allows options; quality gates do not receive options and do not require selected_approach. It omits options when policy is disabled or no eligible task exists. Their absence alone is not a defect, so never ask the planner to author them. Do not approve a contract that makes a writer wait for or require a selection no task produces; ask for that condition to be removed instead.\n\n";
+const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options, quality gates, and the no-quality-gates final integration task) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them. The runtime generates options only for eligible non-gate code-changing tasks when local-options policy is enabled and the selected team allows options; quality gates do not receive options and do not require selected_approach. It omits options when policy is disabled or no eligible task exists. Their absence alone is not a defect, so never ask the planner to author them. Do not approve a contract that makes a writer wait for or require a selection no task produces; ask for that condition to be removed instead. The no-quality-gates final integration node depends on all code producers and performs branch integration with the existing conflict and failure handling; it does not run quality checks.\n\n";
 
 /// Review of a plan revision. A resumed reviewer has the plan already; either
 /// way the earlier contracts are repeated only for tasks the revision changed

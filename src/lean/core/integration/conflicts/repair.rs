@@ -194,8 +194,18 @@ impl<'a> Repair<'a> {
         self.core.store.assert_task_inputs(self.task)?;
         self.task.report = Some(report);
         self.task.verdict = None;
-        self.task.feedback =
-            Some(json!({"round": self.task.round, "integration_repairs": self.attempts}));
+        let mut feedback = if self.spec.integration_batch {
+            self.task
+                .feedback
+                .take()
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default()
+        } else {
+            serde_json::Map::new()
+        };
+        feedback.insert("round".into(), json!(self.task.round));
+        feedback.insert("integration_repairs".into(), json!(self.attempts));
+        self.task.feedback = Some(serde_json::Value::Object(feedback));
         self.core.store.update_task(self.task)?;
         let result = git::transplant_repair(
             self.worktree,
@@ -209,6 +219,11 @@ impl<'a> Repair<'a> {
     }
 
     fn queue_review(&mut self) -> Result<()> {
+        if self.spec.integration_batch {
+            return self
+                .core
+                .set_status(self.conversation, self.task, status::WORKING);
+        }
         let reviewer = format!("reviewer:{}", self.task.id);
         self.core.store.add_mail(
             self.conversation,

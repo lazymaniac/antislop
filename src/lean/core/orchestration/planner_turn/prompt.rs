@@ -35,6 +35,8 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         guidance.write_guidance_section(&mut prompt);
         if guidance.team == tasks::Team::CodeReview {
             prompt.push_str(tasks::CODE_REVIEW_PLANNING_RULES);
+        } else if guidance.team == tasks::Team::NoQualityGates {
+            prompt.push_str(tasks::NO_QUALITY_GATES_PLANNING_RULES);
         }
     }
     if let Some(contracts) = context.replaced {
@@ -104,5 +106,28 @@ mod tests {
         assert!(prompt.contains("change_kind=none"));
         assert!(prompt.contains("Do not add implementation, refactoring, options"));
         assert!(prompt.contains("No confirmed findings is a valid outcome"));
+    }
+
+    #[test]
+    fn no_quality_gates_planning_keeps_requested_tasks_and_only_runtime_integration() {
+        let guidance = TeamGuidance {
+            team: tasks::Team::NoQualityGates,
+            origin: crate::lean::store::TeamOrigin::User,
+            reason: "Use ordinary task acceptance".into(),
+        };
+        let prompt = planner_prompt_text(PlannerPrompt {
+            project: Path::new("project"),
+            first: false,
+            requirements: "Implement a parser and its tests.",
+            team_guidance: Some(&guidance),
+            asked: &[],
+            replaced: None,
+            keepable: None,
+            scope_context: None,
+        });
+        assert!(prompt.contains("Selected rigor: `no-quality-gates`"));
+        assert!(prompt.contains("real dependency edges"));
+        assert!(prompt.contains("ignores global required-gates and local-options policy"));
+        assert!(prompt.contains("Do not add another integration task or a final quality audit"));
     }
 }

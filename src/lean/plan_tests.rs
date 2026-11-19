@@ -154,6 +154,61 @@ fn code_review_selection_accepts_only_report_only_review_tasks() {
 }
 
 #[test]
+fn no_quality_gates_preserves_requested_dependencies_without_gates_options_or_audit_task() {
+    use crate::lean::core::plan::proposal::checked_team_plan;
+
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    config.policy.local_options = true;
+    let parse = |value| serde_json::from_value::<TaskContract>(value).unwrap();
+    let first = parse(json!({
+        "id":"first", "title":"Implement parser", "goal":"Add parser behavior",
+        "change_kind":"code", "kind":"implementation",
+        "depends_on":[], "acceptance_criteria":[{"id":"C1","text":"Parser works"}]
+    }));
+    let second = parse(json!({
+        "id":"second", "title":"Add parser tests", "goal":"Test parser behavior",
+        "change_kind":"code", "kind":"testing", "depends_on":["first"],
+        "acceptance_criteria":[{"id":"C1","text":"Tests cover parser behavior"}]
+    }));
+
+    for required_gates in [false, true] {
+        config.policy.required_gates = required_gates;
+        let plan = checked_team_plan(
+            &[first.clone(), second.clone()],
+            &config,
+            tasks::Team::NoQualityGates,
+        )
+        .unwrap();
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[1].depends_on, ["first"]);
+        let finalizer = plan.last().unwrap();
+        assert!(finalizer.integration_batch);
+        assert!(!finalizer.quality_gate && finalizer.options_for.is_none());
+        assert_eq!(finalizer.depends_on, ["first", "second"]);
+        assert_eq!(finalizer.kind, WorkKind::Integration);
+        assert_eq!(
+            plan.iter().filter(|task| task.quality_gate).count(),
+            0,
+            "global required_gates={required_gates} must not add a quality pipeline"
+        );
+        assert!(plan.iter().all(|task| task.kind != WorkKind::Options));
+        assert_eq!(
+            plan,
+            checked_team_plan(&plan, &config, tasks::Team::NoQualityGates).unwrap(),
+            "runtime-generated final integration remains stable through persistence revalidation"
+        );
+        tasks::validate(&plan).unwrap();
+    }
+
+    let legacy = checked_team_plan(&[first], &config, tasks::Team::CodeReview);
+    assert!(
+        legacy.is_err(),
+        "code-review still rejects implementation work"
+    );
+}
+
+#[test]
 fn writer_base_through_options_includes_both_dependency_chains_and_local_user_changes() {
     let project = test_tempdir();
     let root = project.path();

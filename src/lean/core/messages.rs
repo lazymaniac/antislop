@@ -84,6 +84,7 @@ impl Core {
         };
         let spec = TaskContract {
             quality_gate: false,
+            integration_batch: false,
             options_for: None,
             id: task_id.clone(),
 

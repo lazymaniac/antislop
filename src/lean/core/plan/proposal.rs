@@ -38,6 +38,9 @@ pub(in crate::lean) fn checked_team_plan(
         validate_code_review_plan(&authored)?;
     } else {
         for task in &mut authored {
+            if team != tasks::Team::NoQualityGates {
+                task.integration_batch = false;
+            }
             if tasks::is_report_only_review_task(task) {
                 task.reviewer.summary = None;
             }

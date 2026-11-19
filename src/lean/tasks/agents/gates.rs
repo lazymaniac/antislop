@@ -162,6 +162,7 @@ fn gate_task(
         delivery: None,
         deferred: false,
         quality_gate: true,
+        integration_batch: false,
         acceptance_criteria: Vec::new(),
         options_for: None,
 

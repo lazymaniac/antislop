@@ -11,8 +11,12 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let tasks = self.store.plan(plan_id)?;
-        let code_review = self.store.team(conversation)? == tasks::Team::CodeReview;
+        let team = self.store.team(conversation)?;
+        let code_review = team == tasks::Team::CodeReview;
         let results = task_results(&tasks);
+        if team == tasks::Team::NoQualityGates {
+            return Ok(report_intro(&results));
+        }
         let mut text = if code_review {
             format!("# Code review results\n\nReviewed scope and candidate reports:\n{results}")
         } else {
@@ -422,6 +426,52 @@ mod tests {
         assert_eq!(event.payload["approved"], false);
         assert_eq!(event.payload["findings"][0]["issue"], "Input X causes Y");
         assert_eq!(event.payload["findings"][0]["where"], "src/lib.rs:42");
+    }
+
+    #[test]
+    fn no_quality_gates_plan_report_does_not_start_or_append_a_final_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_team(
+                &conversation,
+                tasks::Team::NoQualityGates,
+                "No quality pipeline",
+            )
+            .unwrap();
+        let tasks = core
+            .store
+            .add_plan(
+                &conversation,
+                &[json!({
+                    "id":"implementation",
+                    "title":"Implement requested change",
+                    "goal":"Make the requested change",
+                    "kind":"implementation",
+                    "change_kind":"code",
+                    "acceptance_criteria":[{"id":"C1","text":"The requested behavior is present"}]
+                })],
+            )
+            .unwrap();
+        let report = core
+            .plan_report(&conversation, &tasks[0].plan_id, &AtomicBool::new(false))
+            .unwrap();
+        assert!(report.contains("Results of each task follow"));
+        assert!(!report.contains("Independent audit"));
+        assert!(
+            core.store
+                .latest_audit_event(&conversation)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

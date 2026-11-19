@@ -46,6 +46,7 @@ pub(super) fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
 pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
     TaskMeta {
         deferred: task["deferred"].as_bool().unwrap_or(false),
+        integration_batch: task["integration_batch"].as_bool().unwrap_or(false),
         outputs: strings(&task["outputs"]),
         acceptance_criteria: serde_json::from_value(task["acceptance_criteria"].clone())
             .unwrap_or_default(),

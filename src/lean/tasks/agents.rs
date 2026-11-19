@@ -318,6 +318,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         delivery: None,
         deferred: task.deferred,
         quality_gate: false,
+        integration_batch: false,
         options_for: Some(task.id.clone()),
         id,
 

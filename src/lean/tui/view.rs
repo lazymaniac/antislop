@@ -153,6 +153,7 @@ pub struct PendingApproval {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TaskMeta {
     pub deferred: bool,
+    pub integration_batch: bool,
     pub outputs: Vec<String>,
     pub acceptance_criteria: Vec<crate::lean::tasks::AcceptanceCriterion>,
     pub quality_gate: bool,

@@ -34,6 +34,7 @@ impl PlannedTask {
     pub fn into_contract(self) -> TaskContract {
         TaskContract {
             quality_gate: false,
+            integration_batch: false,
             options_for: None,
             acceptance_criteria: self.acceptance_criteria,
             reviewer: ReviewerSpec {
