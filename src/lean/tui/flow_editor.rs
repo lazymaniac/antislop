@@ -579,6 +579,7 @@ impl FlowEditor {
 
         Ok(TaskContract {
             quality_gate: meta.quality_gate,
+            integration_batch: meta.integration_batch,
             options_for: meta.options_for,
             id: id.to_owned(),
 
@@ -869,6 +870,7 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
     };
     TaskContract {
         quality_gate: meta.quality_gate,
+        integration_batch: meta.integration_batch,
         options_for: meta.options_for,
         id: row.id.clone(),
 

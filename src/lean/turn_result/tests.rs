@@ -214,6 +214,21 @@ mod tests {
     }
 
     #[test]
+    fn review_reports_survive_verdict_parsing_for_result_presentation() {
+        let encoded = tool_result(
+            "review",
+            &json!({"report":"Scope: src/lib.rs. Verdict: no confirmed findings.","findings":[]}),
+        )
+        .unwrap()
+        .encode()
+        .unwrap();
+        assert_eq!(
+            TurnResult::parse_turn_review(&encoded).unwrap().0.as_str(),
+            "Scope: src/lib.rs. Verdict: no confirmed findings."
+        );
+    }
+
+    #[test]
     fn an_answer_carries_the_comments_it_settled_and_a_plain_one_stays_text() {
         let plain = tool_result("finish_turn", &json!({"text": "Done"})).unwrap();
         assert_eq!(plain.encode().unwrap(), "Done");

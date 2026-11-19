@@ -27,6 +27,9 @@ pub(in crate::lean) fn finalize_team_plan(
     local_options: bool,
     team: tasks::Team,
 ) -> Vec<TaskContract> {
+    if team == tasks::Team::NoQualityGates {
+        return tasks::finalize_no_quality_gates(specs);
+    }
     let specs = if required_gates {
         tasks::with_team_gates(specs, team.gates())
     } else {

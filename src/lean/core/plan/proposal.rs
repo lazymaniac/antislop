@@ -33,15 +33,40 @@ pub(in crate::lean) fn checked_team_plan(
     config: &Config,
     team: tasks::Team,
 ) -> std::result::Result<Vec<TaskContract>, String> {
+    let mut authored = specs.to_vec();
+    if team == tasks::Team::CodeReview {
+        validate_code_review_plan(&authored)?;
+    } else {
+        for task in &mut authored {
+            if team != tasks::Team::NoQualityGates {
+                task.integration_batch = false;
+            }
+            if tasks::is_report_only_review_task(task) {
+                task.reviewer.summary = None;
+            }
+        }
+    }
+    let specs = authored.as_slice();
     if let Some(misfit) = team.misfit(specs) {
         return Err(misfit);
     }
-    let specs = finalize_team_plan(
+    let mut specs = finalize_team_plan(
         specs.to_vec(),
         config.policy.required_gates,
         config.policy.local_options,
         team,
     );
+    if team == tasks::Team::CodeReview {
+        for task in &mut specs {
+            task.reviewer.summary = Some(tasks::CODE_REVIEW_REVIEWER_SUMMARY.into());
+        }
+        if let Some(task) = specs.iter().find(|task| !is_review_only(task)) {
+            return Err(format!(
+                "code-review generated task `{}` that is not report-only; remove code delivery, options, quality gates and implementation work",
+                task.id
+            ));
+        }
+    }
     let specs = tasks::order_graph(specs).map_err(|error| error.to_string())?;
     let findings = feasibility::check(&specs);
     let blocking: Vec<_> = findings
@@ -53,6 +78,53 @@ pub(in crate::lean) fn checked_team_plan(
     } else {
         Err(feasibility::message(&blocking))
     }
+}
+
+fn validate_code_review_plan(
+    specs: &[TaskContract],
+) -> std::result::Result<&[TaskContract], String> {
+    for task in specs {
+        let reason = if task.change_kind() != tasks::ChangeKind::None {
+            Some("must use change_kind=none")
+        } else if task.quality_gate {
+            Some("cannot be a quality gate")
+        } else if task.options_for.is_some() {
+            Some("cannot be an options task")
+        } else if !is_review_kind(task.kind) {
+            Some("must be a review or validation task, not implementation or delivery work")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(format!(
+                "code-review task `{}` {reason}; plan review must be report-only",
+                task.id
+            ));
+        }
+    }
+    Ok(specs)
+}
+
+fn is_review_only(task: &TaskContract) -> bool {
+    task.change_kind() == tasks::ChangeKind::None
+        && !task.quality_gate
+        && task.options_for.is_none()
+        && is_review_kind(task.kind)
+}
+
+fn is_review_kind(kind: WorkKind) -> bool {
+    matches!(
+        kind,
+        WorkKind::Analysis
+            | WorkKind::Research
+            | WorkKind::Architecture
+            | WorkKind::Dependencies
+            | WorkKind::StaticAnalysis
+            | WorkKind::Testing
+            | WorkKind::Security
+            | WorkKind::Performance
+            | WorkKind::Integration
+    )
 }
 
 impl Core {

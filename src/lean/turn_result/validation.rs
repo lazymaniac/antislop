@@ -52,11 +52,15 @@ impl TurnResult {
 
     /// The verdict of a plan, audit or code review; `None` when the reviewer
     /// ended its turn without one.
-    pub fn review_verdict(text: &str) -> Option<Verdict> {
+    pub(crate) fn parse_turn_review(text: &str) -> Option<(String, Verdict)> {
         match Self::decode(text) {
-            Self::Review { verdict, .. } => Some(verdict),
+            Self::Review { report, verdict } => Some((report, verdict)),
             _ => None,
         }
+    }
+
+    pub fn review_verdict(text: &str) -> Option<Verdict> {
+        Self::parse_turn_review(text).map(|(_, verdict)| verdict)
     }
 
     /// The comments this answer says it settled.

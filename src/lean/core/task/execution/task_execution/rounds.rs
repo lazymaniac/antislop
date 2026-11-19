@@ -247,6 +247,18 @@ impl Execution<'_> {
     }
 
     fn approve_round(&mut self) -> Result<()> {
+        if self.spec.changes_code()
+            && !self.spec.integration_batch
+            && self.core.store.team(self.conversation)? == tasks::Team::NoQualityGates
+        {
+            if let Some(report) = &mut self.task.report {
+                report.push_str("\n\nAccepted; final branch integration is queued after all code producers finish.");
+            }
+            self.core.store.update_task(self.task)?;
+            return self
+                .core
+                .set_status(self.conversation, self.task, status::APPROVED);
+        }
         if let Some(path) = &self.worktree {
             return self.core.integrate(
                 self.conversation,

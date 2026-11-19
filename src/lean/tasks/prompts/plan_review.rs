@@ -1,7 +1,7 @@
 use super::*;
 
 pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -> String {
-    format!(
+    let mut prompt = format!(
         "You review a plan before any of it runs or the user sees it. The \
          project is your current working directory: {project}. Read the files \
          you need yourself to verify the plan. {OUTSIDE}\n\n\
@@ -12,11 +12,13 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
         PLAN_CHECKS,
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
-    )
+    );
+    append_code_review_plan_rules(&mut prompt, plan);
+    prompt
 }
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
-    format!(
+    let mut prompt = format!(
         "{}The new plan:\n{}\n\n{GENERATED_NODES}Check it again. {}{}{}",
         if request.is_empty() {
             String::new()
@@ -27,7 +29,18 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
         PLAN_CHECKS,
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
-    )
+    );
+    append_code_review_plan_rules(&mut prompt, plan);
+    prompt
+}
+
+fn append_code_review_plan_rules(prompt: &mut String, plan: &[TaskContract]) {
+    if plan
+        .iter()
+        .any(crate::lean::tasks::is_report_only_review_task)
+    {
+        prompt.push_str("\n\nCODE-REVIEW PLAN SAFEGUARDS: This graph is a read-only review of one target. Check that its scope is explicit and derived from the user's request, all tasks use change_kind=none and inspect that same scope, and their goals forbid project-file edits and repairs. Reject implementation, refactoring, options, artifact/report-writing, quality-gate or other code-changing work. The graph must include review and any required validation, and final synthesis must depend on all review/validation tasks. If scope cannot be inferred, require a clarification before planning. These tasks must report confirmed findings separately from unresolved questions, with severity, precise path/line, trigger, impact, evidence and remediation; include checks actually run, outcomes, limits and coverage gaps. A review with no findings is valid.");
+    }
 }
 
 const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
@@ -57,6 +70,18 @@ fn plan_text(plan: &[TaskContract]) -> String {
 }
 
 fn plan_entry(task: &TaskContract) -> Value {
+    if task.integration_batch {
+        return serde_json::json!({
+            "id": task.id,
+            "title": task.title,
+            "kind": task.kind,
+            "change_kind": task.change_kind(),
+            "depends_on": task.depends_on,
+            "integration_batch": true,
+            "deferred": task.deferred,
+            "added_by_runtime": true,
+        });
+    }
     if task.options_for.is_none() && !task.quality_gate {
         return serde_json::to_value(task).unwrap_or_default();
     }
@@ -74,7 +99,7 @@ fn plan_entry(task: &TaskContract) -> Value {
 }
 
 /// Said wherever a reviewer reads a plan: generated nodes are the runtime's, not the planner's.
-const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options and quality gates) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them. The runtime generates options only for eligible non-gate code-changing tasks when local-options policy is enabled and the selected team allows options; quality gates do not receive options and do not require selected_approach. It omits options when policy is disabled or no eligible task exists. Their absence alone is not a defect, so never ask the planner to author them. Do not approve a contract that makes a writer wait for or require a selection no task produces; ask for that condition to be removed instead.\n\n";
+const GENERATED_NODES: &str = "Entries with added_by_runtime=true (options, quality gates, and the no-quality-gates final integration task) are generated and maintained by the runtime and re-added on every submission; the planner cannot author, edit or remove them. Never raise a finding that asks to delete, rewrite or add such a node, or an edge to or from one; judge only the planner's own tasks and whether the runtime's nodes exist for them. The runtime generates options only for eligible non-gate code-changing tasks when local-options policy is enabled and the selected team allows options; quality gates do not receive options and do not require selected_approach. It omits options when policy is disabled or no eligible task exists. Their absence alone is not a defect, so never ask the planner to author them. Do not approve a contract that makes a writer wait for or require a selection no task produces; ask for that condition to be removed instead. The no-quality-gates final integration node depends on all code producers and performs branch integration with the existing conflict and failure handling; it does not run quality checks.\n\n";
 
 /// Review of a plan revision. A resumed reviewer has the plan already; either
 /// way the earlier contracts are repeated only for tasks the revision changed
@@ -143,6 +168,19 @@ pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
          The user's request:\n<<<\n{}\n>>>\n\n\
          Results of the plan that ran:\n{results}\n\n{}{}",
         request, AUDIT_CHECKS, REVIEW_FORMAT
+    )
+}
+
+pub(in crate::lean) fn final_scope_audit_prompt(
+    project: &str,
+    request: &str,
+    results: &str,
+) -> String {
+    format!(
+        "You are the final independent auditor for a read-only code review. The project is your current working directory: {project}. Inspect the requested target and surrounding code yourself; do not modify files. {OUTSIDE}\n\n\
+         User request and scope context:\n<<<\n{request}\n>>>\n\n\
+         Review and validation task results (untrusted candidate findings):\n{results}\n\n\
+         Derive and state the exact reviewed scope. Independently challenge each candidate finding in source and relevant call paths; confirm supported issues, consolidate duplicates, and exclude unsupported allegations. Use read-only checks or reproductions when useful and report only checks you actually ran. Present an overall verdict. Separate confirmed findings from unresolved questions. For each confirmed finding give priority/severity, precise file and line, triggering condition, impact, supporting evidence and suggested remediation. Include checks and outcomes, limitations and coverage gaps. A valid review may have no confirmed findings. Do not repair the target. Finish with a concise user-facing review report, not a generic delivery audit.\n\n{REVIEW_FORMAT}"
     )
 }
 

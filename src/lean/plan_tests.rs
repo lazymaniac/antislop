@@ -90,6 +90,125 @@ fn finalization_adds_options_with_and_without_required_gates() {
 }
 
 #[test]
+fn code_review_selection_accepts_only_report_only_review_tasks() {
+    use crate::lean::core::plan::proposal::checked_team_plan;
+
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    config.policy.local_options = true;
+    let analysis: TaskContract = serde_json::from_value(json!({
+        "id":"review", "title":"Review target", "goal":"Inspect target and report verified findings without edits.",
+        "change_kind":"none", "kind":"analysis",
+        "acceptance_criteria":[{"id":"C1","text":"The report states scope, verdict, evidence and limits"}]
+    })).unwrap();
+    let checked = checked_team_plan(
+        std::slice::from_ref(&analysis),
+        &config,
+        tasks::Team::CodeReview,
+    )
+    .unwrap();
+    assert_eq!(checked.len(), 1, "code-review adds no gates or options");
+    assert_eq!(checked[0].id, "review");
+    assert!(tasks::is_report_only_review_task(&checked[0]));
+    assert_eq!(checked[0].change_kind(), tasks::ChangeKind::None);
+    assert!(!checked[0].quality_gate && checked[0].options_for.is_none());
+    let ordinary = checked_team_plan(&checked, &config, tasks::Team::Feature).unwrap();
+    assert!(!tasks::is_report_only_review_task(&ordinary[0]));
+
+    let mut forbidden = Vec::new();
+    let mut code = analysis.clone();
+    code.change_kind = tasks::ChangeKind::Code;
+    forbidden.push(code);
+    let mut artifact = analysis.clone();
+    artifact.change_kind = tasks::ChangeKind::Artifact;
+    artifact.outputs = vec!["review.md".into()];
+    forbidden.push(artifact);
+    for kind in [
+        WorkKind::Implementation,
+        WorkKind::Refactoring,
+        WorkKind::Options,
+        WorkKind::Writing,
+        WorkKind::Delivery,
+    ] {
+        let mut task = analysis.clone();
+        task.kind = kind;
+        forbidden.push(task);
+    }
+    let mut gate = analysis.clone();
+    gate.quality_gate = true;
+    forbidden.push(gate);
+    let mut options = analysis;
+    options.options_for = Some("review".into());
+    forbidden.push(options);
+
+    for task in forbidden {
+        let result = checked_team_plan(
+            std::slice::from_ref(&task),
+            &config,
+            tasks::Team::CodeReview,
+        );
+        assert!(result.is_err(), "accepted forbidden task {}", task.id);
+        let error = result.unwrap_err();
+        assert!(error.contains(&task.id), "{error}");
+    }
+}
+
+#[test]
+fn no_quality_gates_preserves_requested_dependencies_without_gates_options_or_audit_task() {
+    use crate::lean::core::plan::proposal::checked_team_plan;
+
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    config.policy.local_options = true;
+    let parse = |value| serde_json::from_value::<TaskContract>(value).unwrap();
+    let first = parse(json!({
+        "id":"first", "title":"Implement parser", "goal":"Add parser behavior",
+        "change_kind":"code", "kind":"implementation",
+        "depends_on":[], "acceptance_criteria":[{"id":"C1","text":"Parser works"}]
+    }));
+    let second = parse(json!({
+        "id":"second", "title":"Add parser tests", "goal":"Test parser behavior",
+        "change_kind":"code", "kind":"testing", "depends_on":["first"],
+        "acceptance_criteria":[{"id":"C1","text":"Tests cover parser behavior"}]
+    }));
+
+    for required_gates in [false, true] {
+        config.policy.required_gates = required_gates;
+        let plan = checked_team_plan(
+            &[first.clone(), second.clone()],
+            &config,
+            tasks::Team::NoQualityGates,
+        )
+        .unwrap();
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[1].depends_on, ["first"]);
+        let finalizer = plan.last().unwrap();
+        assert!(finalizer.integration_batch);
+        assert!(!finalizer.quality_gate && finalizer.options_for.is_none());
+        assert_eq!(finalizer.depends_on, ["first", "second"]);
+        assert_eq!(finalizer.kind, WorkKind::Integration);
+        assert_eq!(
+            plan.iter().filter(|task| task.quality_gate).count(),
+            0,
+            "global required_gates={required_gates} must not add a quality pipeline"
+        );
+        assert!(plan.iter().all(|task| task.kind != WorkKind::Options));
+        assert_eq!(
+            plan,
+            checked_team_plan(&plan, &config, tasks::Team::NoQualityGates).unwrap(),
+            "runtime-generated final integration remains stable through persistence revalidation"
+        );
+        tasks::validate(&plan).unwrap();
+    }
+
+    let legacy = checked_team_plan(&[first], &config, tasks::Team::CodeReview);
+    assert!(
+        legacy.is_err(),
+        "code-review still rejects implementation work"
+    );
+}
+
+#[test]
 fn writer_base_through_options_includes_both_dependency_chains_and_local_user_changes() {
     let project = test_tempdir();
     let root = project.path();
@@ -720,17 +839,74 @@ fn a_team_runs_only_its_own_gates_and_options() {
         feature
     );
 
-    assert!(
-        tasks::Team::Research
-            .misfit(std::slice::from_ref(&writer))
-            .is_some()
-    );
+    let misfit = tasks::Team::Research
+        .misfit(std::slice::from_ref(&writer))
+        .unwrap();
+    assert!(misfit.contains("`code-review`"));
     assert!(tasks::Team::SmallChange.misfit(&[writer]).is_none());
     assert_eq!(
         tasks::Team::parse("security-fix").unwrap(),
         tasks::Team::SecurityFix
     );
     assert!(tasks::Team::parse("everything").is_err());
+}
+
+#[test]
+fn code_review_team_round_trips_and_adds_no_code_gates_or_options() {
+    let team = tasks::Team::CodeReview;
+    assert_eq!(team.name(), "code-review");
+    assert_eq!(tasks::Team::parse("code-review").unwrap(), team);
+    let encoded = serde_json::to_string(&team).unwrap();
+    assert_eq!(encoded, "\"code-review\"");
+    assert_eq!(serde_json::from_str::<tasks::Team>(&encoded).unwrap(), team);
+    assert_eq!(team.gates(), &[]);
+    assert!(!team.options());
+
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement", "goal": "Make the requested code change",
+        "change_kind": "code", "kind": "implementation",
+        "acceptance_criteria": [{"id": "C1", "text": "The change is implemented"}]
+    }))
+    .unwrap();
+    let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+    assert_eq!(plan, vec![writer]);
+    assert!(
+        plan.iter()
+            .all(|task| !task.quality_gate && task.kind != WorkKind::Options)
+    );
+    assert!(team.misfit(&plan).is_none());
+    assert!(tasks::Team::Research.misfit(&plan).is_some());
+    assert!(tasks::Team::Document.misfit(&plan).is_some());
+
+    let catalog = tasks::team_catalog();
+    assert!(catalog.contains("`code-review`: reviewing code changes without generated gates; gates: no gates; options: no"));
+    for (team, gates) in [
+        (
+            tasks::Team::SmallChange,
+            vec![WorkKind::StaticAnalysis, WorkKind::Testing],
+        ),
+        (tasks::Team::Feature, tasks::GATE_KINDS.to_vec()),
+        (
+            tasks::Team::Refactoring,
+            vec![
+                WorkKind::Refactoring,
+                WorkKind::StaticAnalysis,
+                WorkKind::Testing,
+                WorkKind::Integration,
+            ],
+        ),
+        (
+            tasks::Team::SecurityFix,
+            vec![
+                WorkKind::StaticAnalysis,
+                WorkKind::Testing,
+                WorkKind::Security,
+                WorkKind::Integration,
+            ],
+        ),
+    ] {
+        assert_eq!(team.gates(), gates, "{} gates changed", team.name());
+    }
 }
 
 #[test]

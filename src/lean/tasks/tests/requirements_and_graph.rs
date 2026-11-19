@@ -76,6 +76,34 @@ fn plan_review_options_guidance_excludes_quality_gates() {
 }
 
 #[test]
+fn selected_code_review_plan_review_reinforces_scope_and_no_write_graph() {
+    let mut task = contract(serde_json::json!({
+        "id":"review","title":"Review current diff","goal":"Inspect the current diff read-only and report findings.",
+        "change_kind":"none","kind":"analysis"
+    }));
+    task.reviewer.summary = Some(CODE_REVIEW_REVIEWER_SUMMARY.into());
+    for prompt in [
+        plan_review_prompt("/p", "Review current changes", std::slice::from_ref(&task)),
+        plan_review_followup("", std::slice::from_ref(&task)),
+    ] {
+        assert!(prompt.contains("CODE-REVIEW PLAN SAFEGUARDS"));
+        assert!(prompt.contains("same scope"));
+        assert!(prompt.contains("Reject implementation, refactoring, options"));
+        assert!(prompt.contains("A review with no findings is valid"));
+    }
+    assert!(
+        !plan_review_prompt(
+            "/p",
+            "normal request",
+            &[contract(serde_json::json!({
+                "id":"analysis","title":"Analyze","goal":"g","change_kind":"none","kind":"analysis"
+            }))]
+        )
+        .contains("CODE-REVIEW PLAN SAFEGUARDS")
+    );
+}
+
+#[test]
 fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     let same = contract(serde_json::json!({
         "id":"a","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"UNCHANGED GOAL","change_kind": "none", "kind":"analysis","reviewer":{"summary": "f"}}));

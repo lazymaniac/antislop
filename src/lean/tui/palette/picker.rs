@@ -41,6 +41,14 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SelectTeam(Team::SecurityFix)),
         ),
         (
+            "Rigor: code-review · code review without generated quality gates".into(),
+            Action::Run(Command::SelectTeam(Team::CodeReview)),
+        ),
+        (
+            "Rigor: no-quality-gates · requested work + final integration only".into(),
+            Action::Run(Command::SelectTeam(Team::NoQualityGates)),
+        ),
+        (
             "Rigor: research · investigation & evidence (final audit)".into(),
             Action::Run(Command::SelectTeam(Team::Research)),
         ),
@@ -105,6 +113,16 @@ fn rigor_items(view: &View) -> Vec<(String, Action)> {
             "security ceremony · security review + static analysis + test + audit",
         ),
         (
+            Team::CodeReview,
+            "code-review",
+            "review code changes · no generated quality gates",
+        ),
+        (
+            Team::NoQualityGates,
+            "no-quality-gates",
+            "requested work · ordinary acceptance + final integration only",
+        ),
+        (
             Team::Research,
             "research",
             "investigation · evidence gathering + final audit",
@@ -160,6 +178,14 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
         (
             "/security-fix · security rigor (security gate + audit)".into(),
             Action::Run(Command::SelectTeam(Team::SecurityFix)),
+        ),
+        (
+            "/code-review · code review without generated quality gates".into(),
+            Action::Run(Command::SelectTeam(Team::CodeReview)),
+        ),
+        (
+            "/no-quality-gates · requested work + final integration only".into(),
+            Action::Run(Command::SelectTeam(Team::NoQualityGates)),
         ),
         (
             "/research · research rigor (evidence + audit)".into(),

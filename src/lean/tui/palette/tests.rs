@@ -73,6 +73,71 @@ fn small_change_picker_labels_share_the_options_summary() {
 }
 
 #[test]
+fn code_review_is_visible_and_selected_in_every_rigor_surface() {
+    use crate::lean::tasks::Team;
+    let mut view = View::default();
+    let action = Action::Run(Command::SelectTeam(Team::CodeReview));
+
+    let rigor = Picker::new(Kind::Rigor).items(&view);
+    assert!(rigor.iter().any(|(label, item)| {
+        label == "code-review · review code changes · no generated quality gates" && *item == action
+    }));
+
+    let mut commands = Picker::new(Kind::Commands);
+    commands.query = "code-review".into();
+    assert!(commands.items(&view).iter().any(|(label, item)| {
+        label == "Rigor: code-review · code review without generated quality gates"
+            && *item == action
+    }));
+
+    let mut slash = Picker::new(Kind::SlashCommands);
+    slash.query = "code-review".into();
+    assert!(slash.items(&view).iter().any(|(label, item)| {
+        label == "/code-review · code review without generated quality gates" && *item == action
+    }));
+
+    view.apply(
+        &serde_json::json!({"seq": 1, "kind": "team_selected", "payload": {
+            "team": "code-review", "reason": "Review-only run", "origin": "user"
+        }}),
+    );
+    assert_eq!(view.rigor_label(), "code-review");
+    let rigor = Picker::new(Kind::Rigor).items(&view);
+    assert!(rigor.iter().any(|(label, item)| {
+        label == "code-review (current) · review code changes · no generated quality gates"
+            && *item == action
+    }));
+}
+
+#[test]
+fn no_quality_gates_is_visible_and_selected_in_every_rigor_surface() {
+    use crate::lean::tasks::Team;
+    let mut view = View::default();
+    let action = Action::Run(Command::SelectTeam(Team::NoQualityGates));
+    assert!(Picker::new(Kind::Rigor).items(&view).iter().any(|(label, item)| {
+        label == "no-quality-gates · requested work · ordinary acceptance + final integration only"
+            && *item == action
+    }));
+    let mut commands = Picker::new(Kind::Commands);
+    commands.query = "no-quality-gates".into();
+    assert!(commands.items(&view).iter().any(|(label, item)| {
+        label == "Rigor: no-quality-gates · requested work + final integration only"
+            && *item == action
+    }));
+    let mut slash = Picker::new(Kind::SlashCommands);
+    slash.query = "no-quality-gates".into();
+    assert!(slash.items(&view).iter().any(|(label, item)| {
+        label == "/no-quality-gates · requested work + final integration only" && *item == action
+    }));
+    view.apply(
+        &serde_json::json!({"seq": 1, "kind": "team_selected", "payload": {
+            "team":"no-quality-gates", "reason":"No gates", "origin":"user"
+        }}),
+    );
+    assert_eq!(view.rigor_label(), "no-quality-gates");
+}
+
+#[test]
 fn the_conversation_is_searched_newest_first() {
     let mut view = View::default();
     for (seq, text) in [(1, "plan importu"), (2, "inne"), (3, "Import gotowy")] {
