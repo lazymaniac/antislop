@@ -1,6 +1,6 @@
 use super::{
-    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionRequest, TerminalRequest,
-    WireRequest,
+    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionActionKind,
+    SessionActionResult, SessionRequest, TerminalRequest, WireRequest,
 };
 use serde_json::json;
 
@@ -37,6 +37,13 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
                 turn: "t".into(),
             }),
             json!({"op":"run_context","conversation":"c","turn":"t"}),
+        ),
+        (
+            Request::Session(SessionRequest::SessionAction {
+                conversation: "c".into(),
+                action: SessionActionKind::CreatePr,
+            }),
+            json!({"op":"session_action","conversation":"c","action":"create_pr"}),
         ),
         (
             Request::History(HistoryRequest::Events {
@@ -79,6 +86,55 @@ fn grouped_requests_keep_the_tagged_wire_shape() {
 }
 
 #[test]
+fn session_action_results_preserve_success_raw_failure_and_missing_inputs() {
+    let cases = [
+        (
+            SessionActionResult::Queued { message: 12 },
+            json!({"status":"queued","message":12}),
+        ),
+        (
+            SessionActionResult::Succeeded {
+                summary: "PR 42 opened".into(),
+            },
+            json!({"status":"succeeded","summary":"PR 42 opened"}),
+        ),
+        (
+            SessionActionResult::Failed {
+                details: "git push: permission denied (publickey)".into(),
+            },
+            json!({"status":"failed","details":"git push: permission denied (publickey)"}),
+        ),
+        (
+            SessionActionResult::MissingInputs {
+                inputs: vec!["remote repository".into()],
+            },
+            json!({"status":"missing_inputs","inputs":["remote repository"]}),
+        ),
+    ];
+    for (result, expected) in cases {
+        assert_eq!(serde_json::to_value(&result).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<SessionActionResult>(expected).unwrap(),
+            result
+        );
+    }
+    assert!(
+        serde_json::from_value::<SessionActionResult>(json!({
+            "status":"failed","details":"raw failure","ignored":true
+        }))
+        .is_err()
+    );
+    for invalid in [
+        json!({"status":"failed","details":"  "}),
+        json!({"status":"succeeded","summary":""}),
+        json!({"status":"missing_inputs","inputs":[]}),
+        json!({"status":"missing_inputs","inputs":[" "]}),
+    ] {
+        assert!(serde_json::from_value::<SessionActionResult>(invalid).is_err());
+    }
+}
+
+#[test]
 fn grouped_protocol_keeps_defaults_and_rejects_malformed_or_unknown_fields() {
     let decoded: Request = serde_json::from_value(json!({
         "op":"terminal_open","conversation":"c","role":"writer","columns":80,"rows":24
@@ -115,6 +171,9 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         json!({"op":"terminal_resize","conversation":"c","role":"writer","handle":"h","columns":100,"rows":30}),
         json!({"op":"terminal_detach","conversation":"c","role":"writer","handle":"h"}),
         json!({"op":"run_context","conversation":"c","turn":"t"}),
+        json!({"op":"session_action","conversation":"c","action":"create_pr"}),
+        json!({"op":"session_action","conversation":"c","action":"merge_with_main"}),
+        json!({"op":"session_action","conversation":"c","action":"continue_work"}),
         json!({"op":"comment","conversation":"c","plan":null,"target":"T1","text":"note","round":null,"run":null}),
         json!({"op":"send_to_agent","message":{"conversation":"c","plan":null,"recipient":"worker","operation_id":"op","expected_round":null,"expected_run":null,"text":"hello"}}),
         json!({"op":"task_rounds","conversation":"c","plan":"p","id":"task"}),
@@ -167,6 +226,12 @@ fn every_wire_operation_round_trips_through_its_grouped_request() {
         assert_group_matches_operation(&request, expected["op"].as_str().unwrap());
         assert_eq!(serde_json::to_value(request).unwrap(), expected);
     }
+    assert!(
+        serde_json::from_value::<Request>(json!({
+            "op":"session_action","conversation":"c","action":"publish"
+        }))
+        .is_err()
+    );
 }
 
 fn assert_group_matches_operation(request: &Request, operation: &str) {

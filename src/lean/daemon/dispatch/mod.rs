@@ -194,6 +194,54 @@ mod tests {
         assert_eq!(content["text"], text);
         assert_eq!(content["done"], true);
     }
+
+    #[test]
+    fn session_action_dispatches_to_the_existing_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_completed",
+                &json!({"cleanup_complete":true,"branch":"antislop/session"}),
+            )
+            .unwrap();
+
+        let response = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
+                conversation: conversation.id.clone(),
+                action: crate::lean::daemon::SessionActionKind::MergeWithMain,
+            }),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(response["status"], "queued");
+        assert!(response["message"].as_u64().is_some());
+        let conversations = core.store.conversations().unwrap();
+        assert_eq!(conversations.len(), 1);
+        let messages = core.store.messages_after(&conversation.id, 0).unwrap();
+        assert_eq!(messages.last().unwrap().author, "user");
+        assert!(
+            messages
+                .last()
+                .unwrap()
+                .text
+                .contains("merging its preserved branch with main")
+        );
+    }
 }
 
 pub(super) struct Context<'a> {

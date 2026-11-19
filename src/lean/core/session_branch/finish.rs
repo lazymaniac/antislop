@@ -229,6 +229,8 @@ impl Core {
                 .collect::<Result<Vec<_>>>()?
         };
         let project = PathBuf::from(&conversation.project);
+        let completed_tasks = self.store.plan(&plan)?;
+        let summary = self.session_completion_summary(&completed_tasks)?;
         let (branch, commit) = if git::is_repository(&project) {
             let record = self.load_session_branch(&conversation.id)?;
             self.validate_session_record(&conversation.id, &project.canonicalize()?, &record)?;
@@ -264,9 +266,36 @@ impl Core {
             (None, None)
         };
         self.store.append_event(&conversation.id, None, Some(&plan), "session_completed", &json!({
-            "key":key,"project":conversation.project,"branch":branch,"commit":commit,"cleanup_complete":true
+            "key":key,"project":conversation.project,"branch":branch,"commit":commit,"summary":summary,"cleanup_complete":true
         }))?;
         Ok(())
+    }
+
+    fn session_completion_summary(&self, tasks: &[Task]) -> Result<String> {
+        let mut summaries = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let summary = match self.store.task_summary(task) {
+                Ok(summary) if !summary.trim().is_empty() => summary,
+                Ok(_) => task.report.clone().unwrap_or_default(),
+                Err(Error::Invalid(message))
+                    if message == "completed worker result has no summary" =>
+                {
+                    task.report.clone().unwrap_or_default()
+                }
+                Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows)) => {
+                    task.report.clone().unwrap_or_default()
+                }
+                Err(error) => return Err(error),
+            };
+            let summary = if summary.trim().is_empty() {
+                "Summary unavailable from the completed task report.".to_owned()
+            } else {
+                crate::lean::tasks::bound(summary.trim(), 500)
+            };
+            let title = task.spec["title"].as_str().unwrap_or(&task.id);
+            summaries.push(format!("{title}: {summary}"));
+        }
+        Ok(crate::lean::tasks::bound(&summaries.join("\n"), 2_000))
     }
 
     fn preserve_final_result(&self, record: &SessionBranch, tasks: &[Task]) -> Result<String> {
@@ -370,7 +399,10 @@ mod tests {
             .unwrap()
             .remove(0);
         task.status = status::APPROVED.into();
+        task.report = Some("Wrote result.txt with the completed result.".into());
         core.store.update_task(&task).unwrap();
+        core.store
+            .test_completion(&task, task.report.as_deref().unwrap());
         let scope = core
             .store
             .create_scope(&conversation.id, "Write result")
@@ -533,6 +565,17 @@ mod tests {
                 .filter(|event| event.kind == "session_completed")
                 .count(),
             1
+        );
+        let completed = events
+            .iter()
+            .find(|event| event.kind == "session_completed")
+            .unwrap();
+        assert_eq!(completed.payload["branch"], result.branch);
+        assert!(
+            completed.payload["summary"]
+                .as_str()
+                .unwrap()
+                .contains("Wrote result.txt with the completed result.")
         );
         let mut view = crate::lean::tui::view::View::default();
         for event in events {

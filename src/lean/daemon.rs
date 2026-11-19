@@ -75,7 +75,8 @@ pub(crate) use protocol::RequestEnvelope;
 // serde wire-representation implementations belong to runtime-protocol.
 // Daemon retains lifecycle and dispatch; keep protocol behavior compatible.
 pub use protocol::{
-    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionRequest, TerminalRequest,
+    ControlRequest, ConversationRequest, HistoryRequest, Request, SessionActionKind,
+    SessionActionResult, SessionRequest, TerminalRequest,
 };
 
 #[derive(Debug, Serialize, Deserialize)]

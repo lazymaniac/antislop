@@ -29,7 +29,9 @@ pub(super) enum Access {
 /// The conversation a request touches and how; reads other than following
 /// events are free.
 pub(super) fn scope(request: &Request) -> Option<(&str, Access)> {
-    use super::{ConversationRequest as C, HistoryRequest as H, TerminalRequest as T};
+    use super::{
+        ConversationRequest as C, HistoryRequest as H, SessionRequest as S, TerminalRequest as T,
+    };
     let (conversation, access) = match request {
         Request::History(H::Events { conversation, .. } | H::EventsPaged { conversation, .. }) => {
             (conversation, Access::Follow)
@@ -59,6 +61,7 @@ pub(super) fn scope(request: &Request) -> Option<(&str, Access)> {
         | Request::Terminal(T::TerminalInput { conversation, .. }) => {
             (conversation, Access::Change)
         }
+        Request::Session(S::SessionAction { conversation, .. }) => (conversation, Access::Change),
         _ => return None,
     };
     Some((conversation.as_str(), access))

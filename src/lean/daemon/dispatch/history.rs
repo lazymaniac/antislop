@@ -8,6 +8,7 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             task_rounds,
             task_round,
             run_context,
+            session_action,
             session_events,
             history_content,
             history_messages,
@@ -19,6 +20,42 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
             history_and_mail,
         ],
     )
+}
+
+fn session_action(context: &Context<'_>, request: Request) -> Result<Route> {
+    let core = context.core;
+    let project = context.project;
+    Ok(match request {
+        Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
+            conversation,
+            action,
+        }) => Route::Handled({
+            validate_project_conversation(core, project, &conversation)?;
+            let completed: bool = core.store.db().query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND kind='session_completed' AND json_extract(payload,'$.cleanup_complete')=1)",
+                [&conversation],
+                |row| row.get(0),
+            )?;
+            require(completed, "session actions require a completed session")?;
+            let text = match action {
+                crate::lean::daemon::SessionActionKind::CreatePr => {
+                    "Continue this completed session by creating a pull request for its preserved branch."
+                }
+                crate::lean::daemon::SessionActionKind::MergeWithMain => {
+                    "Continue this completed session by merging its preserved branch with main."
+                }
+                crate::lean::daemon::SessionActionKind::ContinueWork => {
+                    "Continue work in this session, preserving its branch and prior results."
+                }
+            };
+            let message = core.store.add_message(&conversation, "user", text)?;
+            core.wake(&conversation);
+            json!(crate::lean::daemon::SessionActionResult::Queued {
+                message: message.seq,
+            })
+        }),
+        request => Route::Unmatched(request),
+    })
 }
 
 fn result_documents(context: &Context<'_>, request: Request) -> Result<Route> {
