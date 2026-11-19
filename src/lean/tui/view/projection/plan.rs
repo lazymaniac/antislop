@@ -186,6 +186,7 @@ fn publish_plan_summary(view: &mut View, payload: &Value) {
         .unwrap_or_default();
     let summary = format!("Plan: {} tasks. {next}", view.tasks.len());
     view.cards.push(TranscriptCard::Plan {
+        sent_at: view.event_created_ms,
         plan: view.plan.clone().unwrap_or_default(),
         tasks: view.tasks.len(),
         text: summary.clone(),
@@ -213,6 +214,7 @@ pub(super) fn on_plan_rejected(
     }
     let reason = text("reason");
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Plan rejected".into(),
         meta: String::new(),
         text: format!("✗ {reason}"),
@@ -262,6 +264,7 @@ fn report_plan_invalid(view: &mut View, payload: &Value, err: String) {
     };
     view.requirements_progress = Some((true, err.clone()));
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Plan rejected".into(),
         meta: String::new(),
         text: format!("✗ {err}"),

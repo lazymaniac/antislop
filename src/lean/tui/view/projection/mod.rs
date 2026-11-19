@@ -10,6 +10,7 @@ mod reviews;
 mod tasks;
 
 pub(super) fn apply(view: &mut View, event: &Value) {
+    view.event_created_ms = event["created_ms"].as_i64();
     view.layout_revision = view.layout_revision.wrapping_add(1);
     view.after = event["seq"].as_u64().unwrap_or(view.after);
     let payload = &event["payload"];

@@ -15,10 +15,29 @@ impl App {
         width: u16,
         theme: &Theme,
     ) -> Vec<Row> {
-        if let Some(comment) = comment_card_ref(entry) {
-            return self.comment_rows(comment, found, width, theme);
+        let mut rows = if let Some(comment) = comment_card_ref(entry) {
+            self.comment_rows(comment, found, width, theme)
+        } else {
+            standard_card_rows(entry, found, width, theme)
+        };
+        if let Some(datetime) = entry.sent_at().and_then(message_datetime)
+            && let Some(header) = rows.first()
+        {
+            let fill = header.fill;
+            let timestamps = theme::wrap(&datetime, usize::from(width.saturating_sub(2)))
+                .into_iter()
+                .map(|line| {
+                    Row::new(
+                        fill,
+                        vec![
+                            Span::styled(theme.glyphs().bar, fill.patch(theme.dim())),
+                            Span::styled(format!(" {line}"), fill.patch(theme.dim())),
+                        ],
+                    )
+                });
+            rows.splice(1..1, timestamps);
         }
-        standard_card_rows(entry, found, width, theme)
+        rows
     }
 
     fn comment_rows(
@@ -59,6 +78,7 @@ fn comment_card_ref(entry: &TranscriptCard) -> Option<CommentCardRef<'_>> {
         target,
         text,
         status,
+        ..
     } = entry
     else {
         return None;
@@ -74,14 +94,15 @@ fn comment_card_ref(entry: &TranscriptCard) -> Option<CommentCardRef<'_>> {
 fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &Theme) -> Vec<Row> {
     match entry {
         TranscriptCard::Message(msg) => message_rows(msg, found, width, theme),
-        TranscriptCard::Plan { plan, tasks, text } => {
-            plan_rows(plan, *tasks, text, found, width, theme)
-        }
+        TranscriptCard::Plan {
+            plan, tasks, text, ..
+        } => plan_rows(plan, *tasks, text, found, width, theme),
         TranscriptCard::System {
             title,
             meta,
             text,
             tone,
+            ..
         } => system_rows(title, meta, text, tone, found, width, theme),
         TranscriptCard::Comment { .. } => unreachable!("comments handled before standard rows"),
     }
@@ -138,12 +159,7 @@ fn message_heading(msg: &MessageEntry, person: Style, theme: &Theme) -> Vec<Span
 }
 
 fn message_right(msg: &MessageEntry, theme: &Theme) -> String {
-    let state = theme.clean(&msg.state);
-    match msg.sent_at.and_then(message_datetime) {
-        Some(datetime) if state.is_empty() => datetime,
-        Some(datetime) => format!("{datetime} {} {state}", theme.glyphs().dot),
-        None => state,
-    }
+    theme.clean(&msg.state)
 }
 
 fn message_datetime(milliseconds: i64) -> Option<String> {
@@ -258,5 +274,124 @@ fn comment_body(text: &str, error: Option<&str>) -> String {
     match error {
         Some(error) => format!("{text}\nError: {error}"),
         None => text.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn every_card_kind_keeps_its_event_time_after_replay_and_at_narrow_widths() {
+        let events = [
+            ("message", json!({"author":"user","text":"Continue"})),
+            (
+                "plan_proposed",
+                json!({"plan":"p","tasks":[{"id":"t1","title":"Task","change_kind":"code"},{"id":"t1-options","title":"Options","change_kind":"none"}]}),
+            ),
+            ("notice", json!({"text":"Preserve 👩‍💻e\u{301}"})),
+            (
+                "comment",
+                json!({"id":1,"target":"plan:p","text":"Check scope","status":"open","label":"Plan","message":1}),
+            ),
+            (
+                "task",
+                json!({"id":"t1","task":"task","status":"needs_user","round":1}),
+            ),
+            (
+                "task",
+                json!({"id":"t1","task":"task","status":"approved","round":1,"feedback":{"round":1,"integration":{"commit_message":"fix: preserve result"}}}),
+            ),
+            (
+                "task",
+                json!({"id":"t1-options","task":"options","status":"approved","round":1,"feedback":{"round":1,"selection":{"approach":"Keep order","rationale":"Preserve work","tradeoffs":"One queue"}}}),
+            ),
+        ];
+        let mut app = App::test_app();
+        let mut replay = View::default();
+        for (index, (kind, payload)) in events.into_iter().enumerate() {
+            let sent_at = 1_700_000_000_000_i64 + index as i64 * 1000;
+            let event = json!({"seq":index+1,"created_ms":sent_at,"kind":kind,"payload":payload});
+            app.view.apply(&event);
+            replay.apply(&event);
+            assert_eq!(
+                app.view.cards.last().unwrap().sent_at(),
+                Some(sent_at),
+                "{kind}"
+            );
+        }
+        assert_eq!(app.view.cards, replay.cards);
+        for card in &app.view.cards {
+            let datetime = message_datetime(card.sent_at().unwrap()).unwrap();
+            for width in [120, 50, 34, 12] {
+                let rows = app.transcript_card_rows(card, false, width, &Theme::new(false, false));
+                let text = rows
+                    .iter()
+                    .flat_map(|row| &row.line.spans)
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                let compact = text
+                    .replace(['▌', '|'], "")
+                    .split_whitespace()
+                    .collect::<String>();
+                assert!(
+                    compact.contains(&datetime.replace(' ', "")),
+                    "{width}: {text}"
+                );
+            }
+        }
+        for title in ["Progress", "Completed: Task", "Selected approach: Options"] {
+            assert!(app.view.cards.iter().any(|card| matches!(card, TranscriptCard::System {title: actual, ..} if actual == title)), "{title}");
+        }
+        let before = app.view.cards.len();
+        app.view.apply(
+            &json!({"seq":100,"kind":"notice","payload":{"text":"Legacy event has no timestamp"}}),
+        );
+        assert_eq!(app.view.cards[before].sent_at(), None);
+    }
+
+    #[test]
+    fn coalesced_progress_uses_its_last_update_time() {
+        let mut view = View::default();
+        view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Task".into(),
+            ..Default::default()
+        });
+        for (seq, status, time) in [(1, "needs_user", 1000), (2, "waiting", 2000)] {
+            view.apply(
+                &json!({"seq":seq,"created_ms":time,"kind":"task","payload":{
+                    "id":"t1","task":"task","round":1,"status":status
+                }}),
+            );
+        }
+        assert_eq!(view.cards.len(), 1);
+        assert_eq!(view.cards[0].sent_at(), Some(2000));
+    }
+
+    #[test]
+    fn the_live_phase_card_uses_the_workflow_event_time() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let sent_at = 1_700_000_000_000_i64;
+        let mut app = App::test_app();
+        app.view.apply(&json!({"seq":1,"created_ms":sent_at,"kind":"workflow","payload":{"phase":"implementation"}}));
+        assert_eq!(app.view.workflow_sent_at, Some(sent_at));
+        let mut terminal = Terminal::new(TestBackend::new(70, 14)).unwrap();
+        terminal
+            .draw(|frame| app.draw_transcript(frame, frame.area(), &Theme::new(false, false)))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            screen.contains(&message_datetime(sent_at).unwrap()),
+            "{screen}"
+        );
+        assert!(screen.contains("Phase 3/3"), "{screen}");
     }
 }

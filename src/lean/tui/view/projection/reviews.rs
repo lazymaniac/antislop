@@ -11,6 +11,7 @@ pub(super) fn on_paused(view: &mut View, event: &Value, payload: &Value, key: St
         "▶ resumed"
     };
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Pause".into(),
         meta: String::new(),
         text: txt.into(),
@@ -27,6 +28,7 @@ pub(super) fn on_notice(view: &mut View, event: &Value, payload: &Value, key: St
     let _ = (event, &key, turn, &text);
     let txt = text("text");
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Notice".into(),
         meta: String::new(),
         text: txt.clone(),

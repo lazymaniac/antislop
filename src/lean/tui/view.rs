@@ -73,22 +73,36 @@ pub struct MessageEntry {
 pub enum TranscriptCard {
     Message(MessageEntry),
     Plan {
+        sent_at: Option<i64>,
         plan: String,
         tasks: usize,
         text: String,
     },
     System {
+        sent_at: Option<i64>,
         title: String,
         meta: String,
         text: String,
         tone: super::theme::Tone,
     },
     Comment {
+        sent_at: Option<i64>,
         id: u64,
         target: String,
         text: String,
         status: String,
     },
+}
+
+impl TranscriptCard {
+    pub(super) fn sent_at(&self) -> Option<i64> {
+        match self {
+            Self::Message(message) => message.sent_at,
+            Self::Plan { sent_at, .. }
+            | Self::System { sent_at, .. }
+            | Self::Comment { sent_at, .. } => *sent_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -172,6 +186,8 @@ pub struct View {
     pub plan_head_revision: i64,
     pub task_meta: HashMap<String, TaskMeta>,
     pub workflow_phase: Option<String>,
+    /// When the currently displayed session phase began.
+    pub(super) workflow_sent_at: Option<i64>,
     pub session_branch: Option<String>,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
     /// Full proposed scope attached to the pending transition decision.
@@ -200,6 +216,8 @@ pub struct View {
     pub activity: Option<String>,
     pub idle: bool,
     pub after: u64,
+    /// Source timestamp for cards produced by the event currently being projected.
+    event_created_ms: Option<i64>,
     pub agents: HashMap<String, Agent>,
     /// Messages between agents by (sender key, recipient key).
     pub links: HashMap<(String, String), Link>,
@@ -609,6 +627,7 @@ mod tests {
     fn staged(statuses: &[&str], activity: bool) -> View {
         let mut view = View::default();
         view.cards.push(TranscriptCard::System {
+            sent_at: None,
             title: "t".into(),
             meta: String::new(),
             text: "x".into(),
@@ -685,6 +704,7 @@ mod tests {
 
         // Another card in between starts a new progress card.
         view.cards.push(TranscriptCard::System {
+            sent_at: None,
             title: "Notice".into(),
             meta: String::new(),
             text: "x".into(),

@@ -204,10 +204,12 @@ impl View {
             title,
             text,
             tone: card_tone,
+            sent_at,
             ..
         }) = self.cards.last_mut()
             && title == "Progress"
         {
+            *sent_at = self.event_created_ms.or(*sent_at);
             text.push('\n');
             text.push_str(&line);
             let skip = text.lines().count().saturating_sub(PROGRESS_LINES);
@@ -218,6 +220,7 @@ impl View {
             return;
         }
         self.cards.push(TranscriptCard::System {
+            sent_at: self.event_created_ms,
             title: "Progress".into(),
             meta: String::new(),
             text: line,
@@ -232,6 +235,7 @@ impl View {
         tone: crate::lean::tui::theme::Tone,
     ) {
         self.cards.push(TranscriptCard::System {
+            sent_at: self.event_created_ms,
             title: title.into(),
             meta: String::new(),
             text,

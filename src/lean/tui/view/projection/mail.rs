@@ -172,6 +172,7 @@ pub(super) fn on_comment(view: &mut View, payload: &Value) {
         view.comments.contains_key(&comment.id),
     );
     view.cards.push(TranscriptCard::Comment {
+        sent_at: view.event_created_ms,
         id: comment.id,
         target: name,
         text: comment.text.clone(),

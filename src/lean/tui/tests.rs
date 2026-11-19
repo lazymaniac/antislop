@@ -2064,6 +2064,7 @@ fn transcript_cache_reuses_rows_and_matches_fresh_layout() {
     draw(&mut app, &mut term, &theme);
     assert_eq!(app.transcript_layout.entries.len(), 1);
     app.view.cards.push(TranscriptCard::Comment {
+        sent_at: None,
         id: 7,
         target: "plan".into(),
         text: "please fix".into(),
@@ -2642,6 +2643,7 @@ fn panels_and_buttons_in_the_header_can_be_clicked() {
     let mut app = test_app();
     app.view.idle = false;
     app.view.cards.push(view::TranscriptCard::System {
+        sent_at: None,
         title: "x".into(),
         meta: String::new(),
         text: "x".into(),

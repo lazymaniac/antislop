@@ -98,6 +98,7 @@ pub(super) fn on_planning_progress(
     let _ = (event, &key, turn, &text);
     view.requirements_progress = Some((false, text("text")));
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Planning".into(),
         meta: String::new(),
         tone: crate::lean::tui::theme::Tone::Active,
@@ -116,6 +117,7 @@ pub(super) fn on_workflow(
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);
     view.workflow_phase = Some(text("phase"));
+    view.workflow_sent_at = event["created_ms"].as_i64();
     if view.workflow_phase.as_deref() != Some("interview") && !view.user_decision {
         view.interview_question = None;
     }
@@ -226,6 +228,7 @@ fn append_user_message(view: &mut View, message: MessageEntry, text: String) {
 
 fn record_runtime_message(view: &mut View) {
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Runtime".into(),
         meta: String::new(),
         text: "· task results handed to orchestrator".into(),

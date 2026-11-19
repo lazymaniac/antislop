@@ -121,6 +121,7 @@ fn report_graph_amendment(view: &mut View, description: &str) {
     view.plan_doc
         .push_str(&format!("\n\n## Graph amendment\n{description}\n"));
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: "Graph updated".into(),
         meta: String::new(),
         text: description.to_owned(),

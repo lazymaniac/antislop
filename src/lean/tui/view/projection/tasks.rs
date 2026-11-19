@@ -209,6 +209,7 @@ pub(super) fn on_integration(view: &mut View, payload: &Value) {
 
 fn report_integration(view: &mut View, title: &str, detail: &str, approved: bool) {
     view.cards.push(TranscriptCard::System {
+        sent_at: view.event_created_ms,
         title: title.to_owned(),
         meta: if approved {
             "approved".into()

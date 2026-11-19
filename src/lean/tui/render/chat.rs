@@ -141,7 +141,7 @@ impl App {
             && self.picker.is_none()
             && self.help.is_none()
             && self.diff.is_none()
-            && self.details.is_none();
+            && (self.details.is_none() || self.graph_expanded.is_some());
         self.paint_input(frame, input, shown_lines, focused, theme);
         self.place_chat_cursor(
             frame,
@@ -258,4 +258,62 @@ fn paint_input_lines(frame: &mut Frame, input: Rect, lines: &[String], fill: Sty
     );
     let rows = lines.iter().cloned().map(Line::raw).collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(rows).style(fill.patch(theme.text())), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn hidden_expanded_details_leave_the_chat_composer_active_and_editable() {
+        for color in [true, false] {
+            let theme = Theme::new(color, false);
+            let mut app = App::test_app();
+            app.graph_expanded = Some("worker:t1".into());
+            app.details = Some(Details::new("worker:t1".into()));
+            app.input = InputBuffer::with_text("draft 👩‍💻e\u{301}");
+            let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
+            for focus in [Focus::Graph, Focus::Chat] {
+                app.focus = focus;
+                terminal
+                    .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
+                    .unwrap();
+                let label = &terminal.backend().buffer()[(2, 13)];
+                let expected = if focus == Focus::Chat {
+                    theme.accent()
+                } else {
+                    theme.dim()
+                };
+                assert_eq!(label.fg, expected.fg.unwrap_or(Color::Reset));
+                assert_eq!(
+                    label.modifier.contains(Modifier::DIM),
+                    expected.add_modifier.contains(Modifier::DIM)
+                );
+                assert_eq!(
+                    label.modifier.contains(Modifier::BOLD),
+                    focus == Focus::Chat
+                );
+                if focus == Focus::Chat {
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    assert_eq!(cursor.y, 14);
+                    assert!(cursor.x > 1);
+                }
+            }
+            assert!(app.key(event::KeyEvent::new(
+                event::KeyCode::Char('q'),
+                event::KeyModifiers::NONE
+            )));
+            assert_eq!(app.input.text, "draft 👩‍💻e\u{301}q");
+            app.help = Some(palette::Help::Chat);
+            terminal
+                .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
+                .unwrap();
+            assert_eq!(
+                terminal.backend().buffer()[(2, 13)].fg,
+                theme.dim().fg.unwrap_or(Color::Reset)
+            );
+            assert_eq!(app.input.text, "draft 👩‍💻e\u{301}q");
+        }
+    }
 }

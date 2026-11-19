@@ -107,17 +107,17 @@ impl App {
         let Some((title, body)) = workflow_card_text(&self.view) else {
             return;
         };
-        cards.extend(card(
-            theme,
-            CardProps {
-                fill: theme.card(),
-                accent: theme.accent(),
-                head: vec![Span::styled(title, theme.title())],
-                right: String::new(),
-                body: &body,
-                max_body: usize::MAX,
-                width,
+        cards.extend(self.transcript_card_rows(
+            &TranscriptCard::System {
+                sent_at: self.view.workflow_sent_at,
+                title: title.into(),
+                meta: String::new(),
+                text: body,
+                tone: theme::Tone::Active,
             },
+            false,
+            width,
+            theme,
         ));
     }
 

@@ -103,7 +103,7 @@ impl App {
             || (self.focus == Focus::Chat
                 && self.help.is_none()
                 && self.plan_view.is_none()
-                && self.details.is_none()
+                && (self.details.is_none() || self.graph_expanded.is_some())
                 && self.diff.is_none()
                 && !self.input.is_empty())
     }
