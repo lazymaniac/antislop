@@ -23,6 +23,14 @@ const ORCHESTRATOR_WORKFLOW: &str = "Follow the runtime session phase in a three
          Respond to plan comments with revisions before approval; \
          during execution coordinate results and review. Answer worker/reviewer questions with answer_agent; when only the user can decide one, hand it over with defer_to_user and pass the user's answer on with answer_agent. For a separate user decision during execution, call ask_user with context, question and 2–6 options (label, description); it ends your turn. Ask only for missing user requirements or choices that cannot be inferred from the request; the runtime asks nobody for execution permissions beyond the CLI dialogs described next. The runtime presents this question outside the interview without changing contracts, permissions, gates or worker-question state. Wait for the user's actual answer before dependent actions; do not request additional execution permission. Never reopen an answered worker question to ask the user. When the runtime puts an agent CLI's approval dialog to you (a message that names an approval request and its choices), settle it with decide_approval: pick the choice that lets the agent do what its task needs and nothing broader, deny what it does not need, and use choice escalate_to_user with an explanation when you cannot judge it or it goes beyond what the user asked. Never answer a dialog by messaging the agent. Use only the current task_states snapshot for task ids and statuses; it supersedes earlier plans and conversation history. Run a task whose current status is failed for a reason outside its contract (a crashed CLI) again with retry_task, which keeps its worktree. For a non-deferred coordinating task, read its full blocker report. If the prerequisite is now resolved, or independent authorized work remains that the blocker does not prevent, use resume_task with the concrete continuation, evidence and next change; keep unresolved steps blocked; preserve its original input generation and evidence. Missing implementation/tests this task owns are assigned work, not an external prerequisite. Use resume_task for technical recovery, including failed experiments; preserve actual evidence and do not pretend a still-missing input is available. If resolving the blocker requires contract or dependency changes, use revise_plan. Never use retry_task for a coordinating task. Repair contracts and dependencies only using revise_plan; when the plan needs a different shape instead, call request_replan with the reason and the planner redrafts it; do not emit recover or graph blocks. Coordinate implementation through the task workers.";
 
+/// Shared task-boundary policy for planners, orchestrators and plan reviewers.
+pub(crate) const PLAN_DECOMPOSITION: &str = "TASK DECOMPOSITION:
+    Derive authored tasks from the user's distinct outcomes and the repository's actual component boundaries. Inspect the relevant interfaces before deciding the graph. A task should deliver one cohesive, independently verifiable result with a clear owner. Group changes that must be implemented and reviewed together; separate independent capabilities, failure modes and consumers even when they belong to one feature.
+    For work spanning durable storage, message contracts, UI interaction and provider delivery, identify usable prerequisites and bounded consumer slices instead of assigning the entire feature to one implementation task. Prefer a stable foundation followed by independently testable consumers, or bounded vertical slices. Depend only on the producer whose interface or result is needed; independent consumers may run in parallel once that prerequisite is ready. Tasks changing the same shared contract must be ordered; shared files alone do not justify collapsing unrelated capabilities into one task.
+    Give each task its owned behavior, the inputs it consumes, its concrete result and the relevant task-local acceptance criteria. For code-changing tasks, include focused tests with the code they verify. Map every user requirement to its owning task in the existing plan document; identify who verifies cross-component behavior when requested. Do not copy the whole feature's acceptance list into every task or leave integration behavior without an owner.
+    The selected rigor controls quality policy, not task count: small-change is not a one-task instruction. Runtime-generated options and gates do not count as decomposition of the requested implementation. Respect code-review and no-quality-gates policy; decomposition does not authorize extra gates, options, audits or unrequested work.
+    Keep a genuinely cohesive small change in one task. Do not split mechanically by file, by acceptance-criterion count, or by implementation/test/documentation phases. Do not add a planning-only task merely to document the split, or impose task-count, time or cost quotas. Explain the meaningful boundaries and dependency edges briefly in the plan document. If a multi-capability request remains one task, justify why candidate boundaries would not yield usable, independently checkable results. Preserve completed work and retained checkpoints when reshaping remaining work; do not invalidate approved results merely to make historical tasks smaller.";
+
 const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends your turn. \
          `document` is the plan for the user in Markdown, divided into clear `#` / `##` / `###` \
          sections. `tasks` lists the tasks; each has `id`, `title`, `goal`, `kind` and `change_kind`, and \
@@ -81,6 +89,7 @@ pub fn orchestrator_instructions() -> String {
         NO_PINNING,
         ORCHESTRATOR_WORKFLOW,
         PLAN_FORMAT,
+        PLAN_DECOMPOSITION,
         TEAM_NOTE,
         ORCHESTRATOR_TAIL,
     ]
@@ -98,6 +107,7 @@ pub fn planner_instructions() -> String {
         FILESYSTEM_GUIDANCE,
         NO_PINNING,
         PLAN_FORMAT,
+        PLAN_DECOMPOSITION,
         TEAM_NOTE,
         PLAN_REVIEW_NOTE,
     ]

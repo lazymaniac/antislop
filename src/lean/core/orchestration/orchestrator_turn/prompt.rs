@@ -41,6 +41,10 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     );
     prompt.push_str(context.comment_context);
     append_decision(&mut prompt, context.decision);
+    if !context.first && context.answered != 0 && context.editable_graph && !context.interviewing {
+        prompt.push_str(tasks::PLAN_DECOMPOSITION);
+        prompt.push('\n');
+    }
     append_graph(
         &mut prompt,
         context.editable_graph && !context.interviewing,
@@ -134,6 +138,50 @@ const INTERVIEW_INSTRUCTIONS: &str = "\nSESSION PHASE: INTERVIEW. This overrides
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_and_resumed_orchestrators_get_task_boundaries_when_revising_an_active_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let graph = store.add_plan(&conversation.id, &[json!({
+            "id":"attachments","title":"Image attachments","goal":"Implement durable image attachments",
+            "kind":"implementation","change_kind":"code",
+            "acceptance_criteria":[{"id":"C1","text":"Attachments survive restart"}]
+        })]).unwrap();
+        let workflow = Workflow {
+            phase: "implementation".into(),
+            summary: "Image attachments".into(),
+            upto_message: 1,
+        };
+        for first in [true, false] {
+            let prompt = orchestrator_prompt_text(PromptContext {
+                project: Path::new("project"),
+                first,
+                fresh: first,
+                answered: 1,
+                asked: &[],
+                open: &[],
+                history: &[],
+                comment_context: "",
+                editable_graph: true,
+                graph: &graph,
+                graph_json: "CURRENT CONTRACTS",
+                interviewing: false,
+                workflow: &workflow,
+                scope_context: None,
+                decision: None,
+                audit_response: None,
+            });
+            assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
+            assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
+            assert!(prompt.contains("CURRENT CONTRACTS"));
+            assert!(prompt.contains(
+                "do not invalidate approved results merely to make historical tasks smaller"
+            ));
+            assert!(prompt.contains("use replacements to inherit its checkpoint"));
+        }
+    }
 
     #[test]
     fn implementation_phase_requires_orchestrator_to_handle_audit_before_advancing() {

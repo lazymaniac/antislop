@@ -13,7 +13,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
     );
-    append_code_review_plan_rules(&mut prompt, plan);
+    append_plan_review_rules(&mut prompt, plan);
     prompt
 }
 
@@ -30,11 +30,14 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
         super::instructions::FILESYSTEM_GUIDANCE,
         REVIEW_FORMAT
     );
-    append_code_review_plan_rules(&mut prompt, plan);
+    append_plan_review_rules(&mut prompt, plan);
     prompt
 }
 
-fn append_code_review_plan_rules(prompt: &mut String, plan: &[TaskContract]) {
+fn append_plan_review_rules(prompt: &mut String, plan: &[TaskContract]) {
+    prompt.push_str("\n\n");
+    prompt.push_str(super::instructions::PLAN_DECOMPOSITION);
+    prompt.push_str("\nDECOMPOSITION REVIEW: Judge the planner-authored tasks, excluding generated options, quality gates and final integration nodes. Reject an umbrella implementation task when it combines separable deliverables with different owners or failure modes and hides meaningful dependencies or separately verifiable outcomes. Name the concrete boundaries and missing producer/consumer edges in the finding; do not merely ask for more tasks. A single task is valid for an inseparable, cohesive change, and a larger task count alone does not prove a good plan. Review only remaining work when prior results are already approved; granularity alone is not grounds to redo completed work.\n");
     if plan
         .iter()
         .any(crate::lean::tasks::is_report_only_review_task)

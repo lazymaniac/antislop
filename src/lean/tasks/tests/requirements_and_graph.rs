@@ -51,6 +51,8 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     // Review independence does not restrict CLI access.
     assert!(prompt.contains("imposes no access limits on agents"));
     assert!(!prompt.contains("never by execution or edits"));
+    assert!(prompt.contains(PLAN_DECOMPOSITION));
+    assert!(prompt.contains("A single task is valid for an inseparable, cohesive change"));
 }
 
 #[test]
@@ -69,6 +71,8 @@ fn plan_review_options_guidance_excludes_quality_gates() {
         plan_review_followup("", &plan),
     ] {
         assert!(prompt.contains("eligible non-gate code-changing tasks"));
+        assert!(prompt.contains("Judge the planner-authored tasks, excluding generated options, quality gates and final integration nodes"));
+        assert!(prompt.contains("Reject an umbrella implementation task"));
         assert!(prompt.contains("quality gates do not receive options"));
         assert!(prompt.contains("do not require selected_approach"));
         assert!(!prompt.contains("generates options for code-changing tasks"));
@@ -128,6 +132,11 @@ fn no_quality_gates_plan_checks_preserve_rigor_through_initial_and_revision_revi
         );
         assert!(!prompt.contains("only change_kind=code requires quality"));
         assert!(prompt.contains("\"integration_batch\":true"));
+        assert!(prompt.contains(PLAN_DECOMPOSITION));
+        assert!(
+            prompt.contains("Name the concrete boundaries and missing producer/consumer edges")
+        );
+        assert!(prompt.contains("granularity alone is not grounds to redo completed work"));
     }
     for prompt in [planner_instructions(), orchestrator_instructions()] {
         assert!(prompt.contains("For `no-quality-gates`, plan the requested work with ordinary task acceptance and dependencies"));
@@ -149,6 +158,7 @@ fn selected_code_review_plan_review_reinforces_scope_and_no_write_graph() {
         plan_review_followup("", std::slice::from_ref(&task)),
     ] {
         assert!(prompt.contains("CODE-REVIEW PLAN SAFEGUARDS"));
+        assert!(prompt.contains(PLAN_DECOMPOSITION));
         assert!(prompt.contains("same scope"));
         assert!(prompt.contains("Reject implementation, refactoring, options"));
         assert!(prompt.contains("A review with no findings is valid"));

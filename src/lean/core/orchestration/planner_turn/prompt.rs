@@ -16,7 +16,8 @@ pub(super) struct PlannerPrompt<'a> {
 }
 
 /// The requirements always lead, so a resumed session drafts from the current
-/// ones; the role and the plan format are told once.
+/// ones; the role and plan format are told once, while task-boundary guidance
+/// also reaches sessions resumed from an older prompt.
 pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     let mut prompt = String::new();
     if context.first {
@@ -25,6 +26,9 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
             tasks::planner_instructions(),
             context.project.display()
         ));
+    } else {
+        prompt.push_str(tasks::PLAN_DECOMPOSITION);
+        prompt.push('\n');
     }
     prompt.push_str(&format!(
         "\nSESSION PHASE: planning. Collected requirements:\n{}\nDraft the complete plan for review. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted. Address plan reviewer findings yourself and resubmit the complete corrected plan. If submit_plan or the plan reviewer refuses the plan and you cannot resolve it within the agreed requirements, end the turn with finish_turn naming the blocker and the decision needed; the orchestrator receives it.\n\n",
@@ -55,6 +59,54 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broad_attachment_requirements_get_boundary_guidance_on_new_and_resumed_replans() {
+        let requirements = "Paste clipboard images and recognize dropped files. Preserve mixed text/image drafts per conversation and recover failed sends. Retain image bytes and compact message references across restart and source removal. Deliver images to providers and expose relevant images to later task workers and reviewers. Verify the complete user journey.";
+        let previous = "image-attachments: implement the TUI, daemon, persistence, providers, downstream retrieval and all regression coverage in one task.";
+        for team in [tasks::Team::SmallChange, tasks::Team::NoQualityGates] {
+            let guidance = TeamGuidance {
+                team,
+                origin: crate::lean::store::TeamOrigin::User,
+                reason: "Preserve my rigor selection".into(),
+            };
+            for first in [true, false] {
+                for replaced in [None, Some(previous)] {
+                    let prompt = planner_prompt_text(PlannerPrompt {
+                        project: Path::new("project"),
+                        first,
+                        requirements,
+                        team_guidance: Some(&guidance),
+                        asked: &[],
+                        replaced,
+                        keepable: Some(
+                            "Approved storage work and retained checkpoints remain available.",
+                        ),
+                        scope_context: None,
+                    });
+                    assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
+                    assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
+                    assert!(prompt.contains(requirements));
+                    assert!(prompt.contains(
+                        "Approved storage work and retained checkpoints remain available."
+                    ));
+                    assert!(prompt.contains(&format!("\"team\":\"{}\"", team.name())));
+                    assert!(prompt.contains("small-change is not a one-task instruction"));
+                    assert!(prompt.contains(
+                        "Runtime-generated options and gates do not count as decomposition"
+                    ));
+                    if let Some(previous) = replaced {
+                        assert!(prompt.contains(previous));
+                    }
+                    if team == tasks::Team::NoQualityGates {
+                        assert!(prompt.contains(
+                            "Do not add another integration task or a final quality audit"
+                        ));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn planner_prompt_keeps_team_policy_separate_from_untrusted_reason_data() {
