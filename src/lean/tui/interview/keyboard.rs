@@ -30,18 +30,18 @@ impl Form {
             return true;
         }
         if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
-            self.scroll_page(key.code == KeyCode::PageDown);
+            self.scroll_by(key.code == KeyCode::PageDown, self.scroll_step);
             true
         } else {
             false
         }
     }
 
-    fn scroll_page(&mut self, down: bool) {
+    pub(in crate::lean::tui) fn scroll_by(&mut self, down: bool, lines: usize) {
         self.scroll = if down {
-            self.scroll.saturating_add(self.scroll_step)
+            self.scroll.saturating_add(lines)
         } else {
-            self.scroll.saturating_sub(self.scroll_step)
+            self.scroll.saturating_sub(lines)
         };
         self.manual_scroll = true;
     }

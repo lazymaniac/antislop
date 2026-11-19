@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 impl Form {
     pub fn draw(&mut self, frame: &mut Frame, screen: Rect, theme: &Theme) {
-        let (area, block) = interview_box(screen, theme);
+        let (area, block) = interview_box(screen, theme, self.scope_summary.is_some());
         let inner_width = usize::from(area.width.saturating_sub(3).max(1));
         let custom = self.selected == self.question.options.len();
         let (rows, selected_rows, input_row, scope_insert) = self.rows(inner_width, custom, theme);
@@ -44,6 +44,16 @@ impl Form {
         };
         let insertion = scope_insert.unwrap_or(0);
         let scroll = self.visible_scroll(target_start, target_end, viewport, row_count);
+        let block = if row_count > viewport {
+            block.title_bottom(format!(
+                " PgUp/PgDn / Mouse wheel | {}-{}/{} ",
+                scroll + 1,
+                scroll.saturating_add(viewport).min(row_count),
+                row_count
+            ))
+        } else {
+            block
+        };
         let scope = self.scope_summary.as_deref();
         let visible = visible_rows(
             rows,
@@ -662,8 +672,12 @@ fn append_interview_footer(rows: &mut Vec<Line<'static>>, sending: bool, theme: 
     rows.push(Line::styled(footer, theme.dim()));
 }
 
-fn interview_box(screen: Rect, theme: &Theme) -> (Rect, Block<'static>) {
-    let width = screen.width.min(94);
+fn interview_box(screen: Rect, theme: &Theme, scope: bool) -> (Rect, Block<'static>) {
+    let width = if scope {
+        screen.width
+    } else {
+        screen.width.min(94)
+    };
     let area = Rect::new(
         screen.x + screen.width.saturating_sub(width) / 2,
         screen.y,

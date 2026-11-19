@@ -90,6 +90,8 @@ impl Form {
             self.scope_summary = summary.map(str::to_owned);
             self.scope_revision = self.scope_revision.wrapping_add(1);
             self.scope_cache.clear_layout();
+            self.scroll = 0;
+            self.manual_scroll = summary.is_some();
         }
     }
 

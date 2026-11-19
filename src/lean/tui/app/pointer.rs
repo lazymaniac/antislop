@@ -29,6 +29,12 @@ impl App {
         if self.picker.is_some() || self.editor.is_some() {
             return;
         }
+        if self.interview_visible() {
+            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                form.scroll_by(down, 3);
+            }
+            return;
+        }
         if let Some(view) = &mut self.plan_view {
             view.key(
                 event::KeyEvent::new(
@@ -203,6 +209,20 @@ impl App {
         if self.modal_blocks_mouse() {
             self.click_graph_filters(mouse);
             self.click_unblock(mouse);
+            if self
+                .config_editor
+                .as_ref()
+                .is_none_or(|editor| !editor.visible)
+                && self.unblock.is_none()
+                && self.graph_filters.is_none()
+                && self.flow_editor.is_none()
+                && matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                )
+            {
+                self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+            }
             return true;
         }
         false

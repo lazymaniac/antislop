@@ -39,8 +39,20 @@ fn draw_interview(app: &mut App, frame: &mut Frame) {
     {
         return;
     }
+    let area = if app.view.scope_confirmation_summary.is_some() {
+        let screen = frame.area();
+        let horizontal = (screen.width / 20)
+            .max(1)
+            .min(screen.width.saturating_sub(view::MIN_TERM_WIDTH) / 2);
+        let vertical = (screen.height / 20)
+            .max(1)
+            .min(screen.height.saturating_sub(view::MIN_TERM_HEIGHT) / 2);
+        screen.inner(ratatui::layout::Margin::new(horizontal, vertical))
+    } else {
+        app.chat_area
+    };
     if let Some(form) = app.interview_forms.get_mut(&app.conversation) {
-        form.draw(frame, app.chat_area, &Theme::from_env());
+        form.draw(frame, area, &Theme::from_env());
     }
 }
 

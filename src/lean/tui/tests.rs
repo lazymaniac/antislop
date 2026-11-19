@@ -2226,8 +2226,7 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         .backend()
         .buffer()
         .content
-        .chunks(120)
-        .flat_map(|row| row.iter().take(40))
+        .iter()
         .flat_map(|cell| cell.symbol().chars())
         .filter(|character| !character.is_whitespace())
         .collect();
@@ -2236,6 +2235,122 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
     assert!(screen.contains("rejectedrecords."));
     assert!(screen.contains("Doyouconfirmthisscope"));
     assert!(screen.contains("planningcanbegin?"));
+
+    // The scope decision spans both panels with margins and starts at the
+    // beginning of a long summary. The wheel must scroll the modal only.
+    let summary = (0..80)
+        .map(|index| format!("REQ{index:03} preserve rows 👩‍💻e\u{301}\n"))
+        .collect::<String>();
+    app.input = InputBuffer::with_text("chat draft");
+    app.focus = Focus::Graph;
+    for (width, height) in [(120, 24), (84, 16)] {
+        app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
+        app.view.after += 1;
+        app.sync_interview();
+        app.interview_forms
+            .get_mut(&app.conversation)
+            .unwrap()
+            .input = InputBuffer::with_text("decision draft 👩‍💻e\u{301}");
+        terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = |terminal: &Terminal<TestBackend>| -> String {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
+        };
+        let initial = screen(&terminal);
+        assert!(initial.contains("REQ000"));
+        assert!(initial.contains("PgUp/PgDn / Mouse wheel"));
+        assert!(initial.contains("👩‍💻"));
+        assert!(initial.contains("e\u{301}"));
+        let buffer = terminal.backend().buffer();
+        let title_row = (0..height)
+            .find(|&y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("Question · choose an answer")
+            })
+            .unwrap();
+        let left = (0..width)
+            .find(|&x| buffer[(x, title_row)].symbol() == "┌")
+            .unwrap();
+        let right = (0..width)
+            .rfind(|&x| buffer[(x, title_row)].symbol() == "┐")
+            .unwrap();
+        let bottom = (title_row..height)
+            .find(|&y| buffer[(left, y)].symbol() == "└")
+            .unwrap();
+        assert!(left > 0 && right < width - 1, "side margins stay visible");
+        assert!(
+            title_row > 0 && bottom < height - 1,
+            "vertical margins stay visible"
+        );
+        assert!(
+            right - left > width * 3 / 4,
+            "scope modal spans both panels"
+        );
+        let offset = app.offset;
+        let chat_scroll = app.scroll;
+        let wheel = |kind| event::MouseEvent {
+            kind,
+            column: right - 1,
+            row: height / 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        let mut visited = initial.clone();
+        for _ in 0..40 {
+            app.mouse(wheel(MouseEventKind::ScrollDown));
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            visited.push_str(&screen(&terminal));
+        }
+        for index in 0..80 {
+            assert!(visited.contains(&format!("REQ{index:03}")));
+        }
+        assert!(screen(&terminal).contains("Confirm scope"));
+        for _ in 0..40 {
+            app.mouse(wheel(MouseEventKind::ScrollUp));
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+        }
+        assert!(screen(&terminal).contains("REQ000"));
+        assert!(!screen(&terminal).contains("REQ079"));
+        assert_eq!(app.offset, offset);
+        assert_eq!(app.scroll, chat_scroll);
+        assert_eq!(app.input.text, "chat draft");
+        assert_eq!(
+            app.interview_forms[&app.conversation].input.text,
+            "decision draft 👩‍💻e\u{301}"
+        );
+
+        let form = app.interview_forms[&app.conversation].clone();
+        app.help = Some(palette::Help::Chat);
+        app.mouse(wheel(MouseEventKind::ScrollDown));
+        assert_eq!(app.interview_forms[&app.conversation], form);
+        app.help = None;
+        app.picker = Some(Picker::new(Kind::Commands));
+        app.mouse(wheel(MouseEventKind::ScrollDown));
+        assert_eq!(app.interview_forms[&app.conversation], form);
+        app.picker = None;
+
+        app.key(key_press(KeyCode::PageDown));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!screen(&terminal).contains("REQ000"));
+        app.key(key_press(KeyCode::PageUp));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(screen(&terminal).contains("REQ000"));
+        app.key(key_press(KeyCode::Down));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(screen(&terminal).contains("Request changes"));
+        assert_eq!(app.interview_forms[&app.conversation].selected, 1);
+        app.interview_forms
+            .get_mut(&app.conversation)
+            .unwrap()
+            .selected = 0;
+    }
 }
 
 #[test]
