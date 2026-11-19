@@ -132,6 +132,186 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_send_rejects_incompatible_orchestrator_before_message_acceptance() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let source = directory.path().join("attachment.png");
+        std::fs::write(&source, crate::lean::content::valid_png_fixture()).unwrap();
+        let config_text = include_str!("../../../../examples/antislop.toml").replace(
+            "[profiles.orchestrator]\nprovider = \"codex\"",
+            "[profiles.orchestrator]\nprovider = \"agy\"",
+        );
+        let config = Config::from_toml(&config_text).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+
+        let error = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.id.clone(),
+                operation_id: Some(crate::id()),
+                text: "keep this message".into(),
+                to: None,
+                images: vec![source.to_string_lossy().into_owned()],
+            }),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("image attachments are not supported"),
+            "unexpected image send error: {error}"
+        );
+        assert!(error.to_string().contains("agy provider"));
+        assert!(
+            core.store
+                .messages_after(&conversation.id, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.store
+                .linked_images(&conversation.id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn image_send_uses_running_turn_provider_after_config_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let source = directory.path().join("attachment.png");
+        std::fs::write(&source, crate::lean::content::valid_png_fixture()).unwrap();
+        let unsupported = include_str!("../../../../examples/antislop.toml").replace(
+            "[profiles.orchestrator]\nprovider = \"codex\"",
+            "[profiles.orchestrator]\nprovider = \"agy\"",
+        );
+        let core = Arc::new(
+            Core::open(
+                &directory.path().join("state"),
+                Config::from_toml(&unsupported).unwrap(),
+            )
+            .unwrap(),
+        );
+        let config_path = directory.path().join("config.toml");
+        std::fs::write(&config_path, unsupported).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        core.store
+            .start_turn(&conversation.id, "orchestrator", "agy", 0, None)
+            .unwrap();
+
+        let supported = include_str!("../../../../examples/antislop.toml").to_owned();
+        let expected_revision = crate::hash(std::fs::read(&config_path).unwrap());
+        handle(
+            &core,
+            &project,
+            &config_path,
+            Request::Control(crate::lean::daemon::ControlRequest::SetConfig {
+                toml: supported,
+                expected_revision,
+            }),
+            None,
+        )
+        .unwrap();
+        let error = handle(
+            &core,
+            &project,
+            &config_path,
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.id.clone(),
+                operation_id: Some(crate::id()),
+                text: "keep this while the old turn runs".into(),
+                to: None,
+                images: vec![source.to_string_lossy().into_owned()],
+            }),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("image attachments are not supported")
+        );
+        assert!(error.to_string().contains("agy provider"));
+        assert!(
+            core.store
+                .messages_after(&conversation.id, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.store
+                .linked_images(&conversation.id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn supported_image_send_and_text_only_send_still_accept() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let source = directory.path().join("attachment.png");
+        std::fs::write(&source, crate::lean::content::valid_png_fixture()).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        let endpoint = directory.path().join("config.toml");
+
+        handle(
+            &core,
+            &project,
+            &endpoint,
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.id.clone(),
+                operation_id: Some(crate::id()),
+                text: "inspect this image".into(),
+                to: None,
+                images: vec![source.to_string_lossy().into_owned()],
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(core.store.linked_images(&conversation.id).unwrap().len(), 1);
+
+        handle(
+            &core,
+            &project,
+            &endpoint,
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.id.clone(),
+                operation_id: Some(crate::id()),
+                text: "text only".into(),
+                to: None,
+                images: vec![],
+            }),
+            None,
+        )
+        .unwrap();
+        let messages = core.store.messages_after(&conversation.id, 0).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().any(|message| message.text == "text only"));
+    }
+
+    #[test]
     fn result_document_requests_list_and_read_persisted_artifact() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("project");
