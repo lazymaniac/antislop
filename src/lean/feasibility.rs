@@ -205,6 +205,7 @@ mod tests {
             integration_batch: false,
             options_for: None,
             id: id.into(),
+            checkout_name: writes.then(|| crate::lean::tasks::checkout_slug(id)),
 
             acceptance_criteria: Vec::new(),
             title: id.into(),

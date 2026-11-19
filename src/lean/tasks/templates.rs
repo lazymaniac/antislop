@@ -186,6 +186,7 @@ pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<Tas
         integration_batch: true,
         options_for: None,
         id,
+        checkout_name: Some(super::checkout_slug("Integrate delivered changes")),
         acceptance_criteria: vec![super::AcceptanceCriterion {
             id: "C1".into(),
             text: "All accepted code changes from this plan are integrated on the branch".into(),

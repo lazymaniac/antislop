@@ -1,5 +1,7 @@
 //! Task-owned cleanup after execution and revisions; busy views are retried.
-use crate::lean::core::worktree::paths::{release_view, task_path_component, task_view_paths};
+#[cfg(test)]
+use crate::lean::core::worktree::paths::task_view_paths;
+use crate::lean::core::worktree::paths::{release_view, task_path_component};
 use crate::lean::*;
 
 /// A checkout lease excludes cleanup from every in-flight checkout user.
@@ -176,10 +178,7 @@ impl Core {
     }
 
     /// Retire obsolete legacy read-only views before a task uses its stable path.
-    pub(in crate::lean) fn release_task_views(&self, id: &str, keep: Option<&Path>) {
-        self.release_task_views_with_hook(id, keep, || {});
-    }
-
+    #[cfg(test)]
     fn release_task_views_with_hook(
         &self,
         id: &str,
@@ -211,6 +210,7 @@ impl Core {
         }
     }
 
+    #[cfg(test)]
     fn cleanup_view_path(&self, path: &Path) -> Result<bool> {
         require(
             git::is_clean(path),
@@ -257,7 +257,7 @@ impl Core {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let task = tasks
                     .iter()
-                    .find(|task| checkout_kind(&name, &task.id).is_some());
+                    .find(|task| checkout_kind_for_task(&self.state, &name, task).is_some());
                 let expected = match (task, scratch.get(&name)) {
                     (Some(_), _) => format!("antislop/{name}"),
                     (_, Some(branch)) => branch.clone(),
@@ -312,7 +312,7 @@ impl Core {
             let name = branch.trim_start_matches("antislop/");
             if tasks
                 .iter()
-                .any(|task| checkout_kind(name, &task.id).is_some())
+                .any(|task| checkout_kind_for_task(&self.state, name, task).is_some())
                 || scratch.values().any(|expected| expected == &branch)
             {
                 let history = format!(
@@ -365,7 +365,7 @@ impl Core {
             let mut candidates = Vec::new();
             let mut reservation_blocked = false;
             for (name, path) in entries {
-                let Some(kind) = checkout_kind(&name, id) else {
+                let Some(kind) = checkout_kind_for_task(&self.state, &name, &task) else {
                     continue;
                 };
                 if !eligible(&task, kind) {
@@ -497,6 +497,18 @@ fn checkout_kind(name: &str, id: &str) -> Option<CheckoutKind> {
     Some(CheckoutKind::LegacyWriter {
         generation: suffix.strip_prefix('g')?.parse().ok()?,
     })
+}
+
+fn checkout_kind_for_task(state: &Path, name: &str, task: &Task) -> Option<CheckoutKind> {
+    if crate::lean::core::worktree::paths::worktree_path(state, task)
+        .ok()?
+        .file_name()?
+        .to_str()
+        == Some(name)
+    {
+        return Some(CheckoutKind::StableWriter);
+    }
+    checkout_kind(name, &task.id)
 }
 
 fn eligible(task: &Task, checkout: CheckoutKind) -> bool {

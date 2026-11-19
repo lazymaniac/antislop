@@ -582,6 +582,10 @@ impl FlowEditor {
             integration_batch: meta.integration_batch,
             options_for: meta.options_for,
             id: id.to_owned(),
+            checkout_name: self
+                .change_kind
+                .has_delivery()
+                .then(|| crate::lean::tasks::checkout_slug(title)),
 
             title: title.to_owned(),
             goal,
@@ -873,6 +877,10 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
         integration_batch: meta.integration_batch,
         options_for: meta.options_for,
         id: row.id.clone(),
+        checkout_name: row
+            .change_kind
+            .has_delivery()
+            .then(|| crate::lean::tasks::checkout_slug(&row.title)),
 
         acceptance_criteria: meta.acceptance_criteria,
         title: row.title.clone(),

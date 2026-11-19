@@ -1,7 +1,5 @@
 use super::RoundState;
-use crate::lean::core::worktree::paths::{
-    branch, task_path_component, worktree_branch, worktree_path,
-};
+use crate::lean::core::worktree::paths::{task_path_component, worktree_branch, worktree_path};
 use crate::lean::*;
 mod completion;
 pub(super) use completion::commit_round;
@@ -98,25 +96,9 @@ pub(super) fn task_directories(
     project: &Path,
     worktree: &Option<PathBuf>,
 ) -> Result<(PathBuf, Vec<PathBuf>)> {
-    let task_worktree = task_worktree(core, task, spec, project, worktree)?;
-    let workdir = worktree
-        .clone()
-        .or(task_worktree)
-        .unwrap_or_else(|| project.to_path_buf());
-    Ok((workdir, Vec::new()))
-}
-
-fn task_worktree(
-    core: &Core,
-    task: &Task,
-    spec: &TaskContract,
-    project: &Path,
-    worktree: &Option<PathBuf>,
-) -> Result<Option<PathBuf>> {
-    if worktree.is_some() || !git::is_repository(project) {
-        return Ok(None);
-    }
-    if let Some(owner_id) = spec.options_for.as_deref() {
+    let workdir = if let Some(writer) = worktree {
+        writer.clone()
+    } else if let Some(owner_id) = spec.options_for.as_deref() {
         let mut owner = core
             .store
             .task_in_plan_by_id(&task.plan_id, owner_id)?
@@ -127,31 +109,18 @@ fn task_worktree(
                 ))
             })?;
         let owner_spec: TaskContract = serde_json::from_value(owner.spec.clone())?;
-        let owner_worktree = writer_worktree(core, &mut owner, &owner_spec, project)?;
-        require(
-            owner_worktree.is_some(),
-            "options task owner does not have a writer worktree",
-        )?;
+        let owner_worktree =
+            writer_worktree(core, &mut owner, &owner_spec, project)?.ok_or_else(|| {
+                Error::Invalid("options task owner does not have a writer worktree".into())
+            })?;
         core.store.update_task(&owner)?;
-        return Ok(owner_worktree);
-    }
-    let onto = core.writer_base(&task.plan_id, spec, project)?;
-    // Read-only continuations inspect their own retained changes, even when
-    // another task's checkpoint has not landed yet.
-    let base = match (&task.base, &task.result) {
-        (Some(base), Some(result)) => {
-            match combine_saved_checkpoint(core, task, project, &onto, base, result)? {
-                git::CombineResult::Applied(combined) => combined,
-                git::CombineResult::Conflicted(_) => result.clone(),
-            }
-        }
-        _ => onto,
+        owner_worktree
+    } else if core.plan_has_integrated_results(&task.plan_id)? {
+        core.session_worktree(&core.store.plan_conversation(&task.plan_id)?, project)?
+    } else {
+        project.to_path_buf()
     };
-    let path = worktree_path(&core.state, task)?;
-    let branch = branch(task)?;
-    core.release_task_views(&task.id, Some(&path));
-    git::add_worktree(project, &path, &branch, &base)?;
-    Ok(Some(path))
+    Ok((workdir, Vec::new()))
 }
 
 fn combine_saved_checkpoint(
@@ -315,7 +284,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_only_continuation_keeps_checkpoint_separate_from_new_project_inputs() {
+    fn read_only_work_before_integration_uses_project_and_options_share_owner_checkout() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("project");
         std::fs::create_dir(&project).unwrap();
@@ -352,24 +321,21 @@ mod tests {
         task.feedback = Some(json!({"continuation_review":true}));
         let (view, dirs) = task_directories(&core, &task, &spec, &project, &None).unwrap();
         assert!(dirs.is_empty());
-        assert_ne!(view, project);
-        assert_eq!(
-            std::fs::read_to_string(view.join("instrument.txt")).unwrap(),
-            "repaired instrument"
-        );
-        assert!(!view.join("user.txt").exists());
+        assert_eq!(view, project);
+        assert!(!worktree_path(&core.state, &task).unwrap().exists());
         assert_eq!(
             std::fs::read_to_string(project.join("user.txt")).unwrap(),
             "new local input"
         );
         assert_eq!(
             std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
-            "old instrument"
+            "old instrument",
+            "pre-integration read-only work uses the project rather than a private checkpoint"
         );
         assert_eq!(git::head(&project).unwrap(), base);
         let owner_spec: TaskContract = serde_json::from_value(json!({
             "id":"recover", "title":"Recover", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Continue the saved repair",
-            "change_kind": "code", "kind":"implementation"}))
+            "change_kind": "code", "kind":"implementation", "checkout_name":"same-label"}))
         .unwrap();
         let options_spec: TaskContract = serde_json::from_value(json!({
             "id":"recover-options", "title":"Options", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Assess recovery",
@@ -378,7 +344,7 @@ mod tests {
         .unwrap();
         let isolated_spec: TaskContract = serde_json::from_value(json!({
             "id":"isolated", "title":"Isolated", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Keep another task isolated",
-            "change_kind": "code", "kind":"implementation"
+            "change_kind": "code", "kind":"implementation", "checkout_name":"same-label"
         }))
         .unwrap();
         let mut tasks = core
@@ -427,6 +393,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_ne!(isolated_worktree, restarted_options_view);
+        assert_ne!(
+            git::worktree_branch(&isolated_worktree).unwrap(),
+            git::worktree_branch(&restarted_options_view).unwrap()
+        );
         assert_eq!(
             std::fs::read_to_string(project.join("instrument.txt")).unwrap(),
             "old instrument"
@@ -493,7 +463,7 @@ mod tests {
         let conversation = core.start(&project).unwrap();
         let owner_spec: TaskContract = serde_json::from_value(json!({
             "id":"owner", "title":"Owner", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement the selected change",
-            "change_kind":"code", "kind":"implementation"
+            "change_kind":"code", "kind":"implementation", "checkout_name":"named-owner"
         }))
         .unwrap();
         let options_spec: TaskContract = serde_json::from_value(json!({
@@ -562,6 +532,18 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(workdir, writer);
+        assert!(
+            writer
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("named-owner")
+        );
+        assert!(
+            git::worktree_branch(&writer)
+                .unwrap()
+                .contains("named-owner")
+        );
         std::fs::write(writer.join("local-edit.txt"), "keep this edit").unwrap();
         let mut resumed = owner.clone();
         resumed.input_generation += 1;
@@ -617,6 +599,96 @@ mod tests {
             "keep this edit"
         );
         assert_eq!(git::head(&project).unwrap(), revised_base);
+    }
+
+    #[test]
+    fn parallel_writer_results_share_the_session_checkout_with_later_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("base.txt"), "base").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core.start(&project).unwrap();
+        let specs: Vec<TaskContract> = [
+            json!({"id":"writer-alpha","title":"Alpha writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write alpha","change_kind":"code","kind":"implementation","checkout_name":"alpha-change"}),
+            json!({"id":"writer-beta","title":"Beta writer","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write beta","change_kind":"code","kind":"implementation","checkout_name":"beta-change"}),
+            json!({"id":"reader-task","title":"Combined reader","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read combined results","change_kind":"none","kind":"analysis"}),
+        ]
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+        let mut tasks = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &specs
+                    .iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let alpha_path = writer_worktree(&core, &mut tasks[0], &specs[0], &project)
+            .unwrap()
+            .unwrap();
+        let beta_path = writer_worktree(&core, &mut tasks[1], &specs[1], &project)
+            .unwrap()
+            .unwrap();
+        assert_ne!(alpha_path, beta_path);
+        std::fs::write(alpha_path.join("alpha.txt"), "alpha").unwrap();
+        std::fs::write(beta_path.join("beta.txt"), "beta").unwrap();
+        let alpha_result = git::commit_all(&alpha_path, git::CommitPurpose::TestFixture).unwrap();
+        let beta_result = git::commit_all(&beta_path, git::CommitPurpose::TestFixture).unwrap();
+
+        let session = core.session_worktree(&conversation.id, &project).unwrap();
+        let combined = match git::combine_or_conflict(
+            &project,
+            &core.state.join("worktrees").join("parallel-reader-combine"),
+            &base,
+            &[
+                (base.clone(), alpha_result.clone()),
+                (base.clone(), beta_result.clone()),
+            ],
+        )
+        .unwrap()
+        {
+            git::CombineResult::Applied(commit) => commit,
+            git::CombineResult::Conflicted(detail) => {
+                panic!("parallel changes conflicted: {detail}")
+            }
+        };
+        git::ok(&session, &["reset", "--hard", &combined]).unwrap();
+        core.record_plan_landing(&tasks[0].plan_id, &tasks[0].id, &alpha_result)
+            .unwrap();
+        core.record_plan_landing(&tasks[1].plan_id, &tasks[1].id, &beta_result)
+            .unwrap();
+
+        let (reader_path, add_dirs) =
+            task_directories(&core, &tasks[2], &specs[2], &project, &None).unwrap();
+        assert!(add_dirs.is_empty());
+        assert_eq!(reader_path, session);
+        assert!(!worktree_path(&core.state, &tasks[2]).unwrap().exists());
+        assert_eq!(
+            std::fs::read_to_string(reader_path.join("alpha.txt")).unwrap(),
+            "alpha"
+        );
+        assert_eq!(
+            std::fs::read_to_string(reader_path.join("beta.txt")).unwrap(),
+            "beta"
+        );
     }
 
     #[test]
