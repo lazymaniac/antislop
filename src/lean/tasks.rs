@@ -100,6 +100,11 @@ pub struct TaskContract {
     #[serde(default)]
     pub options_for: Option<String>,
     pub id: String,
+    /// Stable lowercase ASCII label (letters, digits and hyphens, 1–48 bytes)
+    /// for a writer checkout. New plans freeze a slug of the task title when
+    /// omitted; retained older contracts keep their ID-based paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_name: Option<String>,
     #[serde(default)]
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub title: String,
@@ -123,6 +128,16 @@ pub struct TaskContract {
     pub kind: WorkKind,
     #[serde(default)]
     pub reviewer: ReviewerSpec,
+}
+
+pub(crate) fn valid_checkout_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 48
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
 }
 
 impl TaskContract {

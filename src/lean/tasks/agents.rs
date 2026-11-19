@@ -307,6 +307,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         integration_batch: false,
         options_for: Some(task.id.clone()),
         id,
+        checkout_name: None,
 
         acceptance_criteria: task.acceptance_criteria.clone(),
         title: format!("Options for {}", task.title),

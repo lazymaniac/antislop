@@ -212,6 +212,7 @@ fn gate_task(
         options_for: None,
 
         id,
+        checkout_name: (!description.audit).then(|| crate::lean::tasks::checkout_slug(agent.title)),
         title: agent.title.to_owned(),
         summary: Some(description.summary.to_owned()),
         goal: gate_goal(agent.focus, description.audit),

@@ -19,12 +19,33 @@ pub(in crate::lean) fn task_path_component(id: &str) -> Result<&str> {
 /// Every turn for a task shares one checkout; input-specific results remain
 /// recorded on the task rather than being encoded in its filesystem identity.
 pub(in crate::lean) fn worktree_path(state: &Path, task: &Task) -> Result<PathBuf> {
-    let id = task_path_component(&task.id)?;
-    Ok(state.join("worktrees").join(id))
+    Ok(state.join("worktrees").join(checkout_component(task)?))
 }
 
 pub(in crate::lean) fn branch(task: &Task) -> Result<String> {
-    Ok(format!("antislop/{}", task_path_component(&task.id)?))
+    Ok(format!("antislop/{}", checkout_component(task)?))
+}
+
+fn checkout_component(task: &Task) -> Result<String> {
+    let id = task_path_component(&task.id)?;
+    let Some(label) = task.spec.get("checkout_name") else {
+        // Existing retained tasks keep their original branch and directory.
+        return Ok(id.to_owned());
+    };
+    let label = label.as_str().ok_or_else(|| {
+        Error::Invalid(format!(
+            "task {} has an invalid writer checkout name",
+            task.id
+        ))
+    })?;
+    crate::require(
+        tasks::valid_checkout_name(label),
+        &format!("task {} has an invalid writer checkout name", task.id),
+    )?;
+    // The full stable digest distinguishes equal labels and scopes task IDs
+    // that are reused by separate plans in the same project.
+    let unique = crate::hash(format!("{}:{}", task.plan_id, task.id).as_bytes());
+    Ok(format!("{label}-{unique}"))
 }
 
 pub(in crate::lean) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
@@ -62,6 +83,7 @@ pub(in crate::lean) fn release_views(
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::lean) fn task_view_paths(
     state: &Path,
     task_id: &str,
@@ -189,27 +211,44 @@ fn release_writer_checkouts(store: &Store, state: &Path) -> Result<()> {
     let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
         return Ok(());
     };
+    let mut named_tasks = std::collections::HashMap::new();
+    for conversation in store.conversations()? {
+        for task in store.latest_plan(&conversation.id)? {
+            if let Some(name) = worktree_path(state, &task)?
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
+                named_tasks.insert(name.to_owned(), task);
+            }
+        }
+    }
     for entry in entries.flatten() {
-        release_writer_checkout(store, entry.path())?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        release_writer_checkout(store, path, named_tasks.get(&name))?;
     }
     Ok(())
 }
 
-fn release_writer_checkout(store: &Store, path: PathBuf) -> Result<()> {
+fn release_writer_checkout(store: &Store, path: PathBuf, named_task: Option<&Task>) -> Result<()> {
     if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
         return Ok(());
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let (task, generation) = match store.task_by_id(&name)? {
-        Some(task) => (task, None),
-        None => {
-            let Some((id, generation)) = writer_checkout_id(&name) else {
-                return Ok(());
-            };
-            let Some(task) = store.task_by_id(id)? else {
-                return Ok(());
-            };
-            (task, Some(generation))
+    let (task, generation) = if let Some(task) = named_task {
+        (task.clone(), None)
+    } else {
+        match store.task_by_id(&name)? {
+            Some(task) => (task, None),
+            None => {
+                let Some((id, generation)) = writer_checkout_id(&name) else {
+                    return Ok(());
+                };
+                let Some(task) = store.task_by_id(id)? else {
+                    return Ok(());
+                };
+                (task, Some(generation))
+            }
         }
     };
     let settled = matches!(

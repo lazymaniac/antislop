@@ -90,6 +90,67 @@ fn planned_tasks_preserve_explicit_delivery_independently_of_work_kind() {
 }
 
 #[test]
+fn writer_checkout_names_are_frozen_from_planner_input_and_readers_have_none() {
+    let tasks = submitted(json!({"tasks":[
+        {"id":"writer-one","title":"Cache Layers & Paths","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Change storage","change_kind":"code","kind":"implementation"},
+        {"id":"writer-two","title":"Custom label","checkout_name":"cache-v2","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Change storage too","change_kind":"code","kind":"implementation"},
+        {"id":"reader-one","title":"Inspect","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect storage","change_kind":"none","kind":"analysis"}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        tasks[0].checkout_name.as_deref(),
+        Some("cache-layers-paths")
+    );
+    assert_eq!(tasks[1].checkout_name.as_deref(), Some("cache-v2"));
+    assert_eq!(tasks[2].checkout_name, None);
+    let restored: Vec<TaskContract> =
+        serde_json::from_value(serde_json::to_value(&tasks).unwrap()).unwrap();
+    assert_eq!(restored, tasks);
+}
+
+#[test]
+fn checkout_names_reject_invalid_labels_and_non_writers() {
+    for name in [
+        "",
+        "Uppercase",
+        "two words",
+        "path/name",
+        "-leading",
+        "trailing-",
+        &"a".repeat(49),
+    ] {
+        let error = submitted(json!({"tasks":[
+            {"id":"writer-one","title":"Writer","checkout_name":name,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write files","change_kind":"code","kind":"implementation"}
+        ]}))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("checkout_name"), "{name:?}: {error}");
+    }
+
+    let tasks = submitted(json!({"tasks":[
+        {"id":"reader-one","title":"Reader","checkout_name":"reader-label","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect files","change_kind":"none","kind":"analysis"}
+    ]}))
+    .unwrap();
+    assert_eq!(tasks[0].checkout_name, None);
+}
+
+#[test]
+fn generated_writer_checkout_slug_respects_length_limit_at_separator_boundary() {
+    let forty_seven = "a".repeat(47);
+    let over_limit_title = format!("{forty_seven} b");
+    let slug = crate::lean::tasks::checkout_slug(&over_limit_title);
+    assert_eq!(slug, forty_seven);
+    assert!(crate::lean::tasks::valid_checkout_name(&slug));
+
+    let forty_six = "a".repeat(46);
+    let exact_limit_title = format!("{forty_six} b");
+    let slug = crate::lean::tasks::checkout_slug(&exact_limit_title);
+    assert_eq!(slug, format!("{forty_six}-b"));
+    assert_eq!(slug.len(), 48);
+    assert!(crate::lean::tasks::valid_checkout_name(&slug));
+}
+
+#[test]
 fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
     let base = json!({"id": "t1", "title": "Storage", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "A detailed storage analysis.", "change_kind": "none", "kind": "analysis"});
     let parse = |task: &Value| submitted(json!({"tasks": [task]}));

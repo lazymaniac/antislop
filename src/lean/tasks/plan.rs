@@ -10,6 +10,10 @@ pub(crate) use artifact_outputs::validate_artifact_output;
 #[serde(deny_unknown_fields)]
 pub struct PlannedTask {
     pub id: String,
+    /// Optional immutable writer label: lowercase ASCII letters, digits or
+    /// hyphens, 1–48 bytes. Omitted writer labels freeze a task-title slug.
+    #[serde(default)]
+    pub checkout_name: Option<String>,
     pub title: String,
     pub goal: String,
     pub kind: WorkKind,
@@ -32,10 +36,19 @@ pub struct PlannedTask {
 
 impl PlannedTask {
     pub fn into_contract(self) -> TaskContract {
+        let checkout_name = if self.change_kind.has_delivery() {
+            Some(
+                self.checkout_name
+                    .unwrap_or_else(|| checkout_slug(&self.title)),
+            )
+        } else {
+            None
+        };
         TaskContract {
             quality_gate: false,
             integration_batch: false,
             options_for: None,
+            checkout_name,
             acceptance_criteria: self.acceptance_criteria,
             reviewer: ReviewerSpec {
                 summary: Some(reviewer_summary(self.change_kind != ChangeKind::None).into()),
@@ -53,6 +66,27 @@ impl PlannedTask {
             kind: self.kind,
         }
     }
+}
+
+pub(crate) fn checkout_slug(text: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            let separator_bytes = usize::from(separator && !slug.is_empty());
+            if slug.len() + separator_bytes + 1 > 48 {
+                break;
+            }
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            separator = false;
+            slug.push((byte as char).to_ascii_lowercase());
+        } else {
+            separator = true;
+        }
+    }
+    if slug.is_empty() { "task".into() } else { slug }
 }
 
 fn reviewer_summary(delivers_files: bool) -> &'static str {
@@ -158,6 +192,15 @@ pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     for task in tasks {
         validate_task_id(&task.id)?;
+        if let Some(name) = &task.checkout_name {
+            crate::require(
+                task.change_kind.has_delivery() && super::valid_checkout_name(name),
+                &format!(
+                    "task {}: checkout_name must be a lowercase writer label of 1–48 ASCII letters, digits or hyphens",
+                    task.id
+                ),
+            )?;
+        }
         validate_change(task)?;
         validate_acceptance_criteria(task)?;
         validate_dependencies(task, &seen)?;

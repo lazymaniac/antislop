@@ -87,6 +87,7 @@ impl Core {
             integration_batch: false,
             options_for: None,
             id: task_id.clone(),
+            checkout_name: Some(tasks::checkout_slug(&title)),
 
             acceptance_criteria: vec![tasks::AcceptanceCriterion {
                 id: "C1".into(),

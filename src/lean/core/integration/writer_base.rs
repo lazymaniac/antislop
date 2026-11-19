@@ -2,6 +2,10 @@ use crate::lean::core::plan::helpers::writer_base_scratch;
 use crate::lean::*;
 
 impl Core {
+    pub(in crate::lean) fn plan_has_integrated_results(&self, plan_id: &str) -> Result<bool> {
+        Ok(!self.plan_base_record(plan_id)?.landed.is_empty())
+    }
+
     pub(in crate::lean) fn initial_plan_anchor(
         &self,
         plan_id: &str,
