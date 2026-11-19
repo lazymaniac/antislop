@@ -109,6 +109,32 @@ fn writer_checkout_names_are_frozen_from_planner_input_and_readers_have_none() {
 }
 
 #[test]
+fn checkout_names_reject_invalid_labels_and_non_writers() {
+    for name in [
+        "",
+        "Uppercase",
+        "two words",
+        "path/name",
+        "-leading",
+        "trailing-",
+        &"a".repeat(49),
+    ] {
+        let error = submitted(json!({"tasks":[
+            {"id":"writer-one","title":"Writer","checkout_name":name,"acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Write files","change_kind":"code","kind":"implementation"}
+        ]}))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("checkout_name"), "{name:?}: {error}");
+    }
+
+    let tasks = submitted(json!({"tasks":[
+        {"id":"reader-one","title":"Reader","checkout_name":"reader-label","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Inspect files","change_kind":"none","kind":"analysis"}
+    ]}))
+    .unwrap();
+    assert_eq!(tasks[0].checkout_name, None);
+}
+
+#[test]
 fn generated_writer_checkout_slug_respects_length_limit_at_separator_boundary() {
     let forty_seven = "a".repeat(47);
     let over_limit_title = format!("{forty_seven} b");
