@@ -43,6 +43,12 @@ pub(super) fn on_notice(view: &mut View, event: &Value, payload: &Value, key: St
 pub(super) fn on_audit(view: &mut View, event: &Value, payload: &Value, key: String, turn: &str) {
     let text = |name: &str| payload[name].as_str().unwrap_or_default().to_owned();
     let _ = (event, &key, turn, &text);
+    if payload["plan"]
+        .as_str()
+        .is_none_or(|plan| Some(plan) == view.plan.as_deref())
+    {
+        view.audit_error = payload["error"].as_str().map(clean);
+    }
     let lines = crate::lean::cli::review_lines("audit", payload);
     for line in &lines {
         view.push(

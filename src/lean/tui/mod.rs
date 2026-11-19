@@ -221,6 +221,19 @@ fn recover(
     if task == ORCHESTRATOR && action == crate::lean::RecoveryAction::RestartAgent {
         return recover_orchestrator(client, conversation);
     }
+    if task == view::AUDITOR && action == crate::lean::RecoveryAction::RestartAgent {
+        return client
+            .call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::Resume {
+                    conversation: conversation.into(),
+                    operation_id: Some(crate::id()),
+                    plan: plan.into(),
+                    revision_token: None,
+                },
+            ))
+            .map(|_| "final audit restarted; approved task results preserved".into())
+            .map_err(|error| error.to_string());
+    }
     recover_task(client, conversation, plan, task, action, message)
 }
 

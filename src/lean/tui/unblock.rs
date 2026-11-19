@@ -106,6 +106,23 @@ pub struct Unblock {
 }
 
 impl Unblock {
+    pub fn auditor(plan: &str, reason: &str) -> Self {
+        Self {
+            plan: plan.into(),
+            task: super::view::AUDITOR.into(),
+            title: "Final audit".into(),
+            status: "stopped".into(),
+            reason: reason.into(),
+            choices: vec![choice(
+                RecoveryAction::RestartAgent,
+                "Retry the final audit; keep approved task results",
+                false,
+            )],
+            selected: 0,
+            rects: Vec::new(),
+        }
+    }
+
     pub fn orchestrator() -> Self {
         let mut modal = Self::new(
             "",

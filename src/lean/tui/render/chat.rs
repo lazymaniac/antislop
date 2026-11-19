@@ -62,6 +62,8 @@ impl App {
             Some(("Answer scope question · F3", Command::InterviewQuestion))
         } else if self.view.plan_proposed() {
             Some(("Review & accept proposed plan · Ctrl+L", Command::Plan))
+        } else if self.view.audit_retryable() {
+            Some(("Retry final audit · F5 / u", Command::TaskActions))
         } else if self
             .view
             .tasks

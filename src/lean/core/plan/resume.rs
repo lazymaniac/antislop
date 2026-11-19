@@ -27,8 +27,23 @@ impl Core {
             // A plan the reviewer did not approve automatically waits for the user.
             return self.activate_reviewed_plan(conversation, plan_id);
         }
+        let retry_audit = !tasks.is_empty()
+            && tasks
+                .iter()
+                .all(|task| task.status == status::APPROVED && task.spec["deferred"] != true)
+            && self.store.team(conversation)? != tasks::Team::NoQualityGates
+            && !self.final_audit_current(conversation, plan_id)?;
+        if retry_audit {
+            require(
+                !self.store.paused(conversation)?,
+                "the session is paused; continue it before retrying the final audit",
+            )?;
+        }
         self.start_plan(conversation, plan_id, |store| {
             if store.requeue_plan(conversation, plan_id)? > 0 {
+                return Ok(());
+            }
+            if retry_audit && store.plan(plan_id)?.iter().all(|task| task.status == status::APPROVED && task.spec["deferred"] != true) {
                 return Ok(());
             }
             let waiting: bool = store.db().query_row(

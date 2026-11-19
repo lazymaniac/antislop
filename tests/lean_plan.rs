@@ -8,6 +8,88 @@ use std::time::{Duration, Instant};
 const CALLS: &str = "calls.jsonl";
 
 #[test]
+fn a_cancelled_final_audit_resumes_without_rerunning_approved_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let marker = dir.path().join("audit-started");
+    let release = dir.path().join("release-audit");
+    let script = std::fs::read_to_string(&agy).unwrap();
+    let needle = "if any(marker in prompt for marker in REVIEW):\n";
+    assert!(script.contains(needle));
+    let script = script.replace(needle, &format!("{needle}    if 'You audit' in prompt:\n        import os, time\n        open({marker:?}, 'w').close()\n        while not os.path.exists({release:?}): time.sleep(0.01)\n"));
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    accept_latest_reviewed_plan(&core, &conversation.id);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "audit did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    core.cancel(&conversation.id);
+    wait_idle(&core, &conversation.id);
+    let before = core.store.latest_plan(&conversation.id).unwrap();
+    assert!(before.iter().all(|task| task.status == "approved"));
+    let events = core
+        .store
+        .events_since(&conversation.id, 0, 10_000)
+        .unwrap();
+    let interrupted = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == "audit")
+        .unwrap();
+    assert!(
+        interrupted.payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    let mut view = antislop::lean::tui::view::View::default();
+    for event in events {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert!(view.audit_retryable());
+    assert_eq!(view.stage(), antislop::lean::tui::view::Stage::Blocked);
+    core.pause(&conversation.id, true).unwrap();
+    assert!(
+        core.resume_plan(&conversation.id, &before[0].plan_id)
+            .unwrap_err()
+            .to_string()
+            .contains("paused")
+    );
+    assert_eq!(core.store.latest_plan(&conversation.id).unwrap(), before);
+    core.pause(&conversation.id, false).unwrap();
+    std::fs::write(release, "continue").unwrap();
+    core.resume_plan(&conversation.id, &before[0].plan_id)
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    assert_eq!(core.store.latest_plan(&conversation.id).unwrap(), before);
+    let events = core
+        .store
+        .events_since(&conversation.id, view.after, 10_000)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "audit" && event.payload["approved"] == true)
+    );
+    assert!(events.iter().all(|event| {
+        event.kind != "turn_started"
+            || !event.payload["role"]
+                .as_str()
+                .is_some_and(|role| role.starts_with("worker:") || role.starts_with("reviewer:"))
+    }));
+    for event in events {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert!(!view.audit_retryable());
+    assert!(!view.controls().resume_plan);
+}
+
+#[test]
 fn a_reviewer_started_after_a_live_update_uses_the_new_profile_in_the_same_round() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());

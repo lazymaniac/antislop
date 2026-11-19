@@ -103,7 +103,9 @@ impl View {
                 Stage::Fresh
             };
         }
-        if self.tasks.iter().all(|task| task.status == "approved") {
+        if self.audit_retryable() {
+            Stage::Blocked
+        } else if self.tasks.iter().all(|task| task.status == "approved") {
             Stage::Done
         } else {
             Stage::Blocked
@@ -147,13 +149,29 @@ impl View {
 
     /// Whether the plan ended with tasks that can run again.
     pub fn plan_resumable(&self) -> bool {
-        self.tasks.iter().all(|task| status::finished(&task.status))
-            && self.tasks.iter().any(|task| {
-                matches!(
-                    task.status.as_str(),
-                    "cancelled" | "failed" | "coordinating" | "needs_user" | "skipped" | "waiting"
-                )
-            })
+        self.audit_retryable()
+            || (self.tasks.iter().all(|task| status::finished(&task.status))
+                && self.tasks.iter().any(|task| {
+                    matches!(
+                        task.status.as_str(),
+                        "cancelled"
+                            | "failed"
+                            | "coordinating"
+                            | "needs_user"
+                            | "skipped"
+                            | "waiting"
+                    )
+                }))
+    }
+
+    pub fn audit_retryable(&self) -> bool {
+        self.audit_error.is_some()
+            && self.plan.is_some()
+            && !self.pending_scope_revision
+            && self.team != Some(crate::lean::tasks::Team::NoQualityGates)
+            && !self.tasks.is_empty()
+            && self.tasks.iter().all(|task| task.status == "approved")
+            && !self.agents.get(AUDITOR).is_some_and(|agent| agent.running)
     }
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).

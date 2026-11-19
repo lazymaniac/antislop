@@ -5,6 +5,22 @@ impl App {
     /// Opens actions for the named or selected step, falling back to a
     /// stopped step or an active task that can be restarted.
     pub fn open_unblock(&mut self, named: Option<String>) {
+        if self.view.audit_retryable()
+            && (named.is_none() || named.as_deref() == Some(view::AUDITOR))
+        {
+            self.unblock = Some(unblock::Unblock::auditor(
+                self.view.plan.as_deref().unwrap(),
+                self.view.audit_error.as_deref().unwrap(),
+            ));
+            return;
+        }
+        if named.as_deref() == Some(view::AUDITOR)
+            || (named.is_none() && self.selected == view::AUDITOR)
+        {
+            self.notice =
+                Some("The final audit is running or has no interrupted result to retry.".into());
+            return;
+        }
         if self.targets_orchestrator(&named) {
             self.unblock = Some(unblock::Unblock::orchestrator());
             return;

@@ -2461,6 +2461,41 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
 }
 
 #[test]
+fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
+    let mut app = test_app();
+    app.view.apply(&serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p","tasks":[{"id":"t1","title":"Work","change_kind":"none"}]}}));
+    app.view.apply(&serde_json::json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"uuid","status":"approved","round":1}}));
+    for event in [
+        serde_json::json!({"seq":3,"turn_id":"audit","kind":"turn_started","payload":{"role":"auditor"}}),
+        serde_json::json!({"seq":4,"turn_id":"audit","kind":"turn_finished","payload":{"role":"auditor","status":"cancelled","error":"agent turn cancelled"}}),
+        serde_json::json!({"seq":5,"kind":"audit","payload":{"plan":"p","approved":false,"error":"agent turn cancelled"}}),
+    ] {
+        app.view.apply(&event);
+    }
+    assert!(app.view.plan_resumable());
+    assert!(app.view.controls().resume_plan);
+    assert_eq!(app.view.stage(), view::Stage::Blocked);
+    assert_eq!(app.phase_action().unwrap().1, Command::TaskActions);
+    app.focus = Focus::Graph;
+    app.selected = ORCHESTRATOR.into();
+    app.key(key_press(KeyCode::Char('u')));
+    let modal = app.unblock.take().unwrap();
+    assert_eq!(modal.task, view::AUDITOR);
+    assert_eq!(modal.plan, "p");
+    assert_eq!(modal.reason, "agent turn cancelled");
+    assert_eq!(modal.choices.len(), 1);
+    assert!(!modal.choices[0].asks_text);
+    assert!(modal.choices[0].label.contains("Retry the final audit"));
+    app.open_unblock(Some(ORCHESTRATOR.into()));
+    assert_eq!(app.unblock.take().unwrap().task, ORCHESTRATOR);
+    app.view.apply(&serde_json::json!({"seq":6,"turn_id":"audit-2","kind":"turn_started","payload":{"role":"auditor"}}));
+    assert!(!app.view.audit_retryable());
+    app.open_unblock(Some(view::AUDITOR.into()));
+    assert!(app.unblock.is_none());
+    assert!(app.notice.as_ref().unwrap().contains("running"));
+}
+
+#[test]
 fn the_orchestrator_actions_open_without_a_plan_and_with_an_existing_plan() {
     let mut app = test_app();
     app.focus = Focus::Graph;

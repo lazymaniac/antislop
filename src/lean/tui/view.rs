@@ -228,6 +228,8 @@ pub struct View {
     pub comment_progress: BTreeMap<u64, CommentProgress>,
     /// The latest review of the plan reviewer and the auditor, as lines.
     pub reviews: HashMap<String, Vec<String>>,
+    /// Raw failure of the current plan’s final audit, cleared when it restarts.
+    pub audit_error: Option<String>,
     /// The user paused new plan work.
     pub paused: bool,
     /// The orchestrator decides the agents' approval dialogs.

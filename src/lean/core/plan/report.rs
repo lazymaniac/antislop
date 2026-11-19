@@ -54,9 +54,16 @@ impl Core {
         let _source = source.lock().expect("conversation source scope");
         let _graph = self.locks.graph();
         let _integration = self.locks.integration();
-        if input.cancel.load(Ordering::SeqCst)
-            || self.final_audit_binding(input.conversation, input.plan_id)? != binding
-        {
+        if input.cancel.load(Ordering::SeqCst) {
+            let reason = self
+                .store
+                .last_turn(input.conversation, AUDITOR)?
+                .and_then(|turn| turn.error)
+                .unwrap_or_else(|| {
+                    "final audit cancelled; retry the audit to finish this session".into()
+                });
+            audit = Err(reason);
+        } else if self.final_audit_binding(input.conversation, input.plan_id)? != binding {
             audit=Err("plan, scope or integrated files changed during final audit; audit the current result again".into());
         }
         let mut audit_report = None;

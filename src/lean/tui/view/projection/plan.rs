@@ -27,6 +27,7 @@ pub(super) fn on_plan_proposed(
     view.plan_head_revision = payload["base_revision"].as_i64().unwrap_or(0);
     view.plan_doc = payload["document"].as_str().unwrap_or_default().to_owned();
     if !preserve_live_graph {
+        view.audit_error = None;
         view.tasks = proposed_tasks(payload);
         view.task_meta = proposed_task_meta(payload);
         fill_parallel_fallback(view, payload);
