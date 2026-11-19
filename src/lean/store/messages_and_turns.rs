@@ -4,24 +4,6 @@ use super::*;
 mod session;
 
 impl Store {
-    /// Provider pinned to the newest running orchestrator turn, if one exists.
-    pub(in crate::lean) fn current_orchestrator_turn_provider(
-        &self,
-        conversation: &str,
-    ) -> Result<Option<String>> {
-        let provider = self
-            .db()
-            .query_row(
-                "SELECT provider FROM turns
-             WHERE conversation_id=?1 AND role='orchestrator' AND status='running'
-             ORDER BY rowid DESC LIMIT 1",
-                [conversation],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(provider)
-    }
-
     /// Preserve the original transcript while excluding a verified preflight
     /// fallback from future interpretation as a user instruction.
     pub(in crate::lean) fn classify_preflight_failure(

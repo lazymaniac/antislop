@@ -145,7 +145,7 @@ fn image_retrieval_returns_provider_image_blocks_for_all_message_linked_images()
         )
         .unwrap_err()
         .to_string()
-        .contains("not supported by the opencode provider")
+        .contains("not supported by the configured opencode provider")
     );
 }
 

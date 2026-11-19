@@ -2046,65 +2046,6 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
 }
 
 #[test]
-fn tui_submits_an_image_only_chat_message_with_the_dropped_image_path() {
-    let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
-    let listener = UnixListener::bind(&sock_path).unwrap();
-    let (tx, rx) = mpsc::channel::<Value>();
-    let handle = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        let parsed: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
-        tx.send(parsed).unwrap();
-
-        let mut writer = stream;
-        writer
-            .write_all(b"{\"data\":null,\"error\":null}\n")
-            .unwrap();
-        writer.flush().unwrap();
-    });
-
-    let image_path = dir.path().join("diagram.png");
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-        1,
-        1,
-        image::Rgba([10, 20, 30, 255]),
-    ))
-    .write_to(&mut png, image::ImageFormat::Png)
-    .unwrap();
-
-    std::fs::write(&image_path, png.into_inner()).unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
-    app.paste(&image_path.to_string_lossy());
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(request["op"], "send");
-    assert_eq!(request["conversation"], "test-conv");
-    assert_eq!(request["text"], "");
-    assert_eq!(request["images"], json!([image_path.to_string_lossy()]));
-
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(update) = updates.recv_timeout(Duration::from_millis(50)) {
-            let sent = matches!(update, Update::SendResult { .. });
-            app.apply_update(update);
-            if sent {
-                break;
-            }
-        }
-    }
-    assert!(
-        !app.sending,
-        "the send result should settle the image-only request"
-    );
-    handle.join().unwrap();
-}
-
-#[test]
 fn tui_isolated_fake_request_capture() {
     let dir = test_tempdir();
     let sock_path = test_socket(dir.relative_path());

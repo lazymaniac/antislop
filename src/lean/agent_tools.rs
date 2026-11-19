@@ -77,8 +77,12 @@ impl Core {
             rusqlite::params![turn, conversation],
             |row| row.get(0),
         )?;
-        let provider = crate::lean::provider_kind(&provider)?;
-        crate::lean::require_image_support(provider)?;
+        crate::require(
+            matches!(provider.as_str(), "codex" | "claude" | "gemini"),
+            &format!(
+                "image retrieval is not supported by the configured {provider} provider; the retained images remain available to a compatible provider"
+            ),
+        )?;
         let images = self.store.linked_images(conversation)?;
         let offset = usize::try_from(args["offset"].as_u64().unwrap_or(0))
             .map_err(|_| Error::Invalid("image offset exceeds the platform range".into()))?;

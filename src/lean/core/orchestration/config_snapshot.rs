@@ -35,20 +35,6 @@ impl Core {
         text: &str,
         images: &[PathBuf],
     ) -> Result<Message> {
-        if !images.is_empty() {
-            let provider = match self
-                .store
-                .current_orchestrator_turn_provider(conversation)?
-            {
-                Some(provider) => crate::lean::provider_kind(&provider)?,
-                None => {
-                    self.config_snapshot()
-                        .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)?
-                        .provider
-                }
-            };
-            crate::lean::require_image_support(provider)?;
-        }
         let message = if images.is_empty() {
             text.to_owned()
         } else {

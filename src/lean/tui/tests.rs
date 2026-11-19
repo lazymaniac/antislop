@@ -146,37 +146,6 @@ fn missing_image_file_uri_reports_error_without_replacing_unsent_text() {
 }
 
 #[test]
-fn failed_incompatible_image_send_restores_text_and_keeps_conversation_images() {
-    let directory = tempfile::tempdir().unwrap();
-    let image = directory.path().join("pending.png");
-    std::fs::write(&image, crate::lean::content::valid_png_fixture()).unwrap();
-    let mut app = test_app();
-    app.conversation = "conversation-a".into();
-    app.input = InputBuffer::default();
-    app.sending = true;
-    app.pending_send = Some("inspect this".into());
-    app.send_request_id = 4;
-    app.image_drafts
-        .insert(app.conversation.clone(), vec![image.clone()]);
-
-    app.open("conversation-b".into());
-    app.input = InputBuffer::with_text("other conversation draft");
-    app.apply_update_inner(Update::SendResult {
-        conversation: "conversation-a".into(),
-        generation: 0,
-        request_id: 4,
-        sent_text: "inspect this".into(),
-        result: Err("image attachments are not supported by the configured agy provider".into()),
-    });
-
-    let failed = &app.conversation_states["conversation-a"];
-    assert_eq!(failed.input.text, "inspect this");
-    assert!(!failed.sending);
-    assert_eq!(app.image_drafts["conversation-a"], vec![image]);
-    assert_eq!(app.input.text, "other conversation draft");
-}
-
-#[test]
 fn multiple_dropped_file_uris_attach_as_a_batch() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first image.png");

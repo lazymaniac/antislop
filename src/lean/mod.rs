@@ -37,34 +37,9 @@ pub mod turn_result;
 
 use crate::{
     Error, Result,
-    config::{Config, ProviderKind, ResolvedProfile, RoleKind, WorkKind},
+    config::{Config, ResolvedProfile, RoleKind, WorkKind},
     require,
 };
-
-fn require_image_support(provider: ProviderKind) -> Result<()> {
-    let (name, supported) = match provider {
-        ProviderKind::Agy => ("agy", false),
-        ProviderKind::Codex => ("codex", true),
-        ProviderKind::Claude => ("claude", true),
-        ProviderKind::Gemini => ("gemini", true),
-        ProviderKind::Opencode => ("opencode", false),
-    };
-    require(
-        supported,
-        &format!("image attachments are not supported by the {name} provider"),
-    )
-}
-
-fn provider_kind(provider: &str) -> Result<ProviderKind> {
-    match provider {
-        "codex" => Ok(ProviderKind::Codex),
-        "claude" => Ok(ProviderKind::Claude),
-        "gemini" => Ok(ProviderKind::Gemini),
-        "agy" => Ok(ProviderKind::Agy),
-        "opencode" => Ok(ProviderKind::Opencode),
-        _ => Err(Error::Invalid(format!("unknown provider {provider}"))),
-    }
-}
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
