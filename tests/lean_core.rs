@@ -974,6 +974,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
                 operation_id: None,
                 text: "sleepy".into(),
                 to: None,
+                images: vec![],
             },
         ))
         .unwrap();
@@ -1853,6 +1854,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
             operation_id: None,
             text: "sleepy: keep this turn".into(),
             to: None,
+            images: vec![],
         }))
         .unwrap();
     wait_for(&|v| v["busy"] == true);
@@ -1878,6 +1880,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
             operation_id: None,
             text: "new work accepted while validation runs".into(),
             to: None,
+            images: vec![],
         }))
         .unwrap();
     assert!(!accepted.is_null());

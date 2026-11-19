@@ -10,6 +10,15 @@ pub(in crate::lean) use staging::PreparedContent;
 pub(in crate::lean) use staging::PublishedContent;
 
 pub const CHUNK_BYTES: usize = 64 * 1024;
+pub(in crate::lean) const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(in crate::lean) struct ImageReference {
+    pub id: String,
+    pub mime_type: String,
+    pub bytes: u64,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reference {
@@ -27,19 +36,135 @@ pub struct Chunk {
 #[cfg(test)]
 type DirectorySyncHook = std::sync::Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>;
 
+pub(in crate::lean) fn image_type(bytes: &[u8]) -> Result<&'static str> {
+    let format = image::guess_format(bytes).map_err(|error| {
+        crate::Error::Invalid(format!(
+            "unsupported or invalid image attachment; use PNG, JPEG, GIF, TIFF, or WebP ({error})"
+        ))
+    })?;
+    let mime = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::Gif => "image/gif",
+        image::ImageFormat::WebP => "image/webp",
+        image::ImageFormat::Tiff => "image/tiff",
+        _ => {
+            return Err(crate::Error::Invalid(
+                "unsupported image attachment; use PNG, JPEG, GIF, TIFF, or WebP".into(),
+            ));
+        }
+    };
+    let reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|error| crate::Error::Invalid(format!("invalid image attachment: {error}")))?;
+    require(
+        width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 40_000_000,
+        "image dimensions exceed the 40 megapixel limit",
+    )?;
+    image::ImageReader::with_format(std::io::Cursor::new(bytes), format)
+        .decode()
+        .map_err(|error| crate::Error::Invalid(format!("invalid image attachment: {error}")))?;
+    Ok(mime)
+}
+
+#[cfg(test)]
+pub(in crate::lean) fn valid_png_fixture() -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
 pub struct Content {
     directory: PathBuf,
+    image_directory: PathBuf,
     #[cfg(test)]
     directory_sync_hook: std::sync::Mutex<Option<DirectorySyncHook>>,
 }
 
 impl Content {
+    pub(in crate::lean) fn store_image(&self, name: &str, bytes: &[u8]) -> Result<ImageReference> {
+        let original_type = image_type(bytes)?;
+        require(
+            bytes.len() <= MAX_IMAGE_BYTES,
+            "image attachment exceeds the 20 MiB limit",
+        )?;
+        let normalized;
+        let bytes = if original_type == "image/tiff" {
+            let decoded = image::load_from_memory(bytes).map_err(|error| {
+                crate::Error::Invalid(format!("invalid TIFF image attachment: {error}"))
+            })?;
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            decoded
+                .write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|error| {
+                    crate::Error::Invalid(format!(
+                        "cannot normalize TIFF image attachment: {error}"
+                    ))
+                })?;
+            normalized = cursor.into_inner();
+            normalized.as_slice()
+        } else {
+            bytes
+        };
+        require(
+            bytes.len() <= MAX_IMAGE_BYTES,
+            "normalized image attachment exceeds the 20 MiB limit",
+        )?;
+        let mime_type = image_type(bytes)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        super::daemon::private_directory(&self.image_directory)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(self.image_directory.join(&id))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::File::open(&self.image_directory)?.sync_all()?;
+        Ok(ImageReference {
+            id,
+            mime_type: mime_type.into(),
+            bytes: bytes.len() as u64,
+            name: name.chars().take(240).collect(),
+        })
+    }
+
+    pub(in crate::lean) fn read_image(&self, reference: &ImageReference) -> Result<Vec<u8>> {
+        require(
+            uuid::Uuid::parse_str(&reference.id).is_ok(),
+            "invalid image reference",
+        )?;
+        require(
+            reference.bytes <= MAX_IMAGE_BYTES as u64,
+            "image attachment exceeds the 20 MiB limit",
+        )?;
+        let bytes = std::fs::read(self.image_directory.join(&reference.id))?;
+        require(
+            bytes.len() as u64 == reference.bytes,
+            "image attachment size changed",
+        )?;
+        require(
+            image_type(&bytes)? == reference.mime_type,
+            "image attachment type changed",
+        )?;
+        Ok(bytes)
+    }
+
     pub fn new(database: &Path) -> Self {
         Self {
             directory: database
                 .parent()
                 .unwrap_or(Path::new("."))
                 .join("session-content"),
+            image_directory: database
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("image-content"),
             #[cfg(test)]
             directory_sync_hook: std::sync::Mutex::new(None),
         }

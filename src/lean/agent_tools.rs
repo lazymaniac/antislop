@@ -49,6 +49,7 @@ impl Core {
     ) -> Result<Value> {
         self.require_open_agent_turn(conversation, role, turn)?;
         match tool {
+            "get_images" => self.conversation_images(conversation, turn, args),
             "record_evidence" | "read_evidence" => {
                 self.evidence_tool(conversation, role, turn, tool, args)
             }
@@ -68,6 +69,33 @@ impl Core {
             "revise_plan" | "request_replan" => self.revision_tool(conversation, role, tool, args),
             _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
         }
+    }
+
+    fn conversation_images(&self, conversation: &str, turn: &str, args: &Value) -> Result<Value> {
+        let provider: String = self.store.db().query_row(
+            "SELECT provider FROM turns WHERE id=?1 AND conversation_id=?2",
+            rusqlite::params![turn, conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(
+            matches!(provider.as_str(), "codex" | "claude" | "gemini"),
+            &format!(
+                "image retrieval is not supported by the configured {provider} provider; the retained images remain available to a compatible provider"
+            ),
+        )?;
+        let images = self.store.linked_images(conversation)?;
+        let offset = usize::try_from(args["offset"].as_u64().unwrap_or(0))
+            .map_err(|_| Error::Invalid("image offset exceeds the platform range".into()))?;
+        crate::require(offset <= images.len(), "image offset is out of range")?;
+        let mut content = vec![];
+        if let Some((message, reference)) = images.get(offset) {
+            let bytes = self.store.read_image(reference)?;
+            content.push(serde_json::json!({"type":"text","text":format!("Image {}/{} attached to message {message}: {}. {}", offset + 1, images.len(), reference.name, if offset + 1 < images.len() { format!("Call get_images with offset {} for the next image.", offset + 1) } else { "All conversation images have been retrieved.".into() })}));
+            content.push(serde_json::json!({"type":"image","data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),"mimeType":reference.mime_type}));
+        } else {
+            content.push(serde_json::json!({"type":"text","text":"No images are attached to messages in this conversation."}));
+        }
+        Ok(serde_json::json!({"_mcp_content":content}))
     }
 
     fn task_result_tool(

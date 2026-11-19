@@ -1,4 +1,93 @@
-//! Sanitized clipboard output. The TUI calls this only between frame draws.
+//! Clipboard access for text output and image input.
+pub fn read_image() -> std::result::Result<Vec<u8>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        read_macos_image()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        read_other_clipboard_image()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_image() -> std::result::Result<Vec<u8>, String> {
+    const SCRIPT: &str = "ObjC.import('AppKit'); var pasteboard = $.NSPasteboard.generalPasteboard; var data = pasteboard.dataForType('public.png'); if (!data) data = pasteboard.dataForType('public.jpeg'); if (!data) data = pasteboard.dataForType('public.tiff'); if (!data) throw new Error('clipboard does not expose a PNG, JPEG, or TIFF image'); $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);";
+    let output = std::process::Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", SCRIPT])
+        .output()
+        .map_err(|error| format!("clipboard image access requires osascript: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "osascript could not read a clipboard image: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    validate_clipboard_image(output.stdout)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_other_clipboard_image() -> std::result::Result<Vec<u8>, String> {
+    #[cfg(target_os = "linux")]
+    let candidates: &[(&str, &[&str])] = &[
+        ("wl-paste", &["--type", "image/png"]),
+        ("wl-paste", &["--type", "image/jpeg"]),
+        ("wl-paste", &["--type", "image/gif"]),
+        ("wl-paste", &["--type", "image/webp"]),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-t", "image/png", "-o"],
+        ),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-t", "image/jpeg", "-o"],
+        ),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-t", "image/gif", "-o"],
+        ),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-t", "image/webp", "-o"],
+        ),
+    ];
+    #[cfg(not(target_os = "linux"))]
+    let candidates: &[(&str, &[&str])] = &[];
+    let mut failures = Vec::new();
+    for (program, args) in candidates {
+        match std::process::Command::new(program).args(*args).output() {
+            Ok(output) if output.status.success() => {
+                match validate_clipboard_image(output.stdout) {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(error) => failures.push(format!("{program}: {error}")),
+                }
+            }
+            Ok(output) => failures.push(format!(
+                "{program} exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => failures.push(format!("{program}: {error}")),
+        }
+    }
+    if failures.is_empty() {
+        Err("clipboard image paste is unsupported on this platform".into())
+    } else {
+        Err(format!(
+            "clipboard image unavailable ({}); use a dropped image file instead",
+            failures.join("; ")
+        ))
+    }
+}
+
+fn validate_clipboard_image(bytes: Vec<u8>) -> std::result::Result<Vec<u8>, String> {
+    if bytes.len() > crate::lean::content::MAX_IMAGE_BYTES {
+        return Err("clipboard image exceeds the 20 MiB limit".into());
+    }
+    crate::lean::content::image_type(&bytes)
+        .map(|_| bytes)
+        .map_err(|error| format!("invalid clipboard image data: {error}"))
+}
 
 use super::sanitize::sanitize;
 use base64::{Engine, engine::general_purpose::STANDARD};

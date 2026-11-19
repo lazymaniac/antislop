@@ -2078,6 +2078,7 @@ fn tui_isolated_fake_request_capture() {
             operation_id: None,
             text: "hello orchestrator".into(),
             to: None,
+            images: vec![],
         },
     ));
     assert!(res.is_ok());
@@ -6669,6 +6670,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                     operation_id: None,
                     text: "first turn".into(),
                     to: None,
+                    images: vec![],
                 },
             ))
             .unwrap();
@@ -6738,6 +6740,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                     operation_id: None,
                     text: "second turn".into(),
                     to: None,
+                    images: vec![],
                 },
             ))
             .unwrap();

@@ -20,6 +20,21 @@ fn data(reply: Value) -> Value {
 }
 
 #[test]
+fn image_blocks_from_the_agent_handler_remain_native_mcp_image_content() {
+    let shared = shared();
+    shared.state.lock().unwrap().handler = Some(Arc::new(|_, _| {
+        Ok(json!({"_mcp_content":[{"type":"image","data":"AQID","mimeType":"image/png"}]}))
+    }));
+    let reply = call(
+        &shared,
+        &json!({"name":"get_images","arguments":{"turn":"current-turn"}}),
+    );
+    assert_eq!(reply["content"][0]["type"], "image");
+    assert_eq!(reply["content"][0]["data"], "AQID");
+    assert_eq!(reply["content"][0]["mimeType"], "image/png");
+}
+
+#[test]
 fn turn_discovery_recovers_a_stale_result_without_accepting_it_or_exposing_its_body() {
     let shared = shared();
     let logged = Arc::new(Mutex::new(vec![]));

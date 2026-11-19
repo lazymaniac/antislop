@@ -198,6 +198,8 @@ fn append_help_word(current: &mut String, word: &str, width: usize, out: &mut Ve
 fn help_chat() -> &'static [&'static str] {
     &[
         "Enter, Ctrl+S    send message to orchestrator",
+        "Ctrl+V           attach an image from the system clipboard",
+        "Alt+Backspace    remove the latest pending image",
         "@t2 text         message worker t2 (copied in chat)",
         "Alt+Enter, Ctrl+J  newline in draft",
         "↑/↓              line in draft; sent history at edges",

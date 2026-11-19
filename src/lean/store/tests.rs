@@ -4,6 +4,8 @@ use super::*;
 mod agent_exchange;
 #[path = "tests/events_and_recovery.rs"]
 mod events_and_recovery;
+#[path = "tests/image_attachments.rs"]
+mod image_attachments;
 #[path = "tests/result_documents.rs"]
 mod result_documents;
 #[path = "tests/rows_and_feedback.rs"]

@@ -27,6 +27,7 @@ pub enum ConversationRequest {
         operation_id: Option<String>,
         text: String,
         to: Option<String>,
+        images: Vec<String>,
     },
     /// Rejects a proposed plan and asks the orchestrator to revise it.
     Reject {

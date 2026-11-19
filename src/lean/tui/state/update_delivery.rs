@@ -79,9 +79,35 @@ impl App {
         else {
             unreachable!("update routed to wrong handler");
         };
+        let operation_key = self
+            .send_operation_keys
+            .remove(&(conversation.clone(), request_id))
+            .unwrap_or_else(|| sent_text.clone());
+        let sent_images = self
+            .send_images
+            .remove(&(conversation.clone(), request_id))
+            .unwrap_or_default();
         if result.is_ok() {
             self.send_operations
-                .remove(&(conversation.clone(), sent_text.clone()));
+                .remove(&(conversation.clone(), operation_key));
+            if let Some(pending) = self.image_drafts.get_mut(&conversation) {
+                pending.retain(|path| !sent_images.contains(path));
+                if pending.is_empty() {
+                    self.image_drafts.remove(&conversation);
+                }
+            }
+            let clipboard_directory = self.client.state_dir().join("clipboard-images");
+            for path in sent_images
+                .iter()
+                .filter(|path| path.starts_with(&clipboard_directory))
+            {
+                if let Err(error) = std::fs::remove_file(path) {
+                    self.notice = Some(format!(
+                        "Sent image is durable, but temporary clipboard file {} could not be removed: {error}",
+                        path.display()
+                    ));
+                }
+            }
         }
         if conversation == self.conversation && request_id == self.send_request_id {
             self.finish_active_send(sent_text, result);

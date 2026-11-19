@@ -62,6 +62,94 @@ fn required_text_validation_preserves_shared_error_contract() {
 }
 
 #[test]
+fn image_retrieval_returns_provider_image_blocks_for_all_message_linked_images() {
+    use base64::Engine;
+    let (directory, core, conversation) = core();
+    let source = directory.path().join("ui.png");
+    let image = crate::lean::content::valid_png_fixture();
+    std::fs::write(&source, &image).unwrap();
+    core.store
+        .add_message_with_images(
+            &conversation,
+            "user",
+            "Inspect",
+            std::slice::from_ref(&source),
+        )
+        .unwrap();
+    core.store
+        .add_message_with_images(
+            &conversation,
+            "user",
+            "Inspect this too",
+            std::slice::from_ref(&source),
+        )
+        .unwrap();
+    let turn = core
+        .store
+        .start_turn(&conversation, "orchestrator", "codex", 1, None)
+        .unwrap();
+    let result = core
+        .agent_tool(
+            &conversation,
+            "orchestrator",
+            &turn.id,
+            "get_images",
+            &json!({"offset":0}),
+        )
+        .unwrap();
+    assert_eq!(result["_mcp_content"][1]["type"], "image");
+    assert_eq!(result["_mcp_content"][1]["mimeType"], "image/png");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result["_mcp_content"][1]["data"].as_str().unwrap())
+            .unwrap(),
+        image
+    );
+    let next = core
+        .agent_tool(
+            &conversation,
+            "orchestrator",
+            &turn.id,
+            "get_images",
+            &json!({"offset":1}),
+        )
+        .unwrap();
+    assert!(
+        next["_mcp_content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Image 2/2")
+    );
+    assert!(
+        core.agent_tool(
+            &conversation,
+            "orchestrator",
+            &turn.id,
+            "get_images",
+            &json!({})
+        )
+        .is_ok()
+    );
+
+    let incompatible = core
+        .store
+        .start_turn(&conversation, "orchestrator", "opencode", 1, None)
+        .unwrap();
+    assert!(
+        core.agent_tool(
+            &conversation,
+            "orchestrator",
+            &incompatible.id,
+            "get_images",
+            &json!({})
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not supported by the configured opencode provider")
+    );
+}
+
+#[test]
 fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
     use crate::lean::tasks::Team;
 

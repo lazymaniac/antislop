@@ -5,7 +5,13 @@ use send::{AgentMessageSend, AgentMessageTarget, CommentSend, comment_text, is_r
 
 impl App {
     pub fn submit(&mut self) {
-        if self.reject_duplicate_send() || self.input.text.trim().is_empty() {
+        if self.reject_duplicate_send()
+            || (self.input.text.trim().is_empty()
+                && self
+                    .image_drafts
+                    .get(&self.conversation)
+                    .is_none_or(Vec::is_empty))
+        {
             return;
         }
         self.begin_chat_send();
@@ -31,20 +37,47 @@ impl App {
         let text = self.input.text.clone();
         self.record_history(&text);
         let sent_text = std::mem::take(&mut self.input.text);
+        let images = self
+            .image_drafts
+            .get(&self.conversation)
+            .cloned()
+            .unwrap_or_default();
         self.reset_input_cursor();
         self.scroll = 0;
         self.sending = true;
         self.pending_send = Some(sent_text.clone());
         self.failed_send = None;
+        let operation_key = if images.is_empty() {
+            sent_text.clone()
+        } else {
+            format!(
+                "{sent_text}\0{}",
+                images
+                    .iter()
+                    .map(|path| path.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("\0")
+            )
+        };
         let operation_id = self
             .send_operations
-            .entry((self.conversation.clone(), sent_text.clone()))
+            .entry((self.conversation.clone(), operation_key.clone()))
             .or_insert_with(crate::id)
             .clone();
-        self.launch_chat_send(request_id, sent_text, operation_id);
+        self.send_operation_keys
+            .insert((self.conversation.clone(), request_id), operation_key);
+        self.send_images
+            .insert((self.conversation.clone(), request_id), images.clone());
+        self.launch_chat_send(request_id, sent_text, operation_id, images);
     }
 
-    fn launch_chat_send(&self, request_id: u64, sent_text: String, operation_id: String) {
+    fn launch_chat_send(
+        &self,
+        request_id: u64,
+        sent_text: String,
+        operation_id: String,
+        images: Vec<std::path::PathBuf>,
+    ) {
         let client = self.client.clone();
         let updates = self.updates.clone();
         let conversation = self.conversation.clone();
@@ -57,6 +90,10 @@ impl App {
                         operation_id: Some(operation_id.clone()),
                         text: sent_text.clone(),
                         to: None,
+                        images: images
+                            .iter()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .collect(),
                     },
                 ))
                 .map(|_| ())

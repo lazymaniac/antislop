@@ -44,9 +44,24 @@ fn addressed_send(context: &Context<'_>, request: Request) -> Result<Route> {
             operation_id: _,
             text,
             to,
+            images,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            core.submit_addressed(&conversation, &text, to.as_deref())?
+            if let Some(to) = to.as_deref() {
+                require(
+                    images.is_empty(),
+                    "image attachments can only be sent to the orchestrator",
+                )?;
+                core.submit_addressed(&conversation, &text, Some(to))?
+            } else if !images.is_empty() {
+                let paths = images
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>();
+                json!(core.send_with_images(&conversation, &text, &paths)?.seq)
+            } else {
+                core.submit_addressed(&conversation, &text, None)?
+            }
         }),
         request => Route::Unmatched(request),
     })

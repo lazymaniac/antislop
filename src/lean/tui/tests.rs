@@ -50,6 +50,118 @@ fn without_color_keeps_dim_and_reversed_as_modifiers() {
 }
 
 #[test]
+fn image_file_drop_is_an_attachment_and_removal_preserves_the_text_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let directory = tempfile::tempdir().unwrap();
+    let image = directory.path().join("wireframe.png");
+    std::fs::write(&image, crate::lean::content::valid_png_fixture()).unwrap();
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("please inspect");
+    app.paste(&image.to_string_lossy());
+    assert_eq!(app.input.text, "please inspect");
+    assert_eq!(app.image_drafts[&app.conversation], vec![image.clone()]);
+    app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+    assert_eq!(app.input.text, "please inspect");
+    assert!(
+        app.image_drafts
+            .get(&app.conversation)
+            .is_none_or(Vec::is_empty)
+    );
+}
+
+#[test]
+fn pasted_prose_ending_in_an_image_filename_remains_chat_text() {
+    let mut app = test_app();
+    let pasted = "the mockup is in screenshot.png";
+
+    app.paste(pasted);
+
+    assert_eq!(app.input.text, pasted);
+    assert!(
+        app.image_drafts
+            .get(&app.conversation)
+            .is_none_or(Vec::is_empty)
+    );
+}
+
+#[test]
+fn multiline_prose_with_an_image_path_remains_chat_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let image = directory.path().join("wireframe.png");
+    std::fs::write(&image, crate::lean::content::valid_png_fixture()).unwrap();
+    let pasted = format!("Please review this draft:\n{}", image.display());
+    let mut app = test_app();
+
+    app.paste(&pasted);
+
+    assert_eq!(app.input.text, pasted);
+    assert!(
+        app.image_drafts
+            .get(&app.conversation)
+            .is_none_or(Vec::is_empty)
+    );
+}
+
+#[test]
+fn invalid_image_drop_reports_error_without_replacing_unsent_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let image = directory.path().join("broken.png");
+    std::fs::write(&image, b"plain text").unwrap();
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("keep this draft");
+    app.paste(&image.to_string_lossy());
+    assert_eq!(app.input.text, "keep this draft");
+    assert!(
+        app.image_drafts
+            .get(&app.conversation)
+            .is_none_or(Vec::is_empty)
+    );
+    assert!(
+        app.notice
+            .as_deref()
+            .unwrap()
+            .contains("unsupported or invalid image attachment")
+    );
+}
+
+#[test]
+fn missing_image_file_uri_reports_error_without_replacing_unsent_text() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("preserve this draft");
+
+    app.paste("file:///definitely/missing/attachment.png");
+
+    assert_eq!(app.input.text, "preserve this draft");
+    assert!(
+        app.image_drafts
+            .get(&app.conversation)
+            .is_none_or(Vec::is_empty)
+    );
+    assert!(
+        app.notice
+            .as_deref()
+            .unwrap()
+            .contains("Image attachment failed")
+    );
+}
+
+#[test]
+fn multiple_dropped_file_uris_attach_as_a_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first image.png");
+    let second = directory.path().join("second.png");
+    std::fs::write(&first, crate::lean::content::valid_png_fixture()).unwrap();
+    std::fs::write(&second, crate::lean::content::valid_png_fixture()).unwrap();
+    let first_uri = first.to_string_lossy().replace(' ', "%20");
+    let pasted = format!("file://{first_uri}\n{}", second.display());
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("keep my text");
+    app.paste(&pasted);
+    assert_eq!(app.input.text, "keep my text");
+    assert_eq!(app.image_drafts[&app.conversation], vec![first, second]);
+}
+
+#[test]
 fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     let mut app = test_app();
     app.focus = Focus::Graph;

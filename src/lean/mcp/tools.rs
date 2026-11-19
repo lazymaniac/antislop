@@ -15,14 +15,21 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     }
     match role {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
-        "planner" => vec![SUBMIT_PLAN, TOOL, "read_evidence", "current_turn"],
-        "auditor" => vec![
-            REVIEW,
-            "read_dependency_result",
+        "planner" => vec![
+            SUBMIT_PLAN,
+            TOOL,
+            "get_images",
             "read_evidence",
             "current_turn",
         ],
-        _ if plain_reviewer(role) => vec![REVIEW, "read_evidence", "current_turn"],
+        "auditor" => vec![
+            REVIEW,
+            "read_dependency_result",
+            "get_images",
+            "read_evidence",
+            "current_turn",
+        ],
+        _ if plain_reviewer(role) => vec![REVIEW, "get_images", "read_evidence", "current_turn"],
         _ => vec![TOOL],
     }
 }
@@ -85,6 +92,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
             ASK,
             WAIT,
             "read_dependency_result",
+            "get_images",
             "read_evidence",
             "current_turn",
         ]
@@ -96,6 +104,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
             ASK,
             WAIT,
             "read_dependency_result",
+            "get_images",
             "record_evidence",
             "read_evidence",
             "current_turn",
@@ -106,6 +115,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
 fn orchestrator_tools() -> Vec<&'static str> {
     vec![
         TOOL,
+        "get_images",
         "current_turn",
         ASK_USER,
         SUBMIT_REQUIREMENTS,
@@ -154,6 +164,7 @@ fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
 
 fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
+        "get_images" => ("Retrieve the next image attached to a user message in this conversation as an image block. Start at offset 0 and use the returned next offset until all images are inspected.".into(), json!({"offset":{"type":"integer","minimum":0,"default":0}}), vec!["turn"]),
         "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
         "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task"
         | "request_replan" => control_contract(name),

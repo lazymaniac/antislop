@@ -23,7 +23,10 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
         .unwrap_or_default();
     let outcome = dispatch(shared, params);
     match outcome {
-        Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
+        Ok(value) => match value.get("_mcp_content").and_then(Value::as_array) {
+            Some(content) => json!({"content":content}),
+            None => json!({"content":[{"type":"text","text":value.to_string()}]}),
+        },
         Err(error) => {
             let mut reason = error.to_string();
             if is_terminal(params["name"].as_str().unwrap_or_default())
