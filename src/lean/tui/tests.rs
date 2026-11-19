@@ -1845,8 +1845,6 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     assert!(text1.contains("newline in draft"));
     assert!(text1.contains("line in draft"));
     assert!(text1.contains("scroll conversation"));
-    assert!(text1.contains("line start / resume"));
-    assert!(text1.contains("delete to start / end of line"));
 
     // 2. Navigate/scroll help down and review modal isolation
     let bottom = app.help_max_scroll();
@@ -1885,6 +1883,10 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
         );
     }
 
+    assert!(text2.contains("line start / resume"));
+    assert!(text2.contains("delete to start / end of line"));
+    assert!(text2.contains("attach an image from the system clipboard"));
+    assert!(text2.contains("remove the latest pending image"));
     assert!(text2.contains("cancel running work"));
     assert!(text2.contains("pause new steps / continue"));
     assert!(text2.contains("always sent as chat"));

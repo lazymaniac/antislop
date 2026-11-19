@@ -282,7 +282,7 @@ fn worker_prompt_parts(
     )
 }
 
-fn has_options_prerequisite(task: &TaskContract) -> bool {
+pub(super) fn has_options_prerequisite(task: &TaskContract) -> bool {
     let base = format!("{}-options", task.id);
     let base = if base.len() > 240 {
         format!("task-{}", crate::hash(base.as_bytes()))

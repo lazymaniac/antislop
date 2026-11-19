@@ -177,13 +177,17 @@ fn describe_mail(payload: &Value) -> String {
 fn describe_task(payload: &Value) -> String {
     if payload["status"] == "approved" {
         let selection = &payload["feedback"]["selection"];
+        if let Some(summary) = selection["user_summary"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+        {
+            return format!("✓ {}: {}", value(payload, "title"), clean(summary));
+        }
         if let Some(approach) = selection["approach"].as_str() {
             return format!(
-                "✓ {}: selected {}\nWhy: {}\nTradeoffs: {}",
+                "✓ {}: selected {}",
                 value(payload, "title"),
-                clean(approach),
-                clean(selection["rationale"].as_str().unwrap_or_default()),
-                clean(selection["tradeoffs"].as_str().unwrap_or_default())
+                clean(approach)
             );
         }
         if let Some(message) = payload["feedback"]["integration"]["commit_message"].as_str() {

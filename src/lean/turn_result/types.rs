@@ -65,6 +65,9 @@ pub struct Selection {
     pub alternatives: Vec<Alternative>,
     pub selected: String,
     pub rationale: String,
+    /// Short decision for the user; older stored selections have none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

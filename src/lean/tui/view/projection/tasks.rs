@@ -71,12 +71,14 @@ fn report_task_selection(
         .unwrap_or(&progress.title);
     view.system_card(
         &format!("Selected approach: {target}"),
-        format!(
-            "Chosen: {}\nWhy: {}\nTradeoffs: {}",
-            field("approach"),
-            field("rationale"),
-            field("tradeoffs")
-        ),
+        if selection["user_summary"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
+            field("user_summary")
+        } else {
+            format!("Chosen: {}", field("approach"))
+        },
         crate::lean::tui::theme::Tone::Done,
     );
     true

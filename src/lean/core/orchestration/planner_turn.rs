@@ -211,6 +211,8 @@ fn planner_prompt(context: &PlannerTurnContext<'_>, first: bool) -> String {
         replaced: context.replaced.as_deref(),
         keepable: context.keepable.as_deref(),
         scope_context: context.scope_context.as_deref(),
+        required_gates: context.config.policy.required_gates,
+        local_options: context.config.policy.local_options,
     })
 }
 

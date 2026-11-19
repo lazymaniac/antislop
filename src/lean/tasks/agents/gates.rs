@@ -5,19 +5,24 @@ pub(super) struct GatePlan {
     deferred: bool,
     prior_gates: Vec<String>,
     refactoring: Option<String>,
-    ids: BTreeSet<String>,
 
-    ordered: Vec<&'static PredefinedAgent>,
+    ordered: Vec<(&'static PredefinedAgent, String)>,
 }
 
 impl GatePlan {
-    pub(super) fn new(tasks: &[TaskContract], mut ordered: Vec<&'static PredefinedAgent>) -> Self {
+    pub(super) fn new(
+        tasks: &mut [TaskContract],
+        mut ordered: Vec<&'static PredefinedAgent>,
+        team_gates: &[WorkKind],
+    ) -> Self {
         ordered.sort_by_key(|agent| GATE_KINDS.iter().position(|kind| *kind == agent.kind));
-        let referenced: BTreeSet<_> = ordered
-            .iter()
-            .filter(|agent| !tasks.iter().any(|task| task.id == agent.id))
-            .map(|agent| agent.id.to_owned())
+        let mut ids = tasks.iter().map(|task| task.id.clone()).collect();
+        let ordered: Vec<_> = ordered
+            .into_iter()
+            .map(|agent| (agent, reserve_task_id(agent.id, &mut ids)))
             .collect();
+        retarget_checkpoints(tasks, team_gates, &ordered);
+        let referenced: BTreeSet<_> = ordered.iter().map(|(_, id)| id.clone()).collect();
         let (placed, upstream) = upstream_tasks(tasks, referenced);
         Self {
             deferred: tasks
@@ -32,16 +37,16 @@ impl GatePlan {
             },
             prior_gates: Vec::new(),
             refactoring: None,
-            ids: tasks.iter().map(|task| task.id.clone()).collect(),
 
             ordered,
         }
     }
 
     pub(super) fn next(&mut self) -> Option<TaskContract> {
-        let agent = self.ordered.first().copied()?;
-        self.ordered.remove(0);
-        let id = reserve_task_id(agent.id, &mut self.ids);
+        if self.ordered.is_empty() {
+            return None;
+        }
+        let (agent, id) = self.ordered.remove(0);
         let dependencies = self.dependencies(agent.kind, &id);
         let description = gate_description(agent);
         let mut task = gate_task(agent, id, dependencies, description);
@@ -58,6 +63,46 @@ impl GatePlan {
         }
         self.prior_gates.push(id.to_owned());
         dependencies
+    }
+}
+
+/// Resolve an obsolete final integration checkpoint to the effective checks, using their actual
+/// reserved ids so authored name collisions cannot bypass a gate.
+fn retarget_checkpoints(
+    tasks: &mut [TaskContract],
+    team_gates: &[WorkKind],
+    generated: &[(&PredefinedAgent, String)],
+) {
+    let disabled: BTreeSet<_> = PREDEFINED_AGENT_POOL
+        .iter()
+        .filter(|agent| agent.kind == WorkKind::Integration && !team_gates.contains(&agent.kind))
+        .map(|agent| agent.id)
+        .collect();
+    let authored: BTreeSet<_> = tasks.iter().map(|task| task.id.clone()).collect();
+    let enabled: Vec<_> = tasks
+        .iter()
+        .filter(|task| team_gates.contains(&task.kind))
+        .map(|task| task.id.clone())
+        .chain(generated.iter().map(|(_, id)| id.clone()))
+        .collect();
+    if enabled.is_empty() || !tasks.iter().any(TaskContract::changes_code) {
+        return;
+    }
+    for task in tasks {
+        let mut dependencies = Vec::new();
+        for id in &task.depends_on {
+            let replacements = if disabled.contains(id.as_str()) && !authored.contains(id) {
+                enabled.as_slice()
+            } else {
+                std::slice::from_ref(id)
+            };
+            for dependency in replacements {
+                if !dependencies.contains(dependency) {
+                    dependencies.push(dependency.clone());
+                }
+            }
+        }
+        task.depends_on = dependencies;
     }
 }
 

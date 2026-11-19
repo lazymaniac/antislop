@@ -185,9 +185,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "record_evidence", "read_evidence", "current_turn"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "get_images", "record_evidence", "read_evidence", "current_turn"],
             ),
-            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "read_evidence", "current_turn"]),
+            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "get_images", "read_evidence", "current_turn"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -208,6 +208,7 @@ mod role_tests {
             allowed_tools("orchestrator"),
             vec![
                 "finish_turn",
+                "get_images",
                 "current_turn",
                 "ask_user",
                 "submit_requirements",
@@ -225,12 +226,12 @@ mod role_tests {
         );
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "finish_turn", "read_evidence", "current_turn"]
+            vec!["submit_plan", "finish_turn", "get_images", "read_evidence", "current_turn"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_dependency_result","read_evidence","current_turn"]} else {vec!["review", "read_evidence", "current_turn"]},
+                if reviewer=="auditor" {vec!["review","read_dependency_result","get_images","read_evidence","current_turn"]} else {vec!["review", "get_images", "read_evidence", "current_turn"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];

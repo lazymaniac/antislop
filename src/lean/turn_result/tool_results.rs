@@ -23,8 +23,8 @@ pub fn report_with_deliverables(report: &str, selection: Option<&Selection>) -> 
 impl Selection {
     pub fn validate(&self) -> Result<()> {
         require(
-            (2..=4).contains(&self.alternatives.len()),
-            "alternatives: compare 2–4 variants",
+            (1..=4).contains(&self.alternatives.len()),
+            "alternatives: compare 1–4 variants; justify a single feasible approach in rationale",
         )?;
         let mut ids = std::collections::BTreeSet::new();
         for alternative in &self.alternatives {

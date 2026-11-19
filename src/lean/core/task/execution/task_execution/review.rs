@@ -187,6 +187,7 @@ pub(super) fn save_verdict(mut input: VerdictSave<'_>) -> Result<()> {
         })?;
         input.task.feedback.as_mut().expect("round feedback")["selection"] = json!({
             "selected":tasks::bound(&selection.selected, tasks::DETAIL_LIMIT),
+            "user_summary":tasks::bound(&selection.user_summary, tasks::DETAIL_LIMIT),
             "approach":tasks::bound(&chosen.approach, tasks::DETAIL_LIMIT),
             "tradeoffs":tasks::bound(&chosen.tradeoffs, tasks::DETAIL_LIMIT),
             "rationale":tasks::bound(&selection.rationale, tasks::DETAIL_LIMIT)

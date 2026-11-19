@@ -42,8 +42,10 @@ fn reviewer_binding(task: &TaskContract) -> &'static str {
         CODE_REVIEW_REVIEW
     } else if task.changes_code() && task.quality_gate {
         GATE_REVIEW
-    } else if task.changes_code() {
+    } else if task.changes_code() && super::worker::has_options_prerequisite(task) {
         OPTIONS_REVIEW
+    } else if task.changes_code() {
+        "Independently verify the implementation against this task's goal and acceptance criteria, actual files and recorded checks. The writer chooses and justifies its approach; no options selection is required."
     } else if task.kind == crate::config::WorkKind::Options {
         SELECTION_REVIEW
     } else {
@@ -97,17 +99,7 @@ pub fn reviewer_turn_prompt(
     } else {
         reviewer_followup(task, report, changes)
     };
-    prompt + &earlier_findings(earlier) + &report_recheck(task, earlier) + upstream
-}
-
-/// Report tasks block a later round only on what that round changed.
-fn report_recheck(task: &TaskContract, earlier: &[Value]) -> String {
-    let report = reviewer_binding(task) == REPORT_REVIEW;
-    if report && earlier.iter().any(crate::lean::progress::blocks) {
-        format!("\n\n{REPORT_RECHECK}")
-    } else {
-        String::new()
-    }
+    prompt + &earlier_findings(earlier) + upstream
 }
 
 /// The blocking findings of the previous round, so the reviewer can name
@@ -155,7 +147,7 @@ pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str
     let code_review_rules = code_review_rules(task);
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {code_review_rules} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
+         the files. {READ_ONLY_REVIEW} {binding} {code_review_rules} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -177,11 +169,11 @@ pub fn code_review_prompt(
     format!(
         "You review a code change the user asked you to look at. The repository \
          is your current working directory: {dir}. Read the change with {range} \
-         and the surrounding files yourself; {PROJECT_RULES}\n\n\
-         Task: {}\nGoal: {}\nAlso check the risks of this kind of work:\n{}\n\n{comments}{}",
-        task.title,
-        task.goal,
-        obligations_text(&crate::lean::risks::for_kind(task.kind).collect::<Vec<_>>()),
+         and the surrounding files yourself. {READ_ONLY_REVIEW} {REVIEW_RULES} {PROJECT_RULES}\n\n\
+         {}\nAll task obligations, including its acceptance criteria:\n{}\n{}\n\n{comments}{}",
+        reviewer_task_context(task),
+        obligations_text(&obligations(task)),
+        risks_note(task),
         REVIEW_FORMAT
     )
 }

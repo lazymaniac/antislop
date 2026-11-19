@@ -99,6 +99,7 @@ def selection_args(selection):
         ],
         "selected": selection["selected"],
         "rationale": selection["rationale"],
+        "user_summary": selection.get("user_summary") or "Selected the approach that preserves the requested behavior with focused changes.",
     }
 
 
@@ -266,6 +267,7 @@ def task_result(text, prompt):
                 {"id": "B", "approach": "Broader restructuring", "tradeoffs": "More coordination"}],
             "selected": (re.findall(r"Selected:\s*([AB])", text) or ["A"])[-1],
             "rationale": "The focused approach satisfies this local contract",
+            "user_summary": "Selected focused changes to preserve the requested behavior with less coordination.",
         }
     return "complete", {"summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text,
                         "commit_message": COMMIT_MESSAGE}

@@ -207,6 +207,24 @@ fn validate_review(report: &str, verdict: &Verdict, spec: &TaskContract) -> Resu
     let obligations = crate::lean::tasks::obligations(spec);
     validate_coverage(verdict, &obligations)?;
     validate_findings(verdict, &obligations)?;
+    for (id, check) in &verdict.coverage {
+        if check["status"] == "issue" {
+            let related: Vec<_> = verdict
+                .findings
+                .iter()
+                .filter(|finding| finding["check"] == *id)
+                .collect();
+            require(
+                related.is_empty()
+                    || related
+                        .iter()
+                        .any(|finding| crate::lean::progress::blocks(finding)),
+                &format!(
+                    "checks.{id}: issue blocks acceptance, but its findings are all low. Leave a satisfied check ok for optional advice; if a real contract violation blocks acceptance, describe it with its actual severity."
+                ),
+            )?;
+        }
+    }
     validate_complete_coverage(verdict, &obligations)?;
     validate_verdict_consistency(verdict)
 }

@@ -33,9 +33,10 @@ pub(super) fn selection() -> Value {
         &["id", "approach", "tradeoffs"],
     );
     json!({
-        "alternatives":{"type":"array","minItems":2,"maxItems":4,"items":alternative},
+        "alternatives":{"type":"array","minItems":1,"maxItems":4,"items":alternative},
         "selected":{"type":"string","description":"The id of the chosen alternative"},
-        "rationale":{"type":"string","description":"Why it fits this task better than the others"}
+        "rationale":{"type":"string","description":"Technical reasoning and evidence; for one feasible alternative explain why the constraints exclude others"},
+        "user_summary":{"type":"string","description":"Up to three short sentences in the user conversation language: chosen approach, user-visible benefit, and meaningful tradeoff. No internal task/check ids, review history or instructions to agents. Full technical detail stays in rationale and alternatives."}
     })
 }
 
@@ -43,11 +44,11 @@ pub(super) fn selection() -> Value {
 /// derives the verdict.
 pub(super) fn review() -> Value {
     let check = object(
-        json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":"What you inspected and found"}}),
+        json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":"What you inspected and found. issue is a blocking contract failure; optional low findings leave a satisfied check ok. blocked means required evidence cannot be obtained; n/a needs a scope reason."}}),
         &["status", "note"],
     );
     let finding = object(
-        json!({"check":{"type":"string","description":"The listed check id the problem breaks"},"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium send the task back"},"issue":{"type":"string"},"where":{"type":"string","description":"File and line, or the part of the report"}}),
+        json!({"check":{"type":"string","description":"The listed check id the problem breaks"},"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium send the task back; low is non-blocking and must not alone mark a satisfied check issue"},"issue":{"type":"string"},"where":{"type":"string","description":"File and line, or the part of the report"}}),
         &["check", "severity", "issue", "where"],
     );
     json!({

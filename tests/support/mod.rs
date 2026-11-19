@@ -75,15 +75,28 @@ pub fn session_worktree(
     project: &std::path::Path,
     conversation: &str,
 ) -> std::path::PathBuf {
-    let branch = core
-        .store
+    let branch = session_branch(core, conversation);
+    session_worktree_if_present(project, &branch)
+        .unwrap_or_else(|| panic!("no linked worktree for session branch {branch}"))
+}
+
+#[allow(dead_code)]
+pub fn session_branch(core: &antislop::lean::Core, conversation: &str) -> String {
+    core.store
         .events_since(conversation, 0, 100_000)
         .unwrap()
         .into_iter()
         .rev()
         .find(|event| event.kind == "session_started")
         .and_then(|event| event.payload["branch"].as_str().map(str::to_owned))
-        .expect("session_started event includes the session branch");
+        .expect("session_started event includes the session branch")
+}
+
+#[allow(dead_code)]
+pub fn session_worktree_if_present(
+    project: &std::path::Path,
+    branch: &str,
+) -> Option<std::path::PathBuf> {
     let output = std::process::Command::new("git")
         .args([
             "-C",
@@ -100,10 +113,10 @@ pub fn session_worktree(
         if let Some(value) = line.strip_prefix("worktree ") {
             path = Some(std::path::PathBuf::from(value));
         } else if line == format!("branch refs/heads/{branch}") {
-            return path.expect("worktree record has a path");
+            return Some(path.expect("worktree record has a path"));
         }
     }
-    panic!("no linked worktree for session branch {branch}");
+    None
 }
 
 /// Confirm the current requirements summary through the same structured

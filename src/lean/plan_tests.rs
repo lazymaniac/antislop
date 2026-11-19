@@ -637,6 +637,52 @@ fn small_change_revision_rebuilds_feature_gates_from_the_selected_team() {
 }
 
 #[test]
+fn small_change_report_checkpoint_preserves_producer_and_check_order() {
+    let authored: Vec<TaskContract> = serde_json::from_value(json!([
+        {"id":"writer","title":"Fix","goal":"Preserve drafts","kind":"implementation","change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Failed sends preserve drafts"}]},
+        {"id":"report","title":"Report","goal":"Report delivered changes and validation","kind":"analysis","change_kind":"none","depends_on":["integration-gate"],"acceptance_criteria":[{"id":"C1","text":"Report the combined result"}]}
+    ])).unwrap();
+    for initial_team in [tasks::Team::Feature, tasks::Team::SmallChange] {
+        let baseline = finalize_team_plan(authored.clone(), true, false, initial_team);
+        let plan = finalize_team_plan(baseline, true, false, tasks::Team::SmallChange);
+        tasks::validate(&plan).unwrap();
+        let report = plan.iter().find(|task| task.id == "report").unwrap();
+        assert_eq!(report.depends_on, ["static-analyzer", "review-testing"]);
+        for dependency in &report.depends_on {
+            let gate = plan.iter().find(|task| task.id == *dependency).unwrap();
+            assert!(gate.depends_on.contains(&"writer".to_owned()));
+        }
+        assert_eq!(
+            finalize_team_plan(plan.clone(), true, false, tasks::Team::SmallChange),
+            plan
+        );
+    }
+}
+
+#[test]
+fn a_retargeted_checkpoint_uses_reserved_gate_ids_before_a_code_consumer() {
+    let authored: Vec<TaskContract> = serde_json::from_value(json!([
+        {"id":"static-analyzer","title":"Context","goal":"Inspect inputs","kind":"context","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Relevant context is reported"}]},
+        {"id":"review-testing","title":"Context","goal":"Inspect outputs","kind":"context","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Relevant context is reported"}]},
+        {"id":"writer","title":"Producer","goal":"Implement storage","kind":"implementation","change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Storage behavior is delivered"}]},
+        {"id":"consumer","title":"Consumer","goal":"Use validated storage","kind":"implementation","change_kind":"code","depends_on":["integration-gate"],"acceptance_criteria":[{"id":"C1","text":"Use the checked storage interface"}]}
+    ])).unwrap();
+    let plan = finalize_team_plan(authored, true, false, tasks::Team::SmallChange);
+    tasks::validate(&plan).unwrap();
+    let consumer = plan.iter().find(|task| task.id == "consumer").unwrap();
+    assert_eq!(
+        consumer.depends_on,
+        ["static-analyzer-2", "review-testing-2"]
+    );
+    for id in &consumer.depends_on {
+        let gate = plan.iter().find(|task| task.id == *id).unwrap();
+        assert!(gate.quality_gate);
+        assert!(gate.depends_on.contains(&"writer".to_owned()));
+        assert!(!gate.depends_on.contains(&"consumer".to_owned()));
+    }
+}
+
+#[test]
 fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     let submitted = json!([
         {"id":"t11", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},

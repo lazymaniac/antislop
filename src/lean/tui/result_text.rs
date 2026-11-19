@@ -169,6 +169,7 @@ mod tests {
     fn history_chunks_preserve_unicode_and_decode_split_selection_markers() {
         use unicode_segmentation::UnicodeSegmentation;
         let selection = Selection {
+            user_summary: String::new(),
             selected: "A".into(),
             rationale: "Why A".into(),
             alternatives: vec![crate::lean::turn_result::Alternative {

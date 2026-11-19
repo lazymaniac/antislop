@@ -14,6 +14,7 @@ mod tests {
     #[test]
     fn a_reviewer_is_shown_the_recorded_selection() {
         let selection = Selection {
+            user_summary: String::new(),
             alternatives: vec![],
             selected: "A".into(),
             rationale: "cheapest".into(),
@@ -90,7 +91,7 @@ mod tests {
 
     #[test]
     fn a_selection_names_one_of_its_distinct_alternatives() {
-        let args = json!({"selected": "A", "rationale": "Preserves contracts", "alternatives": [
+        let args = json!({"selected": "A", "rationale": "Preserves contracts", "user_summary": "Reuse preserves behavior with less flexibility", "alternatives": [
             {"id": "A", "approach": "Reuse", "tradeoffs": "Less flexibility"},
             {"id": "B", "approach": "Replace", "tradeoffs": "Changes contracts"}]});
         let TurnResult::Completed {
@@ -99,7 +100,7 @@ mod tests {
         else {
             panic!("a selection completes the task");
         };
-        assert_eq!(summary, "Selected A: Reuse");
+        assert_eq!(summary, "Reuse preserves behavior with less flexibility");
         assert!(selection.is_some());
         let mut unknown = args.clone();
         unknown["selected"] = json!("C");
@@ -109,6 +110,8 @@ mod tests {
         assert!(task_tool_result("select", &duplicate).is_err());
         let mut single = args;
         single["alternatives"].as_array_mut().unwrap().pop();
+        assert!(task_tool_result("select", &single).is_ok());
+        single["alternatives"] = json!([]);
         assert!(task_tool_result("select", &single).is_err());
     }
 
@@ -116,7 +119,9 @@ mod tests {
     fn selection_rejects_unknown_fields_at_each_level() {
         let current = json!({"alternatives":[{"id":"A","approach":"a","tradeoffs":"t"}],
             "selected":"A","rationale":"r"});
-        assert!(serde_json::from_value::<Selection>(current.clone()).is_ok());
+        let legacy = serde_json::from_value::<Selection>(current.clone()).unwrap();
+        assert!(legacy.user_summary.is_empty(), "stored legacy selections remain readable");
+        assert!(task_tool_result("select", &current).unwrap_err().to_string().contains("user_summary"));
         let mut outer = current.clone();
         outer["criteria"] = json!(["c"]);
         assert!(serde_json::from_value::<Selection>(outer).is_err());
@@ -166,6 +171,27 @@ mod tests {
             panic!("a review");
         };
         assert!(!verdict.approved, "an unsettled check does not approve");
+    }
+
+    #[test]
+    fn optional_options_advice_cannot_accidentally_create_a_blocking_check() {
+        let mut spec = task();
+        spec.kind = crate::config::WorkKind::Options;
+        spec.change_kind = crate::lean::tasks::ChangeKind::None;
+        let checks: serde_json::Map<String, serde_json::Value> = crate::lean::tasks::obligations(&spec)
+            .into_iter().map(|(id, _)| (id, json!({"status":"ok","note":"Selection satisfies this obligation"}))).collect();
+        let mut args = json!({"report":"Chosen approach is feasible; a regression test can confirm its premise.","checks":checks,"findings":[{"check":"goal","severity":"low","issue":"Optional test recommendation","where":"rationale"}]});
+        let accepted = task_tool_result("review", &args).unwrap();
+        accepted.validate_task(&spec, true).unwrap();
+        assert!(matches!(accepted, TurnResult::Review { verdict, .. } if verdict.approved));
+        args["checks"]["goal"]["status"] = json!("issue");
+        let ambiguous = task_tool_result("review", &args).unwrap();
+        assert!(ambiguous.validate_task(&spec, true).unwrap_err().to_string().contains("all low"));
+        args["findings"][0]["severity"] = json!("high");
+        args["findings"][0]["issue"] = json!("The selected option cannot preserve drafts");
+        let failure = task_tool_result("review", &args).unwrap();
+        failure.validate_task(&spec, true).unwrap();
+        assert!(matches!(failure, TurnResult::Review { verdict, .. } if !verdict.approved));
     }
 
     #[test]

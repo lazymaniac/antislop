@@ -280,6 +280,20 @@ fn code_review_workers_and_reviewers_are_read_only_and_validate_findings_indepen
 }
 
 #[test]
+fn on_demand_review_keeps_task_local_criteria_and_preserves_the_reviewed_source() {
+    let task: TaskContract = serde_json::from_value(json!({
+        "id":"send", "title":"Send", "goal":"Reject incompatible images", "kind":"implementation", "change_kind":"code",
+        "acceptance_criteria":[{"id":"C4","text":"After a provider error the draft text and usable attachments remain recoverable"}]
+    })).unwrap();
+    let prompt = code_review_prompt("/p", &task, "base", Some("result"), &[]);
+    assert!(prompt.contains(
+        "C4: After a provider error the draft text and usable attachments remain recoverable"
+    ));
+    assert!(prompt.contains(READ_ONLY_REVIEW));
+    assert!(prompt.contains("when success is acknowledged"));
+}
+
+#[test]
 fn code_review_final_audit_has_valid_empty_and_finding_report_requirements() {
     let prompt = final_scope_audit_prompt("/p", "Review src/lib.rs", "No findings were proposed.");
     for required in [
@@ -298,7 +312,7 @@ fn code_review_final_audit_has_valid_empty_and_finding_report_requirements() {
 }
 
 #[test]
-fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
+fn a_report_reviewer_checks_semantic_scope_and_disclosed_in_scope_gaps() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "audit", "title": "Audit", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "performance",
         "reviewer": {"summary": "f"}}))
@@ -313,7 +327,7 @@ fn a_report_reviewer_names_every_concrete_gap_at_once_and_accepts_stated_residua
 }
 
 #[test]
-fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
+fn a_later_report_round_preserves_the_severity_of_new_in_scope_defects() {
     let audit: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "audit", "title": "Audit", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "change_kind": "none", "kind": "security",
         "reviewer": {"summary": "f"}}))
@@ -322,12 +336,21 @@ fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
         [serde_json::json!({"id": "f1", "check": "R1", "severity": "medium", "issue": "x"})];
     for fresh in [true, false] {
         let first = reviewer_turn_prompt("/p", &audit, "report", None, fresh, "", &[]);
-        assert!(!first.contains(REPORT_RECHECK), "{first}");
+        assert!(
+            first.contains("New in-scope defects keep their actual severity"),
+            "{first}"
+        );
         let later = reviewer_turn_prompt("/p", &audit, "report", None, fresh, "", &earlier);
-        assert!(later.contains(REPORT_RECHECK), "{later}");
+        assert!(
+            later.contains("New in-scope defects keep their actual severity"),
+            "{later}"
+        );
     }
     let mut writer = audit.clone();
     writer.change_kind = crate::lean::tasks::ChangeKind::Code;
     let prompt = reviewer_turn_prompt("/p", &writer, "report", None, false, "", &earlier);
-    assert!(!prompt.contains(REPORT_RECHECK), "{prompt}");
+    assert!(
+        prompt.contains("New in-scope defects keep their actual severity"),
+        "{prompt}"
+    );
 }

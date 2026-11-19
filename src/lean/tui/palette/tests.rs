@@ -364,8 +364,6 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     assert!(rendered.contains("newline in draft"));
     assert!(rendered.contains("line in draft"));
     assert!(rendered.contains("scroll conversation"));
-    assert!(rendered.contains("line start / resume"));
-    assert!(rendered.contains("delete to start / end"));
 
     // Review every scroll position so new help entries cannot make an
     // earlier shortcut disappear from the coverage of the final page.
@@ -384,6 +382,10 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
         );
     }
 
+    assert!(rendered2.contains("line start / resume"));
+    assert!(rendered2.contains("delete to start / end"));
+    assert!(rendered2.contains("attach an image from the system clipboard"));
+    assert!(rendered2.contains("remove the latest pending image"));
     assert!(rendered2.contains("cancel running work"));
     assert!(rendered2.contains("pause new steps / continue"));
     assert!(rendered2.contains("always sent as chat"));

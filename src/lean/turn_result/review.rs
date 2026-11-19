@@ -57,11 +57,11 @@ fn selection_tool(args: &serde_json::Value) -> Result<TurnResult> {
             .map_err(|error| crate::Error::Invalid(format!("alternatives: {error}")))?,
         selected: optional_text(args, "selected"),
         rationale: optional_text(args, "rationale"),
+        user_summary: super::tool_results::required_text(args, "user_summary")?,
     };
     selection.validate()?;
-    let chosen = selection.chosen().map_or("", |item| item.approach.as_str());
     Ok(TurnResult::Completed {
-        summary: format!("Selected {}: {chosen}", selection.selected),
+        summary: selection.user_summary.clone(),
         report: selection.rationale.clone(),
         commit_message: String::new(),
         selection: Some(selection),

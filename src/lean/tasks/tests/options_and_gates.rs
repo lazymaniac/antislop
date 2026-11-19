@@ -29,7 +29,7 @@ fn options_inherit_writer_context_and_precede_it() {
     assert_eq!(options.depends_on, writer.depends_on);
     assert_eq!(options.acceptance_criteria, writer.acceptance_criteria);
     assert_eq!(full[2].depends_on, ["context", "writer-options"]);
-    assert!(options.goal.contains("2–4"));
+    assert!(options.goal.contains("If only one is feasible"));
     assert!(options.goal.contains("End with select"));
     assert!(options.goal.contains("Do not implement"));
 }
@@ -196,6 +196,13 @@ fn a_code_worker_is_told_to_implement_a_selection_only_when_options_exist() {
     let prompt = worker_prompt("project", &without[0]);
     assert!(!prompt.contains("selected_approach"), "{prompt}");
     assert!(!prompt.contains("Never silently switch variants"));
+    for prompt in [
+        reviewer_prompt("project", &without[0], "report", None),
+        reviewer_followup(&without[0], "report", None),
+    ] {
+        assert!(!prompt.contains("selected_approach"), "{prompt}");
+        assert!(prompt.contains("writer chooses and justifies"), "{prompt}");
+    }
     let with = with_options(vec![writer]);
     assert!(worker_prompt("project", &with[1]).contains("selected_approach"));
 }

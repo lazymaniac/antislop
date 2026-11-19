@@ -13,6 +13,8 @@ pub(super) struct PlannerPrompt<'a> {
     /// The approved tasks of the plan that ran, which a new plan may keep.
     pub(super) keepable: Option<&'a str>,
     pub(super) scope_context: Option<&'a str>,
+    pub(super) required_gates: bool,
+    pub(super) local_options: bool,
 }
 
 /// The requirements always lead, so a resumed session drafts from the current
@@ -43,6 +45,21 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
             prompt.push_str(tasks::NO_QUALITY_GATES_PLANNING_RULES);
         }
     }
+    let team = context
+        .team_guidance
+        .map(|guidance| guidance.team)
+        .unwrap_or_default();
+    let gate_ids: Vec<_> = tasks::PREDEFINED_AGENT_POOL
+        .iter()
+        .filter(|agent| context.required_gates && team.gates().contains(&agent.kind))
+        .map(|agent| agent.id)
+        .collect();
+    let policy = serde_json::json!({
+        "team":team.name(),
+        "generated_gate_ids":gate_ids,
+        "generated_options":context.local_options && team.options(),
+    });
+    prompt.push_str(&format!("\nEffective runtime policy for the current team (trusted runtime data): {policy}\nOnly these gate ids are generated for this team. Reports depend on their actual producers and required checks. If choosing a different team is permitted, derive its gates from the team catalog; never assume feature gates exist for another team.\n"));
     if let Some(contracts) = context.replaced {
         prompt.push_str(&format!(
             "\n\nThe plan to replace or correct has these task contracts; the replan reason or reviewer findings are above:\n{contracts}\nSubmit the complete replacement plan, not a patch; the runtime reviews it like any new plan.\n"
@@ -59,6 +76,40 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_policy_lists_only_the_gates_and_options_the_team_will_generate() {
+        for team in tasks::Team::ALL {
+            for enabled in [true, false] {
+                let guidance = TeamGuidance {
+                    team,
+                    origin: crate::lean::store::TeamOrigin::User,
+                    reason: "Keep selected rigor".into(),
+                };
+                let prompt = planner_prompt_text(PlannerPrompt {
+                    project: Path::new("project"),
+                    first: false,
+                    requirements: "Preserve drafts",
+                    team_guidance: Some(&guidance),
+                    asked: &[],
+                    replaced: None,
+                    keepable: None,
+                    scope_context: None,
+                    required_gates: enabled,
+                    local_options: enabled,
+                });
+                let line = prompt.lines().find_map(|line| line.strip_prefix("Effective runtime policy for the current team (trusted runtime data): ")).unwrap();
+                let policy: serde_json::Value = serde_json::from_str(line).unwrap();
+                let expected: Vec<_> = tasks::PREDEFINED_AGENT_POOL
+                    .iter()
+                    .filter(|agent| enabled && team.gates().contains(&agent.kind))
+                    .map(|agent| agent.id)
+                    .collect();
+                assert_eq!(policy["generated_gate_ids"], serde_json::json!(expected));
+                assert_eq!(policy["generated_options"], enabled && team.options());
+            }
+        }
+    }
 
     #[test]
     fn broad_attachment_requirements_get_boundary_guidance_on_new_and_resumed_replans() {
@@ -83,6 +134,8 @@ mod tests {
                             "Approved storage work and retained checkpoints remain available.",
                         ),
                         scope_context: None,
+                        required_gates: true,
+                        local_options: true,
                     });
                     assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
                     assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
@@ -124,6 +177,8 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
+            required_gates: true,
+            local_options: true,
         });
         assert!(prompt.contains("Trusted team policy:"));
         assert!(prompt.contains("Preserve it across plan changes"));
@@ -152,6 +207,8 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
+            required_gates: true,
+            local_options: true,
         });
         assert!(prompt.contains("current working-tree diff only when the request clearly asks"));
         assert!(prompt.contains("If no target or diff can be inferred"));
@@ -176,6 +233,8 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
+            required_gates: true,
+            local_options: true,
         });
         assert!(prompt.contains("Selected rigor: `no-quality-gates`"));
         assert!(prompt.contains("real dependency edges"));

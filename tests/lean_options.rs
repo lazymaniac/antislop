@@ -258,15 +258,37 @@ fn run_scenario_with_team(
         idle();
     }
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
-    let integration_worktree = support::session_worktree(&core, &project, &conversation.id);
+    let branch = support::session_branch(&core, &conversation.id);
+    let integration_worktree = support::session_worktree_if_present(&project, &branch);
+
     for task in tasks.iter().filter(|task| {
         authored_ids.contains(task.spec["id"].as_str().unwrap_or_default())
             && task.spec["change_kind"]
                 .as_str()
                 .is_some_and(|kind| kind != "none")
     }) {
-        let file =
-            integration_worktree.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
+        let relative = format!("result-{}.txt", task.spec["id"].as_str().unwrap());
+        let file = integration_worktree
+            .as_ref()
+            .map(|path| path.join(&relative));
+        let delivered = match file.as_ref().map(std::fs::read_to_string).transpose() {
+            Ok(Some(text)) => Some(text),
+            Ok(None) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("could not inspect integrated {relative}: {error}"),
+        }
+        .or_else(|| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&project)
+                .args(["show", &format!("{branch}:{relative}")])
+                .output()
+                .unwrap();
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8(output.stdout).unwrap())
+        });
         if task.status == "approved" {
             let expected = if implementation == "selected" {
                 "A"
@@ -274,16 +296,16 @@ fn run_scenario_with_team(
                 implementation
             };
             assert_eq!(
-                std::fs::read_to_string(&file).unwrap_or_else(|error| {
+                delivered.unwrap_or_else(|| {
                     panic!(
-                        "missing integrated authored output {} for {task:?}: {error}",
-                        file.display()
+                        "missing integrated authored output {} for {task:?}",
+                        relative
                     )
                 }),
                 expected
             );
         } else {
-            assert!(!file.exists(), "rejected implementation must not land");
+            assert!(delivered.is_none(), "rejected implementation must not land");
         }
     }
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl"))
@@ -379,8 +401,8 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
                 view.apply(&json!({"seq":2,"kind":"task","payload":events[done]}));
                 assert!(view.cards.iter().any(|card| matches!(card,
                     antislop::lean::tui::TranscriptCard::System { title,text,.. }
-                    if title.starts_with("Selected approach:") && text.contains(choice["approach"].as_str().unwrap())
-                        && text.contains("The focused approach satisfies this local contract"))));
+                    if title.starts_with("Selected approach:") && text == choice["user_summary"].as_str().unwrap()
+                        && !text.contains("The focused approach satisfies this local contract"))));
                 let start = events
                     .iter()
                     .position(|event| {
@@ -424,7 +446,7 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             .as_str()
             .unwrap();
         for text in [
-            "2–4",
+            "If only one is feasible",
             "Exclude variants violating requirements",
             "End with select",
         ] {
