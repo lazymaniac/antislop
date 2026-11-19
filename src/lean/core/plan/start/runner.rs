@@ -482,7 +482,7 @@ mod send_deletion_tests {
         let worker = core.clone();
         let id = conversation.clone();
         let sender = std::thread::spawn(move || {
-            crate::lean::record_message_and_wake(&worker, &id, "saved before Git", || {
+            crate::lean::record_message_and_wake(&worker, &id, "saved before Git", &[], || {
                 started_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(())

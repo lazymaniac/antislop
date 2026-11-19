@@ -54,6 +54,7 @@ impl App {
                         operation_id: Some(crate::id()),
                         text,
                         to: None,
+                        images: vec![],
                     },
                 ))
                 .map(|_| ())

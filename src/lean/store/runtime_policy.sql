@@ -97,3 +97,7 @@ CREATE TABLE IF NOT EXISTS runtime_validation_processes(
  operation TEXT NOT NULL REFERENCES runtime_activations(id) ON DELETE CASCADE,
  phase TEXT NOT NULL, pid INTEGER NOT NULL, started_ms INTEGER NOT NULL, executable TEXT NOT NULL,
  PRIMARY KEY(operation,phase));
+CREATE TABLE IF NOT EXISTS message_images(
+  message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+  image_id TEXT NOT NULL, mime_type TEXT NOT NULL, bytes INTEGER NOT NULL,
+  name TEXT NOT NULL, PRIMARY KEY(message_seq,image_id));

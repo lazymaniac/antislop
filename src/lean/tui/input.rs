@@ -137,8 +137,11 @@ impl App {
 
     pub(super) fn chat_key(&mut self, key: event::KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let super_key = key.modifiers.contains(KeyModifiers::SUPER);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            KeyCode::Char('v') if control || super_key => self.paste_clipboard_image(),
+            KeyCode::Backspace if alt => self.remove_last_image_attachment(),
             KeyCode::Esc => self.chat_escape(),
             KeyCode::Char('a') if control => self.input.move_home(),
             KeyCode::Char('r') if control => self.chat_history_or_resume(),
@@ -163,6 +166,39 @@ impl App {
             _ => self.input.edit_key(key),
         }
         true
+    }
+
+    fn remove_last_image_attachment(&mut self) {
+        if let Some(images) = self.image_drafts.get_mut(&self.conversation)
+            && let Some(path) = images.pop()
+        {
+            self.notice = Some(format!(
+                "Removed image {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
+    }
+
+    fn paste_clipboard_image(&mut self) {
+        match super::clipboard::read_image() {
+            Ok(bytes) => {
+                let directory = self.client.state_dir().join("clipboard-images");
+                let result = (|| -> crate::Result<std::path::PathBuf> {
+                    crate::lean::daemon::private_directory(&directory)?;
+                    let path = directory.join(format!("{}.png", crate::id()));
+                    std::fs::write(&path, bytes)?;
+                    Ok(path)
+                })();
+                match result {
+                    Ok(path) => self.add_image_attachment(path),
+                    Err(error) => {
+                        self.notice =
+                            Some(format!("Clipboard image could not be retained: {error}"))
+                    }
+                }
+            }
+            Err(error) => self.notice = Some(error),
+        }
     }
 
     fn chat_escape(&mut self) {

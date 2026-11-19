@@ -78,6 +78,7 @@ fn send_message(client: &Client, conversation: &str, message: &str) -> Result<()
             operation_id: Some(crate::id()),
             text: message.to_owned(),
             to: None,
+            images: vec![],
         },
     ))?;
     Ok(())
@@ -197,6 +198,7 @@ fn send_request(conversation: &str, text: &str) -> Request {
         operation_id: Some(crate::id()),
         text: text.to_owned(),
         to: None,
+        images: vec![],
     })
 }
 

@@ -153,6 +153,8 @@ pub(crate) enum WireRequest {
         text: String,
         #[serde(default)]
         to: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     Reject {
         conversation: String,

@@ -9,6 +9,10 @@ const BASE_TABLE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS conversations(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
                author TEXT NOT NULL, text TEXT NOT NULL, created_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS message_images(
+               message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+               image_id TEXT NOT NULL, mime_type TEXT NOT NULL, bytes INTEGER NOT NULL,
+               name TEXT NOT NULL, PRIMARY KEY(message_seq,image_id));
              CREATE TABLE IF NOT EXISTS turns(
                id TEXT PRIMARY KEY,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),

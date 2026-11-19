@@ -16,11 +16,13 @@ fn encode_send(request: Request) -> std::result::Result<WireRequest, Box<Request
             operation_id,
             text,
             to,
+            images,
         }) => Ok(WireRequest::Send {
             conversation,
             operation_id,
             text,
             to,
+            images,
         }),
         other => Err(Box::new(other)),
     }

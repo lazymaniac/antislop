@@ -16,12 +16,14 @@ fn decode_send(wire: WireRequest) -> std::result::Result<Request, Box<WireReques
             operation_id,
             text,
             to,
+            images,
         } => Ok(Request::Conversation(
             crate::lean::daemon::ConversationRequest::Send {
                 conversation,
                 operation_id,
                 text,
                 to,
+                images,
             },
         )),
         other => Err(Box::new(other)),

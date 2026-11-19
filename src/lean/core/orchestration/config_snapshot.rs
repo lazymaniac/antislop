@@ -20,7 +20,30 @@ impl Core {
 
     /// Records the message at once; the orchestrator answers in the background.
     pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
-        crate::lean::record_message_and_wake(self, conversation, text, || {
+        crate::lean::record_message_and_wake(self, conversation, text, &[], || {
+            let project = PathBuf::from(self.store.conversation(conversation)?.project);
+            if git::is_repository(&project) {
+                self.create_session_branch(conversation, &project)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub(in crate::lean) fn send_with_images(
+        self: &Arc<Self>,
+        conversation: &str,
+        text: &str,
+        images: &[PathBuf],
+    ) -> Result<Message> {
+        let message = if images.is_empty() {
+            text.to_owned()
+        } else {
+            format!(
+                "{text}\n\n[{} image attachment(s) are available through get_images.]",
+                images.len()
+            )
+        };
+        crate::lean::record_message_and_wake(self, conversation, &message, images, || {
             let project = PathBuf::from(self.store.conversation(conversation)?.project);
             if git::is_repository(&project) {
                 self.create_session_branch(conversation, &project)?;

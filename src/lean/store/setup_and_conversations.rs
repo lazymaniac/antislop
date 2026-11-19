@@ -3,6 +3,7 @@ use super::*;
 #[path = "setup_and_conversations/schema.rs"]
 mod schema;
 use schema::{initialize_base_tables, initialize_plan_tables};
+use std::path::PathBuf;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -335,6 +336,84 @@ impl Store {
     pub fn add_message(&self, conversation: &str, author: &str, text: &str) -> Result<Message> {
         let _content_write = self.content_write.lock().expect("content write mutex");
         self.add_message_with_content_lock(conversation, author, text)
+    }
+
+    pub(in crate::lean) fn add_message_with_images(
+        &self,
+        conversation: &str,
+        author: &str,
+        text: &str,
+        paths: &[PathBuf],
+    ) -> Result<Message> {
+        let _content_write = self.content_write.lock().expect("content write mutex");
+        let mut images = Vec::with_capacity(paths.len());
+        for path in paths {
+            let metadata = std::fs::metadata(path).map_err(|error| {
+                crate::Error::Invalid(format!("cannot read image {}: {error}", path.display()))
+            })?;
+            crate::require(
+                metadata.is_file(),
+                &format!("image attachment is not a regular file: {}", path.display()),
+            )?;
+            crate::require(
+                metadata.len() <= crate::lean::content::MAX_IMAGE_BYTES as u64,
+                "image attachment exceeds the 20 MiB limit",
+            )?;
+            let bytes = std::fs::read(path).map_err(|error| {
+                crate::Error::Invalid(format!("cannot read image {}: {error}", path.display()))
+            })?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("image");
+            images.push(self.content.store_image(name, &bytes)?);
+        }
+        let stored_text = self.content.encode(text)?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let seq = insert_message(&tx, conversation, author, &stored_text)?;
+        for image in images {
+            tx.execute("INSERT INTO message_images(message_seq,image_id,mime_type,bytes,name) VALUES(?1,?2,?3,?4,?5)",
+                params![seq as i64, image.id, image.mime_type, image.bytes as i64, image.name])?;
+        }
+        maybe_restart_workflow(&tx, conversation, author, text)?;
+        if author == "user" {
+            super::Store::record_scope_confirmation_answer(&tx, conversation, text, seq)?;
+        }
+        tx.commit()?;
+        Ok(Message {
+            seq,
+            author: author.into(),
+            text: text.into(),
+        })
+    }
+
+    pub(in crate::lean) fn linked_images(
+        &self,
+        conversation: &str,
+    ) -> Result<Vec<(u64, crate::lean::content::ImageReference)>> {
+        let db = self.db();
+        let mut statement = db.prepare("SELECT message_seq,image_id,mime_type,bytes,name FROM message_images JOIN messages ON messages.seq=message_images.message_seq WHERE messages.conversation_id=?1 ORDER BY message_seq,image_id")?;
+        let rows = statement.query_map([conversation], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u64,
+                crate::lean::content::ImageReference {
+                    id: row.get(1)?,
+                    mime_type: row.get(2)?,
+                    bytes: row.get::<_, i64>(3)? as u64,
+                    name: row.get(4)?,
+                },
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(crate::Error::from)
+    }
+
+    pub(in crate::lean) fn read_image(
+        &self,
+        reference: &crate::lean::content::ImageReference,
+    ) -> Result<Vec<u8>> {
+        self.content.read_image(reference)
     }
 
     pub(super) fn add_message_with_content_lock(

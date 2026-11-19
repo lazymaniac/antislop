@@ -187,8 +187,26 @@ impl App {
         };
         paint_input_background(frame, input, fill, accent, focused, theme);
         if input.height > 0 && input.width >= 28 {
+            let attachments = self
+                .image_drafts
+                .get(&self.conversation)
+                .map(|images| {
+                    images
+                        .iter()
+                        .filter_map(|path| {
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
             let hint = truncate(
-                &format!("· {} (Ctrl+M) · / commands ", self.view.rigor_label()),
+                &if attachments.is_empty() {
+                    format!("· {} (Ctrl+M) · / commands ", self.view.rigor_label())
+                } else {
+                    format!("· 📎 {attachments} · Alt+Backspace removes last ")
+                },
                 usize::from(input.width.saturating_sub(11)),
             );
             frame

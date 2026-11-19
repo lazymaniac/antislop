@@ -197,6 +197,7 @@ fn record_message_and_wake(
     core: &Arc<Core>,
     conversation: &str,
     text: &str,
+    images: &[PathBuf],
     before_wake: impl FnOnce() -> Result<()>,
 ) -> Result<Message> {
     // Reserve the conversation against deletion and runtime handoff while Git
@@ -210,7 +211,12 @@ fn record_message_and_wake(
             .expect("session lifecycle mutex");
         core.require_accepting()?;
         core.store.conversation(conversation)?;
-        core.store.add_message(conversation, "user", text)?
+        if images.is_empty() {
+            core.store.add_message(conversation, "user", text)?
+        } else {
+            core.store
+                .add_message_with_images(conversation, "user", text, images)?
+        }
     };
     before_wake()?;
     let _lifecycle = core
