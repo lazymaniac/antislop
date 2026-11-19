@@ -3,7 +3,7 @@ use super::super::super::*;
 impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         self.selected = graph::card_key(&self.view, &self.selected);
-        let (inner, now_area, progress) = self.graph_areas(frame, area);
+        let (inner, now_area, progress) = self.graph_areas(frame, area, theme);
         self.now_area = now_area;
         if self.graph_anim.is_some() {
             // The card moves while it grows: keep it in view each frame.
@@ -324,12 +324,13 @@ impl App {
         &mut self,
         frame: &mut Frame,
         area: Rect,
+        theme: &Theme,
     ) -> (
         Rect,
         Option<Rect>,
         Vec<crate::lean::tui::view::ProgressEntry>,
     ) {
-        let mut frame_inner = self.draw_graph_frame(frame, area);
+        let mut frame_inner = self.draw_graph_frame(frame, area, theme);
         if self.phase_action_area.is_none()
             && self.phase_action().is_some()
             && frame_inner.height >= 6
@@ -361,13 +362,15 @@ impl App {
         (inner, now_area, progress)
     }
 
-    fn draw_graph_frame(&self, frame: &mut Frame, area: Rect) -> Rect {
-        let border = if self.graph_link_source.is_some() {
-            Style::default().fg(theme::ayu::YELLOW)
-        } else if self.focus == Focus::Graph {
-            Style::default().fg(theme::ayu::BLUE)
+    fn draw_graph_frame(&self, frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {
+        let fill = if self.focus == Focus::Graph {
+            if theme.color {
+                theme.panel()
+            } else {
+                theme.panel().add_modifier(Modifier::REVERSED)
+            }
         } else {
-            dim()
+            theme.overlay()
         };
         let title = if let Some(src) = &self.graph_link_source {
             truncate(
@@ -382,10 +385,14 @@ impl App {
                 area.width.saturating_sub(2),
             )
         };
+        let title_style = if self.graph_link_source.is_some() {
+            theme.warning()
+        } else {
+            theme.dim()
+        };
         let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border)
-            .title(title);
+            .style(fill)
+            .title(Span::styled(title, title_style));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         inner

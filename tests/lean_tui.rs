@@ -3416,7 +3416,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
     assert!(text_84.contains("[?]"));
     assert!(text_84.contains("[Chat]"));
 
-    // 85 cols (>= 85): Split side-by-side with vertical separator
+    // 85 cols (>= 85): Split side-by-side with a blank gap and no canvas border
     let mut term_85 = Terminal::new(TestBackend::new(85, 20)).unwrap();
     term_85.draw(|f| app.draw(f)).unwrap();
     let text_85: String = term_85
@@ -3427,9 +3427,9 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         .map(|c| c.symbol())
         .collect();
     assert!(!text_85.contains("[Czat]"));
-    // The separator column contains vertical glyph
+    // The former canvas border is blank.
     let sep_col = 35;
-    assert_eq!(term_85.backend().buffer()[(sep_col, 5)].symbol(), "│");
+    assert_eq!(term_85.backend().buffer()[(sep_col, 5)].symbol(), " ");
 }
 
 #[test]
@@ -4701,7 +4701,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (76, 12));
+    assert_eq!(initial_viewport, (78, 13));
 
     // Measure the expanded card on this renderer-derived 80x24 geometry.
     let expanded = Graph::new_with_expanded(
@@ -4716,11 +4716,11 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let card = expanded.node("worker:t1").unwrap();
     // The expanded task card shares the frame boundary and keeps one cell
     // inside each viewport edge.
-    assert_eq!((card.width, card.height), (74, 10));
+    assert_eq!((card.width, card.height), (76, 11));
     assert_eq!((card.width + 2, card.height + 2), initial_viewport);
-    assert!(expanded.width <= 76);
+    assert!(expanded.width <= 78);
     let content_area = usize::from(card.width - 4) * usize::from(card.height - 5);
-    assert_eq!(content_area, 350);
+    assert_eq!(content_area, 432);
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4760,7 +4760,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (102, 36));
+    assert_eq!(resized_viewport, (104, 37));
 }
 
 #[test]
@@ -4997,24 +4997,15 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     use antislop::lean::tui::graph::{Graph, Relations};
     use antislop::lean::tui::view::TaskRow;
 
-    // Terminal sizes to test:
-    // 80x24 (compact: 78x20)
-    // 85x24 (split: 48x20)
-    // 120x30 (split: 77x26)
-    // 160x50 (split: 104x46)
+    // Terminal sizes and canvas viewports after the header, padding and progress rows.
     let terminal_configs = [
-        ("80x24", 80u16, 24u16, 76u16, 15u16),
-        ("85x24", 85u16, 24u16, 46u16, 15u16),
-        ("120x30", 120u16, 30u16, 75u16, 21u16),
-        ("160x50", 160u16, 50u16, 102u16, 41u16),
+        ("80x24", 80u16, 24u16, 78u16, 15u16),
+        ("85x24", 85u16, 24u16, 48u16, 15u16),
+        ("120x30", 120u16, 30u16, 77u16, 20u16),
+        ("160x50", 160u16, 50u16, 104u16, 40u16),
     ];
 
     for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
-        let inner_h = if term_w >= 85 && term_h >= 30 {
-            inner_h - 2
-        } else {
-            inner_h - 1
-        };
         let (mut app, _rx) =
             App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
         app.focus = Focus::Graph;

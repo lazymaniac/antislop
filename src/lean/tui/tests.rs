@@ -935,7 +935,13 @@ fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
                     .find(|(x, y, _)| *x == route_x && *y == route_y)
                     .expect("entry arrow style");
                 assert_eq!(cell.fg, expected_style.fg.unwrap_or(Color::Reset));
-                assert_eq!(cell.bg, expected_style.bg.unwrap_or(Color::Reset));
+                assert_eq!(
+                    cell.bg,
+                    expected_style
+                        .bg
+                        .or(theme.panel().bg)
+                        .unwrap_or(Color::Reset)
+                );
                 assert_eq!(cell.modifier, expected_style.add_modifier);
                 if theme.ascii {
                     assert_ne!(cell.symbol(), "▼", "ASCII arrow must not be Unicode");

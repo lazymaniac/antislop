@@ -180,12 +180,7 @@ impl App {
         } else {
             theme.card()
         };
-        let accent = if focused {
-            theme.accent()
-        } else {
-            theme.faint()
-        };
-        paint_input_background(frame, input, fill, accent, focused, theme);
+        paint_input_background(frame, input, fill, theme);
         if input.height > 0 && input.width >= 28 {
             let attachments = self
                 .image_drafts
@@ -244,14 +239,7 @@ impl App {
     }
 }
 
-fn paint_input_background(
-    frame: &mut Frame,
-    input: Rect,
-    fill: Style,
-    accent: Style,
-    focused: bool,
-    theme: &Theme,
-) {
+fn paint_input_background(frame: &mut Frame, input: Rect, fill: Style, theme: &Theme) {
     let buffer = frame.buffer_mut();
     for y in input.top()..input.bottom() {
         for x in input.left()..input.right() {
@@ -260,11 +248,11 @@ fn paint_input_background(
         if input.width > 0 {
             buffer[(input.x, y)]
                 .set_symbol(theme.glyphs().bar)
-                .set_style(fill.patch(accent));
+                .set_style(fill.patch(theme.faint()));
         }
     }
     if input.height > 0 && input.width > 2 {
-        let style = fill.patch(if focused { theme.accent() } else { theme.dim() });
+        let style = fill.patch(theme.dim());
         buffer.set_string(input.x + 1, input.y, " message ", style);
     }
 }
@@ -300,20 +288,19 @@ mod tests {
                     .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
                     .unwrap();
                 let label = &terminal.backend().buffer()[(2, 13)];
-                let expected = if focus == Focus::Chat {
-                    theme.accent()
+                let expected_fill = if focus == Focus::Chat {
+                    theme.raised()
                 } else {
-                    theme.dim()
+                    theme.card()
                 };
+                let expected = theme.dim();
+                assert_eq!(label.bg, expected_fill.bg.unwrap_or(Color::Reset));
                 assert_eq!(label.fg, expected.fg.unwrap_or(Color::Reset));
                 assert_eq!(
                     label.modifier.contains(Modifier::DIM),
                     expected.add_modifier.contains(Modifier::DIM)
                 );
-                assert_eq!(
-                    label.modifier.contains(Modifier::BOLD),
-                    focus == Focus::Chat
-                );
+                assert!(!label.modifier.contains(Modifier::BOLD));
                 if focus == Focus::Chat {
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert_eq!(cursor.y, 14);

@@ -99,8 +99,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+#[cfg(test)]
+use view::dim;
 use view::{
-    ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard, target_name,
+    ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, draw_min_term_guard, target_name,
     truncate, wrap,
 };
 

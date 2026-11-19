@@ -47,7 +47,10 @@ mod tests {
             for focus in [Focus::Chat, Focus::Graph] {
                 app.focus = focus;
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let theme = Theme::new(true, false);
+                terminal
+                    .draw(|frame| app.draw_with_theme(frame, &theme))
+                    .unwrap();
                 assert_eq!(app.terminal_area, Rect::new(0, 0, width, height));
                 if width >= SIDE_BY_SIDE_BREAKPOINT || focus == Focus::Graph {
                     let graph_area = app.graph_area.expect("graph panel rendered");
@@ -56,6 +59,16 @@ mod tests {
                         Some((graph_area.width, graph_area.height))
                     );
                     assert!(graph_area.right() >= width.saturating_sub(3));
+                    let fill = if focus == Focus::Graph {
+                        theme.panel()
+                    } else {
+                        theme.overlay()
+                    };
+                    for y in [0, graph_area.y] {
+                        let edge = &terminal.backend().buffer()[(width - 1, y)];
+                        assert_eq!(edge.symbol(), " ", "canvas has no outer border");
+                        assert_eq!(edge.bg, fill.bg.unwrap());
+                    }
                     if width >= SIDE_BY_SIDE_BREAKPOINT {
                         assert!(graph_area.x > app.chat_area.right());
                     }
