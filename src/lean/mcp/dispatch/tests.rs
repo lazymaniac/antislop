@@ -118,9 +118,52 @@ fn a_refused_non_terminal_call_names_the_exact_current_turn() {
     );
     assert_eq!(refused["isError"], true);
     let text = refused["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("turn is not open"), "{text}");
+    assert!(text.contains("turn ID mismatch"), "{text}");
     assert!(
         text.contains("the current turn is \"current-turn\""),
         "{text}"
     );
+}
+
+#[test]
+fn audit_and_plan_review_can_recover_a_mistyped_turn_and_record_their_findings() {
+    let active = "ef09f7e4-d5fb-4bbb-b7bf-5f841eb5170c";
+    let mistyped = "ef09f7e4-d5fb-4bbb-b7f5-5f841eb5170c";
+    for role in ["auditor", "plan-reviewer", "code-review:t1"] {
+        let shared = shared();
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.role = role.into();
+            state.expected = Some(active.into());
+        }
+        let mut review = json!({"name":"review","arguments":{
+            "turn":mistyped,"report":"One high finding remains open.",
+            "findings":[{"severity":"high","issue":"Quality tasks contradict the selected rigor.","where":"plan"}]
+        }});
+        let refused = call(&shared, &review);
+        assert_eq!(refused["isError"], true);
+        let error = refused["content"][0]["text"].as_str().unwrap();
+        assert!(error.contains("turn ID mismatch"), "{error}");
+        assert!(
+            error.contains(mistyped) && error.contains(active),
+            "{error}"
+        );
+        assert!(error.contains("current_turn"), "{error}");
+        assert!(shared.state.lock().unwrap().finished.is_none());
+        let current = data(call(
+            &shared,
+            &json!({"name":"current_turn","arguments":{}}),
+        ));
+        assert_eq!(current["active"], true);
+        assert_eq!(current["turn"], active);
+        review["arguments"]["turn"] = current["turn"].clone();
+        assert_eq!(data(call(&shared, &review))["recorded"], true);
+        let result = shared.state.lock().unwrap().finished.clone().unwrap();
+        let (report, verdict) =
+            crate::lean::turn_result::TurnResult::parse_turn_review(&result.text).unwrap();
+        assert_eq!(report, "One high finding remains open.");
+        assert!(!verdict.approved);
+        assert_eq!(verdict.findings.len(), 1);
+        assert_eq!(data(call(&shared, &review))["recorded"], true);
+    }
 }

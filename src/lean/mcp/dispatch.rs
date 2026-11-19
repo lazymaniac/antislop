@@ -56,7 +56,7 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
             }
             // Tools that do not end the turn used to get only the bare refusal, and models then
             // retyped the id from memory; give the exact one to copy.
-            if reason.starts_with("turn is not open")
+            if reason.starts_with("turn ID mismatch")
                 && !reason.contains("requires turn")
                 && let Some(turn) = expected.as_deref()
             {
@@ -135,9 +135,12 @@ fn prepare_dispatch(
 }
 
 fn require_open_turn(state: &mut super::gateway::State, name: &str, turn: &str) -> Result<()> {
+    let expected = state.expected.as_deref().ok_or_else(|| {
+        invalid("no turn is open; wait for a new runtime prompt before submitting a result")
+    })?;
     crate::require(
-        state.expected.as_deref() == Some(turn),
-        "turn is not open; use the current prompt's turn",
+        expected == turn,
+        &format!("turn ID mismatch: submitted {turn:?}; active {expected:?}"),
     )?;
     crate::require(state.finished.is_none(), "turn is already finished")?;
     if name == ASK {

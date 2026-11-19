@@ -15,9 +15,14 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     }
     match role {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
-        "planner" => vec![SUBMIT_PLAN, TOOL, "read_evidence"],
-        "auditor" => vec![REVIEW, "read_dependency_result", "read_evidence"],
-        _ if plain_reviewer(role) => vec![REVIEW, "read_evidence"],
+        "planner" => vec![SUBMIT_PLAN, TOOL, "read_evidence", "current_turn"],
+        "auditor" => vec![
+            REVIEW,
+            "read_dependency_result",
+            "read_evidence",
+            "current_turn",
+        ],
+        _ if plain_reviewer(role) => vec![REVIEW, "read_evidence", "current_turn"],
         _ => vec![TOOL],
     }
 }
@@ -134,7 +139,7 @@ fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
         properties.insert("evidence".into(),json!({"type":"array","maxItems":64,"items":{"type":"string"},"description":"Optional existing MCP evidence ids to retain in this result. Evidence recorded this turn is attached automatically; use this for earlier evidence when amending a report."}));
     }
     if name != "current_turn" {
-        let description = if crate::lean::task_role(role).is_some() {
+        let description = if allowed_tools(role).contains(&"current_turn") {
             "Exact active turn id from the latest prompt; call current_turn if uncertain. Never reuse a previous turn id."
         } else {
             "Exact active turn id from the latest prompt. Never reuse a previous turn id."
@@ -158,7 +163,7 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
-        "current_turn" => ("Read this gateway's current task role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
+        "current_turn" => ("Read this gateway's current agent role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
         "report_blocker" => ("End a worker turn when missing input or an unsatisfied prerequisite prevents all further permitted work. Record the concrete external blocker, evidence, and actionable condition for resuming. An implementation, test, fixture or output this task is assigned to create is work to perform, not a missing prerequisite; do not ask another actor to supply your own deliverable or block merely because that work is unfinished or large. Preserve completed work and checkpoints. The task stays unapproved and its dependents do not run; the orchestrator must resolve the blocker or revise the contract. Do not claim success or repeat a question already answered without new evidence.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string","description":"An actionable prerequisite another actor can resolve, with evidence; never completion of this task's own assigned deliverable"},"unblocked_work_remaining":{"type":"boolean","description":"True if ANY independent permitted edits or analysis remain, even when a later validation is blocked. A true value is rejected so you can continue that work within this turn. Report a blocker only after no permitted independent work remains."}}), vec!["turn", "report", "resume_condition", "unblocked_work_remaining"]),
         "record_evidence" => ("Persist the decisive part of a command/measurement result as immutable MCP execution evidence before completing: the command, exit code and the relevant lines (errors, failures, totals), not the whole build/test/event stream and not repository source contents. Keep records under 16 KiB; filter first. Disk-backed content survives worktree cleanup. Hard limit 256 KiB UTF-8 per labelled record. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),
         "read_evidence" => ("Read immutable MCP execution evidence recorded in this conversation, in pages of at most 16 KiB. Discover ids in read_dependency_result.evidence, the report's MCP evidence section, or task instructions. Reuse cursor until complete=true. This never ends the turn and does not grant filesystem access.".into(),json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),vec!["turn","evidence"]),

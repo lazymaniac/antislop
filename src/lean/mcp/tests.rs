@@ -225,12 +225,12 @@ mod role_tests {
         );
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "finish_turn", "read_evidence"]
+            vec!["submit_plan", "finish_turn", "read_evidence", "current_turn"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_dependency_result","read_evidence"]} else {vec!["review", "read_evidence"]},
+                if reviewer=="auditor" {vec!["review","read_dependency_result","read_evidence","current_turn"]} else {vec!["review", "read_evidence", "current_turn"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];
@@ -286,7 +286,7 @@ mod role_tests {
             dispatch(&shared, &stale)
                 .unwrap_err()
                 .to_string()
-                .contains("turn is not open")
+                .contains("turn ID mismatch")
         );
         let foreign = json!({"name":"answer_agent","arguments":{"turn":"current","request":"q","answer":"ok"}});
         assert!(
