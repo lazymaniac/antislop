@@ -76,6 +76,68 @@ fn plan_review_options_guidance_excludes_quality_gates() {
 }
 
 #[test]
+fn no_quality_gates_plan_checks_preserve_rigor_through_initial_and_revision_reviews() {
+    let writer = contract(json!({
+        "id":"writer","title":"Writer","goal":"Implement the requested feature",
+        "change_kind":"code","kind":"implementation",
+        "acceptance_criteria":[{"id":"C1","text":"The requested behavior works"}]
+    }));
+    let plan = finalize_no_quality_gates(vec![writer]);
+    assert!(plan.iter().any(|task| task.integration_batch));
+    assert!(
+        plan.iter()
+            .all(|task| !task.quality_gate && task.options_for.is_none())
+    );
+    for prompt in [
+        plan_review_prompt("/p", "request", &plan),
+        plan_review_followup("", &plan),
+        plan_revision_review_prompt(
+            "/p",
+            "request",
+            &plan,
+            &[],
+            ApprovedWork {
+                kept: &[],
+                redone: &[],
+            },
+            "revision",
+            true,
+        ),
+        plan_revision_review_prompt(
+            "/p",
+            "request",
+            &plan,
+            &[],
+            ApprovedWork {
+                kept: &[],
+                redone: &[],
+            },
+            "revision",
+            false,
+        ),
+    ] {
+        assert!(prompt.contains("For `no-quality-gates`, the absence of quality tasks, options and a final quality audit is intentional"));
+        assert!(prompt.contains("never reject the plan for their absence"));
+        assert!(prompt.contains(
+            "ordinary per-task acceptance, independent task review, dependency ordering"
+        ));
+        assert!(
+            prompt.contains(
+                "only for change_kind=code under a rigor team that permits quality gates"
+            )
+        );
+        assert!(!prompt.contains("only change_kind=code requires quality"));
+        assert!(prompt.contains("\"integration_batch\":true"));
+    }
+    for prompt in [planner_instructions(), orchestrator_instructions()] {
+        assert!(prompt.contains("For `no-quality-gates`, plan the requested work with ordinary task acceptance and dependencies"));
+        assert!(prompt.contains("do not add quality gates, options, a separate integration task or a final quality audit"));
+        assert!(prompt.contains("For other code-changing rigor teams, include key quality agents"));
+        assert!(!prompt.contains("Always include key quality agents"));
+    }
+}
+
+#[test]
 fn selected_code_review_plan_review_reinforces_scope_and_no_write_graph() {
     let mut task = contract(serde_json::json!({
         "id":"review","title":"Review current diff","goal":"Inspect the current diff read-only and report findings.",
