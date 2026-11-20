@@ -222,6 +222,7 @@ mod role_tests {
                 "resume_task",
                 "revise_plan",
                 "request_replan",
+                "create_session_pr",
                 "merge_session_with_main",
             ]
         );

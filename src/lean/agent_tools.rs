@@ -66,6 +66,7 @@ impl Core {
             "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task" => {
                 self.orchestrator_tool(conversation, role, turn, tool, args)
             }
+            "create_session_pr" => self.orchestrator_tool(conversation, role, turn, tool, args),
             "merge_session_with_main" => {
                 require(
                     matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),

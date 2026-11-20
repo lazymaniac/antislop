@@ -129,6 +129,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         "resume_task",
         "revise_plan",
         "request_replan",
+        "create_session_pr",
         "merge_session_with_main",
     ]
 }
@@ -168,6 +169,8 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         "get_images" => ("Retrieve the next image attached to a user message in this conversation as an image block. Start at offset 0 and use the returned next offset until all images are inspected.".into(), json!({"offset":{"type":"integer","minimum":0,"default":0}}), vec!["turn"]),
         "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
         "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task"
+        | "create_session_pr"
+        | "merge_session_with_main"
         | "request_replan" => control_contract(name),
         _ => turn_contract(name, role, orchestrator),
     }
@@ -175,7 +178,6 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
-        "merge_session_with_main" => ("Merge the preserved branch of this completed session into the local main branch. Use only after the user selected Merge with main. The runtime validates both refs, preserves user changes, and records a session_action_result event containing the typed succeeded, failed (raw Git details), or missing_inputs result. This runs in the current conversation and starts no agent session.".into(), json!({}), vec!["turn"]),
         "current_turn" => ("Read this gateway's current agent role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
         "report_blocker" => ("End a worker turn when missing input or an unsatisfied prerequisite prevents all further permitted work. Record the concrete external blocker, evidence, and actionable condition for resuming. An implementation, test, fixture or output this task is assigned to create is work to perform, not a missing prerequisite; do not ask another actor to supply your own deliverable or block merely because that work is unfinished or large. Preserve completed work and checkpoints. The task stays unapproved and its dependents do not run; the orchestrator must resolve the blocker or revise the contract. Do not claim success or repeat a question already answered without new evidence.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string","description":"An actionable prerequisite another actor can resolve, with evidence; never completion of this task's own assigned deliverable"},"unblocked_work_remaining":{"type":"boolean","description":"True if ANY independent permitted edits or analysis remain, even when a later validation is blocked. A true value is rejected so you can continue that work within this turn. Report a blocker only after no permitted independent work remains."}}), vec!["turn", "report", "resume_condition", "unblocked_work_remaining"]),
         "record_evidence" => ("Persist the decisive part of a command/measurement result as immutable MCP execution evidence before completing: the command, exit code and the relevant lines (errors, failures, totals), not the whole build/test/event stream and not repository source contents. Keep records under 16 KiB; filter first. Disk-backed content survives worktree cleanup. Hard limit 256 KiB UTF-8 per labelled record. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),
@@ -217,6 +219,8 @@ fn control_contract(name: &str) -> ToolSpec {
         "decide_approval" => ("Decide an agent CLI's approval dialog that the runtime put to you. Pick the id of the choice that lets the agent do what its task needs and nothing broader; refuse (the denying choice) what the task does not need. Use choice \"escalate_to_user\" only when you cannot judge it or it is outside the user's request; give the user the reason in explanation. Never ask the agent: the dialog is the agent CLI's own.".into(), json!({"request":{"type":"string","description":"The approval request id the runtime message names"},"choice":{"type":"string","description":"A choice id from the message, or escalate_to_user"},"explanation":{"type":"string","description":"Why, for the user; required with escalate_to_user"}}), vec!["turn", "request", "choice"]),
         "retry_task" => ("Retry a failed task in its allocated worktree with concrete guidance. There is no recovery-count limit or permission question. Read current task_states first. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"guidance":{"type":"string"}}), vec!["turn","task","guidance"]),
         "resume_task" => ("Continue a coordinating task after resolving its blocker or identifying independent work. No recovery-count limit or permission question applies. Preserve unresolved factual prerequisites; never restart an active task. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"round":{"type":"integer","minimum":0},"input_generation":{"type":"integer","minimum":0},"resolution":{"type":"string"}}),vec!["turn","task","round","input_generation","resolution"]),
+        "create_session_pr" => ("Create a pull request for the branch recorded by this completed session. The branch is resolved from the session completion event; do not supply a branch. Returns and durably records a session_action_result with succeeded, failed (raw gh output), or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
+        "merge_session_with_main" => ("Merge the completed session branch with main through the existing orchestrator conversation. Returns and durably records a session_action_result with succeeded, failed, or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
         "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),
         _ => ("Change the running plan you were shown.".into(), schema::revision(), vec!["turn", "reason", "tasks", "retire"]),
     }

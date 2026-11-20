@@ -61,6 +61,156 @@ fn required_text_validation_preserves_shared_error_contract() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn create_session_pr_targets_completed_branch_and_records_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let (directory, app, conversation) = core();
+    std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::fs::write(directory.path().join("tracked.txt"), "base").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["branch", "session/finished-42"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::fs::write(directory.path().join("user-change.txt"), "preserve").unwrap();
+    app.store
+        .append_event(
+            &conversation,
+            None,
+            None,
+            "session_completed",
+            &json!({"branch":"session/finished-42", "summary":"Implemented the requested change."}),
+        )
+        .unwrap();
+    let gh = directory.path().join("gh-success");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf 'cwd=%s\\n' \"$PWD\" > \"$PR_ARGS_FILE\"\nprintf 'git_root=%s\\n' \"$(git rev-parse --show-toplevel)\" >> \"$PR_ARGS_FILE\"\nprintf 'branch=%s\\n' \"$(git branch --show-current)\" >> \"$PR_ARGS_FILE\"\nprintf 'args=%s\\n' \"$*\" >> \"$PR_ARGS_FILE\"\necho https://github.com/o/r/pull/7\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let args_file = directory.path().join("args");
+    unsafe {
+        std::env::set_var("PR_ARGS_FILE", &args_file);
+    }
+    let result = app
+        .create_session_pr_with(&conversation, gh.to_str().unwrap())
+        .unwrap();
+    unsafe {
+        std::env::remove_var("PR_ARGS_FILE");
+    }
+    assert_eq!(result["status"], "succeeded");
+    let invocation = std::fs::read_to_string(&args_file).unwrap();
+    let field = |name: &str| {
+        invocation
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap()
+    };
+    let working_directory = std::path::Path::new(field("cwd"));
+    assert_ne!(working_directory, directory.path());
+    assert_eq!(working_directory, std::path::Path::new(field("git_root")));
+    assert_eq!(field("branch"), "session/finished-42");
+    assert_eq!(
+        invocation.split_once("args=").unwrap().1.trim_end(),
+        "pr create --head session/finished-42 --title Session changes: session/finished-42 --body ## Session summary\n\nImplemented the requested change.\n\nCreated from completed session branch `session/finished-42`."
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("user-change.txt")).unwrap(),
+        "preserve"
+    );
+    let events = app.store.events_since(&conversation, 0, 100).unwrap();
+    assert!(events.iter().any(
+        |event| event.kind == "session_action_result" && event.payload["status"] == "succeeded"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn create_session_pr_records_raw_failures_and_missing_inputs() {
+    use std::os::unix::fs::PermissionsExt;
+    let (directory, app, conversation) = core();
+    std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::fs::write(directory.path().join("base"), "base").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "base"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["branch", "session/fails"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    app.store
+        .append_event(
+            &conversation,
+            None,
+            None,
+            "session_completed",
+            &json!({"branch":"session/fails", "summary":"A completed change."}),
+        )
+        .unwrap();
+    let gh = directory.path().join("gh-failure");
+    std::fs::write(&gh, "#!/bin/sh\necho raw-provider-error >&2\nexit 23\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let failed = app
+        .create_session_pr_with(&conversation, gh.to_str().unwrap())
+        .unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert!(
+        failed["details"]
+            .as_str()
+            .unwrap()
+            .contains("raw-provider-error")
+    );
+    let (_dir2, core2, conversation2) = core();
+    let missing = core2
+        .create_session_pr_with(&conversation2, gh.to_str().unwrap())
+        .unwrap();
+    assert_eq!(missing["status"], "missing_inputs");
+}
+
 #[test]
 fn image_retrieval_returns_provider_image_blocks_for_all_message_linked_images() {
     use base64::Engine;

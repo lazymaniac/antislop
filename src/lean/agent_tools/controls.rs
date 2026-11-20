@@ -39,6 +39,7 @@ impl Core {
                     &required_text(args, "resolution")?,
                 )
             }
+            "create_session_pr" => self.create_session_pr(conversation),
             _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
         }
     }
@@ -254,5 +255,105 @@ impl Core {
         self.revisions.view(conversation).ok_or_else(|| {
             Error::Invalid("there is no plan to revise; submit a new plan with submit_plan".into())
         })
+    }
+
+    fn create_session_pr(&self, conversation: &str) -> Result<Value> {
+        self.create_session_pr_with(conversation, "gh")
+    }
+
+    pub(super) fn create_session_pr_with(&self, conversation: &str, gh: &str) -> Result<Value> {
+        let completion: Option<String> = self.store.db().query_row(
+            "SELECT payload FROM events WHERE conversation_id=?1 AND kind='session_completed' ORDER BY seq DESC LIMIT 1",
+            [conversation], |row| row.get(0),
+        ).optional()?;
+        let Some(payload) = completion else {
+            return self.session_pr_result(conversation, serde_json::json!({"status":"missing_inputs","inputs":["completed session branch"]}));
+        };
+        let payload: Value = serde_json::from_str(&payload)?;
+        let branch = payload["branch"]
+            .as_str()
+            .filter(|branch| !branch.trim().is_empty());
+        let Some(branch) = branch else {
+            return self.session_pr_result(conversation, serde_json::json!({"status":"missing_inputs","inputs":["completed session branch"]}));
+        };
+        let summary = payload["summary"]
+            .as_str()
+            .filter(|summary| !summary.trim().is_empty());
+        let Some(summary) = summary else {
+            return self.session_pr_result(conversation, serde_json::json!({"status":"missing_inputs","inputs":["completed session summary"]}));
+        };
+        let title = format!("Session changes: {branch}");
+        let body = format!(
+            "## Session summary\n\n{summary}\n\nCreated from completed session branch `{branch}`."
+        );
+        let project: String = self.store.db().query_row(
+            "SELECT project FROM conversations WHERE id=?1",
+            [conversation],
+            |row| row.get(0),
+        )?;
+        let project = std::path::PathBuf::from(project);
+        let checkout = match tempfile::tempdir() {
+            Ok(directory) => directory,
+            Err(error) => return self.session_pr_result(conversation, serde_json::json!({"status":"failed","details":format!("failed to allocate isolated PR checkout: {error}")})),
+        };
+        let checkout_path = checkout.path().join("session");
+        let prepare = std::process::Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--quiet",
+                checkout_path.to_str().unwrap_or_default(),
+                branch,
+            ])
+            .current_dir(&project)
+            .output();
+        match prepare {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => return self.session_pr_result(conversation, serde_json::json!({"status":"failed","details":format!("git worktree add for completed branch {branch} exited {}: {}{}", output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))})),
+            Err(error) => return self.session_pr_result(conversation, serde_json::json!({"status":"failed","details":format!("failed to run git worktree add for completed branch {branch}: {error}")})),
+        }
+        let output = std::process::Command::new(gh)
+            .args([
+                "pr", "create", "--head", branch, "--title", &title, "--body", &body,
+            ])
+            .current_dir(&checkout_path)
+            .output();
+        let result = match output {
+            Ok(output) if output.status.success() => {
+                serde_json::json!({"status":"succeeded","summary":String::from_utf8_lossy(&output.stdout).trim()})
+            }
+            Ok(output) => {
+                serde_json::json!({"status":"failed","details":format!("gh pr create --head {branch} exited {}: {}{}", output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))})
+            }
+            Err(error) => {
+                serde_json::json!({"status":"failed","details":format!("failed to run gh pr create --head {branch}: {error}")})
+            }
+        };
+        let cleanup = std::process::Command::new("git")
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                checkout_path.to_str().unwrap_or_default(),
+            ])
+            .current_dir(&project)
+            .output();
+        let result = match cleanup {
+            Ok(output) if output.status.success() => result,
+            Ok(output) => {
+                serde_json::json!({"status":"failed","details":format!("{}; git worktree cleanup exited {}: {}{}", result["details"].as_str().or_else(|| result["summary"].as_str()).unwrap_or("gh pr create completed"), output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))})
+            }
+            Err(error) => {
+                serde_json::json!({"status":"failed","details":format!("{}; failed to clean isolated PR checkout: {error}", result["details"].as_str().or_else(|| result["summary"].as_str()).unwrap_or("gh pr create completed"))})
+            }
+        };
+        drop(checkout);
+        self.session_pr_result(conversation, result)
+    }
+
+    fn session_pr_result(&self, conversation: &str, result: Value) -> Result<Value> {
+        self.store
+            .append_event(conversation, None, None, "session_action_result", &result)?;
+        Ok(result)
     }
 }
