@@ -216,6 +216,7 @@ impl App {
                 && self.unblock.is_none()
                 && self.graph_filters.is_none()
                 && self.flow_editor.is_none()
+                && self.decision_inbox.is_none()
                 && matches!(
                     mouse.kind,
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -243,6 +244,7 @@ impl App {
             || self.unblock.is_some()
             || self.graph_filters.is_some()
             || self.interview_visible()
+            || self.decision_inbox.is_some()
     }
 
     fn click_graph_filters(&mut self, mouse: event::MouseEvent) {

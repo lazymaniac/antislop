@@ -31,6 +31,7 @@ pub mod clipboard;
 pub mod config;
 mod contracts;
 mod dashboard;
+mod decision_inbox;
 pub mod details;
 pub mod diffview;
 pub mod document;

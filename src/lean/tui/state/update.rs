@@ -72,6 +72,7 @@ impl App {
             update @ Update::Task { .. } => self.apply_task(update),
             update @ Update::Diff { .. } => self.apply_diff(update),
             update @ Update::InterviewResult { .. } => self.apply_interview_result(update),
+            update @ Update::ApprovalResult { .. } => self.apply_approval_result(update),
             update @ Update::SendResult { .. } => self.apply_send_result(update),
             update @ Update::CommentResult { .. } => self.apply_comment_result(update),
             update @ Update::PlanRevisionResult { .. } => self.apply_plan_revision_result(update),

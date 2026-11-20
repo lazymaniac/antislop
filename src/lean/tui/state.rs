@@ -130,6 +130,9 @@ pub struct App {
     pub(super) approval: Option<super::approval::ApprovalCard>,
     /// Approvals the user put off; they stay open and the palette lists them.
     pub(super) approval_hidden: std::collections::HashSet<String>,
+    pub(super) decision_inbox: Option<super::decision_inbox::Inbox>,
+    pub(super) approval_submissions:
+        std::collections::HashMap<(String, String), super::decision_inbox::ApprovalStatus>,
     /// The graph filter menu, while it is open.
     pub(super) graph_filters: Option<super::graph_filters::FilterMenu>,
     /// Direct DAG flow editor for in-place task contract and dependency edits.
@@ -243,6 +246,8 @@ macro_rules! initial_app {
             unblock: None,
             approval: None,
             approval_hidden: std::collections::HashSet::new(),
+            decision_inbox: None,
+            approval_submissions: Default::default(),
             graph_filters: None,
             flow_editor: None,
             graph_link_source: None,

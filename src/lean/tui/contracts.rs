@@ -31,6 +31,12 @@ pub enum Update {
         question: u64,
         result: std::result::Result<(), String>,
     },
+    ApprovalResult {
+        conversation: String,
+        request: String,
+        operation_id: String,
+        result: std::result::Result<(), String>,
+    },
     AgentMessage {
         conversation: String,
         recipient: String,

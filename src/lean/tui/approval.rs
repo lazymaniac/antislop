@@ -241,6 +241,7 @@ impl super::App {
         if self.approval.is_none() {
             self.notice = Some("No approval is waiting.".into());
         }
+        self.open_decision_inbox();
     }
 }
 

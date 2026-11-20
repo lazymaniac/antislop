@@ -17,6 +17,7 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
     draw_help(app, frame);
     modal::draw_unblock(app, frame);
     modal::draw_graph_filters(app, frame);
+    app.draw_decision_inbox(frame);
 }
 
 fn draw_selection(app: &mut App, frame: &mut Frame) {

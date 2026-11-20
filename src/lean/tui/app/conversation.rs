@@ -45,6 +45,7 @@ impl App {
     fn activate_conversation(&mut self, conversation: String) {
         self.stop_poller.store(true, Ordering::SeqCst);
         self.generation += 1;
+        self.decision_inbox = None;
         self.conversation = conversation;
         self.view = View::default();
         self.plan_history = None;

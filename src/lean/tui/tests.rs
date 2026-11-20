@@ -1420,7 +1420,7 @@ fn escape_closes_plan_view_before_restoring_zoomed_split() {
 }
 
 #[test]
-fn f2_reopens_pending_decision_cards() {
+fn f2_opens_decision_inbox_with_deferred_approval_available() {
     let mut app = test_app();
     app.view.approvals.push(view::PendingApproval {
         request: "r1".into(),
@@ -1432,8 +1432,20 @@ fn f2_reopens_pending_decision_cards() {
     });
     app.approval_hidden.insert("r1".into());
     assert!(app.key_inner(key_press(KeyCode::F(2))));
-    assert!(app.approval.is_some());
-    assert!(app.approval_hidden.is_empty());
+    let inbox = app.decision_inbox.as_ref().expect("F2 opens the inbox");
+    assert_eq!(
+        inbox.selected,
+        Some(crate::lean::tui::decision_inbox::Target::Approval(
+            "r1".into()
+        ))
+    );
+    assert!(app.approval_hidden.contains("r1"));
+    assert!(
+        app.view
+            .approvals
+            .iter()
+            .any(|approval| approval.request == "r1")
+    );
 }
 
 #[test]

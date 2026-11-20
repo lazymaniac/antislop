@@ -16,6 +16,11 @@ impl App {
         {
             return result;
         }
+        if self.decision_inbox.is_some()
+            && let Some(result) = self.route_decision_inbox(key)
+        {
+            return result;
+        }
         if self.picker.is_some() {
             if key.code == KeyCode::F(1) {
                 self.show_help(Help::Picker);
@@ -31,6 +36,10 @@ impl App {
         }
         if let Some(result) = self.route_overlays(key) {
             return result;
+        }
+        if key.code == KeyCode::F(2) {
+            self.open_decision_inbox();
+            return true;
         }
         // The visible interview form owns input before navigation shortcuts and
         // zoom handling. Its own key handler keeps Ctrl+P/Ctrl+O exceptions.
@@ -344,10 +353,6 @@ impl App {
                 }
                 _ => {}
             }
-        }
-        if key.code == KeyCode::F(2) && !self.interview_visible() {
-            self.show_pending_approvals();
-            return true;
         }
         false
     }
