@@ -13,7 +13,11 @@ impl App {
         {
             return false;
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+            return false;
+        } else if key.code == KeyCode::F(1) {
+            self.show_help(super::super::palette::Help::Picker);
+        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
             self.reload_config();
         } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             self.save_config();

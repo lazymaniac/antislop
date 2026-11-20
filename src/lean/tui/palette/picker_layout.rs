@@ -20,20 +20,18 @@ impl PickerLayout {
         if area.width == 0 || area.height == 0 {
             return None;
         }
-        let width = if area.width >= 8 {
-            area.width.saturating_sub(4).min(64)
-        } else {
-            area.width
-        };
-        let rows = item_count.clamp(1, 12) as u16;
-        let height = (rows + header_rows as u16 + 2).min(area.height).max(1);
+        let content = super::super::list_area(area);
+        let width = content.width.saturating_add(2).min(area.width);
         let box_area = Rect::new(
-            area.x + (area.width.saturating_sub(width)) / 2,
-            area.y + area.height.saturating_sub(height) / 3,
+            content.x.saturating_sub(1).max(area.x),
+            content.y.saturating_sub(1).max(area.y),
             width,
-            height,
+            content.height.saturating_add(2).min(area.height),
         );
-        let visible_rows = usize::from(height.saturating_sub(header_rows as u16 + 2)).max(1);
+        let height = box_area.height;
+        let visible_rows = usize::from(height.saturating_sub(header_rows as u16 + 3))
+            .min(item_count.max(1))
+            .max(1);
         let start = selected.saturating_sub(visible_rows.saturating_sub(1));
         Some(Self {
             box_area,

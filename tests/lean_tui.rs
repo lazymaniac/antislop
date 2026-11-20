@@ -458,8 +458,9 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
         app.paste(&"a".repeat(len));
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let cursor = terminal.get_cursor_position().unwrap();
-        // At 60 columns, the centered picker spans columns 2..58.
-        assert_eq!(cursor.x, 56);
+        // At 60 columns, the viewport uses the available width and keeps
+        // the query cursor in the last interior cell.
+        assert_eq!(cursor.x, 57);
     }
 }
 

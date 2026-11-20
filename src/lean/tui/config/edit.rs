@@ -192,11 +192,46 @@ impl ConfigEditor {
         }
         match key.code {
             KeyCode::Esc => self.visible = false,
+            KeyCode::Left if control => self.select_section(false),
+            KeyCode::Right if control => self.select_section(true),
             KeyCode::Up | KeyCode::BackTab => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => {
                 self.selected = (self.selected + 1).min(self.fields.len() - 1)
             }
             code => self.edit_field(code, control),
+        }
+    }
+
+    fn select_section(&mut self, forward: bool) {
+        let mut sections = Vec::new();
+        for field in &self.fields {
+            if !sections
+                .iter()
+                .any(|section: &String| section == &field.path[0])
+            {
+                sections.push(field.path[0].clone());
+            }
+        }
+        if sections.len() < 2 {
+            return;
+        }
+        let current = self.fields[self.selected].path[0].clone();
+        let position = sections
+            .iter()
+            .position(|section| *section == current)
+            .unwrap_or(0);
+        let next = if forward {
+            (position + 1) % sections.len()
+        } else {
+            (position + sections.len() - 1) % sections.len()
+        };
+        let target = &sections[next];
+        if let Some(index) = self
+            .fields
+            .iter()
+            .position(|field| field.path[0] == *target)
+        {
+            self.selected = index;
         }
     }
 

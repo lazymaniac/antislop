@@ -1198,6 +1198,29 @@ fn global_navigation_shortcuts_route_before_screens_and_keep_editor_ctrl_k() {
 }
 
 #[test]
+fn configuration_keeps_ctrl_p_palette_access_and_contextual_help() {
+    let mut app = test_app();
+    app.config_editor = Some(
+        config::ConfigEditor::new(
+            include_str!("../../../examples/antislop.toml"),
+            "project.toml".into(),
+        )
+        .unwrap(),
+    );
+    assert!(app.key_inner(key_ctrl('p')));
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Commands);
+    app.picker = None;
+    assert!(app.key_inner(key_press(KeyCode::F(1))));
+    assert_eq!(app.help, Some(Help::Picker));
+    assert!(
+        Help::Picker
+            .lines_for_width(80)
+            .iter()
+            .any(|line| line.contains("Ctrl+Left/Right"))
+    );
+}
+
+#[test]
 fn active_picker_owns_global_shortcuts_and_escape_before_zoom() {
     let mut app = test_app();
     app.navigation.screen = Screen::Workbench;

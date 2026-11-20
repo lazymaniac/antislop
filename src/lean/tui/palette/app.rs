@@ -75,6 +75,10 @@ impl App {
             }
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
             KeyCode::Down => picker.selected += 1,
+            KeyCode::PageUp => picker.selected = picker.selected.saturating_sub(8),
+            KeyCode::PageDown => picker.selected = picker.selected.saturating_add(8),
+            KeyCode::Home => picker.selected = 0,
+            KeyCode::End => picker.selected = picker.items(&self.view).len().saturating_sub(1),
             KeyCode::Backspace => Self::erase_picker_query(picker),
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 picker.query.push(ch);

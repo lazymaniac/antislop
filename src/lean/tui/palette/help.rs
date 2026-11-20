@@ -87,7 +87,7 @@ fn draw_help_box(frame: &mut Frame, area: Rect, width: u16, lines: Vec<String>, 
         Paragraph::new(shown).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(super::super::theme::ayu::BLUE))
+                .border_style(Style::default())
                 .title(title),
         ),
         box_area,
@@ -315,7 +315,19 @@ fn help_picker() -> &'static [&'static str] {
         "text             filter list by typed words",
         "Backspace        delete last query character",
         "↑/↓              select item from list",
+        "PgUp/PgDn        move through a long list",
+        "Home/End         first / last item",
         "Enter            confirm selected item",
         "Esc              close list (chat draft stays)",
+        "Configuration editor",
+        "Ctrl+Left/Right  previous / next section",
+        "Up / Down        previous / next field",
+        "Tab              move between fields",
+        "Enter            cycle a choice",
+        "Ctrl+N / Ctrl+D  add / delete provider, profile or route",
+        "Ctrl+S           validate and apply the draft",
+        "Ctrl+R           refresh without losing a dirty draft",
+        "Ctrl+P           open command palette",
+        "Esc              close configuration",
     ]
 }

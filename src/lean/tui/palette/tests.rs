@@ -195,11 +195,10 @@ fn picker_cursor_bounded_and_display_width_aware() {
             picker.draw(frame, &view);
         })
         .unwrap();
-    // Box width is min(80-4, 64) = 64. Left x is (80-64)/2 = 8.
-    // Inner cursor: prefix "> " (2 cols) + "pla" (3 cols) = 5 cols from box_area.x + 1.
-    // So cursor_x should be 8 + 1 + 5 = 14.
+    // The list content is capped at 72 columns; the surrounding box adds two.
+    // Inner cursor follows "> " plus the three query columns.
     let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
-    assert_eq!(cursor_x, 14);
+    assert_eq!(cursor_x, 9);
     let query_row: String = (0..80)
         .map(|x| terminal.backend().buffer()[(x, cursor_y)].symbol())
         .collect();
@@ -213,8 +212,8 @@ fn picker_cursor_bounded_and_display_width_aware() {
         })
         .unwrap();
     let (cursor_x, _) = terminal.get_cursor_position().unwrap().into();
-    // "> " (2) + "漢" (2) = 4 cols -> 8 + 1 + 4 = 13
-    assert_eq!(cursor_x, 13);
+    // "> " (2) + "漢" (2) = 4 display columns.
+    assert_eq!(cursor_x, 8);
 
     // 3. Overflowing long query: cursor must be bounded within box interior!
     picker.query = "a".repeat(200);
@@ -224,11 +223,9 @@ fn picker_cursor_bounded_and_display_width_aware() {
         })
         .unwrap();
     let (cursor_x, _) = terminal.get_cursor_position().unwrap().into();
-    // Inner width is 64 - 2 = 62. Max col is 61.
-    // Bounded cursor_x should be 8 + 1 + 61 = 70.
-    // Box right is 8 + 64 = 72, interior right is 71. Cursor <= 70 is safely inside border!
-    assert_eq!(cursor_x, 70);
-    assert!(cursor_x < 8 + 64 - 1);
+    // The 72-column inner query keeps the cursor inside the box.
+    assert_eq!(cursor_x, 75);
+    assert!(cursor_x < 3 + 74 - 1);
 }
 
 #[test]
@@ -339,6 +336,15 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
         "Selected item at index {} must be visible with REVERSED modifier at 60x12",
         picker.selected
     );
+}
+
+#[test]
+fn picker_layout_uses_a_72_column_scrollable_viewport_without_item_cap() {
+    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+    let layout = super::picker_layout::PickerLayout::new(area, 1_000, 999, 1).unwrap();
+    assert_eq!(layout.inner, 72);
+    assert!(layout.visible_rows > 12);
+    assert_eq!(layout.start + layout.visible_rows, 1_000);
 }
 
 #[test]

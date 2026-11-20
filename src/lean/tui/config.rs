@@ -10,7 +10,6 @@ use crate::config::{Config, ProviderKind, WorkKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::Rect,
     text::Line,
     widgets::{Clear, Paragraph},
 };

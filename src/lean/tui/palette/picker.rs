@@ -491,6 +491,10 @@ impl Picker {
             ));
         }
         append_visible_items(&mut lines, items, self.selected, layout);
+        lines.push(Line::styled(
+            truncate("↑/↓ move · Enter select · Esc close", layout.inner),
+            dim(),
+        ));
         lines
     }
 
@@ -536,12 +540,15 @@ fn append_visible_items(
         .skip(layout.start)
         .take(layout.visible_rows)
     {
+        let label = truncate(label, layout.inner);
+        let padding = layout.inner.saturating_sub(label.width());
+        let line = format!("{label}{}", " ".repeat(padding));
         let style = if index == selected {
             Style::default().add_modifier(Modifier::REVERSED)
         } else {
             Style::default()
         };
-        lines.push(Line::styled(truncate(label, layout.inner), style));
+        lines.push(Line::styled(line, style));
     }
 }
 
@@ -582,7 +589,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, title: 
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(super::super::theme::ayu::BLUE))
+                .border_style(Style::default())
                 .title(title),
         ),
         area,
