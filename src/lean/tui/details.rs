@@ -234,9 +234,10 @@ impl Details {
         is_overview(self.tab)
     }
 
-    /// The terminal shows unless the info page took its place.
+    /// Whether the active details view has an allocated live PTY area.
     pub fn terminal_visible(&self) -> bool {
-        self.overview() && (!self.show_info || self.split)
+        self.native_areas.iter().any(|area| !area.is_empty())
+            || (self.overview() && (!self.show_info || self.split))
     }
 
     /// The terminal and composer always belong to the selected role.

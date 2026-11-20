@@ -112,6 +112,9 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.handle_workbench_mouse(mouse) {
+            return true;
+        }
         if self.handle_native_mouse(mouse) {
             return true;
         }
@@ -124,6 +127,98 @@ impl App {
         }
         self.handle_content_mouse(mouse);
         true
+    }
+
+    fn handle_workbench_mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.navigation.screen != Screen::Workbench {
+            return false;
+        }
+        if self.help.is_some()
+            || self.picker.is_some()
+            || self.editor.is_some()
+            || self.interview_visible()
+            || self.plan_history.is_some()
+            || self.plan_view.is_some()
+            || self.modal_blocks_mouse()
+        {
+            self.workbench_dragging = false;
+            return false;
+        }
+        if self.workbench_dragging {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    let mut presentation = self.navigation.presentation();
+                    if super::super::workbench::resize_at(
+                        self.terminal_area,
+                        &mut presentation,
+                        mouse.row,
+                    ) {
+                        self.navigation.update_presentation(|current| {
+                            current.terminal_percent = presentation.terminal_percent;
+                        });
+                    }
+                    return true;
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.workbench_dragging = false;
+                    return true;
+                }
+                _ => return true,
+            }
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self
+                .workbench_areas
+                .separator
+                .contains((mouse.column, mouse.row).into())
+        {
+            self.workbench_dragging = true;
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self
+                .workbench_areas
+                .terminal
+                .contains((mouse.column, mouse.row).into())
+        {
+            self.navigation.focus = NavigationFocus::WorkbenchTerminal;
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = NavigationFocus::WorkbenchTerminal;
+            });
+            if let Some(details) = &mut self.details {
+                details.native_focus = true;
+            }
+            return false;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self
+                .workbench_areas
+                .content
+                .contains((mouse.column, mouse.row).into())
+        {
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = NavigationFocus::WorkbenchContent;
+            });
+            if let Some(details) = &mut self.details {
+                details.native_focus = false;
+            }
+            return false;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.workbench_areas.list_visible
+            && self
+                .workbench_areas
+                .list
+                .contains((mouse.column, mouse.row).into())
+        {
+            let row = mouse.row.saturating_sub(self.workbench_areas.list.y) as usize;
+            if let Some((key, _)) = super::super::workbench::target_at(&self.view, row) {
+                self.open_details(key);
+            }
+            return true;
+        }
+        false
     }
 
     fn handle_content_mouse(&mut self, mouse: event::MouseEvent) {

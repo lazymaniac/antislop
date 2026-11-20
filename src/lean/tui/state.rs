@@ -123,6 +123,8 @@ pub struct App {
     pub phase_action_area: Option<Rect>,
     pub phase_action_command: Option<Command>,
     pub chat_area: Rect,
+    pub(super) workbench_areas: super::workbench::WorkbenchAreas,
+    pub(super) workbench_dragging: bool,
     pub graph_viewport: Option<(u16, u16)>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
@@ -243,6 +245,8 @@ macro_rules! initial_app {
             phase_action_area: None,
             phase_action_command: None,
             chat_area: Rect::default(),
+            workbench_areas: super::workbench::WorkbenchAreas::default(),
+            workbench_dragging: false,
             unblock: None,
             approval: None,
             approval_hidden: std::collections::HashSet::new(),

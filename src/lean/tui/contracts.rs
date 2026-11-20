@@ -181,17 +181,39 @@ pub enum NavigationFocus {
     Graph,
     WorkbenchList,
     WorkbenchContent,
+    WorkbenchTerminal,
     Composer,
 }
 
 /// Presentation preferences scoped to a session and stable workbench target.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbenchPresentation {
     pub tab: WorkbenchTab,
     pub round: Option<u64>,
+    pub focus: NavigationFocus,
     pub split: bool,
+    /// Preferred PTY share of the vertical content area, in percent (1..=99).
+    pub terminal_percent: u8,
     pub zoomed: bool,
+    pub split_before_zoom: bool,
+    pub list_visible: bool,
     pub pinned: bool,
+}
+
+impl Default for WorkbenchPresentation {
+    fn default() -> Self {
+        Self {
+            tab: WorkbenchTab::Summary,
+            round: None,
+            focus: NavigationFocus::WorkbenchContent,
+            split: true,
+            terminal_percent: 40,
+            zoomed: false,
+            split_before_zoom: true,
+            list_visible: true,
+            pinned: false,
+        }
+    }
 }
 
 /// Frontend navigation model; it contains no daemon-owned or persisted data.
@@ -201,7 +223,6 @@ pub struct NavigationState {
     pub target: WorkbenchTarget,
     pub focus: NavigationFocus,
     pub presentations: std::collections::HashMap<WorkbenchTarget, WorkbenchPresentation>,
-    pub split_before_zoom: bool,
 }
 
 impl NavigationState {
@@ -217,14 +238,18 @@ impl NavigationState {
     }
 
     pub fn zoom(&mut self, zoomed: bool) {
-        let current = self.presentation().zoomed;
+        let presentation = self.presentation();
+        let current = presentation.zoomed;
         if zoomed && !current {
-            self.split_before_zoom = self.presentation().split;
+            self.update_presentation(|presentation| {
+                presentation.split_before_zoom = presentation.split;
+            });
         }
         self.update_presentation(|presentation| presentation.zoomed = zoomed);
         if !zoomed {
-            let split = self.split_before_zoom;
-            self.update_presentation(|presentation| presentation.split = split);
+            self.update_presentation(|presentation| {
+                presentation.split = presentation.split_before_zoom;
+            });
         }
     }
 }
@@ -305,6 +330,7 @@ impl ConversationState {
             NavigationFocus::Chat
             | NavigationFocus::WorkbenchList
             | NavigationFocus::WorkbenchContent
+            | NavigationFocus::WorkbenchTerminal
             | NavigationFocus::Composer => Focus::Chat,
         };
         let workbench_owns_focus = self.navigation.screen == Screen::Workbench
@@ -312,6 +338,7 @@ impl ConversationState {
                 self.navigation.focus,
                 NavigationFocus::WorkbenchList
                     | NavigationFocus::WorkbenchContent
+                    | NavigationFocus::WorkbenchTerminal
                     | NavigationFocus::Composer
             );
         if !workbench_owns_focus && navigation_coarse_focus != app.focus {
@@ -375,6 +402,7 @@ impl ConversationState {
                 app.navigation.focus,
                 NavigationFocus::WorkbenchList
                     | NavigationFocus::WorkbenchContent
+                    | NavigationFocus::WorkbenchTerminal
                     | NavigationFocus::Composer
             ) {
             self.focus
@@ -384,6 +412,7 @@ impl ConversationState {
                 NavigationFocus::Chat
                 | NavigationFocus::WorkbenchList
                 | NavigationFocus::WorkbenchContent
+                | NavigationFocus::WorkbenchTerminal
                 | NavigationFocus::Composer => Focus::Chat,
             }
         };

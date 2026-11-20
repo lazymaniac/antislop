@@ -1181,6 +1181,14 @@ fn global_navigation_shortcuts_route_before_screens_and_keep_editor_ctrl_k() {
     assert!(app.key_inner(key_ctrl('t')));
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(app.navigation.target, WorkbenchTarget::Session);
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    assert_eq!(
+        app.navigation.presentation().focus,
+        NavigationFocus::WorkbenchContent
+    );
     assert!(app.details.is_some());
     app.details = None;
     app.navigation.screen = Screen::Graph;
@@ -1362,6 +1370,120 @@ fn escape_restores_zoom_split_before_leaving_workbench() {
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert!(app.key_inner(key_press(KeyCode::Esc)));
     assert_eq!(app.navigation.screen, Screen::Graph);
+}
+
+#[test]
+fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.focus = NavigationFocus::WorkbenchTerminal;
+    app.navigation
+        .update_presentation(|presentation| presentation.split = true);
+    app.navigation.zoom(true);
+    let mut details = Details::new("worker:t1".into());
+    details.native_focus = true;
+    app.details = Some(details);
+    assert!(app.native_focused());
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+
+    assert!(!app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+}
+
+#[test]
+fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_target() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
+    app.navigation.focus = NavigationFocus::WorkbenchContent;
+    app.details = Some(Details::new("worker:t1".into()));
+    app.details.as_mut().unwrap().available_rounds = vec![1, 2];
+    app.details.as_mut().unwrap().selected_round = Some(1);
+
+    assert!(app.key_inner(key_press(KeyCode::Tab)));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert!(app.key_inner(key_press(KeyCode::BackTab)));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+    assert!(app.key_inner(key_press(KeyCode::Tab)));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert!(app.key_inner(key_ctrl('b')));
+    assert!(!app.navigation.presentation().list_visible);
+    app.navigation
+        .update_presentation(|presentation| presentation.split = false);
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)));
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)));
+    assert!(app.key_inner(key_press(KeyCode::Char('.'))));
+    assert_eq!(app.navigation.presentation().round, None);
+
+    assert!(app.key_inner(key_ctrl('w')));
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("reviewer:t1".into())
+    );
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+    assert!(app.key_inner(key_ctrl('w')));
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t1".into())
+    );
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert!(!app.navigation.presentation().list_visible);
+    assert!(!app.navigation.presentation().split);
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    assert_eq!(app.navigation.presentation().round, None);
+}
+
+#[test]
+fn workbench_alt_resize_and_mouse_drag_share_the_saved_split_ratio() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Session;
+    app.terminal_area = Rect::new(0, 0, 120, 40);
+    app.workbench_areas = workbench::areas(
+        app.terminal_area,
+        &app.navigation.presentation(),
+        NavigationFocus::WorkbenchContent,
+    );
+    let alt_down = event::KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+    assert!(app.key_inner(alt_down));
+    assert_eq!(app.navigation.presentation().terminal_percent, 45);
+
+    let separator = app.workbench_areas.separator;
+    assert!(app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: separator.x,
+        row: separator.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: separator.x,
+        row: separator.y.saturating_sub(5),
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(app.navigation.presentation().terminal_percent > 45);
+
+    let remembered = app.navigation.presentation().terminal_percent;
+    app.terminal_area = Rect::new(0, 0, 80, 23);
+    app.workbench_areas = workbench::areas(
+        app.terminal_area,
+        &app.navigation.presentation(),
+        NavigationFocus::WorkbenchContent,
+    );
+    assert!(!app.workbench_areas.split);
+    assert!(app.key_inner(alt_down));
+    assert_eq!(app.navigation.presentation().terminal_percent, remembered);
 }
 
 #[test]

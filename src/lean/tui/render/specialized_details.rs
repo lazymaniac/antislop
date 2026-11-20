@@ -9,8 +9,31 @@ impl Details {
     }
 
     pub fn draw_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
+        self.draw_at_inner(frame, area, view, None);
+    }
+
+    pub(super) fn draw_workbench_at(
+        &mut self,
+        frame: &mut Frame,
+        content: Rect,
+        terminal: Rect,
+        view: &View,
+    ) {
+        self.draw_at_inner(frame, content, view, Some(terminal));
+    }
+
+    fn draw_at_inner(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        terminal: Option<Rect>,
+    ) {
         self.normalize_tab();
         if area.width == 0 || area.height == 0 {
+            if let Some(terminal) = terminal {
+                self.draw_workbench_terminal(frame, terminal, view);
+            }
             return;
         }
         let theme = Theme::from_env();
@@ -18,10 +41,16 @@ impl Details {
         let areas = detail_areas(area, self.overview(), summary.len());
         self.draw_header(frame, &areas, summary, &theme);
         let body = self.draw_round_header(frame, areas.body, view, &theme);
-        if self.draw_secondary_screen(frame, body, areas.footer, view, &theme) {
+        if self.draw_secondary_screen(frame, body, areas.footer, view, &theme, terminal.is_some()) {
+            if let Some(terminal) = terminal {
+                self.draw_workbench_terminal(frame, terminal, view);
+            }
             return;
         }
         self.draw_detail_content(frame, body, areas.footer, view, &theme);
+        if let Some(terminal) = terminal {
+            self.draw_workbench_terminal(frame, terminal, view);
+        }
     }
 
     fn normalize_tab(&mut self) {
@@ -77,9 +106,10 @@ impl Details {
         footer: Rect,
         view: &View,
         theme: &Theme,
+        external_terminal: bool,
     ) -> bool {
         self.split = false;
-        if self.draw_overview_screen(frame, body, footer, view, theme) {
+        if self.draw_overview_screen(frame, body, footer, view, theme, external_terminal) {
             return true;
         }
         self.draw_dashboard_screen(frame, body, footer, view, theme)
@@ -92,7 +122,18 @@ impl Details {
         footer: Rect,
         view: &View,
         theme: &Theme,
+        external_terminal: bool,
     ) -> bool {
+        if external_terminal && self.overview() {
+            self.draw_dashboard(frame, view, body, theme);
+            self.draw_footer_hint(
+                frame,
+                footer,
+                overview_split_hint(self.searching, &self.query, footer.width),
+                theme,
+            );
+            return true;
+        }
         if !self.overview() || self.key == "conversation" || !self.query.is_empty() {
             return false;
         }

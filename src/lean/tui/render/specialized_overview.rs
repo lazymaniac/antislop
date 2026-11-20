@@ -1,6 +1,17 @@
 use super::super::*;
 
 impl Details {
+    pub(super) fn draw_workbench_terminal(&mut self, frame: &mut Frame, area: Rect, view: &View) {
+        if area.is_empty() {
+            self.native_areas = [Rect::default(); 2];
+            return;
+        }
+        let theme = Theme::from_env();
+        let key = self.key.clone();
+        self.draw_session_panel(frame, view, &key, 0, area, &theme);
+        self.native_areas[1] = Rect::default();
+    }
+
     pub(super) fn draw_overview(
         &mut self,
         frame: &mut Frame,

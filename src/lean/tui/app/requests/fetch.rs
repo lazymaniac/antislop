@@ -406,28 +406,63 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
-        self.navigation.screen = Screen::Workbench;
-        self.navigation.target = if key == "conversation" {
+        let target = if key == "conversation" {
             WorkbenchTarget::Session
         } else {
             WorkbenchTarget::Agent(key.clone())
         };
-        self.navigation.focus = NavigationFocus::WorkbenchContent;
+        let target_initialized = self.navigation.presentations.contains_key(&target);
+        let previous_focus = self.navigation.focus;
+        let previous_round = self
+            .details
+            .as_ref()
+            .and_then(|details| details.selected_round);
+        self.navigation.update_presentation(|presentation| {
+            presentation.focus = previous_focus;
+            presentation.round = previous_round;
+        });
+        self.navigation.screen = Screen::Workbench;
+        self.navigation.target = target;
+        if !target_initialized {
+            let delivery = self
+                .view
+                .tasks
+                .iter()
+                .find(|task| key.ends_with(&task.id))
+                .is_some_and(|task| task.change_kind.has_delivery());
+            let tab = super::super::super::workbench::default_tab(&key, delivery);
+            self.navigation.update_presentation(|presentation| {
+                presentation.tab = tab;
+                presentation.focus = NavigationFocus::WorkbenchContent;
+            });
+        }
+        self.navigation.focus = self.navigation.presentation().focus;
         self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);
         self.resolve_details_task();
+        if self.graph_expanded.is_none() && self.navigation.presentation().tab == WorkbenchTab::Diff
+        {
+            self.open_diff(&key);
+        } else {
+            self.diff = None;
+        }
         self.fetch_task();
     }
 
     fn restore_details(&mut self, key: &str) {
+        let presentation = self.navigation.presentation();
         if let Some(details) = &mut self.details {
             details.switch_key(key.to_owned());
+            details.selected_round = presentation.round;
+            details.switch_tab(workbench_legacy_tab(presentation.tab));
         } else {
             let mut details = Details::new(key.to_owned());
             details.conversation = self.conversation.clone();
             details.drafts = std::rc::Rc::clone(&self.agent_drafts);
             details.scroll_memory = self.details_scroll_memory.clone();
             details.query_memory = self.details_query_memory.clone();
+            details.selected_round = presentation.round;
+            details.switch_tab(workbench_legacy_tab(presentation.tab));
             details.restore_current_tab();
             self.details = Some(details);
         }
@@ -440,9 +475,18 @@ impl App {
                 .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
                 .and_then(|task| task.uuid.clone());
             if details.task_id().is_some() {
-                details.switch_tab(details::tabs_for(&details.key)[0]);
+                details.switch_tab(workbench_legacy_tab(self.navigation.presentation().tab));
             }
         }
+    }
+}
+
+fn workbench_legacy_tab(tab: WorkbenchTab) -> usize {
+    match tab {
+        WorkbenchTab::Summary | WorkbenchTab::Conversation | WorkbenchTab::Diff => 0,
+        WorkbenchTab::Results => details::RESULT,
+        WorkbenchTab::Checks => details::CHECKS,
+        WorkbenchTab::Comments => details::COMMENTS,
     }
 }
 

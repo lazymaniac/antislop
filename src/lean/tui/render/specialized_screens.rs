@@ -33,12 +33,23 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
     let Some(diff) = &mut app.diff else {
         return false;
     };
-    let area = if app.navigation.screen == Screen::Workbench {
-        panel_area(frame.area(), 84)
+    if app.navigation.screen == Screen::Workbench {
+        let presentation = app.navigation.presentation();
+        let areas =
+            super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
+        app.workbench_areas = areas;
+        draw_workbench_chrome(frame, areas, &app.navigation.target, &presentation);
+        if areas.list_visible {
+            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
+        }
+        diff.paint_at(frame, areas.content, &app.view);
+        if let Some(details) = &mut app.details {
+            details.native_focus = app.navigation.focus == NavigationFocus::WorkbenchTerminal;
+            details.draw_workbench_terminal(frame, areas.terminal, &app.view);
+        }
     } else {
-        frame.area()
-    };
-    diff.paint_at(frame, area, &app.view);
+        diff.paint_at(frame, frame.area(), &app.view);
+    }
     true
 }
 
@@ -49,16 +60,93 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
     let Some(details) = &mut app.details else {
         return false;
     };
-    let area = if app.navigation.screen == Screen::Workbench {
-        list_area(frame.area())
+    if app.navigation.screen == Screen::Workbench {
+        let presentation = app.navigation.presentation();
+        let areas =
+            super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
+        app.workbench_areas = areas;
+        draw_workbench_chrome(frame, areas, &app.navigation.target, &presentation);
+        if areas.list_visible {
+            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
+        }
+        details.draw_workbench_at(frame, areas.content, areas.terminal, &app.view);
     } else {
-        frame.area()
-    };
-    details.draw_at(frame, area, &app.view);
+        app.workbench_areas = Default::default();
+        details.draw_at(frame, frame.area(), &app.view);
+    }
     app.text_area = Some(details.text_area);
     app.text_origin = details.scroll;
     app.sync_native_views();
     true
+}
+
+fn draw_workbench_chrome(
+    frame: &mut Frame,
+    areas: super::super::workbench::WorkbenchAreas,
+    target: &WorkbenchTarget,
+    presentation: &WorkbenchPresentation,
+) {
+    let theme = Theme::from_env();
+    let context = super::super::workbench::context(target, presentation);
+    let identity = match &context.target {
+        WorkbenchTarget::Session => "Session".to_owned(),
+        WorkbenchTarget::Agent(key) => key.clone(),
+    };
+    frame.render_widget(
+        Paragraph::new(format!(
+            " {identity} · {:?} · {:?} · round {:?} · {:?}",
+            context.role, presentation.tab, context.round, context.focus
+        ))
+        .style(theme.bar()),
+        areas.header,
+    );
+    let split_hint = if areas.split {
+        "Tab panel · Alt+↑/↓ resize · z zoom · Ctrl+B list"
+    } else {
+        "Tab panel · Ctrl+B list · Esc back"
+    };
+    frame.render_widget(Paragraph::new(split_hint).style(theme.bar()), areas.footer);
+    if !areas.separator.is_empty() {
+        frame.render_widget(
+            Paragraph::new(if theme.ascii { "-" } else { "─" }),
+            areas.separator,
+        );
+    }
+    if areas.list_visible {
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::RIGHT)
+                .border_style(theme.faint()),
+            areas.list,
+        );
+    }
+}
+
+fn draw_workbench_list(frame: &mut Frame, area: Rect, view: &View, target: &WorkbenchTarget) {
+    let theme = Theme::from_env();
+    for index in 0..usize::from(area.height) {
+        let Some((item, label)) = super::super::workbench::target_at(view, index) else {
+            break;
+        };
+        let selected = match target {
+            WorkbenchTarget::Session => item == "conversation",
+            WorkbenchTarget::Agent(key) => item == *key,
+        };
+        let style = if selected {
+            theme.title().add_modifier(Modifier::REVERSED)
+        } else {
+            theme.text()
+        };
+        frame.render_widget(
+            Paragraph::new(label).style(style),
+            Rect::new(
+                area.x,
+                area.y + index as u16,
+                area.width.saturating_sub(1),
+                1,
+            ),
+        );
+    }
 }
 
 impl App {

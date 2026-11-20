@@ -62,6 +62,7 @@ pub mod theme;
 pub mod unblock;
 pub mod update_queue;
 pub mod view;
+mod workbench;
 pub mod workspace;
 
 pub use contracts::{
@@ -85,6 +86,12 @@ pub use theme::{
 };
 pub use update_queue::{QueueClosed, QueueEmpty, UpdateReceiver, UpdateSender, update_channel};
 pub use view::{MessageEntry, TranscriptCard};
+pub use workbench::{
+    WorkbenchAreas, WorkbenchContext, WorkbenchRole, areas as workbench_areas,
+    context as workbench_context, default_tab as workbench_default_tab,
+    neighbour_tab as workbench_neighbour_tab, resize_at as resize_workbench_at,
+    tabs_for as workbench_tabs_for,
+};
 
 use super::daemon::{Client, Request};
 use super::projects;
@@ -123,6 +130,7 @@ fn padded(area: Rect) -> Rect {
 }
 
 /// Bound a centered panel while preserving the full viewport on small terminals.
+#[cfg(test)]
 fn panel_area(area: Rect, max_width: u16) -> Rect {
     if area.width < 16 || area.height < 7 {
         return area;
@@ -140,6 +148,7 @@ fn panel_area(area: Rect, max_width: u16) -> Rect {
 }
 
 /// Center a list viewport with its own 72-column content limit.
+#[cfg(test)]
 fn list_area(area: Rect) -> Rect {
     panel_area(area, 72)
 }
