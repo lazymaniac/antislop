@@ -1,0 +1,91 @@
+<div id="workbench-pty-preview" aria-label="Workbench z podglądem diff i PTY">
+  <header class="wp-top"><strong><span>›</span> antislop</strong><span class="wp-muted">session / completion</span><span class="wp-live">● worker running <span class="wp-muted">· demo</span></span></header>
+  <div class="wp-title"><h2>Workbench / Create PR</h2><span class="wp-muted">workbench</span></div>
+  <main class="wp-main">
+    <nav class="wp-sidebar" aria-label="Zadania i agenci">
+      <div class="wp-caption">SESSION TASKS</div>
+      <div class="wp-task"><span class="wp-mint">✓</span> Session contracts<small>reviewed · 35/35</small></div>
+      <div class="wp-task wp-selected"><span class="wp-mint">●</span> Create PR<small>implementation · round 5</small></div>
+      <div class="wp-agents"><div>✓ &nbsp;options <span>approved</span></div><div class="wp-agent-active">› &nbsp;worker <span>live PTY</span></div><div>◇ &nbsp;reviewer <span>waiting</span></div></div>
+      <div class="wp-task"><span class="wp-mint">●</span> Merge into main<small>worker · round 4</small></div>
+      <div class="wp-task"><span class="wp-muted">◇</span> Continue session<small>review · round 4</small></div>
+      <div class="wp-side-foot"><div class="wp-caption">TERMINAL FOLLOWS</div><div>Create PR / worker</div><p class="wp-muted">p · pin this terminal</p></div>
+    </nav>
+    <div class="wp-work">
+      <section class="wp-diff" aria-label="Podgląd zmian">
+        <header class="wp-section-head"><div><strong>Create PR</strong><span class="wp-muted wp-small"> &nbsp;session branch</span></div><span class="wp-mint wp-small">+12 <span class="wp-muted">/</span> −4</span></header>
+        <div class="wp-tabs"><button type="button" class="wp-tab wp-tab-active">Diff</button><button type="button" class="wp-tab">Result</button><button type="button" class="wp-tab">Checks</button><span class="wp-muted">working tree ↔ task base</span></div>
+        <div class="wp-diff-body"><div class="wp-files"><div class="wp-file-active">M &nbsp;completion.rs</div><div>M &nbsp;session_actions.rs</div><div class="wp-muted">2 files changed</div></div><div class="wp-code"><div class="wp-code-heading">src/session/completion.rs</div><div class="wp-line wp-muted">@@ complete_session @@</div><div class="wp-line"><span class="wp-number">42</span> let branch = session.branch();</div><div class="wp-line wp-remove"><span class="wp-number">43</span>− return Ok(());</div><div class="wp-line wp-add"><span class="wp-number">43</span>+ let summary = completed_work.summary();</div><div class="wp-line wp-add"><span class="wp-number">44</span>+ retain_session(branch, summary)?;</div><div class="wp-line"><span class="wp-number">45</span> Ok(())</div></div></div>
+      </section>
+      <div class="wp-divider"><span>⋯</span></div>
+      <section class="wp-terminal" aria-label="Podgląd terminala agenta">
+        <header class="wp-terminal-head"><div><strong>PTY</strong><span class="wp-terminal-agent">› worker</span><span class="wp-muted">round 5</span></div><div class="wp-terminal-actions"><span class="wp-mint">● live</span><span class="wp-muted">following output</span><button type="button" data-expand class="wp-terminal-button">z · expand</button></div></header>
+        <div class="wp-terminal-screen"><div class="wp-muted">~/worktrees/create-pr · session branch</div><div><span class="wp-mint">›</span> Prepare the pull request for the completed session.</div><br><div class="wp-muted">• Reading completion flow and retained session metadata</div><div class="wp-muted">• Reviewing the current change</div><br><div><span class="wp-mint">$</span> git diff --stat</div><div> src/session/completion.rs &nbsp;&nbsp;&nbsp;&nbsp;| 10 ++++++++--</div><div> src/session/session_actions.rs | &nbsp;6 ++++--</div><br><div><span class="wp-mint">›</span> Preparing the PR summary<span class="wp-caret"> </span></div></div>
+        <footer class="wp-terminal-footer"><span><span class="wp-mint">t</span> focus terminal</span><span>pgup · scrollback</span><span>esc · return to tasks</span></footer>
+      </section>
+    </div>
+  </main>
+  <footer class="wp-footer"><span class="wp-mint">:</span><span class="wp-muted">Give direction to this task…</span><span class="wp-command-key">ctrl k</span><span class="wp-muted">d · decisions</span></footer>
+</div>
+<style>
+  #workbench-pty-preview{--wp-bg:#101619;--wp-panel:#192226;--wp-focus:#2a3c40;--wp-text:#e7edeb;--wp-muted:#a1b1b3;--wp-mint:#a4dfcc;background:var(--wp-bg);color:var(--wp-text);padding:24px 27px 20px;font:14px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;min-height:930px}
+  #workbench-pty-preview *{box-sizing:border-box}
+  #workbench-pty-preview strong{font-weight:500}
+  #workbench-pty-preview .wp-top{display:flex;gap:25px;align-items:center;font-size:inherit;margin-bottom:28px;flex-wrap:wrap}
+  #workbench-pty-preview .wp-top strong{font-size:inherit}
+  #workbench-pty-preview .wp-top strong span{color:var(--wp-mint);margin-right:7px}
+  #workbench-pty-preview .wp-live{margin-left:auto;color:var(--wp-mint)}
+  #workbench-pty-preview .wp-muted{color:var(--wp-muted)}
+  #workbench-pty-preview .wp-mint{color:var(--wp-mint)}
+  #workbench-pty-preview .wp-title{display:flex;justify-content:space-between;gap:15px;align-items:baseline;margin-bottom:25px;flex-wrap:wrap}
+  #workbench-pty-preview h2{font-size:inherit;font-weight:500;letter-spacing:0;margin:0}
+  #workbench-pty-preview .wp-title>span{font-size:inherit}
+  #workbench-pty-preview .wp-main{display:grid;grid-template-columns:275px minmax(0,1fr);gap:23px}
+  #workbench-pty-preview .wp-caption{font-size:inherit;letter-spacing:0;color:var(--wp-muted);margin-bottom:15px}
+  #workbench-pty-preview .wp-sidebar{padding-top:4px;display:flex;flex-direction:column;min-width:0}
+  #workbench-pty-preview .wp-task{font-size:inherit;padding:13px 14px;margin-bottom:6px}
+  #workbench-pty-preview .wp-task small{display:block;color:var(--wp-muted);font-size:inherit;padding-left:21px;margin-top:4px}
+  #workbench-pty-preview .wp-selected{background:var(--wp-focus)}
+  #workbench-pty-preview .wp-agents{padding:5px 12px 15px 25px;font-size:inherit;color:var(--wp-muted);display:grid;gap:10px}
+  #workbench-pty-preview .wp-agents>div{display:flex;justify-content:space-between;gap:8px}
+  #workbench-pty-preview .wp-agent-active{color:var(--wp-mint)}
+  #workbench-pty-preview .wp-side-foot{margin-top:auto;font-size:inherit;padding:25px 12px 20px}
+  #workbench-pty-preview .wp-side-foot p{margin:7px 0 0}
+  #workbench-pty-preview .wp-work{min-width:0}
+  #workbench-pty-preview .wp-diff{background:var(--wp-panel);min-width:0}
+  #workbench-pty-preview .wp-section-head{display:flex;justify-content:space-between;gap:15px;padding:17px 20px 0;flex-wrap:wrap}
+  #workbench-pty-preview .wp-small{font-size:inherit}
+  #workbench-pty-preview .wp-tabs{display:flex;align-items:center;gap:20px;padding:13px 20px 16px;flex-wrap:wrap}
+  #workbench-pty-preview .wp-tabs>span{margin-left:auto;font-size:inherit}
+  #workbench-pty-preview .wp-tab{background:none;border:0;color:var(--wp-muted);font:inherit;font-size:inherit;padding:0}
+  #workbench-pty-preview .wp-tab-active{color:var(--wp-mint)}
+  #workbench-pty-preview .wp-diff-body{display:grid;grid-template-columns:220px minmax(0,1fr);font-size:inherit;padding-bottom:16px}
+  #workbench-pty-preview .wp-files{padding:0 10px 0 13px;display:grid;gap:5px;align-content:start}
+  #workbench-pty-preview .wp-files>div{padding:7px 8px;overflow-wrap:anywhere}
+  #workbench-pty-preview .wp-file-active{background:var(--wp-focus)}
+  #workbench-pty-preview .wp-code{min-width:0;padding-right:16px}
+  #workbench-pty-preview .wp-code-heading{padding:8px 10px;background:#223035;margin-bottom:9px;overflow-wrap:anywhere}
+  #workbench-pty-preview .wp-line{padding:6px 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+  #workbench-pty-preview .wp-number{display:inline-block;min-width:27px;color:var(--wp-muted)}
+  #workbench-pty-preview .wp-remove{background:#35272a;color:#e0b8bb}
+  #workbench-pty-preview .wp-add{background:#20372f;color:#b9e4ce}
+  #workbench-pty-preview .wp-divider{height:17px;display:flex;justify-content:center;align-items:center;color:#607a81;letter-spacing:0;font-size:inherit}
+  #workbench-pty-preview .wp-terminal{background:#0a1114;min-width:0}
+  #workbench-pty-preview .wp-terminal-head{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;background:#223035;font-size:inherit;padding:11px 16px}
+  #workbench-pty-preview .wp-terminal-head>div{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  #workbench-pty-preview .wp-terminal-agent{color:var(--wp-mint)}
+  #workbench-pty-preview .wp-terminal-actions{font-size:inherit}
+  #workbench-pty-preview .wp-terminal-button{background:transparent;border:0;color:var(--wp-text);font:inherit;padding:0}
+  #workbench-pty-preview .wp-terminal-screen{font-size:inherit;line-height:1.65;padding:17px 20px;overflow-wrap:anywhere}
+  #workbench-pty-preview .wp-caret{display:inline-block;background:var(--wp-mint);width:7px;height:13px;vertical-align:middle;margin-left:7px}
+  #workbench-pty-preview .wp-terminal-footer{display:flex;gap:20px;flex-wrap:wrap;padding:11px 17px;color:var(--wp-muted);font-size:inherit;background:#111c21}
+  #workbench-pty-preview .wp-footer{background:var(--wp-panel);padding:12px 15px;display:flex;gap:16px;font-size:inherit;margin-top:22px;flex-wrap:wrap}
+  #workbench-pty-preview .wp-command-key{margin-left:auto}
+  #workbench-pty-preview.terminal-expanded .wp-main{grid-template-columns:1fr}
+  #workbench-pty-preview.terminal-expanded .wp-sidebar,#workbench-pty-preview.terminal-expanded .wp-diff,#workbench-pty-preview.terminal-expanded .wp-divider{display:none}
+  #workbench-pty-preview.terminal-expanded .wp-terminal-screen{min-height:550px}
+  @media(max-width:750px){#workbench-pty-preview .wp-main{grid-template-columns:1fr}#workbench-pty-preview .wp-sidebar{display:none}#workbench-pty-preview{padding:20px 15px}#workbench-pty-preview .wp-diff-body{grid-template-columns:1fr}#workbench-pty-preview .wp-files{display:flex;flex-wrap:wrap;margin-bottom:12px}#workbench-pty-preview .wp-code{padding-left:13px}#workbench-pty-preview .wp-tabs>span{margin-left:0}}
+</style>
+<script>
+(()=>{const root=document.getElementById('workbench-pty-preview');const expand=root.querySelector('[data-expand]');expand.addEventListener('click',()=>{const expanded=root.classList.toggle('terminal-expanded');expand.textContent=expanded?'z · restore':'z · expand'});})();
+</script>

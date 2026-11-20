@@ -1,0 +1,118 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#101619}</style></head><body><div id="agent-layout-exploration" aria-label="Canvas antislop z inspektorem">
+  <div class="al-app" data-layout="canvas" aria-label="Canvas z inspektorem"></div>
+</div>
+<style>
+  #agent-layout-exploration .al-app {
+    --al-bg:#101619;--al-surface:#192226;--al-focus:#2a3c40;--al-raised:#223035;
+    --al-text:#e7edeb;--al-muted:#a1b1b3;--al-accent:#a4dfcc;--al-line:#365058;--al-attention:#e9c593;
+    color:var(--al-text);background:var(--al-bg);padding:26px 28px 20px;min-height:760px;
+    font:14px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;
+    display:flex;flex-direction:column;position:relative;font-variant-numeric:tabular-nums;
+  }
+  #agent-layout-exploration .al-app *{box-sizing:border-box}
+  #agent-layout-exploration .al-top{display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:32px}
+  #agent-layout-exploration .al-brand{font-weight:600;letter-spacing:-.5px}
+  #agent-layout-exploration .al-brand b{font-weight:500;color:var(--al-accent);margin-right:10px}
+  #agent-layout-exploration .al-session{color:var(--al-muted);font-size:12px}
+  #agent-layout-exploration .al-top-right{margin-left:auto;display:flex;align-items:center;gap:18px;font-size:12px}
+  #agent-layout-exploration .al-dot{color:var(--al-accent)}
+  #agent-layout-exploration .al-head{display:flex;justify-content:space-between;gap:20px;align-items:baseline;margin-bottom:24px;flex-wrap:wrap}
+  #agent-layout-exploration h2{font-size:22px;font-weight:500;letter-spacing:-.7px;margin:0}
+  #agent-layout-exploration h3{font-size:15px;font-weight:500;margin:0}
+  #agent-layout-exploration h4{font-size:14px;font-weight:500;margin:0}
+  #agent-layout-exploration p{margin:0}
+  #agent-layout-exploration .al-sub{color:var(--al-muted);font-size:12px;margin-top:6px}
+  #agent-layout-exploration .al-muted{color:var(--al-muted)}
+  #agent-layout-exploration .al-small{font-size:12px}
+  #agent-layout-exploration .al-label{font-size:11px;letter-spacing:1.4px;color:var(--al-muted);margin-bottom:12px}
+  #agent-layout-exploration .al-accent{color:var(--al-accent)}
+  #agent-layout-exploration .al-attention{color:var(--al-attention)}
+  #agent-layout-exploration .al-button{font:inherit;font-size:12px;color:var(--al-text);background:var(--al-raised);border:0;border-radius:0;padding:8px 12px;min-height:34px;text-align:left}
+  #agent-layout-exploration .al-button.primary{background:var(--al-accent);color:var(--al-bg)}
+  #agent-layout-exploration .al-button.quiet{background:transparent;color:var(--al-muted);padding:0}
+  #agent-layout-exploration .al-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  #agent-layout-exploration .al-tag{display:inline-block;background:var(--al-raised);padding:2px 7px;color:var(--al-muted);font-size:11px}
+  #agent-layout-exploration .al-tag.attention{color:var(--al-attention);background:#372d23}
+  #agent-layout-exploration .al-footer{margin-top:auto;padding-top:26px}
+  #agent-layout-exploration .al-command{display:flex;align-items:center;gap:14px;width:100%;padding:13px 15px;background:var(--al-surface);border:0;color:var(--al-muted);font:inherit;font-size:12px;text-align:left}
+  #agent-layout-exploration .al-command .al-shortcut{margin-left:auto;color:var(--al-text);white-space:nowrap}
+  #agent-layout-exploration .al-keybar{display:flex;gap:23px;flex-wrap:wrap;color:var(--al-muted);font-size:11px;margin-top:12px}
+  #agent-layout-exploration .al-keybar b{font-weight:400;color:var(--al-text)}
+  #agent-layout-exploration .al-notice{color:var(--al-accent);font-size:12px;padding-top:10px;min-height:20px}
+  #agent-layout-exploration .al-canvas-layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:30px;flex:1}
+  #agent-layout-exploration .al-canvas{padding-top:8px;min-width:0}
+  #agent-layout-exploration .al-origin{background:var(--al-surface);padding:14px 19px;display:flex;justify-content:space-between;gap:10px;max-width:400px;margin:0 auto}
+  #agent-layout-exploration .al-route{height:40px;display:flex;align-items:center;justify-content:center;color:var(--al-line)}
+  #agent-layout-exploration .al-branch{display:grid;grid-template-columns:1fr 1fr;gap:22px;position:relative}
+  #agent-layout-exploration .al-node{background:var(--al-surface);color:var(--al-text);padding:19px 20px;text-align:left;border:0;font:inherit;min-width:0;width:100%}
+  #agent-layout-exploration .al-node[aria-pressed="true"]{background:var(--al-focus)}
+  #agent-layout-exploration .al-node h4{margin-bottom:19px}
+  #agent-layout-exploration .al-node-state{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-bottom:12px;flex-wrap:wrap}
+  #agent-layout-exploration .al-stages{display:flex;flex-wrap:wrap;gap:9px;color:var(--al-muted);font-size:11px}
+  #agent-layout-exploration .al-terminal-node{margin:0 auto;max-width:400px;display:block}
+  #agent-layout-exploration .al-inspector{background:var(--al-surface);padding:22px 21px;min-width:0}
+  #agent-layout-exploration .al-inspector .al-divider{height:1px;background:var(--al-line);margin:22px 0}
+  #agent-layout-exploration .al-criteria{display:grid;gap:8px;font-size:12px;margin:17px 0;color:var(--al-muted)}
+  #agent-layout-exploration .al-decision-title{margin-bottom:10px;color:var(--al-attention);font-size:12px}
+  #agent-layout-exploration .al-composer-backdrop{position:absolute;inset:0;background:#080e12c9;z-index:5;padding:120px 90px 30px;display:flex;align-items:start;justify-content:center}
+  #agent-layout-exploration .al-composer-backdrop[hidden]{display:none}
+  #agent-layout-exploration .al-composer{width:100%;max-width:720px;background:var(--al-raised);padding:25px}
+  #agent-layout-exploration .al-composer textarea{width:100%;resize:vertical;min-height:115px;margin:17px 0 0;background:var(--al-bg);color:var(--al-text);font:inherit;border:0;border-radius:0;padding:15px}
+  #agent-layout-exploration .al-composer-top{display:flex;justify-content:space-between;gap:16px;align-items:center}
+  #agent-layout-exploration .al-plain-note{font-size:11px;color:var(--al-muted);margin-top:18px}
+  @media(max-width:800px){
+    #agent-layout-exploration .al-canvas-layout{grid-template-columns:minmax(0,1fr) 250px;gap:18px}
+  }
+  @media(max-width:600px){
+    #agent-layout-exploration .al-app{padding:20px 16px;min-height:1350px}
+    #agent-layout-exploration .al-top{gap:12px;margin-bottom:22px}
+    #agent-layout-exploration .al-top-right{margin-left:0}
+    #agent-layout-exploration .al-branch{gap:9px}
+    #agent-layout-exploration .al-node{padding:15px 12px}
+    #agent-layout-exploration .al-composer-backdrop{padding:80px 12px 20px}
+    #agent-layout-exploration .al-keybar{gap:14px}
+  }
+</style>
+<script>
+(() => {
+  const root=document.getElementById('agent-layout-exploration');
+  const top=(name)=>`<header class="al-top"><span class="al-brand"><b>›</b>antislop</span><span class="al-session">session / completion</span><div class="al-top-right"><span class="al-dot">● running</span><span class="al-muted">${name}</span></div></header>`;
+  const heading=(title,sub)=>`<div class="al-head"><div><h2>${title}</h2><p class="al-sub">${sub}</p></div><span class="al-tag attention" data-pending>1 decision</span></div>`;
+  const command=`<footer class="al-footer"><button class="al-command cursor-interaction" data-open type="button"><span class="al-accent">:</span><span>Give direction, change scope, ask a question…</span><span class="al-shortcut">ctrl k</span></button><div class="al-keybar"><span><b>↑ ↓</b> focus</span><span><b>enter</b> inspect</span><span><b>d</b> decisions</span><span><b>space</b> pause</span><span><b>h</b> history</span></div><div class="al-notice" aria-live="polite"></div></footer>`;
+  const composer=`<div class="al-composer-backdrop" hidden><form class="al-composer"><div class="al-composer-top"><h3>Give direction</h3><button type="button" class="al-button quiet cursor-interaction" data-close>esc · close</button></div><p class="al-sub">To: orchestration · this session</p><textarea aria-label="Polecenie dla orkiestracji" placeholder="Keep the PR as a draft and include a short test summary."></textarea><div class="al-actions"><button type="submit" class="al-button primary cursor-interaction">Send instruction ↵</button><button type="button" class="al-button cursor-interaction" data-close>Cancel</button></div><p class="al-plain-note">Preview only · instructions stay in this mockup</p></form></div>`;
+  const decision=()=>`<div data-decision><div class="al-decision-title">◇ YOUR DECISION</div><h4>Open the PR as a draft?</h4><p class="al-sub">Implementation is ready. Choose how to publish the pull request.</p><div class="al-actions"><button type="button" class="al-button primary cursor-interaction" data-answer="Draft PR">Draft PR</button><button type="button" class="al-button cursor-interaction" data-answer="Ready for review">Ready for review</button></div></div>`;
+  root.querySelector('[data-layout="canvas"]').innerHTML=top('canvas')+heading('See the whole plan.','Dependencies on the left · selected work on the right')+`
+    <main class="al-canvas-layout"><div class="al-canvas">
+      <div class="al-origin"><span>✓ Session contracts</span><span class="al-muted al-small">35/35</span></div><div class="al-route" aria-hidden="true">┌──────────┴──────────┐</div>
+      <div class="al-branch"><button class="al-node cursor-interaction" type="button" data-node="Create PR" aria-pressed="true"><div class="al-node-state"><span class="al-accent">● implementation</span><span class="al-muted">30:41</span></div><h4>Create PR</h4><div class="al-stages"><span>✓ options</span><span class="al-accent">› worker</span><span>○ review</span></div></button><button class="al-node cursor-interaction" type="button" data-node="Merge into main" aria-pressed="false"><div class="al-node-state"><span class="al-accent">● implementation</span><span class="al-muted">35:28</span></div><h4>Merge into main</h4><div class="al-stages"><span>✓ options</span><span class="al-accent">› worker</span><span>○ review</span></div></button></div>
+      <div class="al-route" aria-hidden="true">└──────────┬──────────┘</div><button class="al-node al-terminal-node cursor-interaction" type="button" data-node="Continue the session" aria-pressed="false"><div class="al-node-state"><span class="al-muted">◇ review</span><span class="al-muted">08:06</span></div><h4>Continue the session</h4><div class="al-stages"><span>✓ options</span><span>✓ worker</span><span class="al-accent">› reviewer</span></div></button>
+    </div><aside class="al-inspector"><div class="al-label">SELECTED TASK</div><h3 data-selection-title>Create PR</h3><p class="al-sub" data-selection-copy>Publish the completed session branch through its existing session.</p><div class="al-criteria"><span>✓ Session branch retained</span><span>✓ Summary prepared</span><span>○ Publication choice</span></div><div class="al-small"><span class="al-muted">worker</span> &nbsp; round 5</div><div class="al-divider"></div>${decision()}<div class="al-actions"><button type="button" class="al-button quiet cursor-interaction" data-local="Task results opened">↗ results & changes</button></div></aside></main>`+command+composer;
+  root.querySelectorAll('.al-app').forEach(app=>{
+    const overlay=app.querySelector('.al-composer-backdrop');
+    const area=app.querySelector('textarea');
+    let opener;
+    function close(){overlay.hidden=true;opener?.focus()}
+    app.querySelectorAll('[data-open]').forEach(button=>button.addEventListener('click',()=>{opener=button;overlay.hidden=false;area.focus()}));
+    app.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',close));
+    app.addEventListener('keydown',event=>{if(event.key==='Escape'&&!overlay.hidden){event.preventDefault();close()}});
+    app.querySelector('form').addEventListener('submit',event=>{event.preventDefault();const message=area.value.trim();if(!message){area.focus();return}app.querySelector('.al-notice').textContent='Preview · instruction recorded: '+message;area.value='';close()});
+    app.querySelectorAll('[data-answer]').forEach(button=>button.addEventListener('click',()=>{
+      const block=button.closest('[data-decision]');
+      block.innerHTML='<div class="al-decision-title al-accent">✓ DECISION RECORDED</div><h4></h4><p class="al-sub">The task can continue. Undo is available in history.</p>';
+      block.querySelector('h4').textContent=button.dataset.answer;
+      const pending=app.querySelector('[data-pending]');pending.textContent='No pending decisions';pending.classList.remove('attention');
+      app.querySelector('.al-notice').textContent='Preview · '+button.dataset.answer+' selected';
+    }));
+    app.querySelectorAll('[data-node],[data-task]').forEach(button=>button.addEventListener('click',()=>{
+      const selector=button.hasAttribute('data-node')?'[data-node]':'[data-task]';
+      app.querySelectorAll(selector).forEach(peer=>peer.setAttribute('aria-pressed',String(peer===button)));
+      app.querySelector('[data-selection-title]').textContent=button.dataset.node||button.dataset.task;
+      const copies={'Create PR':'Publish the completed session branch through its existing session.','Merge into main':'Merge the completed session branch into main.','Continue the session':'Resume with the original context and branch.','Session contracts':'Completion and action contracts have been reviewed.'};
+      app.querySelector('[data-selection-copy]').textContent=copies[button.dataset.node||button.dataset.task];
+    }));
+    app.querySelectorAll('[data-local]').forEach(button=>button.addEventListener('click',()=>{app.querySelector('.al-notice').textContent='Preview · '+button.dataset.local}));
+    if(globalThis.Tweak){const settings={accent:'#a4dfcc',compact:false};const tweak=new Tweak({container:app,onChange:()=>{app.style.setProperty('--al-accent',settings.accent);app.style.setProperty('font-size',settings.compact?'13px':'14px')}});tweak.addColorPicker(settings,'accent',{label:'Akcent',reference:'--al-accent'});tweak.addToggle(settings,'compact',{label:'Mniejszy tekst'})}
+  });
+})();
+</script>
+</body></html>

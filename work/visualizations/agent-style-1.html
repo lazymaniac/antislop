@@ -1,0 +1,133 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#101517}button{color:inherit}</style></head><body><div id="agent-design-preview" aria-label="Graf agentów — Obsidian + mint">
+  <div class="agent-product obsidian" data-design="obsidian" aria-label="Graf agentów — Obsidian + mint"></div>
+</div>
+<style>
+  #agent-design-preview .agent-product {
+    --ap-bg:#101517; --ap-panel:#171f22; --ap-focus:#29383b;
+    --ap-text:#e3e9e4; --ap-muted:#99aaa9; --ap-line:#34464a;
+    --ap-accent:#a8dfc8; --ap-quiet:#1c2b28;
+    background:var(--ap-bg); color:var(--ap-text); min-height:690px;
+    padding:24px; box-sizing:border-box; font:14px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums; color-scheme:dark;
+  }
+  #agent-design-preview .agent-product * { box-sizing:border-box; }
+  #agent-design-preview .app-head { display:flex; align-items:center; gap:22px; flex-wrap:wrap; padding-bottom:20px; }
+  #agent-design-preview .wordmark { color:var(--ap-text); font-weight:600; letter-spacing:-.5px; }
+  #agent-design-preview .brand-mark { color:var(--ap-accent); margin-right:9px; }
+  #agent-design-preview .crumb { color:var(--ap-muted); }
+  #agent-design-preview .view-label { margin-left:auto; color:var(--ap-accent); background:var(--ap-quiet); padding:1px 9px; }
+  #agent-design-preview .canvas-head { display:flex; gap:15px; justify-content:space-between; align-items:baseline; margin:15px 0 26px; }
+  #agent-design-preview .canvas-title { font-size:19px; font-weight:500; letter-spacing:-.5px; margin:0; }
+  #agent-design-preview .muted { color:var(--ap-muted); }
+  #agent-design-preview .small { font-size:12px; }
+  #agent-design-preview .completed { display:flex; align-items:center; flex-wrap:wrap; gap:12px; color:var(--ap-muted); margin-bottom:30px; }
+  #agent-design-preview .completed .tick { color:var(--ap-accent); }
+  #agent-design-preview .task-heading { display:flex; align-items:baseline; justify-content:space-between; gap:14px; margin-bottom:14px; }
+  #agent-design-preview .task-heading h3 { font-size:14px; font-weight:500; margin:0; }
+  #agent-design-preview .task-index { color:var(--ap-muted); margin-right:10px; }
+  #agent-design-preview .task-state { color:var(--ap-accent); font-size:12px; white-space:nowrap; }
+  #agent-design-preview .pipeline { display:grid; grid-template-columns:1fr 24px 1.28fr 24px 1fr; align-items:stretch; }
+  #agent-design-preview .agent-node {
+    appearance:none; display:flex; flex-direction:column; text-align:left; width:100%; margin:0;
+    padding:15px 16px; min-width:0; min-height:172px; border:0; border-radius:0;
+    background:var(--ap-panel); color:var(--ap-text); font:inherit;
+    transition:background .16s ease;
+  }
+  #agent-design-preview .agent-node[aria-pressed="true"] { background:var(--ap-focus); }
+  #agent-design-preview .agent-node:hover { background:color-mix(in srgb,var(--ap-focus) 76%,var(--ap-panel)); }
+  #agent-design-preview .node-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:12px; }
+  #agent-design-preview .role { font-weight:500; }
+  #agent-design-preview .glyph { color:var(--ap-accent); margin-right:8px; }
+  #agent-design-preview .timer { color:var(--ap-muted); font-size:12px; white-space:nowrap; }
+  #agent-design-preview .node-status { color:var(--ap-accent); font-size:12px; margin-bottom:10px; }
+  #agent-design-preview .node-copy { font-size:13px; margin:0 0 17px; overflow-wrap:anywhere; }
+  #agent-design-preview .node-foot { color:var(--ap-muted); font-size:12px; margin-top:auto; }
+  #agent-design-preview .connector { color:var(--ap-line); display:flex; align-items:center; justify-content:center; font-size:20px; }
+  #agent-design-preview .track { display:flex; gap:3px; margin-top:13px; }
+  #agent-design-preview .track span { height:3px; flex:1; background:var(--ap-line); }
+  #agent-design-preview .track span:nth-child(n+4) { display:none; }
+  #agent-design-preview .track .filled { background:var(--ap-accent); }
+  #agent-design-preview .downlink { display:flex; justify-content:center; color:var(--ap-line); height:52px; align-items:center; }
+  #agent-design-preview .secondary .agent-node { min-height:122px; }
+  #agent-design-preview .secondary .node-copy { margin-bottom:12px; }
+  #agent-design-preview .app-foot { display:flex; flex-wrap:wrap; gap:18px; margin-top:34px; padding-top:15px; color:var(--ap-muted); font-size:12px; }
+  #agent-design-preview kbd { font:inherit; color:var(--ap-text); background:none; border:0; padding:0; box-shadow:none; }
+  #agent-design-preview .agent-product.compact .agent-node { min-height:0; padding-top:11px; padding-bottom:11px; }
+  #agent-design-preview .agent-product.compact .node-copy { margin-bottom:8px; }
+  #agent-design-preview .agent-product.hide-meta .node-foot { display:none; }
+  @media (max-width:650px) {
+    #agent-design-preview .agent-product { padding:18px; min-height:980px; }
+    #agent-design-preview .canvas-head { align-items:start; flex-direction:column; gap:4px; }
+    #agent-design-preview .pipeline { grid-template-columns:1fr; gap:6px; }
+    #agent-design-preview .connector { height:17px; transform:rotate(90deg); }
+    #agent-design-preview .agent-node { min-height:0; }
+    #agent-design-preview .node-copy { margin-bottom:12px; }
+    #agent-design-preview .downlink { height:32px; }
+    #agent-design-preview .secondary .agent-node { min-height:0; }
+    #agent-design-preview .app-head { gap:12px; }
+    #agent-design-preview .view-label { margin-left:0; }
+    #agent-design-preview .task-heading { flex-wrap:wrap; gap:4px; }
+  }
+  @media (prefers-reduced-motion:reduce) { #agent-design-preview .agent-node { transition:none; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('agent-design-preview');
+  const saved = window.openai?.widgetState?.privateContent || {};
+  const selections = saved.selections || {};
+  const settings = {};
+  const header = `<header class="app-head"><span class="wordmark"><span class="brand-mark">›</span>antislop</span><span class="crumb small">session / delivery</span><span class="view-label small">agents</span></header><div class="canvas-head"><h2 class="canvas-title">Session delivery</h2><span class="muted small">PR · merge · continue</span></div>`;
+  const footer = `<footer class="app-foot"><span><kbd>↑ ↓ ← →</kbd> focus</span><span><kbd>enter</kbd> details</span><span><kbd>f</kbd> cards</span><span><kbd>g</kbd> groups</span></footer>`;
+  function node(id,role,glyph,status,copy,foot,time='',selected=false,extra='') {
+    return `<button type="button" class="agent-node cursor-interaction ${extra}" data-node="${id}" aria-pressed="${selected}"><span class="node-head"><span class="role"><span class="glyph">${glyph}</span>${role}</span><span class="timer">${time}</span></span><span class="node-status">${status}</span>${copy?`<span class="node-copy">${copy}</span>`:''}<span class="node-foot">${foot}</span>${selected?'<span class="track" aria-hidden="true"><span class="filled"></span><span class="filled"></span><span></span><span></span><span></span></span>':''}</button>`;
+  }
+  const connector = '<span class="connector" aria-hidden="true">→</span>';
+  root.querySelector('[data-design="obsidian"]').innerHTML = header + `
+    <div class="completed small"><span class="tick">✓</span><span>Session action contracts</span><span>reviewed · 35/35</span></div>
+    <div class="task-heading"><h3><span class="task-index">01</span>Create PR for the session branch</h3><span class="task-state">● in progress</span></div>
+    <div class="pipeline">
+      ${node('pr-options','options','✓','Approved','Use the existing session branch.','19/19 checks')}${connector}
+      ${node('pr-worker','worker','›','Implementation','Create a pull request for the completed session.','round 5 · awaiting result','30:41',true)}${connector}
+      ${node('pr-reviewer','reviewer','◇','Waiting for worker','Review starts when the change is ready.','next · round 5')}
+    </div>
+    <div class="downlink" aria-hidden="true">│<br>↓</div>
+    <div class="task-heading"><h3><span class="task-index">02</span>Merge session changes into main</h3><span class="muted small">up next</span></div>
+    <div class="pipeline secondary">
+      ${node('merge-options','options','✓','Approved','','19/19 checks')}${connector}
+      ${node('merge-worker','worker','›','Implementation','Merge through the existing session.','round 4','35:28')}${connector}
+      ${node('merge-reviewer','reviewer','◇','Waiting for worker','','next · round 4')}
+    </div>` + footer;
+
+
+  function persist() {
+    window.openai?.setWidgetState?.({modelContent:{preview:'agent-card-designs',selections},privateContent:{selections}})?.catch(()=>{});
+  }
+  root.querySelectorAll('.agent-product').forEach(product => {
+    const design = product.dataset.design;
+    const initial = selections[design] || 'pr-worker';
+    const select = id => {
+      product.querySelectorAll('[data-node]').forEach(el => el.setAttribute('aria-pressed',String(el.dataset.node===id)));
+    };
+    select(initial);
+    product.querySelectorAll('[data-node]').forEach(button => button.addEventListener('click',() => {
+      select(button.dataset.node); selections[design]=button.dataset.node; persist();
+    }));
+    const accents = {obsidian:'#a8dfc8'};
+    settings[design] = {accent:accents[design],compact:false,metadata:true};
+    const state = settings[design];
+    function render() {
+      product.style.setProperty('--ap-accent',state.accent);
+      product.classList.toggle('compact',state.compact);
+      product.classList.toggle('hide-meta',!state.metadata);
+    }
+    render();
+    if (globalThis.Tweak) {
+      const tweak = new Tweak({container:product,onChange:render});
+      tweak.addColorPicker(state,'accent',{label:'Kolor akcentu',reference:'--ap-accent'});
+      tweak.addToggle(state,'compact',{label:'Mniejsze odstępy'});
+      tweak.addToggle(state,'metadata',{label:'Szczegóły rund'});
+    }
+  });
+})();
+</script>
+</body></html>
