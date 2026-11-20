@@ -5,6 +5,18 @@ mod navigation;
 
 impl App {
     pub(super) fn details_primary_key(&mut self, key: KeyEvent, plain: bool) -> bool {
+        if key.code == KeyCode::F(6) {
+            self.run_workflow(Command::PauseOrContinue);
+            return true;
+        }
+        if key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('x')
+        {
+            self.run_workflow(Command::Cancel);
+            return true;
+        }
         if self.details_close_or_search(key) {
             return true;
         }
@@ -25,6 +37,32 @@ impl App {
             }
         }
         if self.details_overview_key(key, plain) {
+            return true;
+        }
+        if plain && (key.code == KeyCode::F(5) || key.code == KeyCode::Char('u')) {
+            let target = self.details.as_ref().map(|details| details.key.clone());
+            if let Some(target) = target {
+                if target == "conversation" {
+                    self.open_unblock(Some(crate::lean::tui::ORCHESTRATOR.into()));
+                } else if let Some((_, task)) = target
+                    .split_once(':')
+                    .filter(|(role, _)| matches!(*role, "worker" | "reviewer"))
+                {
+                    self.open_unblock(Some(task.into()));
+                } else {
+                    self.open_unblock(Some(target));
+                }
+            }
+            return true;
+        }
+        if plain
+            && let KeyCode::Char(action @ '1'..='3') = key.code
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.key == "conversation")
+            && self.select_session_action((action as usize) - ('1' as usize))
+        {
             return true;
         }
         if plain

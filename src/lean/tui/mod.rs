@@ -63,6 +63,7 @@ pub mod unblock;
 pub mod update_queue;
 pub mod view;
 mod workbench;
+pub mod workbench_summary;
 pub mod workspace;
 
 pub use contracts::{

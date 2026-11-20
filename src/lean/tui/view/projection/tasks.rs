@@ -122,9 +122,10 @@ fn update_task_identity(row: &mut TaskRow, payload: &Value, task_uuid: &str) -> 
     row.uuid = Some(task_uuid.to_owned());
     row.status = clean_line(payload["status"].as_str().unwrap_or_default());
     row.round = payload["round"].as_u64().unwrap_or_default();
-    row.reason = payload["reason"]
-        .as_str()
-        .map(|reason| bound(&clean(reason), DETAIL_LIMIT));
+    // Recovery summaries need the complete daemon cause so users can inspect
+    // failures that exceed the normal one-line detail budget. Individual
+    // compact renderers can still bound the text at their display boundary.
+    row.reason = payload["reason"].as_str().map(clean);
     previous
 }
 

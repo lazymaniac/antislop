@@ -41,7 +41,16 @@ impl App {
     }
 
     fn unblock_task(&self, named: Option<String>) -> Option<&view::TaskRow> {
-        let selected = self.selected.split_once(':').map(|(_, id)| id.to_owned());
+        let selected = named
+            .is_none()
+            .then(|| {
+                self.details
+                    .as_ref()
+                    .filter(|_| self.navigation.screen == crate::lean::tui::Screen::Workbench)
+                    .and_then(|details| details.task_id().map(str::to_owned))
+                    .or_else(|| self.selected.split_once(':').map(|(_, id)| id.to_owned()))
+            })
+            .flatten();
         let wanted = named.or(selected);
         self.named_unblock_task(wanted.as_deref())
             .or_else(|| {

@@ -189,9 +189,9 @@ fn draw_workbench_chrome(
         areas.header,
     );
     let split_hint = if areas.split {
-        "Tab panel · Alt+↑/↓ resize · z zoom · Ctrl+B list"
+        "Tab panel · F6 pause/continue · Ctrl+X cancel · Ctrl+P actions · Alt+↑/↓ resize · z zoom · Ctrl+B list"
     } else {
-        "Tab panel · Ctrl+B list · Esc back"
+        "Tab panel · F6 pause/continue · Ctrl+X cancel · Ctrl+P actions · Ctrl+B list · Esc back"
     };
     frame.render_widget(Paragraph::new(split_hint).style(theme.bar()), areas.footer);
     if !areas.separator.is_empty() {

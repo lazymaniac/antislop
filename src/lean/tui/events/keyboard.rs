@@ -254,6 +254,18 @@ impl App {
     }
 
     fn route_native_or_history(&mut self, key: KeyEvent) -> Option<bool> {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.native_focused()
+            && (matches!(key.code, KeyCode::F(5) | KeyCode::F(6))
+                || (control && matches!(key.code, KeyCode::Char('p' | 'x'))))
+        {
+            self.navigation
+                .update_presentation(|presentation| presentation.native_input = false);
+            if let Some(details) = &mut self.details {
+                details.native_focus = false;
+            }
+            return None;
+        }
         if self.navigation.screen == Screen::Workbench
             && self.navigation.focus == NavigationFocus::WorkbenchTerminal
             && self.graph_expanded.is_none()

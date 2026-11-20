@@ -3365,6 +3365,111 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
 }
 
 #[test]
+fn workbench_recovery_shortcut_uses_the_open_task_even_when_graph_selection_differs() {
+    let mut app = test_app();
+    app.view.plan = Some("p1".into());
+    app.view.tasks = vec![view::TaskRow {
+        id: "task-open".into(),
+        title: "Open task".into(),
+        status: "failed".into(),
+        reason: Some("raw worker failure".into()),
+        ..view::TaskRow::default()
+    }];
+    app.selected = "worker:other-task".into();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Agent("worker:task-open".into());
+    app.details = Some(Details::new("worker:task-open".into()));
+
+    app.key(key_press(KeyCode::Char('u')));
+
+    let unblock = app.unblock.as_ref().expect("recovery actions opened");
+    assert_eq!(unblock.task, "task-open");
+    assert_eq!(unblock.reason, "raw worker failure");
+}
+
+#[test]
+fn workbench_summary_renders_raw_recovery_and_session_completion_panels() {
+    let mut app = test_app();
+    app.view.plan = Some("p1".into());
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        title: "Storage".into(),
+        status: "failed".into(),
+        reason: Some("raw cause line one\nraw cause line two".into()),
+        ..view::TaskRow::default()
+    }];
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
+    app.details = Some(Details::new("worker:t1".into()));
+    let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let rows = |terminal: &Terminal<TestBackend>| {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    };
+    let recovery = rows(&terminal);
+    assert!(recovery.contains("Available actions"));
+    assert!(recovery.contains("Retry with a hint for the worker"));
+    app.details.as_mut().unwrap().scroll = usize::MAX;
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let recovery_reason = rows(&terminal);
+    assert!(recovery_reason.contains("Raw stop reason"));
+    assert!(recovery_reason.contains("raw cause line one"));
+    assert!(recovery_reason.contains("raw cause line two"));
+
+    app.navigation.target = WorkbenchTarget::Session;
+    app.details = Some(Details::new("conversation".into()));
+    app.view.apply(&serde_json::json!({"seq":8,"kind":"session_completed","payload":{"branch":"antislop/session/final","summary":"Delivered all requested work"}}));
+    app.view.apply(&serde_json::json!({"seq":9,"kind":"session_action_result","payload":{"action":"create_pr","result":{"status":"failed","details":"gh: authentication failed"}}}));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let completion = rows(&terminal);
+    for expected in [
+        "Session completion",
+        "antislop/session/final",
+        "Create PR",
+        "Merge with main",
+        "Continue work",
+        "failed: gh: authentication failed",
+    ] {
+        assert!(
+            completion.contains(expected),
+            "missing {expected:?}: {completion:?}"
+        );
+    }
+    app.details.as_mut().unwrap().scroll = usize::MAX;
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(rows(&terminal).contains("Delivered all requested work"));
+}
+
+#[test]
+fn workbench_completion_key_marks_the_selected_action_as_pending_for_this_session() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Session;
+    app.details = Some(Details::new("conversation".into()));
+    app.view.apply(&serde_json::json!({"seq":1,"kind":"session_completed","payload":{"branch":"feature/final","summary":"Finished"}}));
+
+    app.key(key_press(KeyCode::Char('2')));
+
+    let TranscriptCard::Completion {
+        actions, selected, ..
+    } = app.view.cards.last().unwrap()
+    else {
+        panic!("completion card remains the source of action state");
+    };
+    assert_eq!(*selected, 1);
+    assert!(matches!(
+        actions[1].result,
+        Some(crate::lean::daemon::SessionActionResult::Queued { .. })
+    ));
+}
+
+#[test]
 fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
     let mut app = test_app();
     app.view.apply(&serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p","tasks":[{"id":"t1","title":"Work","change_kind":"none"}]}}));

@@ -48,7 +48,7 @@ fn editor_box(editor: &Editor, comments: &[String], lines: &[String]) -> Paragra
         .iter()
         .cloned()
         .map(Line::raw)
-        .chain(std::iter::once(Line::raw("Write a comment:")))
+        .chain(std::iter::once(Line::raw(editor_prompt(&editor.target))))
         .chain(lines.iter().cloned().map(Line::raw))
         .collect::<Vec<_>>();
     Paragraph::new(rows).block(
@@ -61,11 +61,13 @@ fn editor_box(editor: &Editor, comments: &[String], lines: &[String]) -> Paragra
 
 fn editor_title(target: &str) -> String {
     if let Some(rest) = target.strip_prefix("unblock:") {
-        let task = rest.rsplit(':').next().unwrap_or_default();
-        let action = rest.split(':').next().unwrap_or_default();
+        let mut parts = rest.splitn(3, ':');
+        let action = parts.next().unwrap_or_default();
+        let plan = parts.next().unwrap_or_default();
+        let task = parts.next().unwrap_or_default();
         format!(
-            " {} {task} · optional text · Enter send · Alt+Enter newline · Esc cancel ",
-            action.replace('_', " ")
+            " {} · plan {plan} · task {task} · optional scoped text · Enter send · Alt+Enter newline · Esc cancel ",
+            action.replace('_', " "),
         )
     } else if let Some(plan) = target.strip_prefix("reject:") {
         format!(
@@ -77,6 +79,21 @@ fn editor_title(target: &str) -> String {
             target_name(target)
         )
     }
+}
+
+fn editor_prompt(target: &str) -> String {
+    if let Some(rest) = target.strip_prefix("unblock:") {
+        let action = rest.split(':').next().unwrap_or_default();
+        return match action {
+            "retry_with_guidance" => "Hint for this worker (optional):".into(),
+            "restart_agent" => "Context for the fresh agent session (optional):".into(),
+            _ => "Additional context for this recovery action (optional):".into(),
+        };
+    }
+    if let Some(plan) = target.strip_prefix("reject:") {
+        return format!("Reason for rejecting plan {plan} (optional):");
+    }
+    format!("Comment on {}:", target_name(target))
 }
 
 fn draw_editor_cursor(
@@ -102,4 +119,25 @@ fn draw_editor_cursor(
         + cursor.1.saturating_sub(window.0).min(window.1 - 1) as u16)
         .clamp(min_y, max_y);
     frame.set_cursor_position((x, y));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_rejection_and_comment_prompts_name_their_target_and_purpose() {
+        let target = "unblock:retry_with_guidance:plan-7:task-9";
+        assert!(editor_title(target).contains("plan plan-7 · task task-9"));
+        assert_eq!(editor_prompt(target), "Hint for this worker (optional):");
+        assert!(editor_title("reject:plan-7").contains("reject plan plan-7"));
+        assert_eq!(
+            editor_prompt("reject:plan-7"),
+            "Reason for rejecting plan plan-7 (optional):"
+        );
+        assert_eq!(
+            editor_prompt("plan:plan-7:line:12"),
+            "Comment on Plan plan-7 line 12:"
+        );
+    }
 }

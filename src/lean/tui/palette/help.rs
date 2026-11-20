@@ -261,6 +261,9 @@ fn help_details() -> &'static [&'static str] {
     &[
         "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
         "Workbench       , / . select round; . on newest follows live work",
+        "F5 / u          task recovery actions; 1–3 session completion actions",
+        "F6 / Ctrl+X     pause/continue or cancel the current session",
+        "Ctrl+P          command palette",
         "i / a            native CLI focus / message composer",
         "Ctrl+T           composer: queue / steer / interrupt the running turn",
         "Ctrl+]           leave PTY and return to Details",

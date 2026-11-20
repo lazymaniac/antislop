@@ -53,6 +53,14 @@ impl Details {
             }
             return;
         }
+        if workbench_tab == Some(WorkbenchTab::Summary)
+            && self.draw_workbench_summary(frame, body, view)
+        {
+            if let Some(terminal) = terminal {
+                self.draw_workbench_terminal(frame, terminal, view);
+            }
+            return;
+        }
         if self.draw_secondary_screen(frame, body, areas.footer, view, &theme, terminal.is_some()) {
             if let Some(terminal) = terminal {
                 self.draw_workbench_terminal(frame, terminal, view);
@@ -63,6 +71,11 @@ impl Details {
         if let Some(terminal) = terminal {
             self.draw_workbench_terminal(frame, terminal, view);
         }
+    }
+
+    fn draw_workbench_summary(&mut self, frame: &mut Frame, area: Rect, view: &View) -> bool {
+        let projection = crate::lean::tui::workbench_summary::project(view, &self.key);
+        super::specialized_summary::draw(frame, area, projection, &mut self.scroll)
     }
 
     fn draw_conversation(
