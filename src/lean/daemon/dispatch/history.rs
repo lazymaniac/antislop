@@ -29,7 +29,7 @@ fn session_action(context: &Context<'_>, request: Request) -> Result<Route> {
         Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
             conversation,
             action,
-        }) => Route::Handled({
+        }) => Route::Handled((|| -> Result<serde_json::Value> {
             validate_project_conversation(core, project, &conversation)?;
             let completed: bool = core.store.db().query_row(
                 "SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND kind='session_completed' AND json_extract(payload,'$.cleanup_complete')=1)",
@@ -50,10 +50,12 @@ fn session_action(context: &Context<'_>, request: Request) -> Result<Route> {
             };
             let message = core.store.add_message(&conversation, "user", text)?;
             core.wake(&conversation);
-            json!(crate::lean::daemon::SessionActionResult::Queued {
+            Ok(json!(crate::lean::daemon::SessionActionResult::Queued {
                 message: message.seq,
-            })
-        }),
+            }))
+        })().unwrap_or_else(|error| json!(crate::lean::daemon::SessionActionResult::Failed {
+            details: error.to_string(),
+        }))),
         request => Route::Unmatched(request),
     })
 }
