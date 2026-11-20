@@ -11,6 +11,7 @@ mod evidence;
 mod questions;
 mod references;
 mod results;
+mod session_actions;
 
 /// The tasks of `submit_plan` or `revise_plan`, with an error that names the
 /// task and field the agent must fix.
@@ -64,6 +65,13 @@ impl Core {
             }
             "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task" => {
                 self.orchestrator_tool(conversation, role, turn, tool, args)
+            }
+            "merge_session_with_main" => {
+                require(
+                    matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),
+                    "only the orchestrator may merge a completed session",
+                )?;
+                self.merge_session_with_main_tool(conversation, turn)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),
             "revise_plan" | "request_replan" => self.revision_tool(conversation, role, tool, args),
