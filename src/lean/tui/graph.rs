@@ -271,8 +271,7 @@ pub fn card_key(view: &View, key: &str) -> String {
     }
 }
 
-/// An options card shares its terminal between the worker and reviewer,
-/// following the phase that currently owns the task.
+/// An options Workbench follows the worker or reviewer owning the current phase.
 pub(in crate::lean::tui) fn card_terminal_role(view: &View, key: &str) -> String {
     match task_card(view, key) {
         Some((task, Role::Pair)) => {

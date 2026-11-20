@@ -23,6 +23,8 @@ impl App {
         self.save_active_conversation();
         self.activate_conversation(conversation.clone());
         self.restore_conversation(&conversation);
+        self.navigation
+            .update_presentation(|presentation| presentation.native_input = false);
         self.schedule_output_document_fetch();
         self.reset_history_recall();
         self.start_poller();
@@ -47,6 +49,7 @@ impl App {
         self.generation += 1;
         self.decision_inbox = None;
         self.conversation = conversation;
+        self.workbench_sessions.clear();
         self.view = View::default();
         self.plan_history = None;
     }
@@ -57,6 +60,9 @@ impl App {
         } else {
             self.restore_conversation_draft(conversation);
             self.initialize_new_conversation();
+        }
+        if self.navigation.presentation().pinned {
+            self.fetch_workbench_sessions();
         }
     }
 

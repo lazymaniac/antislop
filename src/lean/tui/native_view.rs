@@ -33,6 +33,124 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
     use std::time::Instant;
+
+    #[test]
+    fn workbench_native_mode_routes_every_key_except_the_exit_chord() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::test_app();
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
+        app.navigation.focus = NavigationFocus::WorkbenchTerminal;
+        let mut details = Details::new("conversation".into());
+        details.native_areas[0] = Rect::new(1, 1, 50, 12);
+        app.details = Some(details);
+        let (commands, received) = mpsc::sync_channel(8);
+        app.native_views.insert(
+            format!("{}:orchestrator", app.conversation),
+            View {
+                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+                commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (50, 12),
+                identity: "waiting:".into(),
+            },
+        );
+        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.native_focused());
+        for key in [
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
+        ] {
+            app.key(key);
+            assert!(matches!(
+                received.try_recv(),
+                Ok(Command::Input(Input::Key { .. }))
+            ));
+        }
+        app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+        assert!(!app.native_focused());
+        assert!(received.try_recv().is_err());
+        app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(!app.native_focused());
+    }
+
+    #[test]
+    fn workbench_uses_the_pinned_agents_session_identity_not_the_content_task() {
+        let mut app = App::test_app();
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
+        app.navigation.update_presentation(|presentation| {
+            presentation.terminal_owner = Some("worker:t1".into());
+            presentation.pinned = true;
+        });
+        app.workbench_sessions = vec![
+            crate::lean::store::SessionInfo {
+                turn_id: "orchestrator-turn".into(),
+                plan_id: None,
+                role: "orchestrator".into(),
+                provider: "codex".into(),
+                session_id: Some("orch-1".into()),
+                status: "running".into(),
+                error: None,
+                upto_message: 0,
+                started_ms: 0,
+                finished_ms: None,
+                pid: None,
+            },
+            crate::lean::store::SessionInfo {
+                turn_id: "turn-1".into(),
+                plan_id: None,
+                role: "worker:t1".into(),
+                provider: "codex".into(),
+                session_id: Some("cli-1".into()),
+                status: "running".into(),
+                error: None,
+                upto_message: 0,
+                started_ms: 1,
+                finished_ms: None,
+                pid: None,
+            },
+        ];
+        let mut details = Details::new("conversation".into());
+        details.task = Some(
+            json!({"round":99,"native_sessions":[{"role":"orchestrator","session_id":"wrong"}]}),
+        );
+        details.native_areas[0] = Rect::new(1, 1, 40, 10);
+        app.details = Some(details);
+        let (commands, _received) = mpsc::sync_channel(8);
+        let view = View {
+            state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+            commands,
+            stop: Arc::new(AtomicBool::new(false)),
+            dimensions: (40, 10),
+            identity: "cli-1:run:0".into(),
+        };
+        app.native_views
+            .insert(format!("{}:worker:t1", app.conversation), view);
+        app.sync_native_views();
+        assert!(
+            app.native_views
+                .contains_key(&format!("{}:worker:t1", app.conversation))
+        );
+        assert!(
+            !app.native_views
+                .contains_key(&format!("{}:orchestrator", app.conversation))
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let header = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .take(100)
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(header.contains("CLI worker:t1"), "{header}");
+        assert!(header.contains("r0"), "{header}");
+        assert!(header.contains("pinned"), "{header}");
+    }
     #[test]
     fn resize_while_waiting_for_a_session_is_used_by_the_next_open() {
         std::fs::create_dir_all(".antislop/tmp").unwrap();
@@ -132,6 +250,8 @@ mod tests {
         std::fs::create_dir_all(".antislop/tmp").unwrap();
         let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
         let mut details = Details::new("orchestrator".into());
         details.task = Some(json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}));
         app.details = Some(details);
@@ -147,6 +267,8 @@ mod tests {
     #[test]
     fn overview_follows_session_rotation_without_reusing_a_stale_screen() {
         let mut app = App::test_app();
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
         let mut details = Details::new("orchestrator".into());
         details.task =
             Some(json!({"round":1,"native_sessions":[{"role":"orchestrator","session_id":"old"}]}));
@@ -198,8 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_graph_pty_opens_as_a_scrollable_console_until_i_is_pressed() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    fn graph_card_does_not_attach_a_cli_pty() {
         let mut app = App::test_app();
         app.focus = Focus::Graph;
         app.graph_viewport = Some((120, 48));
@@ -215,49 +336,22 @@ mod tests {
         app.graph_tab = 1;
         let mut details = Details::new(app.selected.clone());
         details.switch_tab(crate::lean::tui::details::RESULT);
-        details.native_areas[0] = Rect::new(1, 1, 40, 10);
         app.details = Some(details);
-        let (commands, received) = mpsc::sync_channel(8);
-        let state = Arc::new(std::sync::Mutex::new(Snapshot {
-            screen: Some(screen("console-text")),
-            error: None,
-        }));
-        app.native_views.insert(
-            format!("{}:worker:t1", app.conversation),
-            View {
-                state,
-                commands,
-                stop: Arc::new(AtomicBool::new(false)),
-                dimensions: (40, 10),
-                identity: "waiting:".into(),
-            },
-        );
         let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert!(!app.native_focused(), "the console opens read-only");
-        let graph = app.graph_area.unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
         assert!(
-            graph.width >= 60,
-            "the card spans the graph canvas: {graph:?}"
+            rendered.contains("CLI PTY is available in the Workbench."),
+            "{rendered}"
         );
-
-        while received.try_recv().is_ok() {}
-        app.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-        assert!(matches!(
-            received.try_recv(),
-            Ok(Command::Input(Input::Scroll { lines })) if lines > 0
-        ));
-        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert!(matches!(
-            received.try_recv(),
-            Ok(Command::Input(Input::Scroll { lines: -1 }))
-        ));
+        assert!(app.native_views.is_empty());
         assert!(!app.native_focused());
-
-        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        assert!(app.native_focused());
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert!(app.native_focused(), "a redraw keeps the typing mode");
     }
 
     #[test]
@@ -295,53 +389,21 @@ mod tests {
     }
 
     #[test]
-    fn expanded_graph_pty_renders_the_owned_snapshot_and_routes_input() {
+    fn graph_pty_tab_points_to_workbench_instead_of_rendering_a_snapshot() {
         let mut app = App::test_app();
         app.focus = Focus::Graph;
         app.graph_viewport = Some((120, 48));
-        app.view.tasks = vec![
-            crate::lean::tui::view::TaskRow {
-                id: "t1".into(),
-                ..Default::default()
-            },
-            crate::lean::tui::view::TaskRow {
-                id: "t2".into(),
-                depends_on: vec!["t1".into()],
-                ..Default::default()
-            },
-        ];
+        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        }];
         app.view
             .agents
             .insert("worker:t1".into(), Default::default());
         app.selected = "worker:t1".into();
         app.graph_expanded = Some(app.selected.clone());
         app.graph_tab = 1;
-
-        let mut details = Details::new(app.selected.clone());
-        details.switch_tab(crate::lean::tui::details::RESULT);
-        details.native_focus = true;
-        // Keep the shared native owner alive through App::draw's first sync;
-        // draw_graph replaces this with the card's actual PTY viewport.
-        details.native_areas[0] = Rect::new(1, 1, 40, 10);
-        app.details = Some(details);
-
-        let (commands, received) = mpsc::sync_channel(8);
-        let state = Arc::new(std::sync::Mutex::new(Snapshot {
-            screen: Some(screen("live-pty-snapshot")),
-            error: None,
-        }));
-        let key = format!("{}:worker:t1", app.conversation);
-        app.native_views.insert(
-            key,
-            View {
-                state,
-                commands,
-                stop: Arc::new(AtomicBool::new(false)),
-                dimensions: (40, 10),
-                identity: "waiting:".into(),
-            },
-        );
-
+        app.details = Some(Details::new(app.selected.clone()));
         let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let rendered = terminal
@@ -351,113 +413,31 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("live-pty-snapshot"), "{rendered}");
-        assert!(app.native_focused());
         assert!(
-            app.native_views
-                .contains_key(&format!("{}:worker:t1", app.conversation))
+            rendered.contains("CLI PTY is available in the Workbench."),
+            "{rendered}"
         );
-        assert!(matches!(received.try_recv(), Ok(Command::Resize(_, _))));
-
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('x'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert!(matches!(
-            received.try_recv(),
-            Ok(Command::Input(Input::Key { .. }))
-        ));
-
-        // Ctrl+] is handled by the TUI before PTY forwarding. It returns to
-        // Details, and that state survives the next graph render.
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char(']'),
-            crossterm::event::KeyModifiers::CONTROL,
-        ));
-        assert_eq!(app.graph_tab, 0);
+        assert!(app.native_views.is_empty());
         assert!(!app.native_focused());
-        assert!(received.try_recv().is_err(), "exit chord reached the PTY");
-        assert!(
-            !app.native_views[&format!("{}:worker:t1", app.conversation)]
-                .stop
-                .load(Ordering::SeqCst)
-        );
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert!(!app.native_focused(), "redraw restored PTY focus");
-        assert!(app.view.agents.contains_key("worker:t1"));
-
-        // Normal TUI tab routing works after leaving; the expanded card keeps
-        // the selection and graph navigation resumes once it closes.
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('3'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert_eq!(app.graph_tab, 2);
-        let selected = app.selected.clone();
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Down,
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert_eq!(
-            app.selected, selected,
-            "the expanded card lost the selection"
-        );
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert!(app.graph_expanded.is_none());
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Down,
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert_ne!(app.selected, selected, "graph navigation stayed blocked");
-
-        let mut reviewer_details = Details::new("reviewer:t1".into());
-        reviewer_details.switch_tab(crate::lean::tui::details::RESULT);
-        reviewer_details.native_focus = true;
-        app.details = Some(reviewer_details);
-        app.graph_expanded = Some("reviewer:t1".into());
-        app.graph_tab = 1;
-        let (reviewer_commands, reviewer_received) = mpsc::sync_channel(8);
-        app.native_views.insert(
-            format!("{}:reviewer:t1", app.conversation),
-            View {
-                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
-                commands: reviewer_commands,
-                stop: Arc::new(AtomicBool::new(false)),
-                dimensions: (40, 10),
-                identity: "waiting:".into(),
-            },
-        );
-        assert!(app.native_focused());
-        app.key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('r'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert!(matches!(
-            reviewer_received.try_recv(),
-            Ok(Command::Input(Input::Key { .. }))
-        ));
     }
 
     #[test]
-    fn options_card_pty_follows_worker_reviewer_transitions() {
+    fn workbench_pty_follows_options_task_owner_transitions() {
         use crossterm::event::KeyEvent;
 
         let mut app = App::test_app();
         app.focus = Focus::Graph;
-        app.graph_viewport = Some((120, 48));
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Agent("worker:options".into());
+        app.navigation.focus = NavigationFocus::WorkbenchTerminal;
         app.view.tasks = vec![crate::lean::tui::view::TaskRow {
             id: "options".into(),
             kind: "options".into(),
             round: 1,
             ..Default::default()
         }];
-        app.selected = "worker:options".into();
-        app.graph_expanded = Some(app.selected.clone());
-        app.graph_tab = 1;
-        let mut details = Details::new(app.selected.clone());
+        let mut details = Details::new("worker:options".into());
+        details.switch_tab(crate::lean::tui::details::RESULT);
         details.task_uuid = Some("task-uuid".into());
         details.task = Some(json!({
             "round": 1,
@@ -477,7 +457,6 @@ mod tests {
             ("working", "worker"),
         ] {
             app.view.tasks[0].status = phase.into();
-            app.details.as_mut().unwrap().native_focus = true;
             let (commands, received) = mpsc::sync_channel(8);
             let stopped = Arc::new(AtomicBool::new(false));
             let marker = format!("{role}-pty");
@@ -507,7 +486,10 @@ mod tests {
             assert!(rendered.contains(&marker), "{phase}: {rendered}");
             assert_eq!(app.native_views.len(), 1);
             assert!(app.native_views.contains_key(&key));
-            assert_eq!(app.graph_expanded.as_deref(), Some("worker:options"));
+            assert_eq!(
+                app.navigation.target,
+                WorkbenchTarget::Agent("worker:options".into())
+            );
             if let Some(previous) = previous {
                 assert!(previous.load(Ordering::SeqCst));
                 assert!(!app.native_focused(), "role changes must leave typing mode");
@@ -520,7 +502,7 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .native
-                    .contains_key("worker:options")
+                    .contains_key(&format!("{role}:task-uuid"))
             );
             while received.try_recv().is_ok() {}
             if !app.native_focused() {
@@ -677,6 +659,11 @@ mod tests {
     #[test]
     fn native_focus_routes_control_c_escape_and_paste_before_global_shortcuts() {
         let mut app = App::test_app();
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
+        app.navigation.focus = NavigationFocus::WorkbenchTerminal;
+        app.navigation
+            .update_presentation(|presentation| presentation.native_input = true);
         let (commands, received) = mpsc::sync_channel(8);
         app.native_views.insert(
             format!("{}:orchestrator", app.conversation),
@@ -685,12 +672,11 @@ mod tests {
                 commands,
                 stop: Arc::new(AtomicBool::new(false)),
                 dimensions: (80, 24),
-                identity: "fixture".into(),
+                identity: "waiting:".into(),
             },
         );
         app.input.insert_str("background draft");
-        let mut details = Details::new("orchestrator".into());
-        details.native_focus = true;
+        let details = Details::new("orchestrator".into());
         app.details = Some(details);
         assert!(app.key(event::KeyEvent::new(
             KeyCode::Char('c'),
@@ -713,7 +699,7 @@ mod tests {
             KeyCode::Char(']'),
             KeyModifiers::CONTROL
         )));
-        assert!(!app.details.as_ref().unwrap().native_focus);
+        assert!(!app.navigation.presentation().native_input);
         assert!(!app.key(event::KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL

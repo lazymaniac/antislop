@@ -185,6 +185,7 @@ impl App {
             self.navigation.update_presentation(|presentation| {
                 presentation.focus = NavigationFocus::WorkbenchTerminal;
             });
+            self.fetch_workbench_sessions();
             if let Some(details) = &mut self.details {
                 details.native_focus = true;
             }

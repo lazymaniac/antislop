@@ -1381,9 +1381,10 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
         .update_presentation(|presentation| presentation.split = true);
     app.navigation.zoom(true);
     let mut details = Details::new("worker:t1".into());
-    details.native_focus = true;
+    // Terminal panel focus is preview-only until the user explicitly presses i.
+    details.native_focus = false;
     app.details = Some(details);
-    assert!(app.native_focused());
+    assert!(!app.native_focused());
 
     assert!(app.key_inner(key_press(KeyCode::Esc)));
 

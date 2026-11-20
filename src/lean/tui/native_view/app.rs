@@ -3,53 +3,62 @@ use super::*;
 impl App {
     pub(in crate::lean::tui) fn sync_native_views(&mut self) {
         let wanted = self.wanted_native_views();
-        let retired = self.retain_native_views(&wanted);
-        self.attach_native_views(wanted, retired);
+        let (retired, reset_input) = self.retain_native_views(&wanted);
+        self.attach_native_views(wanted, retired, reset_input);
     }
 
     fn wanted_native_views(&self) -> Vec<WantedView> {
-        let graph_key = self.graph_native_key();
-        self.details
-            .as_ref()
-            .filter(|details| {
-                graph_key.is_some()
-                    || (details.terminal_visible()
-                        && (details.selected_round.is_none() || details.resume_round))
-            })
-            .map_or_else(Vec::new, |details| {
-                native_panels(details, graph_key, &self.view)
-            })
+        if self.navigation.screen == crate::lean::tui::Screen::Workbench {
+            let Some(details) = self.details.as_ref() else {
+                return Vec::new();
+            };
+            let area = details.native_areas[0];
+            if area.is_empty() {
+                return Vec::new();
+            }
+            let Some((role, identity)) = self.workbench_native_binding(details) else {
+                return Vec::new();
+            };
+            return vec![WantedView {
+                local_key: role.clone(),
+                role,
+                identity,
+                columns: area.width.max(1),
+                rows: area.height.max(1),
+            }];
+        }
+        Vec::new()
     }
 
-    fn graph_native_key(&self) -> Option<&str> {
-        self.graph_expanded.as_deref().filter(|_| {
-            self.graph_tab == 1
-                && self
-                    .details
-                    .as_ref()
-                    .is_none_or(|details| details.selected_round.is_none())
-        })
-    }
-
-    fn retain_native_views(&mut self, wanted: &[WantedView]) -> bool {
+    fn retain_native_views(&mut self, wanted: &[WantedView]) -> (bool, bool) {
         let prefix = format!("{}:", self.conversation);
         let mut retired = false;
+        let mut initial_identity_discovery = false;
         self.native_views.retain(|key, view| {
             let keep = wanted.iter().any(|entry| {
                 *key == format!("{prefix}{}", entry.role) && view.identity == entry.identity
             });
+            if !keep && view.identity.starts_with("waiting:") {
+                initial_identity_discovery |= wanted.iter().any(|entry| {
+                    *key == format!("{prefix}{}", entry.role) && view.identity != entry.identity
+                });
+            }
             retired |= !keep;
             keep
         });
-        retired
+        (retired, retired && !initial_identity_discovery)
     }
 
-    fn attach_native_views(&mut self, wanted: Vec<WantedView>, retired: bool) {
+    fn attach_native_views(&mut self, wanted: Vec<WantedView>, retired: bool, reset_input: bool) {
         if let Some(details) = &mut self.details {
             details.native.clear();
             if retired {
                 details.native_focus = false;
             }
+        }
+        if reset_input && self.navigation.screen == crate::lean::tui::Screen::Workbench {
+            self.navigation
+                .update_presentation(|presentation| presentation.native_input = false);
         }
         for entry in wanted {
             self.attach_native_view(entry);
@@ -76,25 +85,47 @@ impl App {
         }
     }
     fn native_key_role(&self) -> Option<String> {
-        let details = self.details.as_ref()?;
-        if let Some(key) = self.graph_native_key() {
-            return Some(details.composer_recipient(&graph::card_terminal_role(&self.view, key)));
+        if self.navigation.screen == crate::lean::tui::Screen::Workbench {
+            let details = self.details.as_ref()?;
+            return self.workbench_native_binding(details).map(|(role, _)| role);
         }
-        if !details.terminal_visible()
-            || (details.selected_round.is_some() && !details.resume_round)
-        {
-            return None;
-        }
-        details
-            .session_keys()
-            .get(details.active_panel)
-            .map(|key| details.composer_recipient(key))
+        None
     }
     pub(in crate::lean::tui) fn native_focused(&self) -> bool {
-        self.details.as_ref().is_some_and(|details| {
-            details.native_focus
-                && (self.graph_native_key().is_some() || details.terminal_visible())
-        }) && self.native_key_role().is_some()
+        if self.navigation.screen == crate::lean::tui::Screen::Workbench {
+            if self.native_input_blocked() {
+                return false;
+            }
+            if !self.navigation.presentation().native_input {
+                return false;
+            }
+            let Some(details) = self.details.as_ref() else {
+                return false;
+            };
+            let Some((role, identity)) = self.workbench_native_binding(details) else {
+                return false;
+            };
+            return self
+                .native_views
+                .get(&format!("{}:{role}", self.conversation))
+                .is_none_or(|view| view.identity == identity);
+        }
+        false
+    }
+
+    pub(in crate::lean::tui) fn native_input_blocked(&self) -> bool {
+        self.help.is_some()
+            || self.decision_inbox.is_some()
+            || self.picker.is_some()
+            || self.editor.is_some()
+            || self.flow_editor.is_some()
+            || self.interview_visible()
+            || self.plan_history.is_some()
+            || self.plan_view.is_some()
+            || self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.editing || details.searching)
     }
     pub(in crate::lean::tui) fn native_send(&mut self, input: Input) {
         if let Some(role) = self.native_key_role() {
@@ -120,6 +151,10 @@ impl App {
         input: Input,
         error: &str,
     ) {
+        if self.navigation.screen == crate::lean::tui::Screen::Workbench {
+            self.navigation
+                .update_presentation(|presentation| presentation.native_input = false);
+        }
         let text = recovered_input_text(input);
         let message = format!(
             "Native input could not be confirmed; text recovered in message draft. Check the terminal before resending: {error}"
@@ -154,14 +189,104 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn native_retry(&mut self) {
-        if let Some(role) = self.native_key_role()
-            && let Some(view) = self
+        if self.navigation.screen != crate::lean::tui::Screen::Workbench {
+            return;
+        }
+        self.fetch_workbench_sessions();
+        if let Some(role) = self.native_key_role() {
+            match self
                 .native_views
                 .get(&format!("{}:{role}", self.conversation))
-        {
-            let _ = view.send(Command::Retry);
+            {
+                Some(view) => {
+                    if let Err(error) = view.send(Command::Retry) {
+                        self.notice = Some(format!("Could not retry CLI attachment: {error}"));
+                    }
+                }
+                None => self.notice = Some("CLI attachment is not ready to retry.".into()),
+            }
         }
     }
+}
+
+impl App {
+    pub(in crate::lean::tui) fn workbench_terminal_owner(&self) -> String {
+        let presentation = self.navigation.presentation();
+        if let Some(owner) = presentation.terminal_owner {
+            return owner;
+        }
+        match &self.navigation.target {
+            WorkbenchTarget::Session => "orchestrator".into(),
+            WorkbenchTarget::Agent(role) => {
+                let actual = graph::card_terminal_role(&self.view, role);
+                self.details.as_ref().map_or(actual.clone(), |details| {
+                    details.composer_recipient(&actual)
+                })
+            }
+        }
+    }
+
+    pub(in crate::lean::tui) fn workbench_terminal_view_role(&self) -> String {
+        self.details
+            .as_ref()
+            .and_then(|details| self.workbench_native_binding(details))
+            .map(|(role, _)| role)
+            .unwrap_or_else(|| self.workbench_terminal_owner())
+    }
+
+    fn workbench_native_binding(&self, details: &Details) -> Option<(String, String)> {
+        let owner = self.workbench_terminal_owner();
+        if details_match_terminal_owner(details, &owner)
+            && details.selected_round.is_some()
+            && !details.resume_round
+        {
+            return None;
+        }
+        Some(self.workbench_native_identity(details, &owner))
+    }
+
+    fn workbench_native_identity(&self, details: &Details, owner: &str) -> (String, String) {
+        if details_match_terminal_owner(details, owner)
+            && let Some(round) = details.selected_round
+        {
+            return (format!("{owner}#r{round}"), format!("round:{round}"));
+        }
+        let run_index = self
+            .workbench_sessions
+            .iter()
+            .filter(|session| session.role == owner)
+            .count()
+            .checked_sub(1);
+        if let (Some(index), Some(session)) = (
+            run_index,
+            self.workbench_sessions
+                .iter()
+                .rfind(|session| session.role == owner),
+        ) {
+            return (
+                owner.to_owned(),
+                format!(
+                    "{}:run:{}",
+                    session.session_id.as_deref().unwrap_or("waiting"),
+                    index
+                ),
+            );
+        }
+        if details_match_terminal_owner(details, owner) {
+            native_identity(details, owner)
+        } else {
+            (owner.to_owned(), "waiting:".into())
+        }
+    }
+}
+
+fn details_match_terminal_owner(details: &Details, owner: &str) -> bool {
+    details.composer_recipient(&details.key) == owner
+        || details.task_uuid.as_deref().is_some_and(|task| {
+            owner
+                .split_once(':')
+                .is_some_and(|(_, owner_task)| owner_task == task)
+        })
 }
 
 struct WantedView {
@@ -170,48 +295,6 @@ struct WantedView {
     identity: String,
     columns: u16,
     rows: u16,
-}
-
-fn native_panels(
-    details: &Details,
-    graph_key: Option<&str>,
-    view: &crate::lean::tui::view::View,
-) -> Vec<WantedView> {
-    if let Some(key) = graph_key {
-        let area = details.native_areas[0];
-        if area.is_empty() {
-            return Vec::new();
-        }
-        let role = details.composer_recipient(&graph::card_terminal_role(view, key));
-        let (role, identity) = native_identity(details, &role);
-        return vec![WantedView {
-            role,
-            local_key: key.to_owned(),
-            identity,
-            columns: area.width.max(1),
-            rows: area.height.max(1),
-        }];
-    }
-    details
-        .session_keys()
-        .iter()
-        .enumerate()
-        .filter_map(|(panel, key)| {
-            let area = details.native_areas[panel];
-            if area.is_empty() {
-                return None;
-            }
-            let role = details.composer_recipient(key);
-            let (role, identity) = native_identity(details, &role);
-            Some(WantedView {
-                role,
-                local_key: key.clone(),
-                identity,
-                columns: area.width.max(1),
-                rows: area.height.max(1),
-            })
-        })
-        .collect()
 }
 
 fn native_identity(details: &Details, role: &str) -> (String, String) {

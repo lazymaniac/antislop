@@ -20,6 +20,12 @@ pub enum Update {
         input: crate::lean::terminal::Input,
         error: String,
     },
+    WorkbenchSessions {
+        conversation: String,
+        generation: u64,
+        request_id: u64,
+        result: std::result::Result<Vec<crate::lean::store::SessionInfo>, String>,
+    },
     PlanHistory {
         conversation: String,
         generation: u64,
@@ -198,6 +204,10 @@ pub struct WorkbenchPresentation {
     pub split_before_zoom: bool,
     pub list_visible: bool,
     pub pinned: bool,
+    /// Agent CLI shown in the Workbench terminal, independent of content tab.
+    pub terminal_owner: Option<String>,
+    /// Key events are delivered to the CLI only while this is enabled.
+    pub native_input: bool,
 }
 
 impl Default for WorkbenchPresentation {
@@ -212,6 +222,8 @@ impl Default for WorkbenchPresentation {
             split_before_zoom: true,
             list_visible: true,
             pinned: false,
+            terminal_owner: None,
+            native_input: false,
         }
     }
 }

@@ -59,6 +59,30 @@ impl App {
                 }
             }
             update @ Update::NativeInputRejected { .. } => self.apply_native_input_rejected(update),
+            Update::WorkbenchSessions {
+                conversation,
+                generation,
+                request_id,
+                result,
+            } => {
+                if conversation == self.conversation
+                    && generation == self.generation
+                    && request_id == self.workbench_sessions_request_id
+                {
+                    match result {
+                        Ok(sessions) => {
+                            self.workbench_sessions = sessions.clone();
+                            if let Some(details) = &mut self.details {
+                                details.sessions = sessions;
+                            }
+                        }
+                        Err(error) => {
+                            self.notice =
+                                Some(format!("Could not load CLI session owners: {error}"))
+                        }
+                    }
+                }
+            }
             update @ Update::PlanHistory { .. } => self.apply_plan_history(update),
             update @ Update::AgentMessage { .. } => self.apply_agent_message(update),
             update @ Update::Config { .. } => self.apply_config(update),
@@ -77,5 +101,63 @@ impl App {
             update @ Update::CommentResult { .. } => self.apply_comment_result(update),
             update @ Update::PlanRevisionResult { .. } => self.apply_plan_revision_result(update),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(session_id: &str) -> crate::lean::store::SessionInfo {
+        crate::lean::store::SessionInfo {
+            turn_id: session_id.into(),
+            plan_id: None,
+            role: "orchestrator".into(),
+            provider: "codex".into(),
+            session_id: Some(session_id.into()),
+            status: "running".into(),
+            error: None,
+            upto_message: 0,
+            started_ms: 0,
+            finished_ms: None,
+            pid: None,
+        }
+    }
+
+    #[test]
+    fn stale_workbench_sessions_reply_cannot_replace_latest_owner_identity() {
+        let mut app = App::test_app();
+        app.workbench_sessions_request_id = 2;
+        app.workbench_sessions = vec![session("latest")];
+
+        app.apply_update(Update::WorkbenchSessions {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            request_id: 1,
+            result: Ok(vec![session("stale")]),
+        });
+
+        assert_eq!(
+            app.workbench_sessions[0].session_id.as_deref(),
+            Some("latest")
+        );
+    }
+
+    #[test]
+    fn latest_workbench_sessions_reply_updates_owner_identity() {
+        let mut app = App::test_app();
+        app.workbench_sessions_request_id = 2;
+
+        app.apply_update(Update::WorkbenchSessions {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            request_id: 2,
+            result: Ok(vec![session("current")]),
+        });
+
+        assert_eq!(
+            app.workbench_sessions[0].session_id.as_deref(),
+            Some("current")
+        );
     }
 }

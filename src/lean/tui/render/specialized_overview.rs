@@ -2,13 +2,23 @@ use super::super::*;
 
 impl Details {
     pub(super) fn draw_workbench_terminal(&mut self, frame: &mut Frame, area: Rect, view: &View) {
+        let key = self.key.clone();
+        self.draw_workbench_terminal_for(frame, area, view, &key);
+    }
+
+    pub(super) fn draw_workbench_terminal_for(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        key: &str,
+    ) {
         if area.is_empty() {
             self.native_areas = [Rect::default(); 2];
             return;
         }
         let theme = Theme::from_env();
-        let key = self.key.clone();
-        self.draw_session_panel(frame, view, &key, 0, area, &theme);
+        self.draw_session_panel(frame, view, key, 0, area, &theme);
         self.native_areas[1] = Rect::default();
     }
 
@@ -233,9 +243,9 @@ fn native_status(
         .as_deref()
         .or(screen.error.as_deref())
         .unwrap_or(if details.native_focus && active {
-            "Ctrl+] antislop"
+            "Ctrl+] preview"
         } else {
-            "i terminal · a message · r retry"
+            "i native input · a message · r retry"
         })
         .to_owned()
 }
@@ -267,6 +277,10 @@ fn composer_status(
         .and_then(|snapshot| snapshot.error.as_deref())
     {
         return error.to_owned();
+    }
+    if details.history_unavailable {
+        return "No retained historical CLI snapshot; press o to open that earlier CLI session."
+            .into();
     }
     if details.selected_round.is_some() {
         "Earlier round · o resume this session (read-only)".into()

@@ -225,42 +225,7 @@ impl App {
         }
 
         if self.graph_tab == 1 {
-            if let Some(details) = &mut self.details {
-                details.native_focus &= details.selected_round.is_none();
-                details.native_areas = [content, Rect::default()];
-            }
-            if self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.selected_round.is_some())
-            {
-                render_card_history_message(
-                    frame,
-                    content,
-                    "Historical PTY is read-only; no retained terminal snapshot is available.",
-                );
-            } else {
-                self.sync_native_views();
-                let snapshot = self
-                    .details
-                    .as_ref()
-                    .and_then(|details| details.native.get(&key))
-                    .cloned();
-                match snapshot {
-                    Some(native_view::Snapshot {
-                        screen: Some(screen),
-                        ..
-                    }) => native_view::render(frame, content, &screen, self.native_focused()),
-                    Some(native_view::Snapshot {
-                        error: Some(error), ..
-                    }) => render_card_history_message(frame, content, &error),
-                    _ => render_card_history_message(
-                        frame,
-                        content,
-                        "No current PTY session is available.",
-                    ),
-                }
-            }
+            render_card_history_message(frame, content, "CLI PTY is available in the Workbench.");
         }
         if self.graph_tab == 3
             && let Some(diff) = &mut self.diff

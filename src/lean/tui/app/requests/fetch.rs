@@ -423,6 +423,8 @@ impl App {
         });
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = target;
+        self.navigation
+            .update_presentation(|presentation| presentation.native_input = false);
         if !target_initialized {
             let delivery = self
                 .view
@@ -437,6 +439,9 @@ impl App {
             });
         }
         self.navigation.focus = self.navigation.presentation().focus;
+        if self.navigation.focus == NavigationFocus::WorkbenchTerminal {
+            self.fetch_workbench_sessions();
+        }
         self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);
         self.resolve_details_task();
@@ -447,6 +452,33 @@ impl App {
             self.diff = None;
         }
         self.fetch_task();
+    }
+
+    pub(in crate::lean::tui) fn fetch_workbench_sessions(&mut self) {
+        let Some(request_id) = self.workbench_sessions_request_id.checked_add(1) else {
+            self.notice = Some("Could not load CLI session owners: request id exhausted".into());
+            return;
+        };
+        self.workbench_sessions_request_id = request_id;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let conversation = self.conversation.clone();
+        let generation = self.generation;
+        std::thread::spawn(move || {
+            let result = client
+                .call(&crate::lean::daemon::Request::Session(
+                    crate::lean::daemon::SessionRequest::Sessions {
+                        conversation: conversation.clone(),
+                    },
+                ))
+                .and_then(|value| serde_json::from_value(value).map_err(crate::Error::from));
+            let _ = updates.send(Update::WorkbenchSessions {
+                conversation,
+                generation,
+                request_id,
+                result: result.map_err(|error| error.to_string()),
+            });
+        });
     }
 
     fn restore_details(&mut self, key: &str) {

@@ -6,6 +6,9 @@ mod update;
 
 pub struct App {
     pub(super) native_views: std::collections::HashMap<String, native_view::View>,
+    pub(super) workbench_sessions: Vec<crate::lean::store::SessionInfo>,
+    /// Most recently issued CLI owner fetch; older concurrent replies are stale.
+    pub(super) workbench_sessions_request_id: u64,
     pub(super) plan_history: Option<planhistory::Browser>,
     pub(super) graph_layout_cache: graph::LayoutCache,
     pub(super) transcript_layout: TranscriptLayout,
@@ -188,6 +191,8 @@ macro_rules! initial_app {
             offset: (0, 0),
             details: None,
             native_views: std::collections::HashMap::new(),
+            workbench_sessions: Vec::new(),
+            workbench_sessions_request_id: 0,
             diff: None,
             plan_view: None,
             editor: None,

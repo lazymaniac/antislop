@@ -130,7 +130,6 @@ fn padded(area: Rect) -> Rect {
 }
 
 /// Bound a centered panel while preserving the full viewport on small terminals.
-#[cfg(test)]
 fn panel_area(area: Rect, max_width: u16) -> Rect {
     if area.width < 16 || area.height < 7 {
         return area;
@@ -148,7 +147,6 @@ fn panel_area(area: Rect, max_width: u16) -> Rect {
 }
 
 /// Center a list viewport with its own 72-column content limit.
-#[cfg(test)]
 fn list_area(area: Rect) -> Rect {
     panel_area(area, 72)
 }

@@ -94,6 +94,25 @@ impl App {
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if !control && !alt && key.code == KeyCode::Char('p') {
+            let current = match &self.navigation.target {
+                WorkbenchTarget::Agent(_) => Some(self.workbench_terminal_owner()),
+                WorkbenchTarget::Session => self
+                    .details
+                    .as_ref()
+                    .filter(|details| details.key != "conversation")
+                    .map(|details| details.composer_recipient(&details.key)),
+            };
+            self.navigation.update_presentation(|presentation| {
+                let pin =
+                    current.filter(|role| presentation.terminal_owner.as_deref() != Some(role));
+                presentation.terminal_owner = pin;
+                presentation.pinned = presentation.terminal_owner.is_some();
+                presentation.native_input = false;
+            });
+            self.fetch_workbench_sessions();
+            return true;
+        }
         if alt && matches!(key.code, KeyCode::Up | KeyCode::Down) && self.workbench_areas.split {
             self.navigation.update_presentation(|presentation| {
                 let step = if key.code == KeyCode::Up {
@@ -131,6 +150,8 @@ impl App {
             self.result_fetch.cancel_document_fetch();
             details.switch_role();
             self.navigation.target = WorkbenchTarget::Agent(details.key.clone());
+            self.navigation
+                .update_presentation(|presentation| presentation.native_input = false);
             let target = self.navigation.target.clone();
             if !self.navigation.presentations.contains_key(&target) {
                 let delivery = details
@@ -163,6 +184,8 @@ impl App {
             if let Some(details) = &mut self.details {
                 self.result_fetch.cancel_document_fetch();
                 details.change_round(&self.view, direction);
+                self.navigation
+                    .update_presentation(|presentation| presentation.native_input = false);
                 self.navigation.update_presentation(|presentation| {
                     presentation.round = details.selected_round;
                 });
@@ -181,6 +204,9 @@ impl App {
             let focus = self.navigation.focus;
             self.navigation
                 .update_presentation(|presentation| presentation.focus = focus);
+            if focus == NavigationFocus::WorkbenchTerminal {
+                self.fetch_workbench_sessions();
+            }
             if let Some(details) = &mut self.details {
                 details.native_focus = self.navigation.focus == NavigationFocus::WorkbenchTerminal;
             }
@@ -228,10 +254,33 @@ impl App {
     }
 
     fn route_native_or_history(&mut self, key: KeyEvent) -> Option<bool> {
-        if self.native_focused() {
-            if self.workbench_navigation_key(key) {
-                return None;
+        if self.navigation.screen == Screen::Workbench
+            && self.navigation.focus == NavigationFocus::WorkbenchTerminal
+            && self.graph_expanded.is_none()
+            && !self.native_input_blocked()
+        {
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && matches!(key.code, KeyCode::Char('t' | 'i'))
+            {
+                let enabled = key.code == KeyCode::Char('i');
+                self.navigation
+                    .update_presentation(|presentation| presentation.native_input = enabled);
+                if enabled {
+                    self.fetch_workbench_sessions();
+                }
+                if let Some(details) = &mut self.details {
+                    details.native_focus = enabled;
+                }
+                return Some(true);
             }
+            if self.native_focused() {
+                self.route_native_key(key);
+                return Some(true);
+            }
+        }
+        if self.native_focused() {
             if self.embedded_diff_graph_active()
                 && embedded_diff_graph_key(key, self.graph_tab == 3)
             {
@@ -251,30 +300,14 @@ impl App {
         Some(true)
     }
 
-    fn workbench_navigation_key(&self, key: KeyEvent) -> bool {
-        if self.navigation.screen != Screen::Workbench
-            || self.graph_expanded.is_some()
-            || self.interview_visible()
-        {
-            return false;
-        }
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        (matches!(key.code, KeyCode::Tab | KeyCode::BackTab))
-            || (key.code == KeyCode::Esc && self.navigation.presentation().zoomed)
-            || (control
-                && matches!(
-                    key.code,
-                    KeyCode::Left | KeyCode::Right | KeyCode::Char('w' | 'b')
-                ))
-            || (!control
-                && !key.modifiers.contains(KeyModifiers::ALT)
-                && matches!(key.code, KeyCode::Char(',' | '.' | 'z')))
-    }
-
     fn route_native_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char(']' | '5'))
         {
+            if self.navigation.screen == Screen::Workbench {
+                self.navigation
+                    .update_presentation(|presentation| presentation.native_input = false);
+            }
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
             }

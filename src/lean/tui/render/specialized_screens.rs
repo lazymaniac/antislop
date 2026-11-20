@@ -30,6 +30,14 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
     if app.graph_expanded.is_some() {
         return false;
     }
+    let terminal_owner = app.workbench_terminal_owner();
+    let terminal_view_role = app.workbench_terminal_view_role();
+    let terminal_round = workbench_terminal_round(
+        &app.workbench_sessions,
+        app.details.as_ref(),
+        &app.navigation.presentation(),
+        &terminal_owner,
+    );
     let Some(diff) = &mut app.diff else {
         return false;
     };
@@ -38,17 +46,33 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
         let areas =
             super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
         app.workbench_areas = areas;
-        draw_workbench_chrome(frame, areas, &app.navigation.target, &presentation);
+        draw_workbench_chrome(
+            frame,
+            areas,
+            &app.navigation.target,
+            &presentation,
+            &terminal_owner,
+            terminal_round,
+        );
         if areas.list_visible {
             draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
         }
         diff.paint_at(frame, areas.content, &app.view);
+        let native_input = app.navigation.presentation().native_input;
         if let Some(details) = &mut app.details {
-            details.native_focus = app.navigation.focus == NavigationFocus::WorkbenchTerminal;
-            details.draw_workbench_terminal(frame, areas.terminal, &app.view);
+            details.native_focus = native_input;
+            details.draw_workbench_terminal_for(
+                frame,
+                areas.terminal,
+                &app.view,
+                &terminal_view_role,
+            );
         }
     } else {
         diff.paint_at(frame, frame.area(), &app.view);
+    }
+    if app.navigation.screen == Screen::Workbench {
+        app.sync_native_views();
     }
     true
 }
@@ -57,6 +81,14 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
     if app.graph_expanded.is_some() {
         return false;
     }
+    let terminal_owner = app.workbench_terminal_owner();
+    let terminal_view_role = app.workbench_terminal_view_role();
+    let terminal_round = workbench_terminal_round(
+        &app.workbench_sessions,
+        app.details.as_ref(),
+        &app.navigation.presentation(),
+        &terminal_owner,
+    );
     let Some(details) = &mut app.details else {
         return false;
     };
@@ -65,11 +97,20 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
         let areas =
             super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
         app.workbench_areas = areas;
-        draw_workbench_chrome(frame, areas, &app.navigation.target, &presentation);
+        draw_workbench_chrome(
+            frame,
+            areas,
+            &app.navigation.target,
+            &presentation,
+            &terminal_owner,
+            terminal_round,
+        );
         if areas.list_visible {
             draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
         }
+        details.native_focus = app.navigation.presentation().native_input;
         details.draw_workbench_at(frame, areas.content, areas.terminal, &app.view);
+        details.draw_workbench_terminal_for(frame, areas.terminal, &app.view, &terminal_view_role);
     } else {
         app.workbench_areas = Default::default();
         details.draw_at(frame, frame.area(), &app.view);
@@ -85,6 +126,8 @@ fn draw_workbench_chrome(
     areas: super::super::workbench::WorkbenchAreas,
     target: &WorkbenchTarget,
     presentation: &WorkbenchPresentation,
+    terminal_owner: &str,
+    terminal_round: Option<u64>,
 ) {
     let theme = Theme::from_env();
     let context = super::super::workbench::context(target, presentation);
@@ -94,8 +137,19 @@ fn draw_workbench_chrome(
     };
     frame.render_widget(
         Paragraph::new(format!(
-            " {identity} · {:?} · {:?} · round {:?} · {:?}",
-            context.role, presentation.tab, context.round, context.focus
+            " {identity} · {:?} · CLI {terminal_owner} · r{} · {}{}",
+            presentation.tab,
+            terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
+            if presentation.native_input {
+                "native input"
+            } else {
+                "preview"
+            },
+            if presentation.pinned {
+                " · pinned"
+            } else {
+                " · following"
+            }
         ))
         .style(theme.bar()),
         areas.header,
@@ -120,6 +174,36 @@ fn draw_workbench_chrome(
             areas.list,
         );
     }
+}
+
+fn workbench_terminal_round(
+    sessions: &[crate::lean::store::SessionInfo],
+    details: Option<&super::super::Details>,
+    presentation: &WorkbenchPresentation,
+    owner: &str,
+) -> Option<u64> {
+    let matching_details = details.filter(|details| {
+        details.composer_recipient(&details.key) == owner
+            || details.task_uuid.as_deref().is_some_and(|task| {
+                owner
+                    .split_once(':')
+                    .is_some_and(|(_, owner_task)| owner_task == task)
+            })
+    });
+    matching_details
+        .and_then(|details| details.selected_round)
+        .or_else(|| {
+            sessions
+                .iter()
+                .filter(|session| session.role == owner)
+                .count()
+                .checked_sub(1)
+                .map(|index| index as u64)
+        })
+        .or_else(|| {
+            matching_details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64())
+        })
+        .or(presentation.round.filter(|_| matching_details.is_some()))
 }
 
 fn draw_workbench_list(frame: &mut Frame, area: Rect, view: &View, target: &WorkbenchTarget) {
