@@ -6020,6 +6020,80 @@ fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
 }
 
 #[test]
+fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
+    let dir = test_tempdir();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let (captured, requests) = mpsc::channel();
+    let server = thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
+            captured.send(request).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                json!({"data":{"status":"succeeded","summary":"Action completed"},"error":null})
+            )
+            .unwrap();
+        }
+    });
+
+    let conversation = "existing-session-42";
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    app.conversation = conversation.into();
+    let kinds = [
+        antislop::lean::daemon::SessionActionKind::CreatePr,
+        antislop::lean::daemon::SessionActionKind::MergeWithMain,
+        antislop::lean::daemon::SessionActionKind::ContinueWork,
+    ];
+    app.view.cards.push(TranscriptCard::Completion {
+        sent_at: None,
+        branch: Some("antislop/session/example".into()),
+        summary: "Implemented the completion card".into(),
+        actions: kinds
+            .into_iter()
+            .map(|kind| antislop::lean::tui::view::CompletionActionState { kind, result: None })
+            .collect(),
+        selected: 0,
+        latest_result: None,
+    });
+
+    for (index, kind) in kinds.into_iter().enumerate() {
+        app.key(KeyEvent::new(
+            KeyCode::Char(char::from(b'1' + index as u8)),
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(
+            requests.recv_timeout(Duration::from_secs(3)).unwrap(),
+            json!({
+                "op":"session_action",
+                "conversation":conversation,
+                "action":match kind {
+                    antislop::lean::daemon::SessionActionKind::CreatePr => "create_pr",
+                    antislop::lean::daemon::SessionActionKind::MergeWithMain => "merge_with_main",
+                    antislop::lean::daemon::SessionActionKind::ContinueWork => "continue_work",
+                }
+            })
+        );
+        let update = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(
+            update,
+            Update::SessionAction {
+                conversation: ref updated_conversation,
+                action: updated_action,
+                result: antislop::lean::daemon::SessionActionResult::Succeeded { .. },
+            } if updated_conversation == conversation && updated_action == kind
+        ));
+        app.apply_update(update);
+    }
+    server.join().unwrap();
+}
+
+#[test]
 fn configuration_load_and_save_use_live_daemon_requests() {
     let dir = test_tempdir();
     let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();

@@ -12,6 +12,15 @@ mod records;
 impl App {
     pub(in crate::lean::tui) fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::SessionAction {
+                conversation,
+                action,
+                result,
+            } => {
+                if conversation == self.conversation {
+                    self.view.set_session_action_result(action, result);
+                }
+            }
             Update::ResultDocument {
                 conversation,
                 generation,

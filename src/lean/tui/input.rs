@@ -139,6 +139,14 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let super_key = key.modifiers.contains(KeyModifiers::SUPER);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if self.input.is_empty()
+            && !control
+            && !alt
+            && let KeyCode::Char(action @ '1'..='3') = key.code
+            && self.select_session_action((action as usize) - ('1' as usize))
+        {
+            return true;
+        }
         match key.code {
             KeyCode::Char('v') if control || super_key => self.paste_clipboard_image(),
             KeyCode::Backspace if alt => self.remove_last_image_attachment(),

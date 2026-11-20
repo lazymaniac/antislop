@@ -70,6 +70,12 @@ pub struct MessageEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CompletionActionState {
+    pub kind: crate::lean::daemon::SessionActionKind,
+    pub result: Option<crate::lean::daemon::SessionActionResult>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptCard {
     Message(MessageEntry),
     Plan {
@@ -92,6 +98,14 @@ pub enum TranscriptCard {
         text: String,
         status: String,
     },
+    Completion {
+        sent_at: Option<i64>,
+        branch: Option<String>,
+        summary: String,
+        actions: Vec<CompletionActionState>,
+        selected: usize,
+        latest_result: Option<String>,
+    },
 }
 
 impl TranscriptCard {
@@ -101,6 +115,7 @@ impl TranscriptCard {
             Self::Plan { sent_at, .. }
             | Self::System { sent_at, .. }
             | Self::Comment { sent_at, .. } => *sent_at,
+            Self::Completion { sent_at, .. } => *sent_at,
         }
     }
 }
@@ -259,6 +274,57 @@ pub fn dim() -> Style {
 }
 
 impl View {
+    pub fn set_session_action_result(
+        &mut self,
+        action: crate::lean::daemon::SessionActionKind,
+        result: crate::lean::daemon::SessionActionResult,
+    ) {
+        if let Some(TranscriptCard::Completion {
+            actions,
+            selected,
+            latest_result,
+            ..
+        }) = self
+            .cards
+            .iter_mut()
+            .rev()
+            .find(|card| matches!(card, TranscriptCard::Completion { .. }))
+        {
+            *selected = actions
+                .iter()
+                .position(|entry| entry.kind == action)
+                .unwrap_or(*selected);
+            if let Some(entry) = actions.iter_mut().find(|entry| entry.kind == action) {
+                if matches!(
+                    result,
+                    crate::lean::daemon::SessionActionResult::Queued { .. }
+                ) && matches!(
+                    entry.result,
+                    Some(
+                        crate::lean::daemon::SessionActionResult::Succeeded { .. }
+                            | crate::lean::daemon::SessionActionResult::Failed { .. }
+                            | crate::lean::daemon::SessionActionResult::MissingInputs { .. }
+                    )
+                ) {
+                    return;
+                }
+                entry.result = Some(result.clone());
+            }
+            *latest_result = Some(match result {
+                crate::lean::daemon::SessionActionResult::Queued { .. } => {
+                    "Action queued for the existing session orchestrator.".into()
+                }
+                crate::lean::daemon::SessionActionResult::Succeeded { summary } => summary,
+                crate::lean::daemon::SessionActionResult::Failed { details } => {
+                    format!("Failed: {details}")
+                }
+                crate::lean::daemon::SessionActionResult::MissingInputs { inputs } => {
+                    format!("Missing inputs: {}", inputs.join(", "))
+                }
+            });
+        }
+    }
+
     pub fn apply(&mut self, event: &Value) {
         projection::apply(self, event);
     }
@@ -379,6 +445,83 @@ mod tests {
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {
         json!({"seq": seq, "turn_id": turn, "kind": kind, "payload": payload})
+    }
+
+    #[test]
+    fn completed_session_card_preserves_branch_summary_and_action_mapping() {
+        let mut view = View::default();
+        view.apply(&event(1, None, "session_completed", json!({
+            "project":"/repo", "branch":"antislop/session/abc", "summary":"Added completion actions and tests"
+        })));
+        let TranscriptCard::Completion {
+            branch,
+            summary,
+            actions,
+            ..
+        } = &view.cards[0]
+        else {
+            panic!("expected completion card")
+        };
+        assert_eq!(branch.as_deref(), Some("antislop/session/abc"));
+        assert_eq!(view.session_branch.as_deref(), Some("antislop/session/abc"));
+        assert_eq!(summary, "Added completion actions and tests");
+        assert_eq!(
+            actions.iter().map(|action| action.kind).collect::<Vec<_>>(),
+            [
+                crate::lean::daemon::SessionActionKind::CreatePr,
+                crate::lean::daemon::SessionActionKind::MergeWithMain,
+                crate::lean::daemon::SessionActionKind::ContinueWork,
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_action_failures_and_missing_inputs_remain_visible() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "session_completed",
+            json!({"branch":"antislop/session/abc", "summary":"Done"}),
+        ));
+        view.apply(&event(2, None, "session_action_result", json!({"action":"create_pr", "result":{"status":"failed", "details":"gh: authentication failed"}})));
+        let TranscriptCard::Completion {
+            actions,
+            latest_result,
+            ..
+        } = &view.cards[0]
+        else {
+            panic!("expected completion card")
+        };
+        assert_eq!(
+            actions[0].result,
+            Some(crate::lean::daemon::SessionActionResult::Failed {
+                details: "gh: authentication failed".into()
+            })
+        );
+        assert_eq!(
+            latest_result.as_deref(),
+            Some("Failed: gh: authentication failed")
+        );
+        view.apply(&event(3, None, "session_action_result", json!({"action":"merge_with_main", "result":{"status":"missing_inputs", "inputs":["local main branch"]}})));
+        let TranscriptCard::Completion {
+            actions,
+            latest_result,
+            ..
+        } = &view.cards[0]
+        else {
+            panic!("expected completion card")
+        };
+        assert_eq!(
+            actions[1].result,
+            Some(crate::lean::daemon::SessionActionResult::MissingInputs {
+                inputs: vec!["local main branch".into()]
+            })
+        );
+        assert_eq!(
+            latest_result.as_deref(),
+            Some("Missing inputs: local main branch")
+        );
     }
 
     #[test]

@@ -581,8 +581,10 @@ mod tests {
         for event in events {
             view.apply(&serde_json::to_value(event).unwrap());
         }
-        assert!(view.cards.iter().any(|card|matches!(card,crate::lean::tui::TranscriptCard::System{title,text,..}
-            if title=="Session completed" && text.contains(&result.branch) && text.contains("git switch"))));
+        assert!(view.cards.iter().any(
+            |card| matches!(card,crate::lean::tui::TranscriptCard::Completion{branch,..}
+            if branch.as_deref()==Some(result.branch.as_str()))
+        ));
         core.activity
             .finishing
             .lock()
