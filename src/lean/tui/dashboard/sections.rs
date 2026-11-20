@@ -60,7 +60,17 @@ fn append_goal_sections(theme: &Theme, width: usize, row: &TaskRow, out: &mut Ve
     out.push(text_section(
         "goal",
         "Goal",
-        para(theme, &row.goal, width, theme.text()),
+        para(
+            theme,
+            &crate::lean::tui::view::task_goal(
+                &row.kind,
+                &row.title,
+                &row.goal,
+                row.summary.as_deref(),
+            ),
+            width,
+            theme.text(),
+        ),
         WHOLE,
     ));
     if !row.focus.trim().is_empty() {

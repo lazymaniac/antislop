@@ -242,7 +242,11 @@ impl Core {
             .filter(|task| task.status == status::APPROVED)
             .count();
         let paused = self.store.paused(&conversation.id).unwrap_or(false);
-        let status = self.conversation_status(&conversation.id, paused, &tasks, &active_plan)?;
+        let (status, status_error) =
+            match self.conversation_status(&conversation.id, paused, &tasks, &active_plan) {
+                Ok(status) => (status, None),
+                Err(error) => ("failed".into(), Some(error.to_string())),
+            };
         let revision_token = self
             .conversation_revision_token(&conversation.id)
             .unwrap_or_default();
@@ -252,6 +256,7 @@ impl Core {
             project: conversation.project.clone(),
             created_ms: conversation.created_ms,
             status,
+            status_error,
             active_plan,
             tasks_total: tasks.len(),
             tasks_done,

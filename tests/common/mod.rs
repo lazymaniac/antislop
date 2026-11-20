@@ -4,6 +4,22 @@
 use std::path::Path;
 use std::sync::Once;
 
+pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+pub struct ReleaseOnDrop(pub std::path::PathBuf);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.0, "release");
+    }
+}
+
 /// Creates a relative fixture root so daemon socket paths stay under this
 /// checkout, even when its absolute worktree path is too long for Unix sockets.
 pub fn tempdir() -> tempfile::TempDir {

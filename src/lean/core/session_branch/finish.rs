@@ -38,14 +38,33 @@ impl Core {
             self.ensure_session_worktree(conversation, &project.canonicalize()?, &record)?;
             git::integrated_fingerprint(&record.worktree)
         } else {
-            git::ok(
+            let reference = format!("refs/heads/{}", record.branch);
+            let tree = git::ok(
                 project,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    &format!("refs/heads/{}^{{tree}}", record.branch),
-                ],
-            )
+                &["rev-parse", "--verify", &format!("{reference}^{{tree}}")],
+            );
+            match tree {
+                Ok(tree) => Ok(tree),
+                Err(error) => {
+                    let found =
+                        git::git(project, &["show-ref", "--verify", "--quiet", &reference])?;
+                    if found.status.code() != Some(1) {
+                        return Err(error);
+                    }
+                    // A merged session branch may have been deleted by the user.
+                    // Its completed result remains identified by its recorded commit.
+                    let commit: Option<String> = self.store.db().query_row(
+                        "SELECT json_extract(payload,'$.commit') FROM events WHERE conversation_id=?1 AND kind='session_completed' AND json_extract(payload,'$.branch')=?2 AND json_extract(payload,'$.project')=?3 AND json_extract(payload,'$.cleanup_complete')=1 ORDER BY seq DESC LIMIT 1",
+                        rusqlite::params![conversation,record.branch,record.project], |row| row.get(0)).optional()?.flatten();
+                    let Some(commit) = commit else {
+                        return Err(Error::Invalid(format!(
+                            "session integration branch {} is missing; restore its Git ref before retrying",
+                            record.branch
+                        )));
+                    };
+                    git::tree_identity(project, &commit)
+                }
+            }
         }
     }
 
@@ -549,5 +568,69 @@ mod tests {
             core.frontend_idle(&conversation.id).unwrap(),
             "streaming clients can exit after the completion summary"
         );
+
+        git::ok(&project, &["merge", "--ff-only", &result.branch]).unwrap();
+        git::ok(&project, &["branch", "-d", &result.branch]).unwrap();
+        assert!(
+            core.final_audit_current(&conversation.id, &task.plan_id)
+                .unwrap(),
+            "a completed result survives deletion of its merged branch"
+        );
+        assert!(!result.worktree.exists());
+        assert!(
+            git::branches(&project, "antislop/session/")
+                .unwrap()
+                .iter()
+                .all(|branch| branch != &result.branch)
+        );
+
+        // An unfinished session with a lost ref has no completed commit to read.
+        let mut unfinished = core
+            .store
+            .add_plan(&foreign.id, std::slice::from_ref(&task.spec))
+            .unwrap()
+            .remove(0);
+        unfinished.status = status::APPROVED.into();
+        core.store.update_task(&unfinished).unwrap();
+        core.store
+            .append_event(
+                &foreign.id,
+                None,
+                Some(&unfinished.plan_id),
+                "audit",
+                &json!({"plan":unfinished.plan_id,"approved":true,"binding":"previous result"}),
+            )
+            .unwrap();
+        git::remove_worktree_keep_branch(&project, &foreign_record.worktree).unwrap();
+        git::ok(&project, &["branch", "-D", &foreign_record.branch]).unwrap();
+        let config = core.config_snapshot();
+        drop(core);
+        let reopened =
+            Core::open(&directory.path().join("state"), config.as_ref().clone()).unwrap();
+        let summaries = reopened.conversations().unwrap();
+        assert_eq!(summaries.len(), 2, "a broken session never hides the list");
+        let completed = summaries
+            .iter()
+            .find(|row| row.id == conversation.id)
+            .unwrap();
+        assert_eq!(completed.status, "done");
+        assert!(completed.status_error.is_none());
+        let legacy = serde_json::to_value(completed).unwrap();
+        assert!(legacy.get("status_error").is_none());
+        assert_eq!(
+            serde_json::from_value::<ConversationSummary>(legacy).unwrap(),
+            *completed
+        );
+        let broken = summaries.iter().find(|row| row.id == foreign.id).unwrap();
+        assert_eq!(broken.status, "failed");
+        assert!(
+            broken
+                .status_error
+                .as_deref()
+                .unwrap()
+                .contains("restore its Git ref")
+        );
+        assert!(!foreign_record.worktree.exists());
+        reopened.start(&project).unwrap();
     }
 }

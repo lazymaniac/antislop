@@ -61,15 +61,23 @@ fn fake_codex(dir: &std::path::Path) -> std::path::PathBuf {
 for last; do :; done
 printf '%s\n---\n' "$*" >> '{log}'
 answer=$(printf '%s' "$last" | tail -n 1)
-case "$answer" in *slow*) sleep 1 ;; esac
-case "$answer" in *sleepy*) sleep 4 ;; esac
+case "$answer" in *slow*|*sleepy*)
+  if [ -f '{dir}/hold-agent' ]; then
+    touch '{dir}/agent-entered'
+    while [ ! -f '{dir}/release-agent' ]; do sleep 0.01; done
+  else
+    case "$answer" in *slow*) sleep 1 ;; esac
+    case "$answer" in *sleepy*) sleep 4 ;; esac
+  fi ;;
+esac
 case "$answer" in *fail*) echo 'login required' >&2; exit 1 ;; esac
 echo '{{"type":"thread.started","thread_id":"T1"}}'
 echo '{{"type":"item.started","item":{{"type":"command_execution","command":"ls"}}}}'
 printf '{{"type":"item.completed","item":{{"type":"agent_message","text":"answer: %s"}}}}\n' "$answer"
 echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}'
 "#,
-            log = log.display()
+            log = log.display(),
+            dir = dir.canonicalize().unwrap().display()
         ),
     )
     .unwrap();
@@ -92,11 +100,9 @@ fn config(codex: &std::path::Path) -> Config {
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !core.is_idle(conversation) {
-        assert!(Instant::now() < deadline, "orchestrator never went idle");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until("orchestrator never went idle", || {
+        core.is_idle(conversation)
+    });
 }
 
 /// Each new native session gets its own id; resuming preserves that id.
@@ -535,32 +541,60 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
     let conversation = core.start(&project).unwrap();
 
-    let first_started = Instant::now();
-    core.send(&conversation.id, "slow: analyze the project architecture")
-        .unwrap();
-    assert!(
-        first_started.elapsed() < Duration::from_millis(500),
-        "first message acceptance must not wait for the agent"
-    );
+    std::fs::write(dir.path().join("hold-agent"), "hold").unwrap();
+    let release = common::ReleaseOnDrop(dir.path().join("release-agent"));
+    let send = |text: &str| {
+        let (sent, receipt) = std::sync::mpsc::channel();
+        let core = core.clone();
+        let conversation = conversation.id.clone();
+        let text = text.to_owned();
+        let sender = std::thread::spawn(move || {
+            let _ = sent.send(core.send(&conversation, &text));
+        });
+        let message = receipt
+            .recv_timeout(Duration::from_secs(120))
+            .expect("message acceptance waited for the blocked agent")
+            .unwrap();
+        sender.join().unwrap();
+        message
+    };
+    send("slow: analyze the project architecture");
     assert_eq!(
         core.store.messages_after(&conversation.id, 0).unwrap()[0].text,
         "slow: analyze the project architecture"
     );
-    // Send the second message while the first turn is running.
-    while core
+    common::wait_until("the agent never entered the gated turn", || {
+        dir.path().join("agent-entered").exists()
+    });
+    let first_turn = core
         .store
         .last_turn(&conversation.id, "orchestrator")
         .unwrap()
-        .is_none()
-    {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let started = Instant::now();
-    core.send(&conversation.id, "second message").unwrap();
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "sending must not wait for the agent"
+        .unwrap();
+    assert_eq!(first_turn.status, TurnStatus::Running);
+    send("second message");
+    let active = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.id, first_turn.id);
+    assert_eq!(active.status, TurnStatus::Running);
+    let messages = core.store.messages_after(&conversation.id, 0).unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.author == "user")
+            .count(),
+        2
     );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.author != "orchestrator"),
+        "the agent stays blocked until both messages are accepted"
+    );
+    drop(release);
     wait_idle(&core, &conversation.id);
 
     let replies: Vec<_> = core
@@ -1174,6 +1208,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     };
 
     common::runtime_environment(&project);
+    std::fs::write(dir.join("hold-agent"), "hold").unwrap();
+    let release = common::ReleaseOnDrop(dir.join("release-agent"));
     let mut first = run(
         if rebuilt { &old_build } else { current_build },
         "sleepy: first",
@@ -1208,6 +1244,9 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         assert!(Instant::now() < deadline, "the daemon never got busy");
         std::thread::sleep(Duration::from_millis(10));
     };
+    common::wait_until("the first agent did not enter its gated turn", || {
+        dir.join("agent-entered").exists()
+    });
     // A foreign repository cannot change the active runtime configuration.
     let other_project = dir.join("other-project");
     std::fs::create_dir(&other_project).unwrap();
@@ -1250,7 +1289,24 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(dir.join("antislop.toml"), format!("{text}\n# edited\n")).unwrap();
     }
-    let second = run(current_build, "second").wait_with_output().unwrap();
+    let second = run(current_build, "second");
+    common::wait_until("the second frontend did not queue its message", || {
+        rusqlite::Connection::open_with_flags(
+            state.join("core.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .and_then(|db| {
+            db.query_row(
+                "SELECT count(*) FROM messages WHERE author='user'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .is_ok_and(|messages| messages == 2)
+    });
+    assert_eq!(identity().unwrap()["pid"], daemon);
+    drop(release);
+    let second = second.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{stderr}");
     assert!(
@@ -1848,6 +1904,8 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         "applied"
     );
 
+    std::fs::write(dir.join("hold-agent"), "hold").unwrap();
+    let release = common::ReleaseOnDrop(dir.join("release-agent"));
     client
         .call(&Request::Conversation(ConversationRequest::Send {
             conversation: conversation.clone(),
@@ -1858,6 +1916,9 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         }))
         .unwrap();
     wait_for(&|v| v["busy"] == true);
+    common::wait_until("the active turn never entered the fixture gate", || {
+        dir.join("agent-entered").exists()
+    });
     let second = dir.join("antislop-successor-2");
     std::fs::copy(executable, &second).unwrap();
     let second_build = antislop::lean::daemon::build_identity(&second).unwrap();
@@ -1896,6 +1957,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
             paused: false,
         }))
         .unwrap();
+    drop(release);
     wait_for(&|v| v["build"] == second_build && v["busy"] == false);
     let events = client
         .call(&Request::History(HistoryRequest::Events {

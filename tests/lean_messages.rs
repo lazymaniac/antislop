@@ -1,10 +1,10 @@
 mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
+use common::wait_until;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Fake codex (orchestrator) and agy (everyone else). Both log every prompt
 /// to `prompts.jsonl`; `answer` comes from the given Python statements.
@@ -104,14 +104,6 @@ def message(to, kind, text):
         assert!(status.success());
     }
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
-}
-
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !done() {
-        assert!(Instant::now() < deadline, "{what}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn prompts(dir: &Path) -> Vec<(String, String)> {
@@ -1305,16 +1297,10 @@ else:
 
 #[test]
 fn a_dependency_correction_cancels_the_old_consumer_and_releases_its_only_slot() {
-    struct ReleaseOnDrop(std::path::PathBuf);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            let _ = std::fs::write(&self.0, "release");
-        }
-    }
     let dir = tempfile::tempdir().unwrap();
     let entered = dir.path().join("old-consumer-entered");
     let release = dir.path().join("release-old-consumer");
-    let _release_on_drop = ReleaseOnDrop(release.clone());
+    let _release_on_drop = common::ReleaseOnDrop(release.clone());
     let agent = format!(
         r#"    import os
     if 'Task id: t2\n' in prompt:

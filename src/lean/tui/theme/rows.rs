@@ -129,20 +129,30 @@ pub fn card(theme: &Theme, props: CardProps<'_>) -> Vec<Row> {
 
 fn card_heading(theme: &Theme, props: &CardProps<'_>, width: usize) -> Row {
     let bar = Span::styled(theme.glyphs().bar, props.fill.patch(props.accent));
-    let mut left = vec![bar, Span::styled(" ", props.fill)];
-    left.extend(props.head.iter().map(|span| {
-        Span::styled(
-            span.content.clone().into_owned(),
-            props.fill.patch(span.style),
-        )
-    }));
+    let mut left = vec![bar];
+    if width > 1 {
+        left.push(Span::styled(" ", props.fill));
+    }
+    let heading_width: usize = props.head.iter().map(|span| span.content.width()).sum();
+    let title_room = heading_width.min(8).min(width.saturating_sub(3) / 2);
+    let right = theme.fit(&props.right, width.saturating_sub(3 + title_room));
+    let mut room = width.saturating_sub(2 + right.width() + usize::from(!right.is_empty()));
+    for span in &props.head {
+        if room == 0 {
+            break;
+        }
+        let text = theme.fit(&span.content, room);
+        let truncated = span.content.width() > room;
+        room = room.saturating_sub(text.width());
+        left.push(Span::styled(text, props.fill.patch(span.style)));
+        if truncated {
+            break;
+        }
+    }
     split_row(
         props.fill,
         left,
-        Span::styled(
-            theme.fit(&props.right, width / 2),
-            props.fill.patch(theme.dim()),
-        ),
+        Span::styled(right, props.fill.patch(theme.dim())),
         width,
     )
 }

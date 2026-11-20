@@ -20,9 +20,22 @@ pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
     };
     let live = stored["checks"].as_array().filter(|rows| !rows.is_empty());
     let verdict = !stored["verdict"].is_null();
+    let goal = super::super::view::task_goal(
+        crate::lean::tasks::work_kind_name(spec.kind),
+        &spec.title,
+        &spec.goal,
+        spec.summary.as_deref(),
+    );
     obligations(&spec)
         .into_iter()
-        .map(|(id, text)| make_check_row(id, text, stored, live, verdict))
+        .map(|(id, text)| {
+            let text = if id == crate::lean::tasks::GOAL_CHECK {
+                format!("The goal is met: {goal}")
+            } else {
+                text
+            };
+            make_check_row(id, text, stored, live, verdict)
+        })
         .collect()
 }
 

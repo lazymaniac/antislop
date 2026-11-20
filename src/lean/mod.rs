@@ -65,6 +65,8 @@ pub struct ConversationSummary {
     pub project: String,
     pub created_ms: i64,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_error: Option<String>,
     pub active_plan: Option<String>,
     pub tasks_total: usize,
     pub tasks_done: usize,

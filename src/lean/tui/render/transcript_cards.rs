@@ -1,10 +1,12 @@
 use super::super::*;
+use unicode_width::UnicodeWidthStr;
 
 struct CommentCardRef<'a> {
     id: u64,
     target: &'a str,
     text: &'a str,
     status: &'a str,
+    sent_at: Option<i64>,
 }
 
 impl App {
@@ -15,29 +17,11 @@ impl App {
         width: u16,
         theme: &Theme,
     ) -> Vec<Row> {
-        let mut rows = if let Some(comment) = comment_card_ref(entry) {
+        if let Some(comment) = comment_card_ref(entry) {
             self.comment_rows(comment, found, width, theme)
         } else {
             standard_card_rows(entry, found, width, theme)
-        };
-        if let Some(datetime) = entry.sent_at().and_then(message_datetime)
-            && let Some(header) = rows.first()
-        {
-            let fill = header.fill;
-            let timestamps = theme::wrap(&datetime, usize::from(width.saturating_sub(2)))
-                .into_iter()
-                .map(|line| {
-                    Row::new(
-                        fill,
-                        vec![
-                            Span::styled(theme.glyphs().bar, fill.patch(theme.dim())),
-                            Span::styled(format!(" {line}"), fill.patch(theme.dim())),
-                        ],
-                    )
-                });
-            rows.splice(1..1, timestamps);
         }
-        rows
     }
 
     fn comment_rows(
@@ -48,12 +32,13 @@ impl App {
         theme: &Theme,
     ) -> Vec<Row> {
         let (state, error) = comment_status(self, comment.id, comment.status);
+        let right = card_metadata(&state, comment.sent_at, width, theme);
         let body = comment_body(comment.text, error.as_deref());
         comment_card(
             comment.id,
             comment.target,
             &body,
-            &state,
+            &right,
             found,
             width,
             theme,
@@ -78,7 +63,7 @@ fn comment_card_ref(entry: &TranscriptCard) -> Option<CommentCardRef<'_>> {
         target,
         text,
         status,
-        ..
+        sent_at,
     } = entry
     else {
         return None;
@@ -88,22 +73,39 @@ fn comment_card_ref(entry: &TranscriptCard) -> Option<CommentCardRef<'_>> {
         target,
         text,
         status,
+        sent_at: *sent_at,
     })
 }
 
 fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &Theme) -> Vec<Row> {
+    let sent_at = entry.sent_at();
     match entry {
         TranscriptCard::Message(msg) => message_rows(msg, found, width, theme),
         TranscriptCard::Plan {
             plan, tasks, text, ..
-        } => plan_rows(plan, *tasks, text, found, width, theme),
+        } => plan_rows(
+            plan,
+            &card_metadata(&format!("{tasks} tasks"), sent_at, width, theme),
+            text,
+            found,
+            width,
+            theme,
+        ),
         TranscriptCard::System {
             title,
             meta,
             text,
             tone,
             ..
-        } => system_rows(title, meta, text, tone, found, width, theme),
+        } => system_rows(
+            title,
+            &card_metadata(meta, sent_at, width, theme),
+            text,
+            tone,
+            found,
+            width,
+            theme,
+        ),
         TranscriptCard::Comment { .. } => unreachable!("comments handled before standard rows"),
     }
 }
@@ -138,7 +140,7 @@ fn message_card_props<'a>(
     };
     let person = theme.person(&msg.sender);
     let head = message_heading(msg, person, theme);
-    let right = message_right(msg, theme);
+    let right = card_metadata(&msg.state, msg.sent_at, width, theme);
     CardProps {
         fill,
         accent: person,
@@ -158,8 +160,26 @@ fn message_heading(msg: &MessageEntry, person: Style, theme: &Theme) -> Vec<Span
     ]
 }
 
-fn message_right(msg: &MessageEntry, theme: &Theme) -> String {
-    theme.clean(&msg.state)
+fn card_metadata(meta: &str, sent_at: Option<i64>, width: u16, theme: &Theme) -> String {
+    let meta = theme.clean(meta);
+    let Some(datetime) = sent_at.and_then(message_datetime) else {
+        return meta;
+    };
+    let (_, time) = datetime.rsplit_once(' ').unwrap_or(("", &datetime));
+    let timestamp = if width >= 32 {
+        datetime.as_str()
+    } else if width >= 20 {
+        time
+    } else {
+        time.rsplit_once(':').map_or(time, |(minutes, _)| minutes)
+    };
+    // Keep eight title columns in addition to the accent, spacing and separator.
+    let meta_room = usize::from(width).saturating_sub(timestamp.width() + 14);
+    if !meta.is_empty() && meta.width() <= meta_room {
+        format!("{meta} {} {timestamp}", theme.glyphs().dot)
+    } else {
+        timestamp.to_owned()
+    }
 }
 
 fn message_datetime(milliseconds: i64) -> Option<String> {
@@ -210,7 +230,7 @@ fn comment_card(
 
 fn plan_rows(
     plan: &str,
-    tasks: usize,
+    meta: &str,
     text: &str,
     found: bool,
     width: u16,
@@ -225,7 +245,7 @@ fn plan_rows(
                 format!("Plan {}", theme.clean(plan)),
                 theme.accent().patch(theme.title()),
             )],
-            right: format!("{tasks} tasks"),
+            right: meta.to_owned(),
             body: text,
             max_body: usize::MAX,
             width,
@@ -283,7 +303,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn every_card_kind_keeps_its_event_time_after_replay_and_at_narrow_widths() {
+    fn every_card_kind_right_aligns_its_event_time_in_the_header_after_replay() {
         let events = [
             ("message", json!({"author":"user","text":"Continue"})),
             (
@@ -324,21 +344,24 @@ mod tests {
         assert_eq!(app.view.cards, replay.cards);
         for card in &app.view.cards {
             let datetime = message_datetime(card.sent_at().unwrap()).unwrap();
-            for width in [120, 50, 34, 12] {
+            for width in [120, 50, 34, 24, 20, 12] {
                 let rows = app.transcript_card_rows(card, false, width, &Theme::new(false, false));
-                let text = rows
+                let header = rows[0]
+                    .line
+                    .spans
                     .iter()
-                    .flat_map(|row| &row.line.spans)
                     .map(|span| span.content.as_ref())
                     .collect::<String>();
-                let compact = text
-                    .replace(['▌', '|'], "")
-                    .split_whitespace()
-                    .collect::<String>();
-                assert!(
-                    compact.contains(&datetime.replace(' ', "")),
-                    "{width}: {text}"
-                );
+                let time = datetime.rsplit_once(' ').unwrap().1;
+                let timestamp = if width >= 32 {
+                    datetime.as_str()
+                } else if width >= 20 {
+                    time
+                } else {
+                    time.rsplit_once(':').unwrap().0
+                };
+                assert!(header.ends_with(timestamp), "{width}: {header}");
+                assert_eq!(header.width(), usize::from(width), "{header}");
             }
         }
         for title in ["Progress", "Completed: Task", "Selected approach: Options"] {

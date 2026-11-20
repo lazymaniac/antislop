@@ -14,10 +14,12 @@ use std::time::Instant;
 
 mod comments;
 mod conversation;
+mod goals;
 mod header;
 mod model;
 mod presentation;
 mod projection;
+pub(super) use goals::task_goal;
 pub use header::*;
 pub use model::*;
 pub use presentation::{

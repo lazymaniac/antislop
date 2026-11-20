@@ -2,6 +2,10 @@ use super::super::*;
 
 fn conversation_title(value: &Value, id: &str, current: bool) -> String {
     let status = value["status"].as_str().unwrap_or("idle");
+    let status = match value["status_error"].as_str() {
+        Some(error) => format!("{status}: {}", view::clean_line(error)),
+        None => status.to_owned(),
+    };
     let mark = if current { " (current)" } else { "" };
     let total = value["tasks_total"].as_u64().unwrap_or(0);
     let goal = value["goal"]
@@ -174,6 +178,14 @@ mod tests {
         assert_eq!(
             conversation_title(&serde_json::json!({"status":"idle"}), "session-id", false),
             "New session · session-id · idle"
+        );
+        assert_eq!(
+            conversation_title(
+                &serde_json::json!({"goal":"Old session","status":"failed","status_error":"session branch is missing"}),
+                "session-id",
+                false,
+            ),
+            "Old session · failed: session branch is missing"
         );
     }
 }
