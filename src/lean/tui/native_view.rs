@@ -27,6 +27,46 @@ pub(super) struct View {
 }
 
 #[cfg(test)]
+pub(super) fn capture_fixture_view(
+    screen: crate::lean::terminal::Screen,
+    error: Option<String>,
+) -> View {
+    let (commands, _receiver) = mpsc::sync_channel(8);
+    View {
+        state: Arc::new(std::sync::Mutex::new(Snapshot {
+            screen: Some(screen.clone()),
+            error,
+        })),
+        commands,
+        stop: Arc::new(AtomicBool::new(false)),
+        dimensions: (screen.columns, screen.rows),
+        identity: "capture-session:run:0".into(),
+    }
+}
+
+#[cfg(test)]
+pub(super) fn capture_fixture_state(view: &View) -> (bool, bool, bool) {
+    view.state
+        .lock()
+        .map(|snapshot| {
+            let has_cells = snapshot
+                .screen
+                .as_ref()
+                .is_some_and(|screen| !screen.cells.is_empty());
+            let empty_screen = snapshot
+                .screen
+                .as_ref()
+                .is_some_and(|screen| screen.cells.is_empty());
+            (
+                has_cells && snapshot.error.is_none(),
+                empty_screen,
+                snapshot.error.is_some(),
+            )
+        })
+        .unwrap_or((false, false, false))
+}
+
+#[cfg(test)]
 mod tests {
     use super::session::call_input;
     use super::*;

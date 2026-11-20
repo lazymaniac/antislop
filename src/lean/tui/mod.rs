@@ -18,6 +18,8 @@ mod app {
     mod workflow;
 }
 #[cfg(test)]
+mod capture;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
