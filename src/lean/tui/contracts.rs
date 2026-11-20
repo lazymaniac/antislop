@@ -1,6 +1,11 @@
 use super::*;
 
 pub enum Update {
+    SessionAction {
+        conversation: String,
+        action: crate::lean::daemon::SessionActionKind,
+        result: crate::lean::daemon::SessionActionResult,
+    },
     ResultDocument {
         conversation: String,
         generation: u64,

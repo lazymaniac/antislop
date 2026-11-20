@@ -51,6 +51,7 @@ pub(crate) const TOOLS: &[&str] = &[
     "resume_task",
     "revise_plan",
     "request_replan",
+    "merge_session_with_main",
 ];
 
 /// Whether a successful call of `name` ends the turn.

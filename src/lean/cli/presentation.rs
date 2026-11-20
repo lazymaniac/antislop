@@ -68,11 +68,13 @@ fn describe_status(kind: &str, payload: &Value) -> Option<String> {
             value(payload, "branch")
         )),
         "session_completed" if !payload["branch"].is_string() => Some(format!(
-            "Session completed. Reports and evidence are available in session history for {}. Temporary agent resources released.",
+            "Session completed. {}\nReports and evidence are available in session history for {}. Temporary agent resources released.",
+            value(payload, "summary"),
             value(payload, "project")
         )),
         "session_completed" => Some(format!(
-            "Session completed. Repository: {}\nFinal branch: {}\nReview: git diff main...{}\nContinue: git switch {}\nTemporary task branches, worktrees and agent processes removed.",
+            "Session completed. {}\nRepository: {}\nFinal branch: {}\nReview: git diff main...{}\nContinue: git switch {}\nTemporary task branches, worktrees and agent processes removed.",
+            value(payload, "summary"),
             value(payload, "project"),
             value(payload, "branch"),
             value(payload, "branch"),

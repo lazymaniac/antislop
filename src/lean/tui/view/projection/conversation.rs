@@ -319,23 +319,60 @@ pub(super) fn on_session_completed(
     _key: String,
     _turn: &str,
 ) {
-    let project = clean_line(payload["project"].as_str().unwrap_or_default());
-    let text = if let Some(branch) = payload["branch"].as_str() {
-        let branch = clean_line(branch);
+    let branch = payload["branch"].as_str().map(clean_line);
+    if let Some(branch) = &branch {
         view.session_branch = Some(branch.clone());
-        format!(
-            "Changes are saved in {project}\nFinal branch: {branch}\nReview: git diff main...{branch}\nContinue with the result: git switch {branch}\nTemporary worktrees, task branches and agent processes have been removed. Reports and retained evidence remain in session history."
-        )
-    } else {
-        format!(
-            "Completed reports are available in session history for {project}.\nTemporary agent resources have been released."
-        )
-    };
-    view.system_card(
-        "Session completed",
-        text,
-        crate::lean::tui::theme::Tone::Done,
-    );
+    }
+    let summary = payload["summary"]
+        .as_str()
+        .map(clean_line)
+        .unwrap_or_else(|| "Summary unavailable: completion event did not include one.".into());
+    view.cards.push(TranscriptCard::Completion {
+        sent_at: view.event_created_ms,
+        branch,
+        summary,
+        actions: [
+            crate::lean::daemon::SessionActionKind::CreatePr,
+            crate::lean::daemon::SessionActionKind::MergeWithMain,
+            crate::lean::daemon::SessionActionKind::ContinueWork,
+        ]
+        .into_iter()
+        .map(|kind| CompletionActionState { kind, result: None })
+        .collect(),
+        selected: 0,
+        latest_result: None,
+    });
+}
+
+pub(super) fn on_session_action_result(
+    view: &mut View,
+    _event: &Value,
+    payload: &Value,
+    _key: String,
+    _turn: &str,
+) {
+    let result_value = payload.get("result").unwrap_or(payload);
+    let result =
+        serde_json::from_value::<crate::lean::daemon::SessionActionResult>(result_value.clone())
+            .unwrap_or_else(|error| crate::lean::daemon::SessionActionResult::Failed {
+                details: format!("Invalid session_action_result {result_value}: {error}"),
+            });
+    let action = payload.get("action").and_then(|value| {
+        serde_json::from_value::<crate::lean::daemon::SessionActionKind>(value.clone()).ok()
+    });
+    if let Some(TranscriptCard::Completion {
+        actions, selected, ..
+    }) = view
+        .cards
+        .iter()
+        .rev()
+        .find(|card| matches!(card, TranscriptCard::Completion { .. }))
+    {
+        let action = action
+            .or_else(|| actions.get(*selected).map(|entry| entry.kind))
+            .unwrap_or(crate::lean::daemon::SessionActionKind::CreatePr);
+        view.set_session_action_result(action, result);
+    }
 }
 
 pub(super) fn on_session_finalizing(

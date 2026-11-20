@@ -1,6 +1,86 @@
 use super::super::*;
 
+fn selected_session_action_request(
+    view: &mut View,
+    conversation: &str,
+    index: usize,
+) -> Option<(
+    crate::lean::daemon::SessionActionKind,
+    crate::lean::daemon::Request,
+)> {
+    let kind = view.cards.iter_mut().rev().find_map(|card| {
+        if let crate::lean::tui::TranscriptCard::Completion {
+            actions, selected, ..
+        } = card
+        {
+            *selected = index;
+            actions.get(index).map(|action| action.kind)
+        } else {
+            None
+        }
+    })?;
+    Some((
+        kind,
+        crate::lean::daemon::Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
+            conversation: conversation.to_owned(),
+            action: kind,
+        }),
+    ))
+}
+
 impl App {
+    pub(in crate::lean::tui) fn select_session_action(&mut self, index: usize) -> bool {
+        if let Some(crate::lean::tui::TranscriptCard::Completion { actions, .. }) = self
+            .view
+            .cards
+            .iter()
+            .rev()
+            .find(|card| matches!(card, crate::lean::tui::TranscriptCard::Completion { .. }))
+            && actions.iter().any(|action| {
+                matches!(
+                    action.result,
+                    Some(crate::lean::daemon::SessionActionResult::Queued { .. })
+                )
+            })
+        {
+            self.notice = Some(
+                "A session action is already queued; wait for its result before choosing another."
+                    .into(),
+            );
+            return true;
+        }
+        let Some((kind, request)) =
+            selected_session_action_request(&mut self.view, &self.conversation, index)
+        else {
+            return false;
+        };
+        self.view.set_session_action_result(
+            kind,
+            crate::lean::daemon::SessionActionResult::Queued { message: 0 },
+        );
+        let conversation = self.conversation.clone();
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let result = client.call(&request).and_then(|value| {
+                serde_json::from_value::<crate::lean::daemon::SessionActionResult>(value)
+                    .map_err(crate::Error::from)
+            });
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => crate::lean::daemon::SessionActionResult::Failed {
+                    details: error.to_string(),
+                },
+            };
+            let _ = updates.send(Update::SessionAction {
+                conversation,
+                action: kind,
+                result,
+            });
+        });
+        true
+    }
+
     pub fn handle_plan_action(&mut self, action: PlanAction) {
         match action {
             PlanAction::Close => self.plan_view = None,

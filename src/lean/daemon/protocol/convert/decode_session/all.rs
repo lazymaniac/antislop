@@ -9,6 +9,21 @@ fn decode_run_context(wire: WireRequest) -> std::result::Result<Request, Box<Wir
     }
 }
 
+fn decode_session_action(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
+    match wire {
+        WireRequest::SessionAction {
+            conversation,
+            action,
+        } => Ok(Request::Session(
+            crate::lean::daemon::SessionRequest::SessionAction {
+                conversation,
+                action,
+            },
+        )),
+        other => Err(Box::new(other)),
+    }
+}
+
 fn decode_session_events(wire: WireRequest) -> std::result::Result<Request, Box<WireRequest>> {
     match wire {
         WireRequest::SessionEvents {
@@ -99,6 +114,7 @@ pub(super) fn decode_group_all(
     wire: WireRequest,
 ) -> std::result::Result<Request, Box<WireRequest>> {
     decode_run_context(wire)
+        .or_else(|wire| decode_session_action(*wire))
         .or_else(|wire| decode_session_events(*wire))
         .or_else(|wire| decode_session_content(*wire))
         .or_else(|wire| decode_result_documents(*wire))

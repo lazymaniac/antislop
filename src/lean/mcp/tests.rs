@@ -222,8 +222,16 @@ mod role_tests {
                 "resume_task",
                 "revise_plan",
                 "request_replan",
+                "create_session_pr",
+                "merge_session_with_main",
             ]
         );
+        let merge = tool_list("orchestrator")
+            .into_iter()
+            .find(|tool| tool["name"] == "merge_session_with_main")
+            .unwrap();
+        assert_eq!(merge["inputSchema"]["required"], json!(["turn"]));
+        assert!(merge["description"].as_str().unwrap().contains("session_action_result"));
         assert_eq!(
             allowed_tools("planner"),
             vec!["submit_plan", "finish_turn", "get_images", "read_evidence", "current_turn"]

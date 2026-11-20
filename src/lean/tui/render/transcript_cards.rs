@@ -97,15 +97,61 @@ fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &T
             text,
             tone,
             ..
-        } => system_rows(
-            title,
-            &card_metadata(meta, sent_at, width, theme),
-            text,
-            tone,
-            found,
-            width,
-            theme,
-        ),
+        } => system_rows(title, meta, text, tone, found, width, theme),
+        TranscriptCard::Completion {
+            branch,
+            summary,
+            actions,
+            selected,
+            latest_result,
+            ..
+        } => {
+            let branch_line = branch.as_ref().map_or_else(|| "Final branch: unavailable".to_owned(), |branch| format!("Final branch: {branch}\nReview: git diff main...{branch}\nContinue with the result: git switch {branch}"));
+            let mut text = format!(
+                "{branch_line}\n\nWork summary: {summary}\nReports and retained evidence remain available in session history.\n\nNext action (press 1, 2 or 3):\n"
+            );
+            for (index, action) in actions.iter().enumerate() {
+                let label = match action.kind {
+                    crate::lean::daemon::SessionActionKind::CreatePr => "Create PR",
+                    crate::lean::daemon::SessionActionKind::MergeWithMain => "Merge with main",
+                    crate::lean::daemon::SessionActionKind::ContinueWork => "Continue work",
+                };
+                text.push_str(&format!(
+                    "{} [{}] {}",
+                    if index == *selected { ">" } else { " " },
+                    index + 1,
+                    label
+                ));
+                if let Some(result) = &action.result {
+                    text.push_str(&format!(
+                        " — {}",
+                        match result {
+                            crate::lean::daemon::SessionActionResult::Queued { .. } =>
+                                "queued".to_owned(),
+                            crate::lean::daemon::SessionActionResult::Succeeded { summary } =>
+                                format!("succeeded: {summary}"),
+                            crate::lean::daemon::SessionActionResult::Failed { details } =>
+                                format!("failed: {details}"),
+                            crate::lean::daemon::SessionActionResult::MissingInputs { inputs } =>
+                                format!("missing inputs: {}", inputs.join(", ")),
+                        }
+                    ));
+                }
+                text.push('\n');
+            }
+            if let Some(result) = latest_result {
+                text.push_str(&format!("\n{result}"));
+            }
+            system_rows(
+                "Session completed",
+                "",
+                &text,
+                &Tone::Done,
+                found,
+                width,
+                theme,
+            )
+        }
         TranscriptCard::Comment { .. } => unreachable!("comments handled before standard rows"),
     }
 }
@@ -303,7 +349,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn every_card_kind_right_aligns_its_event_time_in_the_header_after_replay() {
+    fn completion_card_renders_branch_summary_actions_and_raw_failure() {
+        let mut view = View::default();
+        view.apply(&json!({"seq":1,"kind":"session_completed","payload":{"branch":"antislop/session/x","summary":"Added the completion flow"}}));
+        view.apply(&json!({"seq":2,"kind":"session_action_result","payload":{"action":"create_pr","result":{"status":"failed","details":"gh: authentication failed"}}}));
+        let card = view.cards.last().unwrap();
+        let rows = standard_card_rows(card, false, 120, &Theme::new(false, false));
+        let text = rows
+            .iter()
+            .flat_map(|row| &row.line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        for expected in [
+            "antislop/session/x",
+            "Added the completion flow",
+            "Create PR",
+            "Merge with main",
+            "Continue work",
+            "failed: gh: authentication failed",
+            "Reports and retained evidence",
+        ] {
+            assert!(
+                text.contains(expected),
+                "missing {expected:?} from {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_card_kind_keeps_its_event_time_after_replay_and_at_narrow_widths() {
         let events = [
             ("message", json!({"author":"user","text":"Continue"})),
             (

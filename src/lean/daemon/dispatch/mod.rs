@@ -194,6 +194,137 @@ mod tests {
         assert_eq!(content["text"], text);
         assert_eq!(content["done"], true);
     }
+
+    #[test]
+    fn continue_work_queues_in_the_same_conversation_and_preserves_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let conversation = core
+            .store
+            .create_conversation(&project.to_string_lossy())
+            .unwrap();
+        let prior = core
+            .store
+            .add_message(
+                &conversation.id,
+                "user",
+                "Keep the existing branch and context.",
+            )
+            .unwrap();
+        let session_tree = core.session_worktree(&conversation.id, &project).unwrap();
+        let branch = crate::lean::git::worktree_branch(&session_tree).unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_completed",
+                &json!({"cleanup_complete":true,"branch":branch}),
+            )
+            .unwrap();
+        core.store.db().execute(
+            "INSERT INTO turns(id,conversation_id,role,provider,session_id,status,upto_message,started_ms) VALUES('prior-turn',?1,'orchestrator','codex','provider-session-42','completed',?2,1)",
+            rusqlite::params![conversation.id, prior.seq as i64],
+        ).unwrap();
+
+        let response = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
+                conversation: conversation.id.clone(),
+                action: crate::lean::daemon::SessionActionKind::ContinueWork,
+            }),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(response["status"], "queued");
+        assert!(response["message"].as_u64().is_some());
+        let conversations = core.store.conversations().unwrap();
+        assert_eq!(conversations.len(), 1);
+        let messages = core.store.messages_after(&conversation.id, 0).unwrap();
+        assert_eq!(messages[0].seq, prior.seq);
+        assert!(messages[0].text.contains("existing branch and context"));
+        assert_eq!(messages.last().unwrap().author, "user");
+        assert!(
+            messages
+                .last()
+                .unwrap()
+                .text
+                .contains("preserving its branch and prior results")
+        );
+        assert_eq!(
+            core.store
+                .last_session(&conversation.id, "orchestrator", "codex")
+                .unwrap()
+                .as_deref(),
+            Some("provider-session-42")
+        );
+        // Completion cleanup retires the checkout while retaining the branch ref. A
+        // continuation turn lazily recreates that checkout at the same branch tip.
+        std::fs::remove_dir_all(&session_tree).unwrap();
+        std::process::Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        let restored = core.session_worktree(&conversation.id, &project).unwrap();
+        assert_eq!(
+            crate::lean::git::worktree_branch(&restored).unwrap(),
+            branch
+        );
+    }
+
+    #[test]
+    fn session_action_reports_missing_conversation_as_raw_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let core = Arc::new(Core::open(&directory.path().join("state"), config).unwrap());
+        let response = handle(
+            &core,
+            &project,
+            &directory.path().join("config.toml"),
+            Request::Session(crate::lean::daemon::SessionRequest::SessionAction {
+                conversation: "missing-conversation".into(),
+                action: crate::lean::daemon::SessionActionKind::ContinueWork,
+            }),
+            None,
+        )
+        .unwrap();
+        let encoded = response;
+        assert_eq!(encoded["status"], "failed");
+        assert!(
+            encoded["details"]
+                .as_str()
+                .unwrap()
+                .contains("conversation")
+        );
+    }
 }
 
 pub(super) struct Context<'a> {

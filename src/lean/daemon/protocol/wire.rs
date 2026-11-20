@@ -73,6 +73,10 @@ pub(crate) enum WireRequest {
         conversation: String,
         turn: String,
     },
+    SessionAction {
+        conversation: String,
+        action: crate::lean::daemon::SessionActionKind,
+    },
     Comment {
         conversation: String,
         operation_id: Option<String>,

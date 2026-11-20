@@ -129,6 +129,8 @@ fn orchestrator_tools() -> Vec<&'static str> {
         "resume_task",
         "revise_plan",
         "request_replan",
+        "create_session_pr",
+        "merge_session_with_main",
     ]
 }
 
@@ -167,6 +169,8 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         "get_images" => ("Retrieve the next image attached to a user message in this conversation as an image block. Start at offset 0 and use the returned next offset until all images are inspected.".into(), json!({"offset":{"type":"integer","minimum":0,"default":0}}), vec!["turn"]),
         "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
         "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task"
+        | "create_session_pr"
+        | "merge_session_with_main"
         | "request_replan" => control_contract(name),
         _ => turn_contract(name, role, orchestrator),
     }
@@ -215,6 +219,8 @@ fn control_contract(name: &str) -> ToolSpec {
         "decide_approval" => ("Decide an agent CLI's approval dialog that the runtime put to you. Pick the id of the choice that lets the agent do what its task needs and nothing broader; refuse (the denying choice) what the task does not need. Use choice \"escalate_to_user\" only when you cannot judge it or it is outside the user's request; give the user the reason in explanation. Never ask the agent: the dialog is the agent CLI's own.".into(), json!({"request":{"type":"string","description":"The approval request id the runtime message names"},"choice":{"type":"string","description":"A choice id from the message, or escalate_to_user"},"explanation":{"type":"string","description":"Why, for the user; required with escalate_to_user"}}), vec!["turn", "request", "choice"]),
         "retry_task" => ("Retry a failed task in its allocated worktree with concrete guidance. There is no recovery-count limit or permission question. Read current task_states first. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"guidance":{"type":"string"}}), vec!["turn","task","guidance"]),
         "resume_task" => ("Continue a coordinating task after resolving its blocker or identifying independent work. No recovery-count limit or permission question applies. Preserve unresolved factual prerequisites; never restart an active task. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"round":{"type":"integer","minimum":0},"input_generation":{"type":"integer","minimum":0},"resolution":{"type":"string"}}),vec!["turn","task","round","input_generation","resolution"]),
+        "create_session_pr" => ("Create a pull request for the branch recorded by this completed session. The branch is resolved from the session completion event; do not supply a branch. Returns and durably records a session_action_result with succeeded, failed (raw gh output), or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
+        "merge_session_with_main" => ("Merge the completed session branch with main through the existing orchestrator conversation. Returns and durably records a session_action_result with succeeded, failed, or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
         "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),
         _ => ("Change the running plan you were shown.".into(), schema::revision(), vec!["turn", "reason", "tasks", "retire"]),
     }

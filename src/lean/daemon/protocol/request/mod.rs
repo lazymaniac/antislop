@@ -6,7 +6,7 @@ mod terminal;
 pub use control::ControlRequest;
 pub use conversation::ConversationRequest;
 pub use history::HistoryRequest;
-pub use session::SessionRequest;
+pub use session::{SessionActionKind, SessionActionResult, SessionRequest};
 pub use terminal::TerminalRequest;
 
 #[derive(Debug, Clone, PartialEq)]
