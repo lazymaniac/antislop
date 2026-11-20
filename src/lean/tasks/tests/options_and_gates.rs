@@ -74,6 +74,35 @@ fn options_cover_code_writers_but_exclude_quality_gates_deterministically() {
 }
 
 #[test]
+fn options_with_multiple_producers_remain_acyclic_after_repeated_finalization() {
+    let first = options_test_task("capture", true);
+    let second = options_test_task("adapter", true);
+    let mut writer = options_test_task("capture-adapter", true);
+    writer.depends_on = vec![first.id.clone(), second.id.clone()];
+    let plan = with_options(vec![first, second, writer]);
+    validate(&plan).unwrap();
+
+    let owner = plan
+        .iter()
+        .find(|task| task.id == "capture-adapter")
+        .unwrap();
+    let options = plan
+        .iter()
+        .find(|task| task.options_for.as_deref() == Some("capture-adapter"))
+        .unwrap();
+    assert_eq!(options.depends_on, ["capture", "adapter"]);
+    assert_eq!(
+        owner.depends_on,
+        ["capture", "adapter", options.id.as_str()]
+    );
+    assert!(!options.depends_on.contains(&options.id));
+
+    let finalized = with_options(plan.clone());
+    assert_eq!(finalized, plan);
+    validate(&finalized).unwrap();
+}
+
+#[test]
 fn refreshing_a_legacy_gate_options_task_removes_it_and_its_edges() {
     let mut gate = options_test_task("static-analysis", true);
     let legacy = super::super::with_options(vec![gate.clone()]);

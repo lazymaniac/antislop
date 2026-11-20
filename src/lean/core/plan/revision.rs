@@ -902,6 +902,181 @@ mod tests {
     }
 
     #[test]
+    fn revision_adds_multi_producer_writer_with_acyclic_options_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config =
+            Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        config.policy.local_options = true;
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_planned_team(&conversation, tasks::Team::Feature, "feature")
+            .unwrap();
+
+        let code_task = |id: &str, depends_on: &[&str]| -> TaskContract {
+            serde_json::from_value(json!({
+                "id": id, "title": id, "goal": "Prepare an input", "kind": "implementation",
+                "change_kind": "code", "depends_on": depends_on,
+                "acceptance_criteria": [{"id":"C1","text":"Input is ready"}]
+            }))
+            .unwrap()
+        };
+        let producers = vec![
+            code_task("v2-mockups", &[]),
+            code_task("v2-state", &["v2-mockups"]),
+            code_task("v2-wb-shell", &["v2-state"]),
+            code_task("v2-wb-content", &["v2-wb-shell"]),
+            code_task("v2-wb-pty", &["v2-wb-shell"]),
+            code_task("v2-graph", &["v2-wb-shell", "v2-wb-pty"]),
+            code_task("v2-projects", &["v2-state"]),
+            code_task("v2-composer", &["v2-projects"]),
+            code_task("v2-plans", &["v2-state"]),
+            code_task("v2-decisions", &["v2-state"]),
+            code_task("v2-recovery", &["v2-wb-content"]),
+            code_task("v2-settings", &["v2-state"]),
+            serde_json::from_value(json!({
+                "id":"v2-readiness", "title":"Readiness", "goal":"Check readiness",
+                "kind":"analysis", "change_kind":"artifact",
+                "outputs":["reports/readiness.md"],
+                "depends_on":["v2-mockups","v2-state","v2-wb-shell","v2-wb-content","v2-wb-pty","v2-graph","v2-projects","v2-composer","v2-plans","v2-decisions","v2-recovery","v2-settings"],
+                "acceptance_criteria":[{"id":"C1","text":"Readiness is recorded"}]
+            }))
+            .unwrap(),
+            code_task("v2-default", &["v2-readiness"]),
+            serde_json::from_value(json!({
+                "id":"v2-final-record", "title":"Final record", "goal":"Record the final state",
+                "kind":"analysis", "change_kind":"artifact", "outputs":["reports/final.md"],
+                "depends_on":["v2-default","v2-readiness"],
+                "acceptance_criteria":[{"id":"C1","text":"Final state is recorded"}]
+            }))
+            .unwrap(),
+        ];
+        let mut initial = crate::lean::core::plan::proposal::checked_team_plan(
+            &producers,
+            &config,
+            tasks::Team::Feature,
+        )
+        .unwrap();
+        let gate_ids = initial
+            .iter()
+            .filter(|spec| spec.quality_gate)
+            .map(|spec| spec.id.clone())
+            .collect::<Vec<_>>();
+        let final_record = initial
+            .iter_mut()
+            .find(|spec| spec.id == "v2-final-record")
+            .unwrap();
+        final_record.depends_on.extend(gate_ids);
+        let initial = tasks::order_graph(initial).unwrap();
+        tasks::validate(&initial).unwrap();
+        let baseline = core
+            .store
+            .add_plan(
+                &conversation,
+                &initial
+                    .iter()
+                    .map(|spec| serde_json::to_value(spec).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(baseline.len(), 34);
+        assert_eq!(
+            baseline
+                .iter()
+                .map(|task| task.spec["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "v2-mockups-options",
+                "v2-mockups",
+                "v2-state-options",
+                "v2-state",
+                "v2-wb-shell-options",
+                "v2-wb-shell",
+                "v2-wb-content-options",
+                "v2-wb-content",
+                "v2-wb-pty-options",
+                "v2-wb-pty",
+                "v2-graph-options",
+                "v2-graph",
+                "v2-projects-options",
+                "v2-projects",
+                "v2-composer-options",
+                "v2-composer",
+                "v2-plans-options",
+                "v2-plans",
+                "v2-decisions-options",
+                "v2-decisions",
+                "v2-recovery-options",
+                "v2-recovery",
+                "v2-settings-options",
+                "v2-settings",
+                "v2-readiness",
+                "v2-default-options",
+                "v2-default",
+                "quality-refactoring",
+                "static-analyzer",
+                "review-testing",
+                "security-auditor",
+                "performance-auditor",
+                "integration-gate",
+                "v2-final-record",
+            ]
+        );
+        assert_eq!(
+            baseline
+                .iter()
+                .find(|task| task.spec["id"] == "v2-graph-options")
+                .unwrap()
+                .spec["depends_on"],
+            json!(["v2-wb-shell", "v2-wb-pty"])
+        );
+
+        let mut revision: PlanRevision =
+            serde_json::from_str(include_str!("testdata/revision-279b43ec.json")).unwrap();
+        revision.plan = baseline[0].plan_id.clone();
+
+        let revised = core.revised_specs(&revision, &baseline).unwrap();
+        assert_eq!(core.revised_specs(&revision, &baseline).unwrap(), revised);
+        tasks::validate(&revised).unwrap();
+
+        let options = revised
+            .iter()
+            .find(|spec| spec.options_for.as_deref() == Some("v2-capture-adapter"))
+            .unwrap();
+        let writer = revised
+            .iter()
+            .find(|spec| spec.id == "v2-capture-adapter")
+            .unwrap();
+        assert_eq!(options.id, "v2-capture-adapter-options");
+        assert_eq!(options.depends_on, writer.depends_on[..11]);
+        assert_eq!(writer.depends_on.last(), Some(&options.id));
+        assert!(!options.depends_on.contains(&options.id));
+        assert!(!options.quality_gate);
+        let readiness = revised
+            .iter()
+            .find(|spec| spec.id == "v2-readiness")
+            .unwrap();
+        assert!(readiness.depends_on.contains(&writer.id));
+        assert_eq!(
+            revised
+                .iter()
+                .filter(|spec| spec.quality_gate)
+                .map(|spec| spec.kind)
+                .collect::<BTreeSet<_>>(),
+            tasks::Team::Feature.gates().iter().copied().collect()
+        );
+        assert!(revised.iter().filter(|spec| spec.quality_gate).all(|gate| {
+            revised
+                .iter()
+                .all(|spec| spec.options_for.as_deref() != Some(&gate.id))
+        }));
+    }
+
+    #[test]
     fn rigor_change_preserves_completed_authored_work_in_an_accepted_plan() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();

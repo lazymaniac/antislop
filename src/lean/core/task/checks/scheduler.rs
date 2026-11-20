@@ -338,6 +338,91 @@ mod tests {
         reservations.release("second-writer");
         assert!(reservations.is_empty());
     }
+
+    #[test]
+    fn generated_options_wait_for_each_producer_and_unlock_the_writer_after_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let contract = |id: &str| -> TaskContract {
+            serde_json::from_value(json!({
+                "id": id, "title": id, "acceptance_criteria": [{"id":"C1","text":"Output is ready"}],
+                "goal": "Prepare an output", "change_kind": "code", "kind": "implementation"
+            }))
+            .unwrap()
+        };
+        let mut combined = contract("combined-writer");
+        combined.depends_on = vec!["capture".into(), "adapter".into()];
+        let specs = crate::lean::tasks::with_options(vec![
+            contract("capture"),
+            contract("adapter"),
+            combined,
+        ]);
+        let mut tasks = core
+            .store
+            .add_plan(
+                &conversation,
+                &specs
+                    .iter()
+                    .map(|spec| serde_json::to_value(spec).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        for task in &mut tasks {
+            task.status = status::QUEUED.into();
+            core.store.update_task(task).unwrap();
+        }
+        let option_index = tasks
+            .iter()
+            .position(|task| task.spec["options_for"] == "combined-writer")
+            .unwrap();
+        let writer_index = tasks
+            .iter()
+            .position(|task| task.spec["id"] == "combined-writer")
+            .unwrap();
+        let option_id = tasks[option_index].spec["id"].as_str().unwrap().to_owned();
+        assert!(
+            !dependencies_approved(&tasks[option_index], &task_states(&tasks)),
+            "the options task must wait for both producers"
+        );
+        for producer in ["capture", "adapter"] {
+            for task in tasks
+                .iter_mut()
+                .filter(|task| task.spec["id"] == producer || task.spec["options_for"] == producer)
+            {
+                task.status = status::APPROVED.into();
+                core.store.update_task(task).unwrap();
+            }
+            if producer == "capture" {
+                assert!(
+                    !dependencies_approved(&tasks[option_index], &task_states(&tasks)),
+                    "approving one producer must not release options while another remains open"
+                );
+            }
+        }
+        assert!(dependencies_approved(
+            &tasks[option_index],
+            &task_states(&tasks)
+        ));
+        assert!(
+            !dependencies_approved(&tasks[writer_index], &task_states(&tasks)),
+            "the writer must wait for its selected options result"
+        );
+        tasks[option_index].status = status::APPROVED.into();
+        core.store.update_task(&tasks[option_index]).unwrap();
+        assert!(dependencies_approved(
+            &tasks[writer_index],
+            &task_states(&tasks)
+        ));
+        assert_eq!(tasks[option_index].spec["id"], option_id);
+    }
+
     #[test]
     fn deferred_tasks_cannot_schedule_or_launch_but_independent_work_is_runnable() {
         let dir = tempfile::tempdir().unwrap();

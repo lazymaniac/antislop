@@ -1,0 +1,97 @@
+{
+  "plan": "7a980290-e53c-41e2-93b9-60e05b731b6d",
+  "base_revision": 0,
+  "reason": "Readiness round 2 zachowuje 252 bufory i wyniki 116 testów, lecz wskazuje brak capture prywatnych widoków. Wykonawca rundy 3 potwierdza niedostępne typy/pola bez istniejącego publicznego fixture. Dodajemy producenta testowego adaptera, a raport readiness konsumuje zatwierdzony wynik bez napraw kodu. Dotychczasowe artefakty i dowody pozostają zachowane; nie potwierdzamy kompletności ani nie zwalniamy default przed readiness.",
+  "tasks": [
+    {
+      "quality_gate": false,
+      "options_for": null,
+      "id": "v2-capture-adapter",
+      "checkout_name": "adapter-rzeczywistych-render-w-wszystkich-widok",
+      "acceptance_criteria": [
+        {
+          "id": "C1",
+          "text": "Istnieje odtwarzalna komenda i adapter rzeczywistego App::draw obejmujący wszystkie brakujące rodziny widoków, w tym prywatne i session native PTY."
+        },
+        {
+          "id": "C2",
+          "text": "Eksport dostarcza tekst/style/wymiary i tożsamość fixture/widoku/stanu w sześciu geometriach; adekwatne stany są rzeczywiste, a N/A jawnie uzasadnione."
+        },
+        {
+          "id": "C3",
+          "text": "Skupione testy potwierdzają osiągnięty widok/stan, pełny bufor i natywny panel PTY; istniejące modele i publiczne zachowanie pozostają zachowane, konsumenci mają konkretną komendę."
+        }
+      ],
+      "title": "Adapter rzeczywistych renderów wszystkich widoków",
+      "goal": "Dostarcz w izolowanym checkoutie testowy adapter capture brakujących widoków dla konsumentów v2-readiness i v2-final-record. Odczytaj ich zachowane raporty i istniejące testy/helpers przed zmianami. Obejmij skrzynkę decyzji, pytania/zakres i zgodę CLI, edytor przepływu, filtry, potwierdzenie usunięcia, nową sesję, session native PTY oraz wszystkie pozostałe niepokryte pozycje katalogu sekcji 2, nie tylko pięć publicznych powierzchni. Użyj modułowych fixture lub istniejących wejść zdarzeń, tak aby prywatność pól nie wymagała publicznego API produkcyjnego. Wywołuj rzeczywisty renderer aplikacji App::draw z Ratatui/TestBackend; nie kopiuj rendererów ani nie rysuj makiet. Dostarcz odtwarzalną komendę eksportującą bufory komórek tekst/style/wymiary/fixture/widok/stan w sześciu rozmiarach 12×5,40×12,80×24,100×30,120×40,160×50. Stany zwykły,pusty,oczekiwanie,błąd,brak historii,kompaktowy mają mieć odrębne rzeczywiste fixture tam gdzie adekwatne; dla N/A jawne uzasadnienie. PTY ma realistyczne deterministyczne dane testowe, prawdziwy panel i routing, bez uruchamiania zewnętrznego providera. Zachowaj dotychczasowe bufory i generacje dowodów, podaj interfejs oraz komendę dla raportowych konsumentów. Dodaj skupioną weryfikację, że fixture osiągają zamierzony widok/stan i style oraz że eksport ma width×height komórek; nie uznawaj samego sukcesu eksportu za zgodność designu. Bez napraw UI, migracji bazy, zmian protokołu lub konfiguracji providerów. Zachowaj zmiany użytkownika.",
+      "summary": "Dostarcza odtwarzalny testowy dostęp do brakujących powierzchni TUI.",
+      "change_kind": "code",
+      "depends_on": [
+        "v2-state",
+        "v2-wb-shell",
+        "v2-wb-content",
+        "v2-wb-pty",
+        "v2-graph",
+        "v2-projects",
+        "v2-composer",
+        "v2-plans",
+        "v2-decisions",
+        "v2-recovery",
+        "v2-settings"
+      ],
+      "kind": "implementation",
+      "reviewer": {
+        "summary": "Review the change meets the goal, its criteria and the domain risks."
+      }
+    },
+    {
+      "quality_gate": false,
+      "options_for": null,
+      "id": "v2-readiness",
+      "checkout_name": "kompletno-funkcji-i-referencyjne-rendery-tui",
+      "acceptance_criteria": [
+        {
+          "id": "C1",
+          "text": "Dwa zadeklarowane pliki zawierają komplet renderów rzeczywistego TUI wszystkich katalogowych widoków w sześciu wymiarach i odpowiednich stanach, z jawnym uzasadnieniem nieadekwatnych kombinacji."
+        },
+        {
+          "id": "C2",
+          "text": "Każda funkcja inwentaryzacji ma mapę właściciel → nowe wejście → wykonany scenariusz → dowód; wszystkie luki blokujące kompletność są rozwiązane."
+        },
+        {
+          "id": "C3",
+          "text": "Przekrojowe przejścia, układ treść+PTY, focus, kontekst, błędy, tekst i duże dane spełniają wymagania; raport odróżnia potwierdzone wyniki od braków."
+        }
+      ],
+      "title": "Kompletność funkcji i referencyjne rendery TUI",
+      "goal": "Sprawdź złożony wynik wszystkich producentów bez napraw kodu. Zachowaj artefakty i raw evidence wcześniejszych rund, rozróżniając generacje. Skonsumuj zatwierdzony v2-capture-adapter i jego odtwarzalną komendę, aby uzupełnić prywatne widoki i session native PTY; korzystaj z rzeczywistego wejścia App::draw i Ratatui/TestBackend, nie rysunków makiet. Zapisz w reference-renders.json komplet nazwanych buforów komórek (tekst, style, wymiary, fixture, widok/stan) oraz indeks i interpretację w readiness.md. Dla każdego widoku katalogu sekcji 2 przechwyć stan zwykły, pusty, oczekiwania, błędu, braku historii i kompaktowy tam, gdzie dany stan ma znaczenie; jawnie uzasadnij nieadekwatne kombinacje bez pomijania widoku. Każdy widok sprawdź w 12×5,40×12,80×24,100×30,120×40,160×50. Porównaj D1/D2/D3, progi i kolory z przekazaną specyfikacją użytkownika108, a nie z samym kodem. Rozpisz każdą funkcję sekcji4 na nowe wejście,właściciela,rzeczywisty scenariusz/test i dowód; źródło nazywa tabelę17grupami, lecz wymienia14wierszy: obejmij wszystkie nazwane funkcje bez fabrykowania dodatkowych kategorii. Wykonaj przekrojowe scenariusze graf→agent→Workbench→historia/diff+PTY,sesje,composer/rygory,plan/zgody,recovery/koniec. Sprawdź focus UI/formularz/CLI,duplikaty/spóźnione odpowiedzi,komentarze/rundy/właścicieli,szkice,Unicode/CJK/emoji/ASCII/NO_COLOR/schowek,duże grafy i długie dokumenty. Uzupełnij w szczególności ujawnione braki broadcast/steer/interrupt,wszystkich rygorów,OS clipboard,recovery→manual fix→integracja; niedostępne wymagane scenariusze są nadal otwartymi findings, nie N/A. Zachowaj raw evidence/tool versions; braki kieruj do orkiestratora i producentów do naprawy przez reviewed revision, nie naprawiaj kodu i nie potwierdzaj gotowości przy lukach. Raport potwierdza pokrycie przed przełączeniem i usunięciem rendererów, nie zastępuje końcowych bramek.",
+      "summary": "Sprawdza całą inwentaryzację i zapisuje rendery rzeczywistego TUI.",
+      "change_kind": "artifact",
+      "outputs": [
+        "reports/tui-redesign/readiness.md",
+        "artifacts/tui-redesign/reference-renders.json"
+      ],
+      "depends_on": [
+        "v2-mockups",
+        "v2-state",
+        "v2-wb-shell",
+        "v2-wb-content",
+        "v2-wb-pty",
+        "v2-graph",
+        "v2-projects",
+        "v2-composer",
+        "v2-plans",
+        "v2-decisions",
+        "v2-recovery",
+        "v2-settings",
+        "v2-capture-adapter"
+      ],
+      "kind": "analysis",
+      "reviewer": {
+        "summary": "Review the change meets the goal, its criteria and the domain risks."
+      }
+    }
+  ],
+  "retire": [],
+  "redo": []
+}
