@@ -1,15 +1,6 @@
 use super::super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-fn workbench_legacy_tab(tab: WorkbenchTab) -> usize {
-    match tab {
-        WorkbenchTab::Summary | WorkbenchTab::Conversation | WorkbenchTab::Diff => 0,
-        WorkbenchTab::Results => details::RESULT,
-        WorkbenchTab::Checks => details::CHECKS,
-        WorkbenchTab::Comments => details::COMMENTS,
-    }
-}
-
 mod graph_keys;
 
 impl App {
@@ -94,6 +85,16 @@ impl App {
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if alt
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+            && self.navigation.presentation().tab == WorkbenchTab::Results
+            && let Some(details) = self.details.as_mut()
+            && details.visible_result_keys().len() > 1
+        {
+            details.change_result_document(if key.code == KeyCode::Right { 1 } else { -1 });
+            self.schedule_output_document_fetch();
+            return true;
+        }
         if !control && !alt && key.code == KeyCode::Char('p') {
             let current = match &self.navigation.target {
                 WorkbenchTarget::Agent(_) => Some(self.workbench_terminal_owner()),
@@ -164,14 +165,17 @@ impl App {
             }
             let presentation = self.navigation.presentation();
             details.selected_round = presentation.round;
-            details.switch_tab(workbench_legacy_tab(presentation.tab));
+            details.prepare_workbench_details(None, presentation.tab);
             let details_key = details.key.clone();
             self.navigation.focus = presentation.focus;
-            details.native_focus = self.navigation.focus == NavigationFocus::WorkbenchTerminal;
+            details.native_focus = presentation.native_input;
             if presentation.tab == WorkbenchTab::Diff {
                 self.open_diff(&details_key);
             } else {
                 self.diff = None;
+            }
+            if presentation.tab == WorkbenchTab::Results {
+                self.schedule_output_document_fetch();
             }
             return true;
         }
@@ -208,7 +212,7 @@ impl App {
                 self.fetch_workbench_sessions();
             }
             if let Some(details) = &mut self.details {
-                details.native_focus = self.navigation.focus == NavigationFocus::WorkbenchTerminal;
+                details.native_focus = self.navigation.presentation().native_input;
             }
             return true;
         }
@@ -236,19 +240,15 @@ impl App {
             super::super::workbench::neighbour_tab(&details.key, delivery, current, direction);
         self.navigation
             .update_presentation(|presentation| presentation.tab = next);
-        let legacy_tab = match next {
-            WorkbenchTab::Summary | WorkbenchTab::Conversation => 0,
-            WorkbenchTab::Results => details::RESULT,
-            WorkbenchTab::Checks => details::CHECKS,
-            WorkbenchTab::Comments => details::COMMENTS,
-            WorkbenchTab::Diff => 0,
-        };
-        details.switch_tab(legacy_tab);
+        details.prepare_workbench_details(Some(current), next);
         let details_key = details.key.clone();
         if next == WorkbenchTab::Diff {
             self.open_diff(&details_key);
         } else {
             self.diff = None;
+        }
+        if next == WorkbenchTab::Results {
+            self.schedule_output_document_fetch();
         }
         true
     }
@@ -282,7 +282,7 @@ impl App {
         }
         if self.native_focused() {
             if self.embedded_diff_graph_active()
-                && embedded_diff_graph_key(key, self.graph_tab == 2)
+                && embedded_diff_graph_key(key, self.graph_tab == 3)
             {
                 return None;
             }
@@ -310,6 +310,9 @@ impl App {
             }
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
+            }
+            if self.focus == Focus::Graph && self.graph_tab == 1 {
+                self.graph_tab = 0;
             }
         } else {
             self.native_send(crate::lean::terminal::Input::Key { event: key });
@@ -442,7 +445,7 @@ impl App {
             return Some(result);
         }
         if self.embedded_diff_graph_active() {
-            if embedded_diff_graph_key(key, self.graph_tab == 2) {
+            if embedded_diff_graph_key(key, self.graph_tab == 3) {
                 return Some(self.graph_key(key));
             }
             self.diff_key(key);

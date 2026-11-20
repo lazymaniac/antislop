@@ -175,7 +175,7 @@ impl View {
     }
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).
-    pub(super) fn agent_key(&self, role: &str) -> String {
+    pub(in crate::lean::tui) fn agent_key(&self, role: &str) -> String {
         if role == crate::lean::COMMENT_ORCHESTRATOR {
             return ORCHESTRATOR.into();
         }
@@ -189,7 +189,7 @@ impl View {
     }
 
     /// The agent key of a message's sender or recipient display name.
-    pub(super) fn mail_key(name: &str) -> String {
+    pub(in crate::lean::tui) fn mail_key(name: &str) -> String {
         match name {
             ORCHESTRATOR | PLAN_REVIEWER | AUDITOR | "user" | "runtime" => name.to_owned(),
             crate::lean::PLANNER => crate::lean::PLANNER.to_owned(),

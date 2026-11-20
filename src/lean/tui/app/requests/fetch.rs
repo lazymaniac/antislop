@@ -423,8 +423,6 @@ impl App {
         });
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = target;
-        self.navigation
-            .update_presentation(|presentation| presentation.native_input = false);
         if !target_initialized {
             let delivery = self
                 .view
@@ -439,9 +437,6 @@ impl App {
             });
         }
         self.navigation.focus = self.navigation.presentation().focus;
-        if self.navigation.focus == NavigationFocus::WorkbenchTerminal {
-            self.fetch_workbench_sessions();
-        }
         self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);
         self.resolve_details_task();
@@ -450,6 +445,9 @@ impl App {
             self.open_diff(&key);
         } else {
             self.diff = None;
+        }
+        if self.navigation.presentation().tab == WorkbenchTab::Results {
+            self.schedule_output_document_fetch();
         }
         self.fetch_task();
     }
@@ -486,16 +484,33 @@ impl App {
         if let Some(details) = &mut self.details {
             details.switch_key(key.to_owned());
             details.selected_round = presentation.round;
-            details.switch_tab(workbench_legacy_tab(presentation.tab));
+            details.prepare_workbench_details(None, presentation.tab);
         } else {
             let mut details = Details::new(key.to_owned());
             details.conversation = self.conversation.clone();
             details.drafts = std::rc::Rc::clone(&self.agent_drafts);
             details.scroll_memory = self.details_scroll_memory.clone();
             details.query_memory = self.details_query_memory.clone();
+            details.workbench_memory = [
+                WorkbenchTab::Summary,
+                WorkbenchTab::Conversation,
+                WorkbenchTab::Results,
+                WorkbenchTab::Checks,
+                WorkbenchTab::Comments,
+                WorkbenchTab::Diff,
+            ]
+            .into_iter()
+            .filter_map(|tab| {
+                // These reserved high slots are disjoint from legacy Details indices.
+                let slot = usize::MAX - tab as usize;
+                let scroll = self.details_scroll_memory.get(&(key.to_owned(), slot))?;
+                let query = self.details_query_memory.get(&(key.to_owned(), slot))?;
+                Some(((key.to_owned(), tab), (*scroll, query.clone())))
+            })
+            .collect();
             details.selected_round = presentation.round;
-            details.switch_tab(workbench_legacy_tab(presentation.tab));
             details.restore_current_tab();
+            details.prepare_workbench_details(None, presentation.tab);
             self.details = Some(details);
         }
     }
@@ -507,18 +522,9 @@ impl App {
                 .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
                 .and_then(|task| task.uuid.clone());
             if details.task_id().is_some() {
-                details.switch_tab(workbench_legacy_tab(self.navigation.presentation().tab));
+                details.prepare_workbench_details(None, self.navigation.presentation().tab);
             }
         }
-    }
-}
-
-fn workbench_legacy_tab(tab: WorkbenchTab) -> usize {
-    match tab {
-        WorkbenchTab::Summary | WorkbenchTab::Conversation | WorkbenchTab::Diff => 0,
-        WorkbenchTab::Results => details::RESULT,
-        WorkbenchTab::Checks => details::CHECKS,
-        WorkbenchTab::Comments => details::COMMENTS,
     }
 }
 

@@ -134,6 +134,9 @@ pub struct Details {
     pub scroll_memory: HashMap<(String, usize), usize>,
     /// Query memory per (agent_key, tab_index)
     pub query_memory: HashMap<(String, usize), String>,
+    /// Workbench tabs that share legacy Details indices retain independent
+    /// scroll and search state by stable target and tab.
+    pub workbench_memory: HashMap<(String, crate::lean::tui::WorkbenchTab), (usize, String)>,
     /// Active search/filter query on current tab
     pub query: String,
     /// Whether user is typing a query in search mode

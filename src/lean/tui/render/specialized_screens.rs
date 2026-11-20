@@ -38,6 +38,8 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
         &app.navigation.presentation(),
         &terminal_owner,
     );
+    let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
+    let historical_diff = app.historical_diff_selected();
     let Some(diff) = &mut app.diff else {
         return false;
     };
@@ -57,15 +59,26 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
         if areas.list_visible {
             draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
         }
-        diff.paint_at(frame, areas.content, &app.view);
-        let native_input = app.navigation.presentation().native_input;
+        if historical_diff {
+            frame.render_widget(
+                Paragraph::new(
+                    Theme::from_env().clean("No historical diff is retained for this round."),
+                )
+                .style(Theme::from_env().dim()),
+                areas.content,
+            );
+        } else {
+            diff.paint_at(frame, areas.content, &app.view);
+        }
         if let Some(details) = &mut app.details {
-            details.native_focus = native_input;
-            details.draw_workbench_terminal_for(
+            draw_workbench_terminal(
                 frame,
                 areas.terminal,
+                details,
                 &app.view,
                 &terminal_view_role,
+                presentation.native_input,
+                historical_terminal,
             );
         }
     } else {
@@ -89,6 +102,7 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
         &app.navigation.presentation(),
         &terminal_owner,
     );
+    let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
     let Some(details) = &mut app.details else {
         return false;
     };
@@ -108,9 +122,22 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
         if areas.list_visible {
             draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
         }
-        details.native_focus = app.navigation.presentation().native_input;
-        details.draw_workbench_at(frame, areas.content, areas.terminal, &app.view);
-        details.draw_workbench_terminal_for(frame, areas.terminal, &app.view, &terminal_view_role);
+        details.draw_workbench_at(
+            frame,
+            areas.content,
+            Rect::default(),
+            &app.view,
+            presentation.tab,
+        );
+        draw_workbench_terminal(
+            frame,
+            areas.terminal,
+            details,
+            &app.view,
+            &terminal_view_role,
+            presentation.native_input,
+            historical_terminal,
+        );
     } else {
         app.workbench_areas = Default::default();
         details.draw_at(frame, frame.area(), &app.view);
@@ -135,10 +162,17 @@ fn draw_workbench_chrome(
         WorkbenchTarget::Session => "Session".to_owned(),
         WorkbenchTarget::Agent(key) => key.clone(),
     };
+    let tab = match presentation.tab {
+        WorkbenchTab::Summary => "Podsumowanie",
+        WorkbenchTab::Conversation => "Rozmowa",
+        WorkbenchTab::Results => "Wyniki",
+        WorkbenchTab::Checks => "Sprawdzenia",
+        WorkbenchTab::Comments => "Komentarze",
+        WorkbenchTab::Diff => "Diff",
+    };
     frame.render_widget(
         Paragraph::new(format!(
-            " {identity} · {:?} · CLI {terminal_owner} · r{} · {}{}",
-            presentation.tab,
+            " {identity} · {tab} · CLI {terminal_owner} · r{} · {}{}",
             terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
             if presentation.native_input {
                 "native input"
@@ -182,14 +216,7 @@ fn workbench_terminal_round(
     presentation: &WorkbenchPresentation,
     owner: &str,
 ) -> Option<u64> {
-    let matching_details = details.filter(|details| {
-        details.composer_recipient(&details.key) == owner
-            || details.task_uuid.as_deref().is_some_and(|task| {
-                owner
-                    .split_once(':')
-                    .is_some_and(|(_, owner_task)| owner_task == task)
-            })
-    });
+    let matching_details = details.filter(|details| details_match_terminal_owner(details, owner));
     matching_details
         .and_then(|details| details.selected_round)
         .or_else(|| {
@@ -204,6 +231,50 @@ fn workbench_terminal_round(
             matching_details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64())
         })
         .or(presentation.round.filter(|_| matching_details.is_some()))
+}
+
+fn historical_workbench_terminal(details: Option<&super::super::Details>, owner: &str) -> bool {
+    details.is_some_and(|details| {
+        details.selected_round.is_some()
+            && !details.resume_round
+            && details_match_terminal_owner(details, owner)
+    })
+}
+
+fn details_match_terminal_owner(details: &super::super::Details, owner: &str) -> bool {
+    details.composer_recipient(&details.key) == owner
+        || details.task_uuid.as_deref().is_some_and(|task| {
+            owner
+                .split_once(':')
+                .is_some_and(|(_, owner_task)| owner_task == task)
+        })
+}
+
+fn draw_workbench_terminal(
+    frame: &mut Frame,
+    area: Rect,
+    details: &mut super::super::Details,
+    view: &View,
+    role: &str,
+    native_input: bool,
+    historical: bool,
+) {
+    if historical {
+        details.native_focus = false;
+        details.native_areas = [Rect::default(); 2];
+        frame.render_widget(
+            Paragraph::new(
+                Theme::from_env().clean(
+                    "Historical PTY is read-only; no retained terminal snapshot is available.",
+                ),
+            )
+            .style(Theme::from_env().dim()),
+            area,
+        );
+    } else {
+        details.native_focus = native_input;
+        details.draw_workbench_terminal_for(frame, area, view, role);
+    }
 }
 
 fn draw_workbench_list(frame: &mut Frame, area: Rect, view: &View, target: &WorkbenchTarget) {

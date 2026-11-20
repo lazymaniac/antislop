@@ -4,6 +4,42 @@ use std::os::unix::net::UnixListener;
 use std::sync::mpsc;
 
 #[test]
+fn reopening_details_restores_independent_workbench_tab_state() {
+    use crate::lean::tui::WorkbenchTab;
+
+    let mut app = App::test_app();
+    app.navigation
+        .update_presentation(|presentation| presentation.tab = WorkbenchTab::Diff);
+    for (tab, (scroll, query)) in [
+        (WorkbenchTab::Summary, (3, "summary query")),
+        (WorkbenchTab::Conversation, (8, "conversation query")),
+        (WorkbenchTab::Diff, (13, "diff query")),
+    ] {
+        let slot = usize::MAX - tab as usize;
+        app.details_scroll_memory
+            .insert(("worker:t1".into(), slot), scroll);
+        app.details_query_memory
+            .insert(("worker:t1".into(), slot), query.into());
+    }
+
+    app.restore_details("worker:t1");
+    let details = app.details.as_mut().unwrap();
+    assert_eq!((details.scroll, details.query.as_str()), (13, "diff query"));
+    details.prepare_workbench_details(None, WorkbenchTab::Summary);
+    assert_eq!(
+        (details.scroll, details.query.as_str()),
+        (3, "summary query")
+    );
+    details.prepare_workbench_details(Some(WorkbenchTab::Summary), WorkbenchTab::Conversation);
+    assert_eq!(
+        (details.scroll, details.query.as_str()),
+        (8, "conversation query")
+    );
+    details.prepare_workbench_details(Some(WorkbenchTab::Conversation), WorkbenchTab::Diff);
+    assert_eq!((details.scroll, details.query.as_str()), (13, "diff query"));
+}
+
+#[test]
 fn delayed_a_to_b_to_a_reuses_the_active_fetch_and_single_worker() {
     let state = tempfile::tempdir().unwrap();
     let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();

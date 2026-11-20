@@ -39,7 +39,30 @@ impl App {
         });
     }
 
+    pub(in crate::lean::tui) fn historical_diff_selected(&self) -> bool {
+        let Some(details) = self.details.as_ref() else {
+            return false;
+        };
+        let key = if let Some(key) = &self.graph_expanded {
+            key.as_str()
+        } else if self.navigation.screen == Screen::Workbench {
+            let WorkbenchTarget::Agent(key) = &self.navigation.target else {
+                return false;
+            };
+            key.as_str()
+        } else {
+            return false;
+        };
+        let Some((_, task_id)) = key.split_once(':') else {
+            return false;
+        };
+        details.key == key
+            && details.selected_round.is_some()
+            && self.diff.as_ref().is_some_and(|diff| diff.task == task_id)
+    }
+
     pub(in crate::lean::tui) fn diff_key(&mut self, key: event::KeyEvent) {
+        let historical_diff = self.historical_diff_selected();
         let Some(diff) = &mut self.diff else {
             return;
         };
@@ -47,13 +70,7 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => self.diff = None,
             KeyCode::Char('?') => self.show_help(Help::Diff),
             KeyCode::Char('c') => {
-                if self.graph_expanded.is_some()
-                    && self.graph_tab == 2
-                    && self
-                        .details
-                        .as_ref()
-                        .is_some_and(|details| details.selected_round.is_some())
-                {
+                if historical_diff {
                     self.notice =
                         Some("No historical diff is retained for the selected round.".into());
                     return;
@@ -63,8 +80,16 @@ impl App {
                     self.editor = Some(Editor { target, input });
                 }
             }
+            KeyCode::Char('r') if historical_diff => {
+                self.notice = Some("No historical diff is retained for the selected round.".into());
+            }
             KeyCode::Char('r') => self.fetch_diff(),
             KeyCode::Char('R') => {
+                if historical_diff {
+                    self.notice =
+                        Some("No historical diff is retained for the selected round.".into());
+                    return;
+                }
                 if let Some(plan) = self.view.plan.clone() {
                     let request = Request::Conversation(ConversationRequest::Review {
                         conversation: self.conversation.clone(),

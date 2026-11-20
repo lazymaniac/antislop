@@ -57,7 +57,22 @@ impl App {
         };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                let tab = self.navigation.presentation().tab;
                 details.save_current_tab();
+                details.workbench_memory.insert(
+                    (details.key.clone(), tab),
+                    (details.scroll, details.query.clone()),
+                );
+                for ((key, tab), (scroll, query)) in &details.workbench_memory {
+                    if key == &details.key {
+                        // Keep Workbench slots outside the legacy Details tab range (0..7).
+                        let slot = usize::MAX - *tab as usize;
+                        self.details_scroll_memory
+                            .insert((key.clone(), slot), *scroll);
+                        self.details_query_memory
+                            .insert((key.clone(), slot), query.clone());
+                    }
+                }
                 self.details_scroll_memory
                     .extend(details.scroll_memory.clone());
                 self.details_query_memory
@@ -201,5 +216,51 @@ impl App {
         };
         self.set_comment(comment, status);
         true
+    }
+}
+
+#[cfg(test)]
+mod workbench_memory_tests {
+    use super::*;
+    use crate::lean::tui::WorkbenchTab;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn closing_details_persists_each_workbench_tab_state() {
+        let mut app = App::test_app();
+        app.details = Some(Details::new("worker:t1".into()));
+        let details = app.details.as_mut().unwrap();
+        details.workbench_memory.insert(
+            ("worker:t1".into(), WorkbenchTab::Summary),
+            (3, "summary query".into()),
+        );
+        details.workbench_memory.insert(
+            ("worker:t1".into(), WorkbenchTab::Conversation),
+            (8, "conversation query".into()),
+        );
+        details.scroll = 13;
+        details.query = "diff query".into();
+        app.navigation
+            .update_presentation(|presentation| presentation.tab = WorkbenchTab::Diff);
+
+        assert!(app.details_close_or_search(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.details.is_none());
+        for (tab, expected) in [
+            (WorkbenchTab::Diff, (13, "diff query")),
+            (WorkbenchTab::Summary, (3, "summary query")),
+            (WorkbenchTab::Conversation, (8, "conversation query")),
+        ] {
+            let slot = usize::MAX - tab as usize;
+            assert_eq!(
+                app.details_scroll_memory.get(&("worker:t1".into(), slot)),
+                Some(&expected.0)
+            );
+            assert_eq!(
+                app.details_query_memory
+                    .get(&("worker:t1".into(), slot))
+                    .map(String::as_str),
+                Some(expected.1)
+            );
+        }
     }
 }

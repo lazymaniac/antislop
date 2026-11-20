@@ -496,6 +496,33 @@ fn result_document_loading_state_keeps_document_navigation_visible() {
 }
 
 #[test]
+fn workbench_summary_and_conversation_keep_independent_scroll_and_search() {
+    let mut details = Details::new("conversation".into());
+    details.scroll = 7;
+    details.query = "summary filter".into();
+    details.prepare_workbench_details(
+        Some(crate::lean::tui::WorkbenchTab::Summary),
+        crate::lean::tui::WorkbenchTab::Conversation,
+    );
+    assert_eq!(details.scroll, 0);
+    assert!(details.query.is_empty());
+    details.scroll = 3;
+    details.query = "conversation filter".into();
+    details.prepare_workbench_details(
+        Some(crate::lean::tui::WorkbenchTab::Conversation),
+        crate::lean::tui::WorkbenchTab::Summary,
+    );
+    assert_eq!(details.scroll, 7);
+    assert_eq!(details.query, "summary filter");
+    details.prepare_workbench_details(
+        Some(crate::lean::tui::WorkbenchTab::Summary),
+        crate::lean::tui::WorkbenchTab::Conversation,
+    );
+    assert_eq!(details.scroll, 3);
+    assert_eq!(details.query, "conversation filter");
+}
+
+#[test]
 fn result_index_membership_scales_across_metadata_and_cached_documents() {
     let state = tempfile::tempdir().unwrap();
     let mut builder = super::super::document::Builder::new(state.path()).unwrap();

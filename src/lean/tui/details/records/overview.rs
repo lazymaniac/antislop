@@ -100,7 +100,42 @@ fn task_record(view: &View, task: &TaskRow, reviewer: bool) -> Rc<DetailRecord> 
     append_list(&mut lines, "Depends on", &task.depends_on);
     lines.push(plain(String::new()));
     lines.push(label("Goal"));
-    lines.push(plain(task.goal.clone()));
+    lines.push(plain(
+        crate::lean::tui::view::task_goal(
+            &task.kind,
+            &task.title,
+            &task.goal,
+            task.summary.as_deref(),
+        )
+        .into_owned(),
+    ));
+    if task
+        .summary
+        .as_deref()
+        .is_some_and(|summary| !summary.trim().is_empty())
+        && !task.goal.trim().is_empty()
+    {
+        let context = readable_goal_context(&task.goal);
+        if !context.is_empty() {
+            lines.push(plain(String::new()));
+            lines.push(label("Additional goal context"));
+            lines.extend(context.lines().map(|line| plain(line.to_owned())));
+        }
+    }
+    if let Some(criteria) = view
+        .task_meta
+        .get(&task.id)
+        .map(|meta| &meta.acceptance_criteria)
+        && !criteria.is_empty()
+    {
+        lines.push(plain(String::new()));
+        lines.push(label("Acceptance criteria"));
+        lines.extend(
+            criteria
+                .iter()
+                .map(|criterion| plain(format!("{}: {}", criterion.id, criterion.text))),
+        );
+    }
     if reviewer || !task.focus.is_empty() {
         lines.push(plain(String::new()));
         lines.push(label("Review"));
@@ -174,4 +209,97 @@ fn label(text: &str) -> (Style, String) {
         Style::default().add_modifier(Modifier::BOLD),
         text.to_owned(),
     )
+}
+
+fn readable_goal_context(goal: &str) -> String {
+    let mut output = String::with_capacity(goal.len());
+    let mut cursor = 0;
+    let bytes = goal.as_bytes();
+    while cursor < bytes.len() {
+        let Some(relative_start) = bytes[cursor..]
+            .iter()
+            .position(|byte| matches!(byte, b'{' | b'['))
+        else {
+            output.push_str(&goal[cursor..]);
+            break;
+        };
+        let start = cursor + relative_start;
+        output.push_str(&goal[cursor..start]);
+        if let Some(end) = json_value_end(goal, start) {
+            cursor = end;
+        } else {
+            output.push(bytes[start] as char);
+            cursor = start + 1;
+        }
+    }
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn json_value_end(text: &str, start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut stack = Vec::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for (offset, byte) in bytes.iter().copied().enumerate().skip(start) {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => quoted = true,
+            b'{' | b'[' => stack.push(byte),
+            b'}' | b']' => {
+                let opening = stack.pop()?;
+                if !matches!((opening, byte), (b'{', b'}') | (b'[', b']')) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    let end = offset + 1;
+                    serde_json::from_str::<serde_json::Value>(&text[start..end]).ok()?;
+                    return Some(end);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_record_formats_full_context_without_embedded_json() {
+        let task = TaskRow {
+            id: "t1".into(),
+            title: "Storage".into(),
+            kind: "implementation".into(),
+            summary: Some("Improve the storage experience.".into()),
+            goal: "Add a readable storage summary. Run cargo test afterwards. {\"runtime\":\"internal\"}".into(),
+            ..Default::default()
+        };
+        let rendered = task_record(&View::default(), &task, false)
+            .lines
+            .iter()
+            .map(|(_, line)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Add a readable storage summary."));
+        assert!(rendered.contains("Run cargo test afterwards."));
+        assert!(!rendered.contains("\"runtime\""));
+        assert!(rendered.contains("Additional goal context"));
+    }
 }

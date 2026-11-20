@@ -9,7 +9,7 @@ impl Details {
     }
 
     pub fn draw_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
-        self.draw_at_inner(frame, area, view, None);
+        self.draw_at_inner(frame, area, view, None, None);
     }
 
     pub(super) fn draw_workbench_at(
@@ -18,8 +18,9 @@ impl Details {
         content: Rect,
         terminal: Rect,
         view: &View,
+        tab: WorkbenchTab,
     ) {
-        self.draw_at_inner(frame, content, view, Some(terminal));
+        self.draw_at_inner(frame, content, view, Some(terminal), Some(tab));
     }
 
     fn draw_at_inner(
@@ -28,6 +29,7 @@ impl Details {
         area: Rect,
         view: &View,
         terminal: Option<Rect>,
+        workbench_tab: Option<WorkbenchTab>,
     ) {
         self.normalize_tab();
         if area.width == 0 || area.height == 0 {
@@ -36,11 +38,21 @@ impl Details {
             }
             return;
         }
+        if let Some(tab) = workbench_tab {
+            self.show_info = tab == WorkbenchTab::Summary;
+        }
         let theme = Theme::from_env();
         let summary = self.summary(view, &theme);
         let areas = detail_areas(area, self.overview(), summary.len());
-        self.draw_header(frame, &areas, summary, &theme);
+        self.draw_header(frame, &areas, summary, &theme, view, workbench_tab);
         let body = self.draw_round_header(frame, areas.body, view, &theme);
+        if workbench_tab == Some(WorkbenchTab::Conversation) {
+            self.draw_conversation(frame, body, areas.footer, view, &theme);
+            if let Some(terminal) = terminal {
+                self.draw_workbench_terminal(frame, terminal, view);
+            }
+            return;
+        }
         if self.draw_secondary_screen(frame, body, areas.footer, view, &theme, terminal.is_some()) {
             if let Some(terminal) = terminal {
                 self.draw_workbench_terminal(frame, terminal, view);
@@ -51,6 +63,37 @@ impl Details {
         if let Some(terminal) = terminal {
             self.draw_workbench_terminal(frame, terminal, view);
         }
+    }
+
+    fn draw_conversation(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        footer: Rect,
+        view: &View,
+        theme: &Theme,
+    ) {
+        let inner = self.draw_detail_block(frame, body, theme);
+        let width = usize::from(inner.width.saturating_sub(1));
+        let records = self.project_dialogue_entries(view);
+        let lines = self.layout_cache.update(records, &self.query, width);
+        let bottom = lines.len().saturating_sub(usize::from(inner.height));
+        self.scroll = self.scroll.min(bottom);
+        let end = self
+            .scroll
+            .saturating_add(usize::from(inner.height))
+            .min(lines.len());
+        frame.render_widget(
+            Paragraph::new(lines[self.scroll..end].to_vec()),
+            self.text_area,
+        );
+        draw_record_scrollbar(frame, inner, lines.len(), self.scroll, theme);
+        self.draw_footer_hint(
+            frame,
+            footer,
+            "↑/↓ scroll · Ctrl+F search history · G latest".into(),
+            theme,
+        );
     }
 
     fn normalize_tab(&mut self) {
@@ -65,8 +108,41 @@ impl Details {
         areas: &DetailAreas,
         summary: Vec<Line<'static>>,
         theme: &Theme,
+        view: &View,
+        workbench_tab: Option<WorkbenchTab>,
     ) {
-        let mut tabs = format_tabs(&self.key, self.tab, usize::from(areas.header.width));
+        let mut tabs = if let Some(active) = workbench_tab {
+            let delivers = self
+                .task_id()
+                .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+                .is_some_and(|task| task.change_kind.has_delivery());
+            let labels = |tab| match tab {
+                WorkbenchTab::Summary => "Podsumowanie",
+                WorkbenchTab::Conversation => "Rozmowa",
+                WorkbenchTab::Results => "Wyniki",
+                WorkbenchTab::Checks => "Sprawdzenia",
+                WorkbenchTab::Comments => "Komentarze",
+                WorkbenchTab::Diff => "Diff",
+            };
+            let mut spans = Vec::new();
+            for (index, tab) in super::super::workbench::tabs_for(&self.key, delivers)
+                .into_iter()
+                .enumerate()
+            {
+                if index > 0 {
+                    spans.push(Span::styled(" · ", theme.faint()));
+                }
+                let style = if tab == active {
+                    theme.title().add_modifier(Modifier::REVERSED)
+                } else {
+                    theme.text()
+                };
+                spans.push(Span::styled(labels(tab), style));
+            }
+            Line::from(spans)
+        } else {
+            format_tabs(&self.key, self.tab, usize::from(areas.header.width))
+        };
         if !self.query.is_empty() {
             tabs.spans.push(Span::styled(
                 format!(" [🔍 \"{}\"]", self.query),

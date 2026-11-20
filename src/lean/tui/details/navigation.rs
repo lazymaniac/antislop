@@ -1,6 +1,35 @@
 use super::*;
 
 impl Details {
+    pub(in crate::lean::tui) fn prepare_workbench_details(
+        &mut self,
+        previous: Option<crate::lean::tui::WorkbenchTab>,
+        next: crate::lean::tui::WorkbenchTab,
+    ) {
+        let previous_state = (self.scroll, self.query.clone());
+        self.switch_tab(match next {
+            crate::lean::tui::WorkbenchTab::Summary
+            | crate::lean::tui::WorkbenchTab::Conversation
+            | crate::lean::tui::WorkbenchTab::Diff => 0,
+            crate::lean::tui::WorkbenchTab::Results => RESULT,
+            crate::lean::tui::WorkbenchTab::Checks => CHECKS,
+            crate::lean::tui::WorkbenchTab::Comments => COMMENTS,
+        });
+        if let Some(previous) = previous {
+            self.workbench_memory
+                .insert((self.key.clone(), previous), previous_state);
+        }
+        if let Some((scroll, query)) = self.workbench_memory.get(&(self.key.clone(), next)) {
+            self.scroll = *scroll;
+            self.query = query.clone();
+        } else if previous.is_some() {
+            self.scroll = 0;
+            self.query.clear();
+        }
+        self.searching = false;
+        self.show_info = next == crate::lean::tui::WorkbenchTab::Summary;
+    }
+
     pub fn neighbour_tab(&self, steps: isize) -> usize {
         let tabs = tabs_for(&self.key);
         let at = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0) as isize;
