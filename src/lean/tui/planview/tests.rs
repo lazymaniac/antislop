@@ -143,6 +143,32 @@ fn enter_comments_and_accept_keys_request_acceptance() {
     }
 }
 
+#[test]
+fn an_open_comment_blocks_acceptance_through_keys_and_the_action_bar() {
+    let mut view = proposed("# Plan\nbody");
+    view.plan = Some("p".into());
+    view.comments.insert(
+        7,
+        Comment {
+            id: 7,
+            plan_id: Some("p".into()),
+            target: "plan:p".into(),
+            text: "unresolved feedback".into(),
+            status: "open".into(),
+        },
+    );
+    let mut plan = PlanView::new("p".into());
+    assert_eq!(
+        press(&mut plan, &view, KeyCode::Char('a')),
+        PlanAction::None
+    );
+    plan.button = BottomButton::Accept;
+    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
+
+    view.comments.clear();
+    assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::Accept);
+}
+
 fn task_in(id: &str, section: &str, status: &str) -> TaskRow {
     TaskRow {
         id: id.into(),

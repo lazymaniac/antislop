@@ -6,7 +6,7 @@ impl PlanView {
         DocumentBuilder::new(view).build(&raw_doc)
     }
     /// Keep original line numbers so existing comment anchors survive the split.
-    pub(in crate::lean::tui::planview) fn description_lines(&self, view: &View) -> Vec<DocLine> {
+    pub(in crate::lean::tui) fn description_lines(&self, view: &View) -> Vec<DocLine> {
         let lines = self.build_lines(view);
         if view.tasks.is_empty() {
             return lines;

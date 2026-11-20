@@ -9,12 +9,14 @@ impl PlanView {
         area: Rect,
         view: &View,
         theme: &Theme,
+        read_only: bool,
     ) {
-        let title = fit_hint(
-            &["Tasks (v)", "arrows select", "Shift+↑/↓ scroll"],
-            usize::from(area.width.saturating_sub(4)),
-            false,
-        );
+        let hints = if read_only {
+            &["Tasks (v)", "arrows select", "Shift+↑/↓ pan"][..]
+        } else {
+            &["Tasks (v)", "arrows select", "Shift+↑/↓ scroll"][..]
+        };
+        let title = fit_hint(hints, usize::from(area.width.saturating_sub(4)), false);
         let block = panel(&format!(" {title} "), self.graph_focused, theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -72,7 +74,7 @@ impl PlanView {
             })
             .collect();
         if let Some(task) = view.tasks.get(self.graph_selected) {
-            self.draw_task_details(frame, details, task, view, theme);
+            self.draw_task_details(frame, details, task, view, theme, read_only);
         }
     }
 
@@ -83,6 +85,7 @@ impl PlanView {
         task: &TaskRow,
         view: &View,
         theme: &Theme,
+        read_only: bool,
     ) {
         let mut text = format!(
             "{}: {}\n{} · {}",
@@ -132,7 +135,11 @@ impl PlanView {
             .title(format!(
                 " {} ",
                 fit_hint(
-                    &["Selected task", "c comment", "Ctrl+u/d scroll"],
+                    if read_only {
+                        &["Selected task", "report in document"]
+                    } else {
+                        &["Selected task", "c comment", "Ctrl+u/d scroll"]
+                    },
                     usize::from(area.width.saturating_sub(4)),
                     false,
                 )

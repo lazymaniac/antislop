@@ -1,4 +1,4 @@
-//! Read-only historical graphs, independent of the live conversation projection.
+//! Read-only historical plan records with an isolated projection and view state.
 use super::*;
 use crate::lean::store::PlansPage;
 
@@ -9,9 +9,7 @@ pub(super) struct Browser {
     pub error: Option<String>,
     plan: Option<crate::lean::store::PlanHistory>,
     view: View,
-    selected: String,
-    scroll: (u16, u16),
-    report_scroll: u16,
+    plan_view: PlanView,
 }
 
 impl Browser {
@@ -23,9 +21,7 @@ impl Browser {
             error: None,
             plan: None,
             view: View::default(),
-            selected: ORCHESTRATOR.into(),
-            scroll: (0, 0),
-            report_scroll: 0,
+            plan_view: PlanView::new("history".into()),
         }
     }
 
@@ -35,9 +31,11 @@ impl Browser {
         self.total = page.total;
         self.plan = page.plans.into_iter().next();
         self.view = View::default();
-        self.scroll = (0, 0);
-        self.report_scroll = 0;
-        self.selected = ORCHESTRATOR.into();
+        self.plan_view = PlanView::new(
+            self.plan
+                .as_ref()
+                .map_or_else(|| "history".into(), |plan| plan.id.clone()),
+        );
         if let Some(plan) = &self.plan {
             self.view.apply(&serde_json::json!({
                 "seq":1, "kind":"plan_proposed", "payload":{
@@ -50,6 +48,7 @@ impl Browser {
                 row.round = u64::from(task.round);
             }
         }
+        self.sync_document();
     }
 
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
@@ -57,9 +56,11 @@ impl Browser {
             KeyCode::Esc | KeyCode::Char('q') => return false,
             KeyCode::Char('[') => self.page_older(),
             KeyCode::Char(']') => self.page_newer(),
-            KeyCode::PageDown => self.report_scroll = self.report_scroll.saturating_add(8),
-            KeyCode::PageUp => self.report_scroll = self.report_scroll.saturating_sub(8),
-            code => self.move_selection(code),
+            KeyCode::Char('v') if key.modifiers.is_empty() && !self.view.tasks.is_empty() => {
+                self.plan_view.graph_focused = !self.plan_view.graph_focused;
+                self.plan_view.graph_reveal = true;
+            }
+            code => self.navigate(code, key.modifiers),
         }
         true
     }
@@ -78,144 +79,128 @@ impl Browser {
         }
     }
 
-    fn move_selection(&mut self, code: KeyCode) {
-        let direction = match code {
-            KeyCode::Left => Some((-1, 0)),
-            KeyCode::Right => Some((1, 0)),
-            KeyCode::Up => Some((0, -1)),
-            KeyCode::Down => Some((0, 1)),
-            _ => None,
-        };
-        let Some((dx, dy)) = direction else { return };
-        let graph = Graph::new(&self.view);
-        if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
-            self.selected = next;
-            self.report_scroll = 0;
+    fn navigate(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        if self.plan_view.graph_focused {
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                match code {
+                    KeyCode::Left => {
+                        self.plan_view.graph_offset.0 =
+                            self.plan_view.graph_offset.0.saturating_sub(4)
+                    }
+                    KeyCode::Right => {
+                        self.plan_view.graph_offset.0 =
+                            self.plan_view.graph_offset.0.saturating_add(4)
+                    }
+                    KeyCode::Up => {
+                        self.plan_view.graph_offset.1 =
+                            self.plan_view.graph_offset.1.saturating_sub(2)
+                    }
+                    KeyCode::Down => {
+                        self.plan_view.graph_offset.1 =
+                            self.plan_view.graph_offset.1.saturating_add(2)
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            match code {
+                KeyCode::Up | KeyCode::Left => {
+                    self.plan_view.graph_selected = self.plan_view.graph_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Right => {
+                    self.plan_view.graph_selected = (self.plan_view.graph_selected + 1)
+                        .min(self.view.tasks.len().saturating_sub(1));
+                }
+                KeyCode::Home => self.plan_view.graph_selected = 0,
+                KeyCode::End => {
+                    self.plan_view.graph_selected = self.view.tasks.len().saturating_sub(1)
+                }
+                _ => return,
+            }
+            self.plan_view.graph_reveal = true;
+            self.sync_document();
+            return;
+        }
+
+        let last = self
+            .plan_view
+            .description_lines(&self.view)
+            .len()
+            .saturating_sub(1);
+        match code {
+            KeyCode::Up => self.plan_view.cursor = self.plan_view.cursor.saturating_sub(1),
+            KeyCode::Down => self.plan_view.cursor = (self.plan_view.cursor + 1).min(last),
+            KeyCode::PageUp => self.plan_view.cursor = self.plan_view.cursor.saturating_sub(10),
+            KeyCode::PageDown => self.plan_view.cursor = (self.plan_view.cursor + 10).min(last),
+            KeyCode::Home => self.plan_view.cursor = 0,
+            KeyCode::End => self.plan_view.cursor = last,
+            _ => {}
         }
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-        let borders = borders();
-        frame.render_widget(Clear, area);
-        let block = self.frame_block(borders);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if let Some(error) = &self.error {
-            frame.render_widget(Paragraph::new(sanitize(error)), inner);
-            return;
-        }
-        let regions =
-            Layout::vertical([Constraint::Percentage(65), Constraint::Min(2)]).split(inner);
-        self.draw_graph(frame, regions[0]);
-        self.draw_report(frame, regions[1], borders);
-    }
-
-    fn frame_block(&self, borders: ratatui::symbols::border::Set<'static>) -> Block<'static> {
-        let title = if self.loading {
-            "Plan history · loading".into()
+        let navigation = if self.loading {
+            format!("loading · {} total", self.total)
         } else if let Some(plan) = &self.plan {
             format!(
-                "Plan history {}/{} · {} · {}",
+                "plan {} of {} · {}",
                 self.offset + 1,
                 self.total,
-                plan.id,
                 plan.status
             )
         } else {
-            "Plan history · no plans".into()
+            format!("no plans · {} total", self.total)
         };
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(borders)
-            .title(title)
-            .title_bottom("[ older · ] newer · arrows select · PgUp/PgDn report · Esc close")
-    }
-
-    fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
-        let graph = Graph::new_with_viewport(
-            &self.view,
-            &Default::default(),
-            &Default::default(),
-            GroupingMode::default(),
-            Some((area.width, area.height)),
-        );
-        if let Some(node) = graph.node(&self.selected) {
-            self.scroll.0 = node.x.saturating_sub(area.width / 4);
-            self.scroll.1 = node.y.saturating_sub(1);
+        if self.error.is_some() {
+            self.view.plan_doc = self.report_text();
         }
-        let mut canvas = Canvas::new_window(self.scroll.0, self.scroll.1, area.width, area.height);
-        graph.render_with(
+        self.plan_view.draw_history(
+            frame,
+            frame.area(),
             &self.view,
-            &mut canvas,
-            Relations::default(),
-            &self.selected,
             &Theme::from_env(),
-            0,
+            &navigation,
         );
-        canvas.show(frame.buffer_mut(), area, self.scroll.0, self.scroll.1);
     }
 
-    fn draw_report(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        borders: ratatui::symbols::border::Set<'static>,
-    ) {
-        let text = self.report_text();
-        frame.render_widget(
-            Paragraph::new(sanitize(&text))
-                .wrap(ratatui::widgets::Wrap { trim: false })
-                .scroll((self.report_scroll, 0))
-                .block(Block::default().borders(Borders::TOP).border_set(borders)),
-            area,
-        );
+    fn sync_document(&mut self) {
+        self.view.plan_doc = self.report_text();
+        self.plan_view.cursor = 0;
+        self.plan_view.scroll = 0;
     }
 
     fn report_text(&self) -> String {
-        let task_id = self.selected.split_once(':').map(|(_, id)| id);
-        self.plan
-            .as_ref()
-            .and_then(|plan| {
-                plan.tasks
-                    .iter()
-                    .find(|task| task.spec["id"].as_str() == task_id)
-            })
-            .map(|task| {
-                format!(
-                    "{} · {} · round {}\n{}\nVerdict: {}\nBase: {}\nResult: {}",
-                    task.spec["title"].as_str().unwrap_or(""),
+        let body = if let Some(plan) = &self.plan {
+            let mut text = format!(
+                "# Plan {}\n\nOriginal plan document: not retained.\n\nThe graph is reconstructed from saved task specifications.\n",
+                plan.id
+            );
+            if let Some(task) = plan.tasks.get(self.plan_view.graph_selected) {
+                text.push_str(&format!(
+                    "\n## Saved task result: {} ({})\n\nStatus: {}\nRound: {}\n\n## Report\n\n{}\n\n## Verdict\n\n{}\n\n## Base\n\n{}\n\n## Result\n\n{}",
+                    task.spec["title"].as_str().unwrap_or("Untitled task"),
+                    task.spec["id"].as_str().unwrap_or("unknown"),
                     task.status,
                     task.round,
-                    task.report.as_deref().unwrap_or("No report"),
-                    task.verdict
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default(),
-                    task.base.as_deref().unwrap_or(""),
-                    task.result.as_deref().unwrap_or("")
-                )
-            })
-            .unwrap_or_else(|| {
-                "Select a task to inspect its historical report, verdict and commits.".into()
-            })
-    }
-}
-
-fn borders() -> ratatui::symbols::border::Set<'static> {
-    if Theme::from_env().ascii {
-        ratatui::symbols::border::Set {
-            top_left: "+",
-            top_right: "+",
-            bottom_left: "+",
-            bottom_right: "+",
-            vertical_left: "|",
-            vertical_right: "|",
-            horizontal_top: "-",
-            horizontal_bottom: "-",
+                    task.report.as_deref().unwrap_or("No report was retained."),
+                    task.verdict.as_ref().map(ToString::to_string).unwrap_or_else(|| "No verdict was retained.".into()),
+                    task.base.as_deref().unwrap_or("No base revision was retained."),
+                    task.result.as_deref().unwrap_or("No result revision was retained."),
+                ));
+            } else {
+                text.push_str("\nNo task specifications are retained for this plan.");
+            }
+            text
+        } else if self.loading {
+            "# Plan history\n\nLoading saved plan records…".into()
+        } else {
+            "# Plan history\n\nNo plan records are retained for this conversation.".into()
+        };
+        if let Some(error) = &self.error {
+            format!("# Plan history request failed\n\n{error}\n\n{body}")
+        } else {
+            body
         }
-    } else {
-        ratatui::symbols::border::PLAIN
     }
 }
 
@@ -256,10 +241,9 @@ mod tests {
     fn history_is_read_only_and_preserves_the_live_draft_and_graph() {
         let mut app = App::test_app();
         app.input.insert_str("draft 👩‍💻");
-        app.view
-            .apply(&json!({"seq":1,"kind":"plan_proposed","payload":{
-                "plan":"live", "tasks":[{"change_kind":"none","id":"current","title":"Current task"}]
-            }}));
+        app.view.apply(&json!({"seq":1,"kind":"plan_proposed","payload":{
+            "plan":"live", "tasks":[{"change_kind":"none","id":"current","title":"Current task"}]
+        }}));
         app.plan_history = Some(Browser::new());
         app.paste("must not reach the draft");
         app.key(event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
@@ -275,21 +259,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::lean::Store::open(&dir.path().join("state.db")).unwrap();
         let conversation = store.create_conversation("project").unwrap();
-        let tasks = store
-            .add_plan(
-                &conversation.id,
-                &[
-                    json!({"change_kind":"none","id":"implementation","title":"Implement"}),
-                    json!({"change_kind":"none","id":"security","title":"Security","depends_on":["implementation"]}),
-                ],
-            )
-            .unwrap();
+        let tasks = store.add_plan(&conversation.id, &[
+            json!({"change_kind":"none","id":"implementation","title":"Implement"}),
+            json!({"change_kind":"none","id":"security","title":"Security","depends_on":["implementation"]}),
+        ]).unwrap();
         store
             .set_plan_status(&tasks[0].plan_id, "proposed", "approved")
             .unwrap();
-        let page = store.plans_page(&conversation.id, 0, 1).unwrap();
         let mut browser = Browser::new();
-        browser.loaded(page);
+        browser.loaded(store.plans_page(&conversation.id, 0, 1).unwrap());
         assert_eq!(browser.view.tasks[1].depends_on, ["implementation"]);
         assert!(
             browser
@@ -302,6 +280,93 @@ mod tests {
             browser.view.tasks[0].uuid.as_deref(),
             Some(tasks[0].id.as_str())
         );
+        assert!(
+            browser
+                .view
+                .plan_doc
+                .contains("Original plan document: not retained.")
+        );
+    }
+
+    #[test]
+    fn history_documents_show_retained_results_and_explicit_missing_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::lean::Store::open(&dir.path().join("state.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store
+            .add_plan(
+                &conversation.id,
+                &[json!({"change_kind":"none","id":"task","title":"Task"})],
+            )
+            .unwrap();
+        let mut browser = Browser::new();
+        browser.loaded(store.plans_page(&conversation.id, 0, 1).unwrap());
+        assert!(browser.view.plan_doc.contains("No report was retained."));
+        assert!(browser.view.plan_doc.contains("No verdict was retained."));
+        assert!(
+            browser
+                .view
+                .plan_doc
+                .contains("No result revision was retained.")
+        );
+    }
+
+    #[test]
+    fn history_uses_document_and_side_graph_and_scrolls_long_reports() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::lean::Store::open(&dir.path().join("state.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store.add_plan(&conversation.id, &[
+            json!({"change_kind":"none","id":"first","title":"First"}),
+            json!({"change_kind":"none","id":"second","title":"Second","depends_on":["first"]}),
+        ]).unwrap();
+        let mut browser = Browser::new();
+        browser.loaded(store.plans_page(&conversation.id, 0, 1).unwrap());
+        browser.plan.as_mut().unwrap().tasks[0].report = Some(
+            (0..80)
+                .map(|n| format!("saved-line-{n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        browser.sync_document();
+        assert!(browser.view.plan_doc.contains("saved-line-0"));
+        assert!(
+            browser
+                .plan_view
+                .description_lines(&browser.view)
+                .iter()
+                .any(|line| line.text.contains("saved-line-0"))
+        );
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|frame| browser.draw(frame)).unwrap();
+        assert!(browser.plan_view.doc_area.width > 0);
+        assert!(browser.plan_view.graph_area.x > browser.plan_view.doc_area.x);
+        let text = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Plan History"), "{text}");
+        assert!(text.contains("Original plan document"), "{text}");
+        assert!(text.contains("Tasks"), "{text}");
+        assert!(
+            !text.contains("c comment"),
+            "history must not advertise editing: {text}"
+        );
+        browser.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        browser.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        term.draw(|frame| browser.draw(frame)).unwrap();
+        let scrolled = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(scrolled.contains("saved-line-"), "{scrolled}");
     }
 
     #[test]
@@ -322,22 +387,56 @@ mod tests {
     }
 
     #[test]
-    fn history_error_is_rendered_without_replacing_the_browser() {
+    fn no_history_and_raw_errors_are_visible_without_fabricating_records() {
         use ratatui::{Terminal, backend::TestBackend};
         let mut browser = Browser::new();
         browser.loading = false;
-        browser.error = Some("database unavailable".into());
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
-        terminal.draw(|frame| browser.draw(frame)).unwrap();
-        let text: String = terminal
+        browser.total = 0;
+        browser.sync_document();
+        let mut term = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        term.draw(|frame| browser.draw(frame)).unwrap();
+        let text = term
             .backend()
             .buffer()
             .content
             .iter()
             .map(|cell| cell.symbol())
-            .collect();
-        assert!(text.contains("database unavailable"));
-        assert_eq!(browser.error.as_deref(), Some("database unavailable"));
+            .collect::<String>();
+        assert!(text.contains("No plan records are retained"), "{text}");
+        browser.error = Some("database unavailable".into());
+        browser.sync_document();
+        term.draw(|frame| browser.draw(frame)).unwrap();
+        let text = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("database unavailable"), "{text}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::lean::Store::open(&dir.path().join("state.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store
+            .add_plan(
+                &conversation.id,
+                &[json!({"change_kind":"none","id":"saved","title":"Saved"})],
+            )
+            .unwrap();
+        browser.loaded(store.plans_page(&conversation.id, 0, 1).unwrap());
+        browser.error = Some("next page failed".into());
+        let mut wide = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        wide.draw(|frame| browser.draw(frame)).unwrap();
+        let text = wide
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("next page failed"), "{text}");
+        assert!(text.contains("Plan "), "{text}");
     }
 
     #[test]

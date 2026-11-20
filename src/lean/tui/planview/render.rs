@@ -4,17 +4,48 @@ mod rows;
 
 impl PlanView {
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
+        self.draw_with_history(frame, area, view, theme, None);
+    }
+
+    pub(in crate::lean::tui) fn draw_history(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+        navigation: &str,
+    ) {
+        self.draw_with_history(frame, area, view, theme, Some(navigation));
+    }
+
+    fn draw_with_history(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+        history_navigation: Option<&str>,
+    ) {
         self.doc_area = Rect::default();
         self.row_docs.clear();
         self.task_rects.clear();
         self.button_rects = [Rect::default(); 4];
         frame.render_widget(Clear, area);
-        let Some(chunks) = self.frame_layout(frame, area, view, theme) else {
+        let Some(chunks) =
+            self.frame_layout(frame, area, view, theme, history_navigation.is_some())
+        else {
             self.graph_area = Rect::default();
             return;
         };
         let open_comments = view.open_plan_comments();
-        self.draw_banner(frame, chunks[0], view, theme, &open_comments);
+        self.draw_banner(
+            frame,
+            chunks[0],
+            view,
+            theme,
+            &open_comments,
+            history_navigation.is_some(),
+        );
         if view.tasks.is_empty() {
             self.graph_area = Rect::default();
             self.graph_focused = false;
@@ -37,9 +68,13 @@ impl PlanView {
             let inner = block.inner(description);
             frame.render_widget(block, description);
             self.draw_document(frame, inner, view, theme);
-            self.draw_task_graph(frame, tasks, view, theme);
+            self.draw_task_graph(frame, tasks, view, theme, history_navigation.is_some());
         }
-        self.draw_buttons(frame, chunks[2], view, theme);
+        if let Some(navigation) = history_navigation {
+            self.draw_history_navigation(frame, chunks[2], navigation, theme);
+        } else {
+            self.draw_buttons(frame, chunks[2], view, theme);
+        }
         // Apply the same terminal fallbacks when this viewer is drawn directly.
         if !theme.color {
             crate::lean::tui::without_color(frame.buffer_mut());
@@ -55,12 +90,22 @@ impl PlanView {
         area: Rect,
         view: &View,
         theme: &Theme,
+        history: bool,
     ) -> Option<[Rect; 3]> {
         let block = graph::panel(
             &format!(
-                " Plan Document ({}) · rigor: {} ",
+                " {} ({}){} ",
+                if history {
+                    "Plan History"
+                } else {
+                    "Plan Document"
+                },
                 self.plan_id,
-                view.rigor_label()
+                if history {
+                    String::new()
+                } else {
+                    format!(" · rigor: {}", view.rigor_label())
+                }
             ),
             true,
             theme,
@@ -98,6 +143,7 @@ impl PlanView {
         view: &View,
         theme: &Theme,
         open_comments: &[&super::super::view::Comment],
+        history: bool,
     ) {
         if !open_comments.is_empty() || view.comment_activity().is_some() {
             frame.render_widget(
@@ -106,7 +152,7 @@ impl PlanView {
             );
         } else {
             frame.render_widget(
-                Paragraph::new(self.task_banner(view, theme, area.width)),
+                Paragraph::new(self.task_banner(view, theme, area.width, history)),
                 area,
             );
         }
@@ -180,13 +226,30 @@ impl PlanView {
         notes
     }
 
-    fn task_banner(&self, view: &View, theme: &Theme, width: u16) -> Line<'static> {
+    fn task_banner(&self, view: &View, theme: &Theme, width: u16, history: bool) -> Line<'static> {
         let completed = view
             .tasks
             .iter()
             .filter(|task| task.status == "approved")
             .count();
         let tasks = format!(" Tasks: {completed}/{} completed ", view.tasks.len());
+        let hints = if history {
+            &[
+                "v switch pane",
+                "arrows navigate",
+                "Shift+arrows pan graph",
+                "read only",
+                "Esc close",
+            ][..]
+        } else {
+            &[
+                "v switch pane",
+                "arrows navigate",
+                "Shift+arrows pan graph",
+                "c comment",
+                "Esc close",
+            ][..]
+        };
         Line::from(vec![
             Span::styled(
                 tasks.clone(),
@@ -198,15 +261,9 @@ impl PlanView {
                 format!(
                     "· {}",
                     fit_hint(
-                        &[
-                            "v switch pane",
-                            "arrows navigate",
-                            "Shift+arrows pan graph",
-                            "c comment",
-                            "Esc close",
-                        ],
+                        hints,
                         usize::from(width).saturating_sub(tasks.len() + 2),
-                        true,
+                        true
                     )
                 ),
                 theme.dim(),
@@ -245,5 +302,27 @@ impl PlanView {
             self.scroll = (last + 1 - height).min(first);
         }
         self.scroll = self.scroll.min(row_count.saturating_sub(height.max(1)));
+    }
+
+    fn draw_history_navigation(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        navigation: &str,
+        theme: &Theme,
+    ) {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("[", theme.accent()),
+                Span::styled(" older  ", theme.dim()),
+                Span::styled("]", theme.accent()),
+                Span::styled(
+                    " newer   v switch pane   arrows navigate   PgUp/PgDn scroll   Esc close",
+                    theme.dim(),
+                ),
+                Span::styled(format!("   {navigation}"), theme.accent()),
+            ])),
+            area,
+        );
     }
 }

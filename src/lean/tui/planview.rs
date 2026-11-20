@@ -114,7 +114,7 @@ pub struct PlanView {
     pub graph_offset: (u16, u16),
     pub graph_area: Rect,
     pub task_rects: Vec<(Rect, usize)>,
-    graph_reveal: bool,
+    pub(in crate::lean::tui) graph_reveal: bool,
     task_scroll: usize,
 }
 
