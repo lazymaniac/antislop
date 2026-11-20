@@ -64,6 +64,7 @@ impl App {
             update @ Update::Config { .. } => self.apply_config(update),
             update @ Update::Events { .. } => self.apply_events(update),
             update @ Update::Conversation { .. } => self.apply_conversation(update),
+            update @ Update::ConversationCreated { .. } => self.apply_conversation_created(update),
             update @ Update::ProjectReady { .. } => self.apply_project_ready(update),
             update @ Update::ProjectStatus { .. } => self.apply_project_status(update),
             update @ Update::Notice { .. } => self.apply_notice(update),

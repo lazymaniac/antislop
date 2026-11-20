@@ -1972,7 +1972,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     // 3. Picker visibility and reversed selection at 60x12
     let mut picker = Picker::new(Kind::Commands);
     let items_len = picker.items(&app.view).len();
-    assert_eq!(items_len, 5);
+    assert_eq!(items_len, 8);
     picker.selected = items_len - 1;
     app.picker = Some(picker);
 
@@ -5836,14 +5836,28 @@ fn project_switches_use_each_daemons_history_directory() {
         ProjectConn::new(second.path().into(), Client::at(second.relative_path())),
     ];
     app.load_history(first.path());
+    app.open("first-conversation".into());
+    app.input = InputBuffer::with_text("draft in project A 👩‍💻");
+    app.selected = "worker:a".into();
+    app.scroll = 7;
     app.record_history("first project");
     app.switch_project(1, Some("second-conversation".into()));
     assert!(app.history.is_empty());
+    assert!(app.input.is_empty());
+    app.input = InputBuffer::with_text("draft in project B");
+    app.selected = "worker:b".into();
+    app.scroll = 3;
     app.record_history("second project");
     app.switch_project(0, Some("first-conversation".into()));
     assert_eq!(app.history, ["first project"]);
+    assert_eq!(app.input.text, "draft in project A 👩‍💻");
+    assert_eq!(app.selected, "worker:a");
+    assert_eq!(app.scroll, 7);
     app.switch_project(1, Some("second-conversation".into()));
     assert_eq!(app.history, ["second project"]);
+    assert_eq!(app.input.text, "draft in project B");
+    assert_eq!(app.selected, "worker:b");
+    assert_eq!(app.scroll, 3);
 }
 
 #[test]

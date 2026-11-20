@@ -118,6 +118,69 @@ impl App {
         }
     }
 
+    pub(super) fn apply_conversation_created(&mut self, update: Update) {
+        let Update::ConversationCreated {
+            project,
+            state_dir,
+            request_id,
+            generation,
+            result,
+        } = update
+        else {
+            unreachable!("update routed to wrong handler");
+        };
+        let id = match result {
+            Ok(id) if !id.is_empty() => id,
+            Ok(_) => {
+                self.notice = Some(format!(
+                    "✗ {}: daemon returned an empty session id",
+                    project.display()
+                ));
+                return;
+            }
+            Err(error) => {
+                self.notice = Some(format!(
+                    "✗ {}: {error} (session was not opened)",
+                    project.display()
+                ));
+                return;
+            }
+        };
+        if let Some(owner) = self.projects.iter_mut().find(|owner| owner.path == project)
+            && !owner.conversations.iter().any(|item| item["id"] == id)
+        {
+            owner
+                .conversations
+                .push(serde_json::json!({"id": id, "project": project.to_string_lossy()}));
+        }
+        self.conversation_projects
+            .insert(id.clone(), project.clone());
+        let active_state_dir = self.client.state_dir();
+        let active_project = self
+            .projects
+            .get(self.active_project)
+            .map(|owner| owner.path.as_path());
+        let project_is_active = active_project.map_or(project.as_os_str().is_empty(), |path| {
+            path == project.as_path()
+        });
+        if request_id != self.new_conversation_request_id
+            || generation != self.generation
+            || !project_is_active
+            || active_state_dir != state_dir
+        {
+            return;
+        }
+        if let Some(index) = self.projects.iter().position(|owner| owner.path == project) {
+            self.switch_project(index, Some(id));
+        } else {
+            self.open(id);
+        }
+        self.navigation.screen = Screen::Workbench;
+        self.navigation.target = WorkbenchTarget::Session;
+        self.navigation.focus = NavigationFocus::Composer;
+        self.focus = Focus::Chat;
+    }
+
     pub(super) fn apply_project_ready(&mut self, update: Update) {
         match update {
             Update::ProjectReady { conn, conversation } => {
@@ -132,8 +195,21 @@ impl App {
         match update {
             Update::ProjectStatus {
                 path,
-                conversations,
+                mut conversations,
             } => {
+                let present: std::collections::HashSet<String> = conversations
+                    .iter()
+                    .filter_map(|item| item["id"].as_str().map(str::to_owned))
+                    .collect();
+                self.deleted_conversations
+                    .retain(|(deleted_path, id)| deleted_path != &path || present.contains(id));
+                conversations.retain(|item| {
+                    item["id"].as_str().is_none_or(|id| {
+                        !self
+                            .deleted_conversations
+                            .contains(&(path.clone(), id.to_owned()))
+                    })
+                });
                 if let Some(project) = self.projects.iter_mut().find(|p| p.path == path) {
                     project.conversations = conversations;
                 }

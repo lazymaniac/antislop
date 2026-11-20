@@ -35,6 +35,8 @@ impl App {
         self.active_project = index;
         self.client = conn.client.clone();
         self.project = conn.name.clone();
+        self.conversation_projects
+            .insert(conversation.clone(), conn.path.clone());
         self.open(conversation);
     }
 

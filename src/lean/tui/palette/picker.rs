@@ -293,7 +293,10 @@ fn conversation_items(items: &[ConversationItem]) -> Vec<(String, Action)> {
         .map(|item| {
             (
                 item.title.clone(),
-                Action::SwitchConversation(item.id.clone()),
+                Action::SwitchConversation {
+                    id: item.id.clone(),
+                    project: item.project.clone(),
+                },
             )
         })
         .collect()
@@ -356,6 +359,7 @@ impl Picker {
             conversations: Vec::new(),
             projects: Vec::new(),
             confirm_delete: false,
+            delete_target: None,
             recommendation: None,
         }
     }
@@ -443,13 +447,16 @@ impl Picker {
         };
         let lines = self.draw_lines(&items, layout);
         let title = if self.kind == Kind::Conversations && self.confirm_delete {
-            " delete session? y confirm · n/Esc cancel "
+            self.delete_target.as_ref().map_or_else(
+                || " delete session? y confirm · n/Esc cancel ".to_owned(),
+                |target| format!(" delete {}? y confirm · n/Esc cancel ", target.title),
+            )
         } else if self.recommendation.is_some() {
-            " Recommended rigor · Enter confirm · Esc close "
+            " Recommended rigor · Enter confirm · Esc close ".to_owned()
         } else {
-            picker_title(self.kind, layout.width)
+            picker_title(self.kind, layout.width).to_owned()
         };
-        draw_picker(frame, layout.box_area, lines, title);
+        draw_picker(frame, layout.box_area, lines, &title);
         if show_cursor {
             self.place_cursor(frame, layout);
         }

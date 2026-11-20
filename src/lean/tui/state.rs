@@ -88,6 +88,8 @@ pub struct App {
     pub observer: bool,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
+    /// Exact owning project for frontend-preserved conversation state.
+    pub conversation_projects: std::collections::HashMap<String, std::path::PathBuf>,
     /// Which cards the graph shows.
     pub graph_scope: graph::Scope,
     /// One card exposed by clicking its active row in the Now panel.
@@ -138,6 +140,10 @@ pub struct App {
     /// `client`.
     pub projects: Vec<workspace::ProjectConn>,
     pub active_project: usize,
+    /// Monotonic frontend identity for requests that create a session.
+    pub new_conversation_request_id: u64,
+    /// Filter a successful delete until a project poll confirms it is absent.
+    pub deleted_conversations: std::collections::HashSet<(std::path::PathBuf, String)>,
 }
 
 macro_rules! initial_app {
@@ -212,6 +218,7 @@ macro_rules! initial_app {
             observer: false,
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
+            conversation_projects: std::collections::HashMap::new(),
             graph_scope: graph::Scope::default(),
             graph_visibility_exception: None,
             graph_revealed: None,
@@ -241,6 +248,8 @@ macro_rules! initial_app {
             graph_link_source: None,
             projects: Vec::new(),
             active_project: 0,
+            new_conversation_request_id: 0,
+            deleted_conversations: Default::default(),
         }
     };
 }

@@ -12,6 +12,10 @@ impl App {
     }
 
     pub fn open(&mut self, conversation: String) {
+        if let Some(project) = self.projects.get(self.active_project) {
+            self.conversation_projects
+                .insert(conversation.clone(), project.path.clone());
+        }
         self.result_fetch.cancel_document_fetch();
         if let Some(details) = self.details.as_mut() {
             details.result_loading = None;
@@ -27,6 +31,10 @@ impl App {
     fn save_active_conversation(&mut self) {
         if self.conversation.is_empty() {
             return;
+        }
+        if let Some(project) = self.projects.get(self.active_project) {
+            self.conversation_projects
+                .insert(self.conversation.clone(), project.path.clone());
         }
         self.conversation_drafts
             .insert(self.conversation.clone(), self.input.text.clone());
@@ -132,18 +140,44 @@ impl App {
         .spawn();
     }
 
-    pub(in crate::lean::tui) fn new_conversation(&self) {
+    pub(in crate::lean::tui) fn new_conversation(&mut self) {
+        let Some(request_id) = self.new_conversation_request_id.checked_add(1) else {
+            self.notice = Some("✗ too many session creation requests in this window".into());
+            return;
+        };
+        self.new_conversation_request_id = request_id;
+        let generation = self.generation;
         let client = self.client.clone();
+        let state_dir = client.state_dir().to_path_buf();
+        let project = self
+            .projects
+            .get(self.active_project)
+            .map(|conn| conn.path.clone())
+            .unwrap_or_default();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
-            let update = match client.call(&Request::Control(
-                crate::lean::daemon::ControlRequest::Start,
-            )) {
-                Ok(conversation) => {
-                    let id = conversation["id"].as_str().unwrap_or_default().to_owned();
-                    Update::Conversation(id)
+            let request = if project.as_os_str().is_empty() {
+                crate::lean::daemon::ControlRequest::Start
+            } else {
+                crate::lean::daemon::ControlRequest::StartIn {
+                    project: project.to_string_lossy().into_owned(),
                 }
-                Err(error) => Update::Notice(format!("✗ {error}")),
+            };
+            let result = client
+                .call(&Request::Control(request))
+                .map_err(|error| error.to_string())
+                .and_then(|conversation| {
+                    conversation["id"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| "daemon returned a session without an id".to_owned())
+                });
+            let update = Update::ConversationCreated {
+                project,
+                state_dir,
+                request_id,
+                generation,
+                result,
             };
             let _ = updates.send(update);
         });

@@ -51,11 +51,28 @@ impl App {
 
     fn daemon_conversation(&self, value: &Value) -> Option<palette::ConversationItem> {
         let project = value["project"].as_str().unwrap_or_default();
-        let basename = std::path::Path::new(project)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(project);
-        if !project.is_empty() && project != self.project && basename != self.project {
+        let active_path = self
+            .projects
+            .get(self.active_project)
+            .map(|project| project.path.to_string_lossy().into_owned());
+        if self.projects.is_empty() && !project.is_empty() {
+            let basename = std::path::Path::new(project)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(project);
+            if project != self.project && basename != self.project {
+                return None;
+            }
+        }
+        if !project.is_empty()
+            && active_path
+                .as_deref()
+                .is_some_and(|active| active != project)
+            && self
+                .projects
+                .iter()
+                .all(|candidate| candidate.path.to_string_lossy() != project)
+        {
             return None;
         }
         let id = value["id"].as_str()?.to_owned();
@@ -64,7 +81,11 @@ impl App {
         }
         Some(palette::ConversationItem {
             title: conversation_title(value, &id, id == self.conversation),
-            project: project.to_owned(),
+            project: if project.is_empty() {
+                active_path.unwrap_or_default()
+            } else {
+                project.to_owned()
+            },
             id,
         })
     }
@@ -97,7 +118,16 @@ impl App {
                 };
                 items.push(palette::ConversationItem {
                     id: id.clone(),
-                    project: self.project.clone(),
+                    project: self
+                        .conversation_projects
+                        .get(id)
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .or_else(|| {
+                            self.projects
+                                .get(self.active_project)
+                                .map(|project| project.path.to_string_lossy().into_owned())
+                        })
+                        .unwrap_or_else(|| self.project.clone()),
                     title: format!("{id}{mark} · saved state"),
                 });
             }
@@ -110,7 +140,11 @@ impl App {
                 0,
                 palette::ConversationItem {
                     id: self.conversation.clone(),
-                    project: self.project.clone(),
+                    project: self
+                        .projects
+                        .get(self.active_project)
+                        .map(|project| project.path.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| self.project.clone()),
                     title: format!("{} (current) · active", self.conversation),
                 },
             );

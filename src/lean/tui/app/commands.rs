@@ -338,9 +338,8 @@ impl App {
     }
 
     fn take_control(&mut self) {
-        self.observer = false;
         self.send_command(
-            Some("this window steers the conversation"),
+            Some("control request accepted; waiting for session state"),
             |conversation| {
                 Request::Conversation(crate::lean::daemon::ConversationRequest::TakeControl {
                     conversation,

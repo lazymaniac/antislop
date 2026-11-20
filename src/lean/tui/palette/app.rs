@@ -63,7 +63,10 @@ impl App {
         if picker.kind == Kind::Conversations && picker.confirm_delete {
             match key.code {
                 KeyCode::Char('y') => return self.delete_selected_conversation(),
-                KeyCode::Char('n') | KeyCode::Esc => picker.confirm_delete = false,
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    picker.confirm_delete = false;
+                    picker.delete_target = None;
+                }
                 _ => {}
             }
             return true;
@@ -71,7 +74,19 @@ impl App {
         match key.code {
             KeyCode::Esc => self.picker = None,
             KeyCode::Char('x') if picker.kind == Kind::Conversations => {
-                picker.confirm_delete = true
+                picker.delete_target =
+                    picker
+                        .items(&self.view)
+                        .get(picker.selected)
+                        .and_then(|(_, action)| match action {
+                            Action::SwitchConversation { id, project } => picker
+                                .conversations
+                                .iter()
+                                .find(|item| item.id == *id && item.project == *project)
+                                .cloned(),
+                            _ => None,
+                        });
+                picker.confirm_delete = picker.delete_target.is_some();
             }
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
             KeyCode::Down => picker.selected += 1,
@@ -91,21 +106,10 @@ impl App {
     }
 
     fn delete_selected_conversation(&mut self) -> bool {
-        let selected = self.picker.as_ref().and_then(|picker| {
-            picker
-                .items(&self.view)
-                .get(picker.selected)
-                .and_then(|(_, action)| {
-                    let Action::SwitchConversation(id) = action else {
-                        return None;
-                    };
-                    picker
-                        .conversations
-                        .iter()
-                        .find(|item| item.id == *id)
-                        .cloned()
-                })
-        });
+        let selected = self
+            .picker
+            .as_ref()
+            .and_then(|picker| picker.delete_target.clone());
         let Some(selected) = selected else {
             return true;
         };
@@ -117,7 +121,24 @@ impl App {
             }
             return true;
         }
-        match self.client.call(&crate::lean::daemon::Request::Session(
+        let Some(client) = self
+            .projects
+            .iter()
+            .find(|project| project.path.to_string_lossy() == selected.project)
+            .map(|project| project.client.clone())
+            .or_else(|| self.projects.is_empty().then(|| self.client.clone()))
+        else {
+            self.notice = Some(format!(
+                "✗ Project connection for {} is unavailable",
+                selected.project
+            ));
+            if let Some(picker) = &mut self.picker {
+                picker.confirm_delete = false;
+                picker.delete_target = None;
+            }
+            return true;
+        };
+        match client.call(&crate::lean::daemon::Request::Session(
             crate::lean::daemon::SessionRequest::DeleteSession {
                 conversation: selected.id.clone(),
             },
@@ -129,6 +150,22 @@ impl App {
                         .selected
                         .min(picker.conversations.len().saturating_sub(1));
                     picker.confirm_delete = false;
+                    picker.delete_target = None;
+                }
+                self.conversation_states.remove(&selected.id);
+                self.conversation_drafts.remove(&selected.id);
+                self.interview_forms.remove(&selected.id);
+                self.conversation_projects.remove(&selected.id);
+                if let Some(project) = self
+                    .projects
+                    .iter_mut()
+                    .find(|project| project.path.to_string_lossy() == selected.project)
+                {
+                    project
+                        .conversations
+                        .retain(|item| item["id"] != selected.id);
+                    self.deleted_conversations
+                        .insert((project.path.clone(), selected.id.clone()));
                 }
                 self.notice = Some("Session and its history permanently deleted.".into());
             }
@@ -136,6 +173,7 @@ impl App {
                 self.notice = Some(error.to_string());
                 if let Some(picker) = &mut self.picker {
                     picker.confirm_delete = false;
+                    picker.delete_target = None;
                 }
             }
         }
@@ -187,8 +225,8 @@ impl App {
                 self.show_picker_entry(entry);
                 true
             }
-            Some(Action::SwitchConversation(id)) => {
-                self.switch_conversation(id);
+            Some(Action::SwitchConversation { id, project }) => {
+                self.switch_conversation(id, Some(&project));
                 true
             }
             Some(Action::OpenProject(path)) => {
@@ -222,19 +260,37 @@ impl App {
         self.plan_view = None;
     }
 
-    fn switch_conversation(&mut self, id: String) {
+    fn switch_conversation(&mut self, id: String, project_path: Option<&str>) {
         if id == self.conversation {
             return;
         }
-        let owner = self.projects.iter().position(|project| {
-            project
-                .conversations
-                .iter()
-                .any(|conversation| conversation["id"] == id.as_str())
-        });
-        match owner {
-            Some(index) if index != self.active_project => self.switch_project(index, Some(id)),
-            _ => self.open(id),
+        let selected_path = project_path
+            .map(std::path::PathBuf::from)
+            .or_else(|| self.conversation_projects.get(&id).cloned());
+        if self.projects.is_empty() {
+            self.open(id);
+            return;
+        }
+        let Some(selected_path) = selected_path else {
+            self.notice = Some("✗ Session project is unknown; session was not opened".into());
+            return;
+        };
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.path == selected_path)
+        else {
+            self.notice = Some(format!(
+                "✗ Project connection for {} is unavailable; session was not opened",
+                selected_path.display()
+            ));
+            return;
+        };
+        self.conversation_projects.insert(id.clone(), selected_path);
+        if index != self.active_project {
+            self.switch_project(index, Some(id));
+        } else {
+            self.open(id);
         }
     }
 

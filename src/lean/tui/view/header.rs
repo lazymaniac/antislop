@@ -103,6 +103,17 @@ pub fn render_header_with(
             label_style,
         )],
     ));
+    if width >= 120 {
+        parts.push((
+            7,
+            vec![
+                Span::styled("[Projects]", secondary),
+                Span::styled(" ", secondary),
+                Span::styled("[Sessions]", secondary),
+                Span::styled("  ", secondary),
+            ],
+        ));
+    }
     let mut panels = Vec::new();
     append_panels(&mut panels, width, focus, &theme, secondary);
     parts.push((0, panels));

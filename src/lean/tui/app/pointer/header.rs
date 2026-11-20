@@ -14,12 +14,14 @@ impl App {
         }
     }
 
-    pub(super) fn activate_header_token(
+    pub(in crate::lean::tui) fn activate_header_token(
         &mut self,
         token: &str,
         controls: crate::lean::tui::view::Controls,
     ) {
         match token {
+            "[Projects]" => self.open_projects_picker(),
+            "[Sessions]" => self.open_conversation_picker(),
             PAUSE | PAUSE_SHORT | PAUSE_ICON if controls.pause => {
                 self.run_workflow(Command::Pause);
             }

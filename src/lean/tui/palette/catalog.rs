@@ -44,7 +44,7 @@ pub enum Command {
     LinkTask,
 }
 
-pub(super) const COMMANDS: [(Command, &str); 5] = [
+pub(super) const COMMANDS: [(Command, &str); 8] = [
     (
         Command::PendingApprovals,
         "Answer agents' pending approval requests",
@@ -65,6 +65,9 @@ pub(super) const COMMANDS: [(Command, &str); 5] = [
         Command::TakeControl,
         "Take control: steer this conversation from this window",
     ),
+    (Command::Projects, "Open projects · Ctrl+G"),
+    (Command::SwitchConversation, "Open sessions · Ctrl+O"),
+    (Command::NewConversation, "New session · Ctrl+N"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +91,10 @@ pub enum Action {
     /// Show this entry of the conversation.
     Show(usize),
     /// Switch to another conversation.
-    SwitchConversation(String),
+    SwitchConversation {
+        id: String,
+        project: String,
+    },
     /// Address a message to a recipient.
     Address(String),
     /// Open this project (a directory) or switch to it.
@@ -115,5 +121,6 @@ pub struct Picker {
     pub conversations: Vec<ConversationItem>,
     pub projects: Vec<ProjectItem>,
     pub confirm_delete: bool,
+    pub delete_target: Option<ConversationItem>,
     pub recommendation: Option<(crate::lean::tasks::Team, String)>,
 }

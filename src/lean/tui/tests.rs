@@ -1511,6 +1511,180 @@ fn conversation_delete_requires_confirmation_and_explains_current_session_lock()
 }
 
 #[test]
+fn delete_confirmation_keeps_the_session_identity_it_was_opened_for() {
+    let mut app = test_app();
+    let mut picker = Picker::new(Kind::Conversations);
+    picker.conversations.extend([
+        crate::lean::tui::palette::ConversationItem {
+            id: "locked-session".into(),
+            project: app.project.clone(),
+            title: "Locked session".into(),
+        },
+        crate::lean::tui::palette::ConversationItem {
+            id: "other-session".into(),
+            project: app.project.clone(),
+            title: "Other session".into(),
+        },
+    ]);
+    app.conversation = "locked-session".into();
+    app.picker = Some(picker);
+
+    app.key(key_press(KeyCode::Char('x')));
+    app.picker.as_mut().unwrap().selected = 1;
+    app.key(key_press(KeyCode::Char('y')));
+
+    assert!(app.notice.as_deref().unwrap().contains("Stop this session"));
+    assert!(!app.picker.as_ref().unwrap().confirm_delete);
+}
+
+#[test]
+fn delayed_session_creation_is_scoped_to_its_project_and_latest_request() {
+    let mut app = test_app();
+    let project = std::path::PathBuf::from("/tmp/antislop-project-a");
+    let conn = crate::lean::tui::workspace::ProjectConn::new(project.clone(), app.client.clone());
+    app.projects.push(conn);
+    app.active_project = 0;
+    app.new_conversation_request_id = 2;
+
+    app.apply_update(Update::ConversationCreated {
+        project: project.clone(),
+        state_dir: app.client.state_dir().to_path_buf(),
+        request_id: 1,
+        generation: app.generation,
+        result: Ok("stale-created-session".into()),
+    });
+
+    assert_eq!(app.conversation, "test-conv");
+    assert_eq!(
+        app.projects[0].conversations[0]["id"],
+        "stale-created-session"
+    );
+}
+
+#[test]
+fn delayed_session_creation_does_not_switch_linked_project_context() {
+    let mut app = test_app();
+    let path_a = std::path::PathBuf::from("/tmp/linked-worktree-a");
+    let path_b = std::path::PathBuf::from("/tmp/linked-worktree-b");
+    app.projects = vec![
+        crate::lean::tui::workspace::ProjectConn::new(path_a.clone(), app.client.clone()),
+        crate::lean::tui::workspace::ProjectConn::new(path_b.clone(), app.client.clone()),
+    ];
+    app.active_project = 0;
+    app.new_conversation_request_id = 1;
+    let start_generation = app.generation;
+    let state_dir = app.client.state_dir().to_path_buf();
+
+    app.switch_project(1, Some("project-b-session".into()));
+    app.apply_update(Update::ConversationCreated {
+        project: path_a.clone(),
+        state_dir,
+        request_id: 1,
+        generation: start_generation,
+        result: Ok("late-project-a-session".into()),
+    });
+
+    assert_eq!(app.active_project, 1);
+    assert_eq!(app.conversation, "project-b-session");
+    assert_eq!(
+        app.projects[0].conversations[0]["id"],
+        "late-project-a-session"
+    );
+    assert_eq!(
+        app.conversation_projects.get("late-project-a-session"),
+        Some(&path_a)
+    );
+}
+
+#[test]
+fn conversation_picker_routes_to_the_selected_projects_client() {
+    let mut app = test_app();
+    let path_a = std::path::PathBuf::from("/tmp/project-a");
+    let path_b = std::path::PathBuf::from("/tmp/project-b");
+    app.projects = vec![
+        crate::lean::tui::workspace::ProjectConn::new(path_a.clone(), app.client.clone()),
+        crate::lean::tui::workspace::ProjectConn::new(path_b.clone(), app.client.clone()),
+    ];
+    let mut picker = Picker::new(Kind::Conversations);
+    picker
+        .conversations
+        .push(crate::lean::tui::palette::ConversationItem {
+            id: "session-b".into(),
+            project: path_b.to_string_lossy().into_owned(),
+            title: "Project B session".into(),
+        });
+    app.picker = Some(picker);
+
+    app.key(key_press(KeyCode::Enter));
+
+    assert_eq!(app.active_project, 1);
+    assert_eq!(app.conversation, "session-b");
+    assert_eq!(app.conversation_projects.get("session-b"), Some(&path_b));
+}
+
+#[test]
+fn created_session_hands_the_goal_to_the_existing_composer() {
+    let mut app = test_app();
+    let project = std::path::PathBuf::from("/tmp/project-b");
+    app.projects
+        .push(crate::lean::tui::workspace::ProjectConn::new(
+            project.clone(),
+            app.client.clone(),
+        ));
+    app.active_project = 0;
+    app.new_conversation_request_id = 1;
+    app.apply_update(Update::ConversationCreated {
+        project,
+        state_dir: app.client.state_dir().to_path_buf(),
+        request_id: 1,
+        generation: app.generation,
+        result: Ok("goal-session".into()),
+    });
+
+    assert_eq!(app.conversation, "goal-session");
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.navigation.focus, NavigationFocus::Composer);
+    app.input = InputBuffer::with_text("Implement the requested feature");
+    app.submit();
+
+    assert!(app.sending);
+    assert_eq!(
+        app.pending_send.as_deref(),
+        Some("Implement the requested feature")
+    );
+    assert_eq!(app.conversation, "goal-session");
+}
+
+#[test]
+fn new_session_header_and_palette_entries_are_available() {
+    let mut app = test_app();
+    let header = app
+        .header_line(180)
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(header.contains("[Projects]"));
+    assert!(header.contains("[Sessions]"));
+    assert!(header.contains("[ + New ]"));
+    let controls = app.view.controls();
+    app.activate_header_token("[Projects]", controls);
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Projects);
+    app.activate_header_token("[Sessions]", controls);
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Conversations);
+
+    let picker = Picker::new(Kind::Commands);
+    let items = picker.items(&app.view);
+    assert!(
+        items
+            .iter()
+            .any(|(label, _)| label.to_lowercase().contains("projects"))
+    );
+    assert!(items.iter().any(|(label, _)| label.contains("sessions")));
+    assert!(items.iter().any(|(label, _)| label.contains("New session")));
+}
+
+#[test]
 fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
     for ch in [']', '5'] {
         let mut app = test_app();
@@ -2111,7 +2285,11 @@ fn ac_resp_app_draw_picker_visible_and_reversed_at_60x12() {
     let mut app = test_app();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&app.view);
-    assert_eq!(items.len(), 5, "Only five commands remain in the palette");
+    assert_eq!(
+        items.len(),
+        8,
+        "The command palette includes project and session navigation"
+    );
     picker.selected = items.len() - 1;
     app.picker = Some(picker);
 
@@ -3296,8 +3474,39 @@ fn a_window_another_frontend_steers_says_it_only_watches() {
     };
     follow(&mut app, true);
     assert!(app.header_status().contains("observer"));
+    app.run_workflow(Command::TakeControl);
+    assert!(
+        app.observer,
+        "a request is not confirmation of a lease change"
+    );
     follow(&mut app, false);
     assert!(!app.header_status().contains("observer"));
+}
+
+#[test]
+fn project_poll_cannot_resurrect_a_session_while_delete_is_settling() {
+    let mut app = test_app();
+    let path = std::path::PathBuf::from("/tmp/project-a");
+    app.deleted_conversations
+        .insert((path.clone(), "deleted-id".into()));
+
+    app.apply_update(Update::ProjectStatus {
+        path: path.clone(),
+        conversations: vec![serde_json::json!({"id":"deleted-id"})],
+    });
+    assert!(
+        app.deleted_conversations
+            .contains(&(path.clone(), "deleted-id".into()))
+    );
+
+    app.apply_update(Update::ProjectStatus {
+        path: path.clone(),
+        conversations: Vec::new(),
+    });
+    assert!(
+        !app.deleted_conversations
+            .contains(&(path, "deleted-id".into()))
+    );
 }
 
 #[test]

@@ -51,6 +51,13 @@ pub enum Update {
         observer: bool,
     },
     Conversation(String),
+    ConversationCreated {
+        project: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+        request_id: u64,
+        generation: u64,
+        result: std::result::Result<String, String>,
+    },
     Notice(String),
     /// A project was opened: switch to it, to `conversation` if one was named.
     ProjectReady {
