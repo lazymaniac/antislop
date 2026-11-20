@@ -6,7 +6,8 @@ use antislop::lean::{
     diff::ReviewerProfile,
     tui::{
         App, CardProps, Command, Details, DiffView, Editor, Focus, Help, InputBuffer, Kind, Picker,
-        Relations, Scope, Theme, TranscriptCard, Update, UpdateReceiver, card,
+        Relations, Scope, Screen, Theme, TranscriptCard, Update, UpdateReceiver, WorkbenchTarget,
+        card,
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
@@ -1328,10 +1329,13 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
 
-    // Enter expands the selected card in the graph; digits select its tabs.
+    // Enter routes the selected role to Workbench; graph detail rendering is
+    // still covered explicitly here for its retained scroll and diff paths.
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    app.navigation.screen = Screen::Graph;
+    app.graph_expanded = Some("worker:t1".into());
     app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
     assert_eq!(app.graph_tab, 2);
 
@@ -1349,7 +1353,8 @@ fn app_graph_details_diff_navigation_and_search() {
     assert!(app.details.is_some());
     assert_eq!(app.focus, Focus::Graph);
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.graph_expanded = None;
+    app.details = None;
     assert!(app.details.is_none());
 
     // Search in conversation history
@@ -1378,8 +1383,8 @@ fn app_graph_details_diff_navigation_and_search() {
 }
 
 #[test]
-fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
-    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+fn enter_opens_workbench_and_graph_detail_state_remains_renderable() {
+    use antislop::lean::tui::view::TaskRow;
 
     let mut app = App::test_app();
     app.view.tasks = vec![TaskRow {
@@ -1399,7 +1404,9 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
 
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    app.navigation.screen = Screen::Graph;
+    app.graph_expanded = Some("worker:t1".into());
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let initial_text: String = terminal
         .backend()
@@ -1423,73 +1430,12 @@ fn expanded_graph_card_stays_open_until_enter_selects_a_new_card() {
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
     assert!(app.details.is_some(), "tab switching preserves Details");
 
-    // Enter closes the card; the arrows then move through the graph.
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    // Closing the retained graph detail view restores ordinary graph navigation.
+    app.graph_expanded = None;
+    app.navigation.screen = Screen::Graph;
+    app.focus = Focus::Graph;
     assert!(app.graph_expanded.is_none());
-    let graph = Graph::new_with_viewport(
-        &app.view,
-        &app.graph_scope,
-        &app.graph_collapsed,
-        app.graph_grouping,
-        app.graph_viewport,
-    );
-    let (direction, next) = [
-        (KeyCode::Left, (-1, 0)),
-        (KeyCode::Right, (1, 0)),
-        (KeyCode::Up, (0, -1)),
-        (KeyCode::Down, (0, 1)),
-    ]
-    .into_iter()
-    .find_map(|(key, (dx, dy))| {
-        graph
-            .neighbour("worker:t1", dx, dy)
-            .filter(|next| next == "orchestrator")
-            .map(|next| (key, next))
-    })
-    .expect("worker card has an adjacent graph node");
-    app.key(KeyEvent::new(direction, KeyModifiers::NONE));
-    assert_eq!(app.selected, next);
-
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some(next.as_str()));
     assert!(app.details.is_some());
-    assert_eq!(app.details.as_ref().unwrap().key, next);
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let expanded_text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect();
-    // The open card's title row names the newly selected card.
-    assert!(
-        expanded_text.contains(&format!("{next} · ")),
-        "expanded content belongs to {next}: {expanded_text}"
-    );
-    let expanded_graph = Graph::new_with_expanded(
-        &app.view,
-        &app.graph_scope,
-        &app.graph_collapsed,
-        app.graph_grouping,
-        app.graph_viewport,
-        app.graph_expanded.clone(),
-        app.graph_tab,
-    );
-    assert_eq!(
-        expanded_graph
-            .nodes
-            .iter()
-            .filter(|node| node.visible && (node.width > 32 || node.height > 14))
-            .count(),
-        1,
-        "only the selected card is expanded"
-    );
-    assert_eq!(app.graph_expanded.as_deref(), Some(next.as_str()));
-
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.graph_expanded.is_none());
-    assert!(app.details.is_none());
 }
 
 #[test]
@@ -1591,8 +1537,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
     let compact = graph(&app);
     assert_geometry(&compact, (160, 50));
 
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.graph_expanded = Some("worker:t1".into());
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let expanded_first = graph(&app);
     assert_geometry(&expanded_first, (160, 50));
@@ -1604,8 +1549,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
     // The arrows stay inside the expanded card; Enter closes it first.
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.selected, "worker:t1");
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.graph_expanded.is_none());
+    app.graph_expanded = None;
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let closed = graph(&app);
     let next = [
@@ -1627,8 +1571,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_geometry(&graph(&app), (160, 50));
 
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t2"));
+    app.graph_expanded = Some("worker:t2".into());
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let expanded_second = graph(&app);
     assert_geometry(&expanded_second, (160, 50));
@@ -1641,8 +1584,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
         1
     );
 
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.graph_expanded.is_none());
+    app.graph_expanded = None;
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_geometry(&graph(&app), (160, 50));
 
@@ -1914,7 +1856,8 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
         }];
         app.focus = Focus::Graph;
         app.selected = "worker:t1".into();
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.graph_inspector_visible = false;
+        app.graph_expanded = Some("worker:t1".into());
 
         let mut terminal =
             Terminal::new(TestBackend::new(terminal_width, terminal_height)).unwrap();
@@ -4796,11 +4739,11 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.graph_collapsed.contains("t2"));
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t2"));
-    app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-    assert_eq!(app.graph_tab, 2);
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.graph_expanded.is_none());
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t2".into())
+    );
     let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
     tiny.draw(|frame| app.draw(frame)).unwrap();
     assert!(

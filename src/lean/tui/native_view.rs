@@ -346,17 +346,14 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(
-            rendered.contains("CLI PTY is available in the Workbench."),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("PTY"), "{rendered}");
         assert!(app.native_views.is_empty());
         assert!(!app.native_focused());
     }
 
     #[test]
     fn the_expanded_card_grows_and_shrinks_with_an_animation() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::time::Instant;
         let mut app = App::test_app();
         app.animate_graph = true;
         app.focus = Focus::Graph;
@@ -373,7 +370,8 @@ mod tests {
             let (key, step) = app.graph_expansion();
             (key.is_some(), step)
         };
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let key = app.selected.clone();
+        app.graph_anim = Some((key.clone(), true, Instant::now()));
         let (open, step) = width(&mut app);
         assert!(
             open && step < crate::lean::tui::graph::FULL_STEP,
@@ -381,44 +379,11 @@ mod tests {
         );
         std::thread::sleep(std::time::Duration::from_millis(260));
         assert_eq!(width(&mut app), (true, crate::lean::tui::graph::FULL_STEP));
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.graph_anim = Some((key, false, Instant::now()));
         let (open, step) = width(&mut app);
         assert!(open && step > 0, "closing still shows the shrinking card");
         std::thread::sleep(std::time::Duration::from_millis(260));
         assert!(!width(&mut app).0);
-    }
-
-    #[test]
-    fn graph_pty_tab_points_to_workbench_instead_of_rendering_a_snapshot() {
-        let mut app = App::test_app();
-        app.focus = Focus::Graph;
-        app.graph_viewport = Some((120, 48));
-        app.view.tasks = vec![crate::lean::tui::view::TaskRow {
-            id: "t1".into(),
-            ..Default::default()
-        }];
-        app.view
-            .agents
-            .insert("worker:t1".into(), Default::default());
-        app.selected = "worker:t1".into();
-        app.graph_expanded = Some(app.selected.clone());
-        app.graph_tab = 1;
-        app.details = Some(Details::new(app.selected.clone()));
-        let mut terminal = Terminal::new(TestBackend::new(120, 48)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            rendered.contains("CLI PTY is available in the Workbench."),
-            "{rendered}"
-        );
-        assert!(app.native_views.is_empty());
-        assert!(!app.native_focused());
     }
 
     #[test]
@@ -519,7 +484,7 @@ mod tests {
                 received.try_recv(),
                 Ok(Command::Input(Input::Paste { text })) if text == "answer"
             ));
-            app.scroll_console(2);
+            app.native_send(Input::Scroll { lines: 2 });
             assert!(matches!(
                 received.try_recv(),
                 Ok(Command::Input(Input::Scroll { lines: 2 }))

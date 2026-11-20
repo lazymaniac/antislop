@@ -3,7 +3,7 @@ use super::super::super::*;
 impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         self.selected = graph::card_key(&self.view, &self.selected);
-        let (inner, now_area, progress) = self.graph_areas(frame, area, theme);
+        let (inner, now_area, progress, inspector) = self.graph_areas(frame, area, theme);
         self.now_area = now_area;
         if self.graph_anim.is_some() {
             // The card moves while it grows: keep it in view each frame.
@@ -52,6 +52,9 @@ impl App {
             self.tick,
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
+        if let Some(inspector) = inspector {
+            self.draw_graph_inspector(frame, inspector, theme);
+        }
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
             self.draw_expanded_card_panels(frame, inner, &graph);
@@ -224,10 +227,7 @@ impl App {
             self.draw_card_details(frame, content, &key);
         }
 
-        if self.graph_tab == 1 {
-            render_card_history_message(frame, content, "CLI PTY is available in the Workbench.");
-        }
-        if self.graph_tab == 3
+        if self.graph_tab == 2
             && let Some(diff) = &mut self.diff
         {
             if self
@@ -252,7 +252,7 @@ impl App {
             details.key == key && (details.task_id().is_some() || details.selected_round.is_some())
         });
         if has_round_snapshot
-            && self.graph_tab == 2
+            && self.graph_tab == 1
             && let Some(scroll) = render_card_round_data(
                 frame,
                 content,
@@ -294,8 +294,17 @@ impl App {
         Rect,
         Option<Rect>,
         Vec<crate::lean::tui::view::ProgressEntry>,
+        Option<Rect>,
     ) {
         let mut frame_inner = self.draw_graph_frame(frame, area, theme);
+        let inspector = if self.graph_inspector_visible && area.width >= 110 && area.height >= 16 {
+            let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(34)])
+                .areas::<2>(frame_inner);
+            frame_inner = columns[0];
+            Some(columns[1])
+        } else {
+            None
+        };
         if self.phase_action_area.is_none()
             && self.phase_action().is_some()
             && frame_inner.height >= 6
@@ -324,7 +333,119 @@ impl App {
         }
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
-        (inner, now_area, progress)
+        (inner, now_area, progress, inspector)
+    }
+
+    fn draw_graph_inspector(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        frame.render_widget(ratatui::widgets::Clear, area);
+        frame.render_widget(Block::default().style(theme.overlay()), area);
+        let selected = graph::card_key(&self.view, &self.selected);
+        let agent = self
+            .view
+            .agents
+            .get(&self.selected)
+            .or_else(|| self.view.agents.get(&selected));
+        let task_id = self
+            .selected
+            .rsplit_once(':')
+            .map(|(_, id)| id)
+            .or_else(|| selected.rsplit_once(':').map(|(_, id)| id));
+        let task = self
+            .view
+            .tasks
+            .iter()
+            .find(|task| task_id == Some(task.id.as_str()));
+        let role = if self.selected.starts_with("reviewer:") {
+            "Reviewer"
+        } else if task.is_some_and(|task| task.kind == "options") {
+            "Options"
+        } else if self.selected.starts_with("worker:") {
+            "Worker"
+        } else {
+            "Session agent"
+        };
+        let mut lines = vec![Line::styled(
+            "INSPECTOR",
+            theme.accent().add_modifier(Modifier::BOLD),
+        )];
+        if let Some(task) = task {
+            let goal = crate::lean::tui::view::task_goal(
+                &task.kind,
+                &task.title,
+                &task.goal,
+                task.summary.as_deref(),
+            );
+            lines.push(Line::raw(truncate(
+                &format!("Goal: {goal}"),
+                usize::from(area.width.saturating_sub(2)),
+            )));
+            lines.push(Line::raw(format!("Role: {role} · {}", task.status)));
+            lines.push(Line::raw(if task.round == 0 {
+                "Round: pending".into()
+            } else {
+                format!("Round: {}", task.round)
+            }));
+            let activity = if !task.activity.is_empty() {
+                task.activity.as_str()
+            } else if let Some(activity) = agent.map(|agent| agent.activity.as_str()) {
+                if activity.is_empty() {
+                    "No active task operation"
+                } else {
+                    activity
+                }
+            } else {
+                "No active task operation"
+            };
+            lines.push(Line::raw(truncate(
+                &format!("Activity: {activity}"),
+                usize::from(area.width.saturating_sub(2)),
+            )));
+            let agent_error = agent
+                .map(|agent| agent.activity.as_str())
+                .filter(|activity| activity.starts_with('✗') || activity.starts_with('⚠'));
+            let cause = task.reason.as_deref().or(agent_error).unwrap_or("—");
+            lines.push(Line::raw(truncate(
+                &format!("Waiting/error: {cause}"),
+                usize::from(area.width.saturating_sub(2)),
+            )));
+            lines.push(Line::raw(truncate(
+                &format!(
+                    "Result: {}",
+                    task.effect.as_deref().unwrap_or("No result yet")
+                ),
+                usize::from(area.width.saturating_sub(2)),
+            )));
+        } else {
+            lines.push(Line::raw(format!("Role: {role}")));
+            lines.push(Line::raw(format!(
+                "Activity: {}",
+                agent.map_or("Idle", |agent| if agent.running {
+                    "Running"
+                } else if agent.activity.is_empty() {
+                    "Idle"
+                } else {
+                    agent.activity.as_str()
+                })
+            )));
+        }
+        lines.push(Line::raw("Enter: open Workbench"));
+        lines.push(Line::raw("c comment · e edit · l dependency"));
+        lines.push(Line::raw("Ctrl+B hide inspector"));
+        let content = Rect::new(
+            area.x.saturating_add(1),
+            area.y.saturating_add(1),
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
+        );
+        frame.render_widget(
+            Paragraph::new(lines)
+                .style(theme.text())
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+            content,
+        );
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {

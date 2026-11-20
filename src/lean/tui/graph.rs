@@ -1,5 +1,5 @@
 //! The team as a two-dimensional graph: one card per agent, a task's agents
-//! framed together, orthogonal edges for what relates them. The layout
+//! grouped together, orthogonal edges for what relates them. The layout
 //! follows the visible content of each card and reroutes links as it changes.
 
 use super::super::tasks::status;
@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 /// signed screen position `(left, top)`: the whole card, its title row (task,
 /// status and round, after the role icon and before the comment count) and
 /// its content panel below the tab strip, each clipped to `viewport`. A card scrolled
-/// partly out of view keeps its panels inside its own frame.
+/// partly out of view keeps its panels inside its card.
 /// Keep this geometry shared by panel rendering and its layout measurements.
 pub(in crate::lean::tui) fn expanded_card_areas(
     viewport: Rect,
@@ -49,7 +49,7 @@ fn clip(viewport: Rect, x: i32, y: i32, width: i32, height: i32) -> Rect {
 }
 
 /// Every tab an expanded card can show, in key order `1`..`4`.
-const EXPANDED_TABS: [&str; 4] = ["Details", "PTY", "Results", "Diff"];
+const EXPANDED_TABS: [&str; 3] = ["Details", "Results", "Diff"];
 
 /// The tabs of an expanded card: Diff for a task agent whose task delivers
 /// changes (code or artifacts), or any agent that reported a branch.
@@ -67,7 +67,7 @@ pub(super) fn expanded_tab_names(view: &View, key: &str) -> &'static [&'static s
     {
         &EXPANDED_TABS
     } else {
-        &EXPANDED_TABS[..3]
+        &EXPANDED_TABS[..2]
     }
 }
 
@@ -135,7 +135,7 @@ const CARD_GAP: u16 = 2;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
 const MARGIN: u16 = 3;
-/// Columns between a task's frame and its cards.
+/// Columns between a task's title and its cards.
 const FRAME_X: u16 = 2;
 /// How long a message keeps its edge highlighted.
 const RECENT: Duration = Duration::from_secs(10);
@@ -199,8 +199,8 @@ struct Edge {
     path: Option<Vec<(u16, u16)>>,
 }
 
-/// The border around one task's cards: its options card, worker and
-/// reviewer, titled with the task.
+/// A task's shared layout bounds and heading for its options, worker and
+/// reviewer cards. These bounds do not draw a border.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     /// `task:{id}`, the `group` of every card inside.

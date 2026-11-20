@@ -287,11 +287,8 @@ fn multiple_dropped_file_uris_attach_as_a_batch() {
 }
 
 #[test]
-fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
-    let mut app = test_app();
-    app.focus = Focus::Graph;
-    app.graph_viewport = Some((120, 48));
-    app.view.tasks = vec![
+fn graph_enter_opens_the_selected_agent_in_the_workbench() {
+    let tasks = vec![
         view::TaskRow {
             id: "t1".into(),
             ..Default::default()
@@ -301,27 +298,97 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
             depends_on: vec!["t1".into()],
             ..Default::default()
         },
+        view::TaskRow {
+            id: "t3-options".into(),
+            kind: "options".into(),
+            status: "reviewing".into(),
+            ..Default::default()
+        },
     ];
-    app.selected = "worker:t1".into();
+    let open = |selected: &str, tasks: &[view::TaskRow]| {
+        let mut app = test_app();
+        app.focus = Focus::Graph;
+        app.graph_viewport = Some((120, 48));
+        app.view.tasks = tasks.to_vec();
+        app.selected = selected.into();
+        app.key(key_press(KeyCode::Enter));
+        app
+    };
+    let app = open("worker:t1", &tasks);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t1".into())
+    );
+    assert!(app.graph_expanded.is_none());
 
-    app.key(key_press(KeyCode::Enter));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-    // The arrows act inside the expanded card: the selection stays on it.
-    app.key(key_press(KeyCode::Down));
-    app.key(key_press(KeyCode::Right));
-    assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.graph_tab, 1);
-    app.key(key_press(KeyCode::Left));
-    app.key(key_press(KeyCode::Left));
-    assert_eq!(app.graph_tab, 2, "tabs wrap around");
-    app.key(key_press(KeyCode::Enter));
-    assert!(app.graph_expanded.is_none());
-    app.key(key_press(KeyCode::Down));
-    assert_ne!(app.selected, "worker:t1");
-    app.key(key_press(KeyCode::Enter));
-    assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
-    app.key(key_press(KeyCode::Enter));
-    assert!(app.graph_expanded.is_none());
+    let app = open("reviewer:t2", &tasks);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("reviewer:t2".into())
+    );
+
+    let app = open("worker:t3-options", &tasks);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("reviewer:t3-options".into())
+    );
+}
+
+#[test]
+fn graph_inspector_can_be_toggled_with_control_b() {
+    use crossterm::event::KeyEvent;
+
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    assert!(app.graph_inspector_visible);
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert!(!app.graph_inspector_visible);
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert!(app.graph_inspector_visible);
+}
+
+#[test]
+fn graph_inspector_renders_human_task_context_and_workbench_action() {
+    let mut app = test_app();
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        title: "Improve login".into(),
+        kind: "implementation".into(),
+        goal: "Keep the login flow reliable.".into(),
+        status: "waiting".into(),
+        round: 2,
+        activity: "Waiting for approval".into(),
+        reason: Some("Approval is pending".into()),
+        effect: Some("Updated authentication flow".into()),
+        ..Default::default()
+    }];
+    let mut terminal = Terminal::new(TestBackend::new(240, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal_text(&terminal);
+    for expected in [
+        "INSPECTOR",
+        "Goal:",
+        "Role: Worker",
+        "Round: 2",
+        "Activity:",
+        "Waiting/error:",
+        "Result:",
+        "Enter: open Workbench",
+    ] {
+        assert!(
+            text.contains(expected),
+            "missing {expected:?} from:\n{text}"
+        );
+    }
+    assert!(
+        !text.contains("{\""),
+        "task goals are rendered as prose, not JSON"
+    );
 }
 
 #[test]
@@ -366,15 +433,14 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     for (tab, expected) in [
         (0, "retained round one details"),
-        (1, "Historical PTY is read-only"),
-        (2, "result for retained round one"),
-        (3, "No historical diff is retained"),
+        (1, "result for retained round one"),
+        (2, "No historical diff is retained"),
     ] {
         if tab > 0 {
             app.key(key_press(KeyCode::Char(char::from(b'1' + tab as u8))));
         }
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        if tab == 2 {
+        if tab == 1 {
             // The disk-backed document builds its line index asynchronously.
             for _ in 0..20 {
                 terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -393,17 +459,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         );
         assert!(terminal_text(&terminal).contains("Round 1"));
         assert!(terminal_text(&terminal).contains(". next"));
-        if tab == 1 {
-            assert!(!app.native_focused());
-            app.native_send(crate::lean::terminal::Input::Key {
-                event: key_press(KeyCode::Char('x')),
-            });
-            assert!(
-                app.native_views.is_empty(),
-                "historical PTY must not attach a process"
-            );
-        }
-        if tab == 3 {
+        if tab == 2 {
             app.key(key_press(KeyCode::Char('c')));
             assert!(
                 app.editor.is_none(),
@@ -685,7 +741,7 @@ fn pointer_graph_filter_change_clears_now_visibility_exception() {
 }
 
 #[test]
-fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
+fn graph_detail_tabs_keep_results_and_diff_without_a_pty_surface() {
     let mut app = test_app();
     app.focus = Focus::Graph;
     app.graph_viewport = Some((120, 48));
@@ -701,10 +757,10 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
         },
     ];
     app.selected = "worker:t1".into();
-    app.key(key_press(KeyCode::Enter));
+    app.graph_expanded = Some("worker:t1".into());
     app.key(key_press(KeyCode::Char('d')));
     assert!(app.diff.is_some());
-    assert_eq!(app.graph_tab, 3);
+    assert_eq!(app.graph_tab, 2);
 
     app.key(key_press(KeyCode::Char('1')));
     assert_eq!(
@@ -712,30 +768,28 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
         "Details tab remains reachable inside Diff"
     );
     app.key(key_press(KeyCode::Char('2')));
-    assert_eq!(app.graph_tab, 1, "PTY tab remains reachable inside Diff");
+    assert_eq!(
+        app.graph_tab, 1,
+        "Results tab remains reachable inside Diff"
+    );
     assert!(
         app.diff.is_none(),
         "the DiffView closes with its tab so it stops taking keys"
     );
     app.key(key_press(KeyCode::Char('3')));
-    assert_eq!(
-        app.graph_tab, 2,
-        "Results tab remains reachable inside Diff"
-    );
-    app.key(key_press(KeyCode::Char('4')));
-    assert_eq!(app.graph_tab, 3, "Diff tab remains selectable");
+    assert_eq!(app.graph_tab, 2, "Diff tab remains selectable");
     assert!(app.diff.is_some(), "the Diff tab reopens the DiffView");
 
     // Inside the diff, ←/→ still switch tabs and the selection stays put.
     app.key(key_press(KeyCode::Up));
     app.key(key_press(KeyCode::Down));
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.graph_tab, 3);
+    assert_eq!(app.graph_tab, 2);
     app.key(key_press(KeyCode::Right));
     assert_eq!(app.graph_tab, 0, "→ wraps from Diff to Details");
     app.key(key_press(KeyCode::Left));
     assert_eq!(
-        app.graph_tab, 2,
+        app.graph_tab, 1,
         "without a branch the card has no Diff tab"
     );
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
@@ -752,10 +806,10 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
         ..Default::default()
     }];
     app.selected = "worker:t1".into();
-    app.key(key_press(KeyCode::Enter));
+    app.graph_expanded = Some("worker:t1".into());
     app.key(key_press(KeyCode::Left));
     assert_eq!(
-        app.graph_tab, 3,
+        app.graph_tab, 2,
         "a code task shows Diff even before a branch is reported"
     );
     let file = |path: &str| {
@@ -777,7 +831,7 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     assert_eq!(target(&app).as_deref(), Some("diff:t1:b.rs:1"));
     app.key(key_press(KeyCode::Char('[')));
     assert_eq!(target(&app).as_deref(), Some("diff:t1:a.rs:1"));
-    assert_eq!(app.graph_tab, 3, "file keys keep the Diff tab open");
+    assert_eq!(app.graph_tab, 2, "file keys keep the Diff tab open");
 }
 
 #[test]
@@ -797,9 +851,9 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
         })
         .collect();
     app.selected = "worker:t2".into();
+    app.graph_expanded = Some("worker:t2".into());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    app.key(key_press(KeyCode::Enter));
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let before = app
         .graph_card_area
@@ -1166,9 +1220,9 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
         })
         .collect();
     app.selected = "worker:t2".into();
+    app.graph_expanded = Some("worker:t2".into());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    app.key(key_press(KeyCode::Enter));
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app
         .graph_card_area

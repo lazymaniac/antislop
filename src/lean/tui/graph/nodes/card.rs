@@ -32,7 +32,7 @@ pub(super) fn draw(
     if outside_viewport(canvas, node) {
         return;
     }
-    Card::new(view, canvas, node, selected, details, theme).paint(selected, tick);
+    Card::new(view, canvas, node, selected, details, theme).paint(tick);
 }
 
 fn outside_viewport(canvas: &Canvas, node: &Node) -> bool {
@@ -72,8 +72,8 @@ impl Card<'_> {
         }
     }
 
-    fn paint(&mut self, selected: bool, tick: u64) {
-        self.paint_background(selected);
+    fn paint(&mut self, tick: u64) {
+        self.paint_background();
         self.paint_progress(tick);
         self.paint_identity();
         self.paint_contents();
@@ -83,7 +83,7 @@ impl Card<'_> {
         self.paint_body();
     }
 
-    fn paint_background(&mut self, selected: bool) {
+    fn paint_background(&mut self) {
         let right = self.node.x + self.node.width - 1;
         let bottom = self
             .node
@@ -94,9 +94,6 @@ impl Card<'_> {
             for x in self.node.x..=right {
                 self.canvas.put(x, y, ' ', self.fill);
             }
-            let bar = if selected { '█' } else { '▌' };
-            self.canvas
-                .put(self.node.x, y, bar, self.fill.patch(self.accent));
         }
     }
 

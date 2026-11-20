@@ -29,7 +29,7 @@ fn expanded_card_areas_clip_with_a_card_scrolled_past_the_top() {
 }
 
 #[test]
-fn expanded_pty_content_grows_with_the_viewport() {
+fn expanded_card_content_grows_with_the_viewport() {
     let viewport = (76, 12);
     let size = Size::fit(Some(viewport), Some("worker:t1".into()));
     let content_area = |width: u16, height: u16| {
@@ -1213,9 +1213,9 @@ fn edges_join_boxes_without_crossing_them() {
     assert_eq!(
         chars(next.y)[usize::from(next.x)],
         '█',
-        "the selected card's bar"
+        "the card's status marker remains on its edge"
     );
-    // t1's frame → t2's frame, ending in an arrow on t2's top border.
+    // t1's group → t2's group, ending beside the group title without a box.
     let (top, bottom) = (&graph.frames[1], &graph.frames[0]);
     assert_eq!((bottom.task.as_str(), top.task.as_str()), ("t1", "t2"));
     assert!(
@@ -1223,7 +1223,7 @@ fn edges_join_boxes_without_crossing_them() {
         "{:?}",
         lines[usize::from(top.y)]
     );
-    assert!(chars(bottom.y + bottom.height - 1).contains(&'┬'));
+    assert!(!chars(bottom.y + bottom.height - 1).contains(&'┬'));
     assert!(lines[usize::from(bottom.y)].contains("Task t1"));
     // A message between them is counted beside the source.
     assert!(lines.join("\n").contains("✉2"));

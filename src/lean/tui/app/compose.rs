@@ -265,7 +265,7 @@ impl App {
         {
             return (default_plan, None, None);
         }
-        if self.diff.is_some() && self.graph_expanded.is_some() && self.graph_tab == 3 {
+        if self.diff.is_some() && self.graph_expanded.is_some() && self.graph_tab == 2 {
             let details = self.details.as_ref();
             let round = details
                 .and_then(|details| details.selected_round)

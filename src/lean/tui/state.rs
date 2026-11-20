@@ -111,6 +111,8 @@ pub struct App {
     /// so it grows out from there rather than from its top-left corner.
     pub graph_anim_anchor: Option<(i32, i32)>,
     pub graph_tab: usize,
+    /// Whether the graph inspector is shown when the terminal meets its minimum size.
+    pub graph_inspector_visible: bool,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
     /// The expanded card's content area as last drawn, for hit testing.
@@ -239,6 +241,7 @@ macro_rules! initial_app {
             graph_anim: None,
             graph_anim_anchor: None,
             graph_tab: 0,
+            graph_inspector_visible: true,
             graph_card_scroll: 0,
             graph_card_area: None,
             details_scroll_memory: std::collections::HashMap::new(),

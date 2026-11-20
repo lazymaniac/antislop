@@ -273,24 +273,8 @@ impl App {
         if !self.native_focused() {
             return false;
         }
-        let in_graph = self.graph_expanded.is_some() && self.graph_tab == 1;
-        if in_graph
-            && matches!(
-                mouse.kind,
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-            )
-        {
-            // The wheel scrolls the agent's history, not the graph.
-            self.scroll_console(if mouse.kind == MouseEventKind::ScrollDown {
-                -3
-            } else {
-                3
-            });
-            return true;
-        }
         if let Some(details) = &self.details {
-            let panel = if in_graph { 0 } else { details.active_panel };
-            let area = details.native_areas[panel];
+            let area = details.native_areas[details.active_panel];
             if area.contains((mouse.column, mouse.row).into()) {
                 mouse.column -= area.x;
                 mouse.row -= area.y;

@@ -282,7 +282,7 @@ impl App {
         }
         if self.native_focused() {
             if self.embedded_diff_graph_active()
-                && embedded_diff_graph_key(key, self.graph_tab == 3)
+                && embedded_diff_graph_key(key, self.graph_tab == 2)
             {
                 return None;
             }
@@ -310,9 +310,6 @@ impl App {
             }
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
-            }
-            if self.focus == Focus::Graph && self.graph_tab == 1 {
-                self.graph_tab = 0;
             }
         } else {
             self.native_send(crate::lean::terminal::Input::Key { event: key });
@@ -445,7 +442,7 @@ impl App {
             return Some(result);
         }
         if self.embedded_diff_graph_active() {
-            if embedded_diff_graph_key(key, self.graph_tab == 3) {
+            if embedded_diff_graph_key(key, self.graph_tab == 2) {
                 return Some(self.graph_key(key));
             }
             self.diff_key(key);

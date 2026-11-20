@@ -67,8 +67,8 @@ impl Graph {
         self.render_expanded_frame_overlay(view, canvas, &nodes, theme);
     }
 
-    /// A fully expanded task card shares the frame border, so restore its
-    /// caption and incoming arrow after the card paints over the frame.
+    /// Restore the group heading and incoming arrows after an expanded card
+    /// paints over their rows.
     fn render_expanded_frame_overlay(
         &self,
         view: &View,
@@ -94,7 +94,7 @@ impl Graph {
             return;
         };
         if let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) {
-            Self::draw_frame_title(canvas, frame, task, true, theme);
+            Self::draw_frame_title(canvas, frame, task, true, false, theme);
         }
         for (x, y, style) in self.expanded_entry_arrows() {
             canvas.put(x, y, '▼', style);
@@ -153,8 +153,7 @@ impl Graph {
         }
     }
 
-    /// Each task's frame, titled with the task and its state; the frame
-    /// around the selected card stands out.
+    /// Task groups use a title and the layout's existing spacing, without a box.
     fn render_frames(
         &self,
         view: &View,
@@ -185,37 +184,16 @@ impl Graph {
         theme: &Theme,
     ) {
         let selected = group == Some(frame.key.as_str());
-        Self::draw_frame_border(
-            canvas,
-            frame,
-            if selected {
-                theme.accent().add_modifier(Modifier::BOLD)
-            } else if critical_path.contains(&frame.task) {
-                theme.warning()
-            } else {
-                theme.faint()
-            },
-        );
         let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) else {
             return;
         };
-        Self::draw_frame_title(canvas, frame, task, selected, theme);
-    }
-
-    fn draw_frame_border(canvas: &mut Canvas, frame: &Frame, style: Style) {
-        let (right, bottom) = (
-            frame.x + frame.width - 1,
-            frame.y + frame.height.saturating_sub(1),
-        );
-        canvas.path(
-            &[
-                (frame.x, frame.y),
-                (right, frame.y),
-                (right, bottom),
-                (frame.x, bottom),
-                (frame.x, frame.y),
-            ],
-            style,
+        Self::draw_frame_title(
+            canvas,
+            frame,
+            task,
+            selected,
+            critical_path.contains(&frame.task),
+            theme,
         );
     }
 
@@ -224,11 +202,21 @@ impl Graph {
         frame: &Frame,
         task: &TaskRow,
         selected: bool,
+        critical_path: bool,
         theme: &Theme,
     ) {
         let (mark, _) = health::mark(&task.status);
         let title = format!(" {mark} {} ", clean(&task.title));
-        let style = theme.status(&task.status).patch(if selected {
+        let tone = if selected {
+            theme.accent()
+        } else if critical_path {
+            theme.warning()
+        } else if task.status == "failed" {
+            theme.error()
+        } else {
+            theme.dim()
+        };
+        let style = theme.status(&task.status).patch(tone).patch(if selected {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -286,14 +274,6 @@ impl Graph {
                     && (node.y..node.y + node.height).contains(&ly)
                     && lx < node.x + node.width
                     && node.x < lx + width
-            }) || self.frames.iter().any(|frame| {
-                let bottom = frame.y + frame.height.saturating_sub(1);
-                let right = frame.x + frame.width.saturating_sub(1);
-                let across = lx <= right && frame.x < lx + width;
-                let down = (frame.y..=bottom).contains(&ly);
-                frame.visible
-                    && ((across && (ly == frame.y || ly == bottom))
-                        || (down && (lx..lx + width).any(|x| x == frame.x || x == right)))
             }) || self.edges.iter().any(|other| {
                 other != edge
                     && other.path.as_ref().is_some_and(|path| {

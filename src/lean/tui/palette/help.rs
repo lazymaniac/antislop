@@ -232,8 +232,8 @@ fn help_chat() -> &'static [&'static str] {
 fn help_graph() -> &'static [&'static str] {
     &[
         "arrows           nearest node in that direction",
-        "Enter            agent details",
-        ", / .            previous / next round in an expanded card",
+        "Enter            open selected role in Workbench",
+        "Ctrl+B           show / hide the graph inspector",
         "/                find agent",
         "d                task diff",
         "u                agent actions: restart orchestrator/worker or unblock",
@@ -260,11 +260,10 @@ fn help_graph() -> &'static [&'static str] {
 fn help_details() -> &'static [&'static str] {
     &[
         "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
-        "Graph card       , / . select round; . on newest follows live work",
+        "Workbench       , / . select round; . on newest follows live work",
         "i / a            native CLI focus / message composer",
         "Ctrl+T           composer: queue / steer / interrupt the running turn",
         "Ctrl+]           leave PTY and return to Details",
-        "Graph card PTY   opens as a read-only console: ↑/↓ PgUp/PgDn wheel scroll, i types",
         "Ctrl+W           switch worker / reviewer panel",
         "h / r            JSON history / retry native attachment",
         "↑/↓ PgUp/PgDn    scroll; on Comments select",

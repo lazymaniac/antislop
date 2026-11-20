@@ -80,17 +80,7 @@ impl Card<'_> {
                     }
                 }
             }
-            1 => rows.push(agent.map_or_else(
-                || "No PTY session is available".to_owned(),
-                |agent| {
-                    if agent.activity.is_empty() {
-                        "PTY session starting".to_owned()
-                    } else {
-                        agent.activity.clone()
-                    }
-                },
-            )),
-            2 => {
+            1 => {
                 if self.node.key.starts_with("requirements-") {
                     rows.extend(
                         self.view
@@ -125,8 +115,8 @@ impl Card<'_> {
                     });
                 }
             }
-            3 => rows.push("Diff: press d to inspect and comment on changes".into()),
-            _ => rows.push("Choose Details, PTY, Results, or Diff".into()),
+            2 => rows.push("Diff: press d to inspect and comment on changes".into()),
+            _ => rows.push("Choose Details, Results, or Diff".into()),
         }
         for (index, row) in rows.iter().enumerate() {
             let y = self.node.y.saturating_add(2 + index as u16);

@@ -48,7 +48,7 @@ impl App {
             KeyCode::Char('?') => self.show_help(Help::Diff),
             KeyCode::Char('c') => {
                 if self.graph_expanded.is_some()
-                    && self.graph_tab == 3
+                    && self.graph_tab == 2
                     && self
                         .details
                         .as_ref()
