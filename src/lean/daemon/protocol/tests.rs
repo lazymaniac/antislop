@@ -246,6 +246,7 @@ fn assert_group_matches_operation(request: &Request, operation: &str) {
         "terminal_open" | "terminal_read" | "terminal_input" | "terminal_resize"
         | "terminal_detach" => "terminal",
         "run_context"
+        | "session_action"
         | "session_events"
         | "session_content"
         | "result_documents"
