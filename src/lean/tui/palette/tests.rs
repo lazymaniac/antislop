@@ -27,9 +27,12 @@ fn command_palette_keeps_only_actions_without_a_direct_route() {
             Action::Run(Command::ApprovalsAutonomous),
             Action::Run(Command::ConversationDetails),
             Action::Run(Command::TakeControl),
+            Action::Run(Command::Projects),
+            Action::Run(Command::SwitchConversation),
+            Action::Run(Command::NewConversation),
         ]
     );
-    assert_eq!(COMMANDS.len(), 5);
+    assert_eq!(COMMANDS.len(), 8);
     assert!(
         Help::Chat
             .lines_for_width(100)
@@ -135,6 +138,55 @@ fn no_quality_gates_is_visible_and_selected_in_every_rigor_surface() {
         }}),
     );
     assert_eq!(view.rigor_label(), "no-quality-gates");
+}
+
+#[test]
+fn direct_and_all_eight_rigors_are_selectable_from_composer_and_palette() {
+    use crate::lean::tasks::Team;
+
+    let view = View::default();
+    let rigors = [
+        ("small-change", Team::SmallChange),
+        ("feature", Team::Feature),
+        ("refactoring", Team::Refactoring),
+        ("security-fix", Team::SecurityFix),
+        ("code-review", Team::CodeReview),
+        ("no-quality-gates", Team::NoQualityGates),
+        ("research", Team::Research),
+        ("document", Team::Document),
+    ];
+    for (name, team) in rigors {
+        let action = Action::Run(Command::SelectTeam(team));
+        for kind in [Kind::SlashCommands, Kind::Commands] {
+            let mut picker = Picker::new(kind);
+            picker.query = name.into();
+            assert!(
+                picker
+                    .items(&view)
+                    .iter()
+                    .any(|(_, candidate)| *candidate == action),
+                "{name} is available from {kind:?}"
+            );
+        }
+    }
+
+    let direct = Action::Run(Command::DirectExecute);
+    let mut slash = Picker::new(Kind::SlashCommands);
+    slash.query = "direct".into();
+    assert!(
+        slash
+            .items(&view)
+            .iter()
+            .any(|(_, action)| *action == direct)
+    );
+    let mut palette = Picker::new(Kind::Commands);
+    palette.query = "direct".into();
+    assert!(
+        palette
+            .items(&view)
+            .iter()
+            .any(|(_, action)| *action == direct)
+    );
 }
 
 #[test]
@@ -300,7 +352,11 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
     let view = View::default();
     let mut picker = Picker::new(Kind::Commands);
     let items = picker.items(&view);
-    assert_eq!(items.len(), 5, "Only five commands remain in the palette");
+    assert_eq!(
+        items.len(),
+        8,
+        "All eight navigation commands remain available"
+    );
 
     // Select the last item.
     picker.selected = items.len() - 1;

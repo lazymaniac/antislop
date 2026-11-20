@@ -1,4 +1,5 @@
 mod chat;
+mod composer;
 mod coordinator;
 mod overlays;
 mod plan_history;

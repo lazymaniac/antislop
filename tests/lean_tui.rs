@@ -1145,6 +1145,147 @@ fn app_fake_request_capture_through_app() {
 }
 
 #[test]
+fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
+    let dir = test_tempdir();
+    let image = dir.path().join("wireframe.png");
+    image::RgbImage::new(1, 1).save(&image).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let (tx, rx) = mpsc::channel::<Value>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let request = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
+        tx.send(request).unwrap();
+        let mut writer = stream;
+        writer
+            .write_all(b"{\"data\":null,\"error\":null}\n")
+            .unwrap();
+        writer.flush().unwrap();
+    });
+
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    app.input = InputBuffer::with_text("review this image");
+    app.paste(&image.to_string_lossy());
+    app.submit();
+
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["op"], "send");
+    assert_eq!(request["conversation"], "test-conv");
+    assert_eq!(request["text"], "review this image");
+    assert_eq!(request["images"][0], image.to_string_lossy().as_ref());
+    assert!(
+        request["operation_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert!(app.input.is_empty());
+    assert!(app.sending);
+    let update = updates.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(update, Update::SendResult { result: Ok(()), .. }));
+    app.apply_update(update);
+    assert!(!app.sending);
+    server.join().unwrap();
+}
+
+#[test]
+fn agent_composer_sends_each_delivery_mode_to_the_selected_session() {
+    let dir = test_tempdir();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let (tx, rx) = mpsc::channel::<Value>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let request = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
+        tx.send(request).unwrap();
+        let mut writer = stream;
+        writer
+            .write_all(b"{\"data\":null,\"error\":\"task fixture unavailable\"}\n")
+            .unwrap();
+        writer.flush().unwrap();
+        for _ in 0..3 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
+            tx.send(request).unwrap();
+            let mut writer = stream;
+            writer
+                .write_all(b"{\"data\":null,\"error\":null}\n")
+                .unwrap();
+            writer.flush().unwrap();
+        }
+    });
+
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    app.conversation = "agent-conversation".into();
+    app.view.plan = Some("plan-7".into());
+    app.view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "task-key".into(),
+        uuid: Some("task-uuid".into()),
+        ..Default::default()
+    });
+    app.open_details("worker:task-key".into());
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()["op"],
+        "task"
+    );
+    let fetch = updates.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(fetch, Update::TaskFailed { .. }));
+    app.apply_update(fetch);
+    let details = app.details.as_mut().unwrap();
+    details.task = Some(json!({"id":"task-uuid", "round":7, "_latest_run":"run-7"}));
+    details.editing = true;
+    let key = details.composer_key();
+
+    for (mode, expected) in [
+        (antislop::lean::store::Delivery::Queue, "queue"),
+        (antislop::lean::store::Delivery::Steer, "steer"),
+        (antislop::lean::store::Delivery::Interrupt, "interrupt"),
+    ] {
+        let text = format!("message in {expected} mode");
+        {
+            let details = app.details.as_ref().unwrap();
+            let mut drafts = details.drafts.borrow_mut();
+            let composer = drafts.entry(key.clone()).or_default();
+            composer.input = InputBuffer::with_text(&text);
+            composer.mode = mode;
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(request["op"], "send_to_agent");
+        assert_eq!(request["message"]["conversation"], "agent-conversation");
+        assert_eq!(request["message"]["plan"], "plan-7");
+        assert_eq!(request["message"]["recipient"], "worker:task-uuid");
+        assert_eq!(request["message"]["delivery"], expected);
+        assert_eq!(request["message"]["expected_round"], 7);
+        assert_eq!(request["message"]["expected_run"], "run-7");
+        assert_eq!(request["message"]["text"], text);
+        let operation = request["message"]["operation_id"].as_str().unwrap();
+        assert!(!operation.is_empty());
+
+        let update = updates.recv_timeout(Duration::from_secs(5)).unwrap();
+        let Update::AgentMessage {
+            operation: confirmed,
+            result: Ok(_),
+            ..
+        } = &update
+        else {
+            panic!("the daemon response must confirm the submitted operation");
+        };
+        assert_eq!(confirmed, operation);
+        app.apply_update(update);
+        let drafts = app.details.as_ref().unwrap().drafts.borrow();
+        assert_eq!(drafts[&key].delivery.as_deref(), Some("queued"));
+    }
+    server.join().unwrap();
+}
+
+#[test]
 fn app_graph_details_diff_navigation_and_search() {
     let mut app = App::test_app();
 

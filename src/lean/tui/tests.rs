@@ -102,6 +102,79 @@ fn ctrl_t_cycles_delivery_while_details_composer_is_editing() {
 }
 
 #[test]
+fn ctrl_k_opens_the_shared_composer_without_changing_its_session_draft() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("keep this draft 👩‍💻");
+
+    app.key(key_ctrl('k'));
+
+    assert_eq!(app.input.text, "keep this draft 👩‍💻");
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.navigation.focus, NavigationFocus::Composer);
+    assert_eq!(app.navigation.target, WorkbenchTarget::Session);
+}
+
+#[test]
+fn failed_agent_send_keeps_its_draft_error_and_retry_identity() {
+    let mut app = App::test_app();
+    let (updates_sender, updates) = update_channel(8);
+    app.updates = updates_sender;
+    let mut details = Details::new("worker:task-key".into());
+    details.conversation = app.conversation.clone();
+    details.task_uuid = Some("task-uuid".into());
+    details.task = Some(serde_json::json!({"id":"task-uuid", "round":3}));
+    let key = details.composer_key();
+    app.agent_drafts = details.drafts.clone();
+    app.agent_drafts
+        .borrow_mut()
+        .entry(key.clone())
+        .or_default()
+        .input = InputBuffer::with_text("retry this agent message");
+    app.details = Some(details);
+
+    app.submit_agent_message();
+    let Update::AgentMessage {
+        operation,
+        result: Err(error),
+        ..
+    } = updates
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap()
+    else {
+        panic!("the unavailable daemon must report the raw send failure");
+    };
+    assert!(!error.is_empty());
+    app.apply_update(Update::AgentMessage {
+        conversation: key.0.clone(),
+        recipient: key.1.clone(),
+        operation: operation.clone(),
+        text: "retry this agent message".into(),
+        result: Err(error),
+    });
+    {
+        let drafts = app.agent_drafts.borrow();
+        let composer = &drafts[&key];
+        assert!(!composer.sending);
+        assert_eq!(composer.input.text, "retry this agent message");
+        assert_eq!(composer.operation.as_deref(), Some(operation.as_str()));
+        assert!(composer.error.is_some());
+    }
+
+    app.submit_agent_message();
+    let Update::AgentMessage {
+        operation: retry_operation,
+        result: Err(_),
+        ..
+    } = updates
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap()
+    else {
+        panic!("the retry must still report its send failure");
+    };
+    assert_eq!(retry_operation, operation);
+}
+
+#[test]
 fn image_file_drop_is_an_attachment_and_removal_preserves_the_text_draft() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let directory = tempfile::tempdir().unwrap();

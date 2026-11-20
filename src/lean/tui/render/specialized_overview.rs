@@ -113,63 +113,46 @@ impl Details {
         let draft_key = (self.conversation.clone(), self.composer_recipient(key));
         let drafts = self.drafts.borrow();
         let composer = drafts.get(&draft_key);
-        let input_area = self.draw_composer_status(frame, area, key, composer, active, theme);
-        self.input_width[panel] = usize::from(input_area.width).max(1);
-        if let Some(input) = composer.map(|composer| &composer.input) {
-            self.draw_composer_input(frame, input, input_area, active, theme);
-        }
-    }
-
-    fn draw_composer_status(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        key: &str,
-        composer: Option<&super::super::details::Composer>,
-        active: bool,
-        theme: &Theme,
-    ) -> Rect {
-        let status = composer_status(self, key, composer, active);
-        draw_session_status(frame, area, &status, theme);
-        Rect::new(
-            area.x,
-            area.y.saturating_add(1),
-            area.width,
-            area.height.saturating_sub(1),
-        )
-    }
-
-    fn draw_composer_input(
-        &self,
-        frame: &mut Frame,
-        input: &super::super::InputBuffer,
-        area: Rect,
-        active: bool,
-        theme: &Theme,
-    ) {
-        let text = theme.clean(&input.text);
-        let lines = wrap(&text, usize::from(area.width));
-        let (column, row) = input.visual_cursor(usize::from(area.width));
-        let start = row.saturating_sub(usize::from(area.height.saturating_sub(1)));
-        frame.render_widget(
-            Paragraph::new(
-                lines
-                    .into_iter()
-                    .skip(start)
-                    .take(usize::from(area.height))
-                    .map(Line::raw)
-                    .collect::<Vec<_>>(),
-            ),
-            area,
+        let title = format!(
+            "To · {} · {}",
+            self.composer_recipient(key),
+            composer_mode_label(composer.map_or_else(Default::default, |composer| composer.mode))
         );
-        if active && self.editing && area.width > 0 && area.height > 0 {
-            place_session_cursor(frame, area, column, row, start);
-        }
+        let editor = super::composer::panel_editor_area(area);
+        self.input_width[panel] = usize::from(editor.width).max(1);
+        let status = composer_status(self, key, composer, active);
+        let lines = composer
+            .map(|composer| {
+                wrap(
+                    &theme.clean(&composer.input.text),
+                    usize::from(editor.width),
+                )
+            })
+            .unwrap_or_default();
+        let cursor = composer.and_then(|composer| {
+            (active && self.editing && editor.width > 0 && editor.height > 0).then(|| {
+                let (column, row) = composer.input.visual_cursor(usize::from(editor.width));
+                let first_line = row.saturating_sub(usize::from(editor.height.saturating_sub(1)));
+                (column, row, first_line)
+            })
+        });
+        super::composer::draw_panel(
+            frame,
+            area,
+            super::composer::Panel {
+                title: &title,
+                status: &status,
+                lines: &lines,
+                focused: active && self.editing,
+                cursor,
+            },
+            theme,
+        );
     }
 }
 
 fn composer_status_area(inner: Rect) -> Rect {
-    let [_, area] = Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
+    let [_, area] = Layout::vertical([Constraint::Min(1), Constraint::Length(7.min(inner.height))])
         .areas(inner);
     area
 }
@@ -321,14 +304,13 @@ fn mode_label(mode: crate::lean::store::Delivery) -> &'static str {
     }
 }
 
-fn place_session_cursor(frame: &mut Frame, area: Rect, column: u16, row: usize, start: usize) {
-    frame.set_cursor_position((
-        area.x
-            .saturating_add(column.min(area.width.saturating_sub(1))),
-        area.y
-            .saturating_add(row.saturating_sub(start) as u16)
-            .min(area.bottom().saturating_sub(1)),
-    ));
+fn composer_mode_label(mode: crate::lean::store::Delivery) -> &'static str {
+    use crate::lean::store::Delivery;
+    match mode {
+        Delivery::Queue => "Queue",
+        Delivery::Steer => "Steer",
+        Delivery::Interrupt => "Interrupt",
+    }
 }
 
 #[cfg(test)]

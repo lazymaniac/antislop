@@ -1,6 +1,27 @@
 use super::super::*;
 use crate::lean::tui::layout::lines::{compute_visual_lines, visual_text_lines_from_layout};
 
+/// Match the core's initial `@recipient` and `/direct` routing rules.
+fn chat_header(text: &str, rigor: &str) -> String {
+    if text
+        .trim()
+        .strip_prefix("/direct")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return format!("Direct execution · {rigor}");
+    }
+    let Some(rest) = text.strip_prefix('@') else {
+        return format!("To · orchestrator · {rigor}");
+    };
+    let Some((recipient, _)) = rest.split_once(char::is_whitespace) else {
+        return "Address · incomplete".into();
+    };
+    if recipient.is_empty() {
+        return "Address · empty recipient".into();
+    }
+    format!("To · {recipient} · {rigor}")
+}
+
 impl App {
     pub(super) fn draw_chat(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if area.width == 0 || area.height == 0 {
@@ -17,7 +38,8 @@ impl App {
     }
 
     fn chat_layout(&mut self, area: Rect) -> (Vec<String>, (u16, usize), [Rect; 5]) {
-        let input_width = usize::from(area.width.saturating_sub(3)).max(1);
+        let panel = super::composer::centered_area(area);
+        let input_width = usize::from(panel.width.saturating_sub(2)).max(1);
         self.input_width = input_width;
         let layout = compute_visual_lines(&self.input.text, input_width);
         let cursor = self.input.visual_cursor_from_lines(&layout);
@@ -135,7 +157,9 @@ impl App {
         cursor: (u16, usize),
         theme: &Theme,
     ) {
-        let visible_box_lines = usize::from(input.height.saturating_sub(2)).max(1);
+        let input = super::composer::centered_area(input);
+        let editor = super::composer::panel_editor_area(input);
+        let visible_box_lines = usize::from(editor.height).max(1);
         let (cursor_col, cursor_row) = cursor;
         let shown_lines = self.chat_input_window(&input_lines, cursor_row, visible_box_lines);
         let focused = self.focus == Focus::Chat
@@ -144,14 +168,37 @@ impl App {
             && self.help.is_none()
             && self.diff.is_none()
             && (self.details.is_none() || self.graph_expanded.is_some());
-        self.paint_input(frame, input, shown_lines, focused, theme);
-        self.place_chat_cursor(
+        let attachments = self
+            .image_drafts
+            .get(&self.conversation)
+            .map(|images| {
+                images
+                    .iter()
+                    .filter_map(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let attachment_status = if attachments.is_empty() {
+            "Attachments · drop or paste image".to_owned()
+        } else {
+            format!("Attachments · {attachments}")
+        };
+        let status = format!("Enter send · Alt+Enter newline · {attachment_status}");
+        super::composer::draw_panel(
             frame,
             input,
-            cursor_col,
-            cursor_row,
-            visible_box_lines,
-            focused,
+            super::composer::Panel {
+                title: &chat_header(&self.input.text, self.view.rigor_label()),
+                status: &status,
+                lines: shown_lines,
+                focused,
+                cursor: Some((cursor_col, cursor_row, self.input_shown)),
+            },
+            theme,
         );
     }
 
@@ -166,112 +213,49 @@ impl App {
         let end = (self.input_shown + visible).min(lines.len());
         &lines[self.input_shown..end]
     }
-
-    fn paint_input(
-        &self,
-        frame: &mut Frame,
-        input: Rect,
-        lines: &[String],
-        focused: bool,
-        theme: &Theme,
-    ) {
-        let fill = if focused {
-            theme.raised()
-        } else {
-            theme.card()
-        };
-        paint_input_background(frame, input, fill, theme);
-        if input.height > 0 && input.width >= 28 {
-            let attachments = self
-                .image_drafts
-                .get(&self.conversation)
-                .map(|images| {
-                    images
-                        .iter()
-                        .filter_map(|path| {
-                            path.file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let hint = truncate(
-                &if attachments.is_empty() {
-                    format!("· {} (Ctrl+M) · / commands ", self.view.rigor_label())
-                } else {
-                    format!("· 📎 {attachments} · Alt+Backspace removes last ")
-                },
-                usize::from(input.width.saturating_sub(11)),
-            );
-            frame
-                .buffer_mut()
-                .set_string(input.x + 10, input.y, hint, fill.patch(theme.dim()));
-        }
-        paint_input_lines(frame, input, lines, fill, theme);
-    }
-
-    fn place_chat_cursor(
-        &self,
-        frame: &mut Frame,
-        input: Rect,
-        column: u16,
-        row: usize,
-        visible: usize,
-        focused: bool,
-    ) {
-        if focused && input.width >= 3 && input.height >= 2 {
-            let x = (input.x + 1 + column).clamp(
-                input.x + 1,
-                input.right().saturating_sub(2).max(input.x + 1),
-            );
-            let y = (input.y
-                + 1
-                + row
-                    .saturating_sub(self.input_shown)
-                    .min(visible.saturating_sub(1)) as u16)
-                .clamp(
-                    input.y + 1,
-                    input.bottom().saturating_sub(1).max(input.y + 1),
-                );
-            frame.set_cursor_position((x, y));
-        }
-    }
-}
-
-fn paint_input_background(frame: &mut Frame, input: Rect, fill: Style, theme: &Theme) {
-    let buffer = frame.buffer_mut();
-    for y in input.top()..input.bottom() {
-        for x in input.left()..input.right() {
-            buffer[(x, y)].set_style(fill);
-        }
-        if input.width > 0 {
-            buffer[(input.x, y)]
-                .set_symbol(theme.glyphs().bar)
-                .set_style(fill.patch(theme.faint()));
-        }
-    }
-    if input.height > 0 && input.width > 2 {
-        let style = fill.patch(theme.dim());
-        buffer.set_string(input.x + 1, input.y, " message ", style);
-    }
-}
-
-fn paint_input_lines(frame: &mut Frame, input: Rect, lines: &[String], fill: Style, theme: &Theme) {
-    let inner = Rect::new(
-        input.x + 1,
-        input.y + 1,
-        input.width.saturating_sub(2),
-        input.height.saturating_sub(1),
-    );
-    let rows = lines.iter().cloned().map(Line::raw).collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(rows).style(fill.patch(theme.text())), inner);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn chat_header_matches_the_destination_parsed_by_submit() {
+        assert_eq!(
+            chat_header("hello", "feature"),
+            "To · orchestrator · feature"
+        );
+        assert_eq!(chat_header("@all", "feature"), "Address · incomplete");
+        assert_eq!(
+            chat_header("@all notify everyone", "feature"),
+            "To · all · feature"
+        );
+        assert_eq!(
+            chat_header("@worker:task-1 please help", "feature"),
+            "To · worker:task-1 · feature"
+        );
+        assert_eq!(
+            chat_header("/direct implement this", "feature"),
+            "Direct execution · feature"
+        );
+        assert_eq!(
+            chat_header("/directive text", "feature"),
+            "To · orchestrator · feature"
+        );
+    }
+
+    #[test]
+    fn composer_panel_stays_centered_and_bounded_on_wide_workbenches() {
+        assert_eq!(
+            super::super::composer::centered_area(Rect::new(0, 0, 120, 12)),
+            Rect::new(18, 0, 84, 12)
+        );
+        assert_eq!(
+            super::super::composer::centered_area(Rect::new(3, 2, 11, 5)),
+            Rect::new(3, 2, 11, 5)
+        );
+    }
 
     #[test]
     fn hidden_expanded_details_leave_the_chat_composer_active_and_editable() {
@@ -287,7 +271,9 @@ mod tests {
                 terminal
                     .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
                     .unwrap();
-                let label = &terminal.backend().buffer()[(2, 13)];
+                let (_, _, areas) = app.chat_layout(Rect::new(0, 0, 60, 16));
+                let input = super::super::composer::centered_area(areas[4]);
+                let label = &terminal.backend().buffer()[(input.x + 1, input.y)];
                 let expected_fill = if focus == Focus::Chat {
                     theme.raised()
                 } else {
@@ -303,8 +289,8 @@ mod tests {
                 assert!(!label.modifier.contains(Modifier::BOLD));
                 if focus == Focus::Chat {
                     let cursor = terminal.get_cursor_position().unwrap();
-                    assert_eq!(cursor.y, 14);
-                    assert!(cursor.x > 1);
+                    assert_eq!(cursor.y, input.y + 1);
+                    assert!(cursor.x > input.x);
                 }
             }
             assert!(app.key(event::KeyEvent::new(
@@ -316,8 +302,10 @@ mod tests {
             terminal
                 .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
                 .unwrap();
+            let (_, _, areas) = app.chat_layout(Rect::new(0, 0, 60, 16));
+            let input = super::super::composer::centered_area(areas[4]);
             assert_eq!(
-                terminal.backend().buffer()[(2, 13)].fg,
+                terminal.backend().buffer()[(input.x + 1, input.y)].fg,
                 theme.dim().fg.unwrap_or(Color::Reset)
             );
             assert_eq!(app.input.text, "draft 👩‍💻e\u{301}q");
