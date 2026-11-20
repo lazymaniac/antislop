@@ -108,7 +108,7 @@ impl App {
                 self.toggle_flow_link();
             }
         }
-        self.focus = Focus::Graph;
+        self.set_focus(Focus::Graph);
         true
     }
 
@@ -132,7 +132,7 @@ impl App {
             self.graph_visibility_exception = Some(selected);
         }
         self.graph_revealed = None;
-        self.focus = Focus::Graph;
+        self.set_focus(Focus::Graph);
         true
     }
 

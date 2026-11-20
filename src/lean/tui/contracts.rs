@@ -134,6 +134,88 @@ pub enum Focus {
     Graph,
 }
 
+/// Frontend screen selected independently of the daemon's projected data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Screen {
+    #[default]
+    Graph,
+    Workbench,
+}
+
+/// Stable frontend target identity. Agent keys are the existing graph keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum WorkbenchTarget {
+    #[default]
+    Session,
+    Agent(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkbenchTab {
+    #[default]
+    Summary,
+    Conversation,
+    Results,
+    Checks,
+    Comments,
+    Diff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NavigationFocus {
+    #[default]
+    Chat,
+    Graph,
+    WorkbenchList,
+    WorkbenchContent,
+    Composer,
+}
+
+/// Presentation preferences scoped to a session and stable workbench target.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorkbenchPresentation {
+    pub tab: WorkbenchTab,
+    pub round: Option<u64>,
+    pub split: bool,
+    pub zoomed: bool,
+    pub pinned: bool,
+}
+
+/// Frontend navigation model; it contains no daemon-owned or persisted data.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NavigationState {
+    pub screen: Screen,
+    pub target: WorkbenchTarget,
+    pub focus: NavigationFocus,
+    pub presentations: std::collections::HashMap<WorkbenchTarget, WorkbenchPresentation>,
+    pub split_before_zoom: bool,
+}
+
+impl NavigationState {
+    pub fn presentation(&self) -> WorkbenchPresentation {
+        self.presentations
+            .get(&self.target)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn update_presentation(&mut self, update: impl FnOnce(&mut WorkbenchPresentation)) {
+        update(self.presentations.entry(self.target.clone()).or_default());
+    }
+
+    pub fn zoom(&mut self, zoomed: bool) {
+        let current = self.presentation().zoomed;
+        if zoomed && !current {
+            self.split_before_zoom = self.presentation().split;
+        }
+        self.update_presentation(|presentation| presentation.zoomed = zoomed);
+        if !zoomed {
+            let split = self.split_before_zoom;
+            self.update_presentation(|presentation| presentation.split = split);
+        }
+    }
+}
+
 /// Full preserved state of a conversation across switches.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConversationState {
@@ -159,6 +241,7 @@ pub struct ConversationState {
     pub task_request_id: u64,
     pub diff_request_id: u64,
     pub focus: Focus,
+    pub navigation: NavigationState,
     pub graph_scope: Scope,
     pub graph_visibility_exception: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
@@ -201,6 +284,29 @@ impl ConversationState {
         self.offset = app.offset;
         self.scroll = app.scroll;
         self.focus = app.focus;
+        self.navigation = app.navigation.clone();
+        // Focus remains mirrored for older graph/chat handlers; snapshots
+        // always capture the most recent interaction as the navigation truth.
+        let navigation_coarse_focus = match self.navigation.focus {
+            NavigationFocus::Graph => Focus::Graph,
+            NavigationFocus::Chat
+            | NavigationFocus::WorkbenchList
+            | NavigationFocus::WorkbenchContent
+            | NavigationFocus::Composer => Focus::Chat,
+        };
+        let workbench_owns_focus = self.navigation.screen == Screen::Workbench
+            && matches!(
+                self.navigation.focus,
+                NavigationFocus::WorkbenchList
+                    | NavigationFocus::WorkbenchContent
+                    | NavigationFocus::Composer
+            );
+        if !workbench_owns_focus && navigation_coarse_focus != app.focus {
+            self.navigation.focus = match app.focus {
+                Focus::Chat => NavigationFocus::Chat,
+                Focus::Graph => NavigationFocus::Graph,
+            };
+        }
         self.graph_scope = app.graph_scope.clone();
         self.graph_visibility_exception = app.graph_visibility_exception.clone();
         self.graph_collapsed = app.graph_collapsed.clone();
@@ -250,7 +356,24 @@ impl ConversationState {
         app.relations = self.relations;
         app.offset = self.offset;
         app.scroll = self.scroll;
-        app.focus = self.focus;
+        app.navigation = self.navigation.clone();
+        app.focus = if app.navigation.screen == Screen::Workbench
+            && matches!(
+                app.navigation.focus,
+                NavigationFocus::WorkbenchList
+                    | NavigationFocus::WorkbenchContent
+                    | NavigationFocus::Composer
+            ) {
+            self.focus
+        } else {
+            match app.navigation.focus {
+                NavigationFocus::Graph => Focus::Graph,
+                NavigationFocus::Chat
+                | NavigationFocus::WorkbenchList
+                | NavigationFocus::WorkbenchContent
+                | NavigationFocus::Composer => Focus::Chat,
+            }
+        };
         app.graph_scope = self.graph_scope.clone();
         app.graph_visibility_exception = self.graph_visibility_exception.clone();
         app.graph_collapsed = self.graph_collapsed.clone();
@@ -271,5 +394,87 @@ impl ConversationState {
         app.diff_request_id = self.diff_request_id;
         app.details_scroll_memory = self.details_scroll_memory.clone();
         app.details_query_memory = self.details_query_memory.clone();
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+
+    #[test]
+    fn conversation_snapshot_round_trips_target_presentation_and_existing_draft() {
+        let mut app = App::test_app();
+        app.input = InputBuffer::with_text("draft 👩‍💻 e\u{301}");
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Agent("worker:t7".into());
+        app.navigation.focus = NavigationFocus::WorkbenchContent;
+        app.navigation.update_presentation(|presentation| {
+            presentation.tab = WorkbenchTab::Diff;
+            presentation.round = Some(3);
+            presentation.split = true;
+            presentation.pinned = true;
+        });
+        app.navigation.zoom(true);
+
+        let snapshot = ConversationState::capture(&app);
+        app.input = InputBuffer::new();
+        app.navigation = NavigationState::default();
+        snapshot.restore(&mut app);
+
+        assert_eq!(app.input.text, "draft 👩‍💻 e\u{301}");
+        assert_eq!(app.navigation.screen, Screen::Workbench);
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+        let presentation = app.navigation.presentation();
+        assert_eq!(presentation.tab, WorkbenchTab::Diff);
+        assert_eq!(presentation.round, Some(3));
+        assert!(presentation.split && presentation.zoomed && presentation.pinned);
+        app.navigation.zoom(false);
+        assert!(app.navigation.presentation().split);
+    }
+
+    #[test]
+    fn presentation_preferences_are_scoped_to_stable_target() {
+        let mut nav = NavigationState {
+            target: WorkbenchTarget::Agent("worker:t1".into()),
+            ..NavigationState::default()
+        };
+        nav.update_presentation(|p| p.tab = WorkbenchTab::Checks);
+        nav.target = WorkbenchTarget::Agent("reviewer:t1".into());
+        assert_eq!(nav.presentation().tab, WorkbenchTab::Summary);
+        nav.target = WorkbenchTarget::Agent("worker:t1".into());
+        assert_eq!(nav.presentation().tab, WorkbenchTab::Checks);
+    }
+
+    #[test]
+    fn conversation_snapshot_captures_focus_changed_by_pointer_transition() {
+        let mut app = App::test_app();
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.focus = NavigationFocus::WorkbenchContent;
+        app.set_focus(Focus::Graph);
+
+        let snapshot = ConversationState::capture(&app);
+        app.set_focus(Focus::Chat);
+        snapshot.restore(&mut app);
+
+        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.focus, NavigationFocus::Graph);
+    }
+
+    #[test]
+    fn conversation_snapshot_preserves_workbench_content_focus_opened_from_graph() {
+        let mut app = App::test_app();
+        app.set_focus(Focus::Graph);
+        assert_eq!(app.focus, Focus::Graph);
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.focus = NavigationFocus::WorkbenchContent;
+
+        let snapshot = ConversationState::capture(&app);
+        app.navigation.screen = Screen::Graph;
+        app.navigation.focus = NavigationFocus::Graph;
+        snapshot.restore(&mut app);
+
+        assert_eq!(app.navigation.screen, Screen::Workbench);
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+        assert_eq!(app.focus, Focus::Graph);
     }
 }

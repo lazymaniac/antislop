@@ -5,8 +5,11 @@ use ratatui::widgets::Paragraph;
 
 impl Details {
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
+        self.draw_at(frame, frame.area(), view);
+    }
+
+    pub fn draw_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
         self.normalize_tab();
-        let area = frame.area();
         if area.width == 0 || area.height == 0 {
             return;
         }

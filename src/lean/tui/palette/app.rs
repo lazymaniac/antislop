@@ -201,13 +201,13 @@ impl App {
 
     fn select_picker_node(&mut self, key: String) {
         self.close_picker_views();
-        self.focus = Focus::Graph;
+        self.set_focus(Focus::Graph);
         self.select_node(key);
     }
 
     fn show_picker_entry(&mut self, entry: usize) {
         self.close_picker_views();
-        self.focus = Focus::Chat;
+        self.set_focus(Focus::Chat);
         self.found = Some(entry);
         self.scroll = usize::MAX;
     }
@@ -236,7 +236,7 @@ impl App {
 
     fn address_recipient(&mut self, recipient: &str) {
         self.close_picker_views();
-        self.focus = Focus::Chat;
+        self.set_focus(Focus::Chat);
         let formatted = format!("@{recipient} ");
         let text = self.input.text.trim_end();
         if text.is_empty() {

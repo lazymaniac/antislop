@@ -38,6 +38,8 @@ pub struct App {
     pub updates: UpdateSender,
     pub(super) result_fetch: app::requests::ResultFetchCoordinator,
     pub focus: Focus,
+    /// Frontend screen, workbench target, focus and per-target presentation.
+    pub navigation: NavigationState,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
     /// The relations the graph draws.
@@ -169,6 +171,7 @@ macro_rules! initial_app {
             updates: $updates,
             result_fetch: app::requests::ResultFetchCoordinator::new(),
             focus: Focus::Chat,
+            navigation: NavigationState::default(),
             selected: ORCHESTRATOR.into(),
             relations: graph::Relations::default(),
             offset: (0, 0),
@@ -243,6 +246,14 @@ macro_rules! initial_app {
 }
 
 impl App {
+    pub(super) fn set_focus(&mut self, focus: Focus) {
+        self.focus = focus;
+        self.navigation.focus = match focus {
+            Focus::Chat => NavigationFocus::Chat,
+            Focus::Graph => NavigationFocus::Graph,
+        };
+    }
+
     pub(super) fn bootstrap(client: Client, updates: UpdateSender) -> App {
         initial_app!(client, updates)
     }

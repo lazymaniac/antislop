@@ -8,9 +8,9 @@ impl App {
     pub(super) fn click_panel(&mut self, col: u16, area: Rect) {
         let chat_width = (area.width / 3).max(34);
         if col < area.x + chat_width {
-            self.focus = Focus::Chat;
+            self.set_focus(Focus::Chat);
         } else if col > area.x + chat_width && self.focus == Focus::Chat {
-            self.focus = Focus::Graph;
+            self.set_focus(Focus::Graph);
         }
     }
 
@@ -34,8 +34,8 @@ impl App {
             }
             PLAN => self.run_workflow(Command::Plan),
             NEW | NEW_SHORT | NEW_ICON => self.run_workflow(Command::NewConversation),
-            "[Chat]" => self.focus = Focus::Chat,
-            "[Team]" => self.focus = Focus::Graph,
+            "[Chat]" => self.set_focus(Focus::Chat),
+            "[Team]" => self.set_focus(Focus::Graph),
             _ => {}
         }
     }

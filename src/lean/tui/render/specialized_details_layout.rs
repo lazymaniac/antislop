@@ -87,7 +87,7 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
     };
     Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Plain)
         .border_style(theme.faint())
         .style(Style::default())
         .title(title)
@@ -280,4 +280,30 @@ pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16) -> String
         usize::from(width),
         true,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn overview_details_block_renders_square_corners() {
+        let area = Rect::new(0, 0, 24, 6);
+        let details = Details::new("orchestrator".into());
+        let theme = Theme::new(true, false);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        terminal
+            .draw(|frame| {
+                frame.render_widget(detail_block(&details, area, &theme), area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "┌");
+        assert_eq!(buffer[(area.width - 1, 0)].symbol(), "┐");
+        assert_eq!(buffer[(0, area.height - 1)].symbol(), "└");
+        assert_eq!(buffer[(area.width - 1, area.height - 1)].symbol(), "┘");
+    }
 }

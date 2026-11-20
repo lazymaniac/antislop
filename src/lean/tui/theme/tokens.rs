@@ -133,22 +133,22 @@ pub struct Theme {
 pub mod ayu {
     use ratatui::style::Color;
 
-    pub const BG: Color = Color::Rgb(0x0B, 0x0E, 0x14);
-    pub const PANEL: Color = Color::Rgb(0x0F, 0x13, 0x1A);
-    pub const LINE: Color = Color::Rgb(0x15, 0x1A, 0x23);
-    pub const RAISED: Color = Color::Rgb(0x1B, 0x21, 0x2C);
-    pub const SELECTION: Color = Color::Rgb(0x27, 0x37, 0x47);
-    pub const FG: Color = Color::Rgb(0xBF, 0xBD, 0xB6);
-    pub const TITLE: Color = Color::Rgb(0xE6, 0xE1, 0xCF);
-    pub const DIM: Color = Color::Rgb(0x56, 0x5B, 0x66);
-    pub const FAINT: Color = Color::Rgb(0x3E, 0x44, 0x51);
+    pub const BG: Color = Color::Rgb(0x10, 0x16, 0x19);
+    pub const PANEL: Color = Color::Rgb(0x19, 0x22, 0x26);
+    pub const LINE: Color = Color::Rgb(0x19, 0x22, 0x26);
+    pub const RAISED: Color = Color::Rgb(0x22, 0x30, 0x35);
+    pub const SELECTION: Color = Color::Rgb(0x2A, 0x3C, 0x40);
+    pub const FG: Color = Color::Rgb(0xE7, 0xED, 0xEB);
+    pub const TITLE: Color = Color::Rgb(0xE7, 0xED, 0xEB);
+    pub const DIM: Color = Color::Rgb(0xA1, 0xB1, 0xB3);
+    pub const FAINT: Color = Color::Rgb(0xA1, 0xB1, 0xB3);
     pub const BLUE: Color = Color::Rgb(0x59, 0xC2, 0xFF);
     pub const GREEN: Color = Color::Rgb(0xAA, 0xD9, 0x4C);
     pub const YELLOW: Color = Color::Rgb(0xFF, 0xB4, 0x54);
     pub const ORANGE: Color = Color::Rgb(0xFF, 0x8F, 0x40);
     pub const RED: Color = Color::Rgb(0xF0, 0x71, 0x78);
     pub const PURPLE: Color = Color::Rgb(0xD2, 0xA6, 0xFF);
-    pub const CYAN: Color = Color::Rgb(0x95, 0xE6, 0xCB);
-    pub const GOLD: Color = Color::Rgb(0xE6, 0xB4, 0x50);
+    pub const CYAN: Color = Color::Rgb(0xA4, 0xDF, 0xCC);
+    pub const GOLD: Color = Color::Rgb(0xE9, 0xC5, 0x93);
     pub const PINK: Color = Color::Rgb(0xF2, 0x96, 0x68);
 }

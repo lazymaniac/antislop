@@ -223,7 +223,7 @@ impl App {
                 if self.graph_link_source.take().is_some() {
                     self.notice = Some("Anulowano tryb łączenia krawędzi".into());
                 } else {
-                    self.focus = Focus::Chat;
+                    self.set_focus(Focus::Chat);
                 }
             }
             KeyCode::Char('q') => return false,

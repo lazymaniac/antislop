@@ -2,10 +2,10 @@ use super::*;
 
 impl App {
     pub(super) fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
+        self.set_focus(match self.focus {
             Focus::Chat => Focus::Graph,
             Focus::Graph => Focus::Chat,
-        };
+        });
     }
 
     pub(super) fn route_graph(&mut self, key: KeyEvent) -> bool {

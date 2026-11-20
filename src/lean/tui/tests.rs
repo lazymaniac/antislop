@@ -1,3 +1,4 @@
+use super::details::Composer;
 use super::view::render_header;
 use super::*;
 use ratatui::buffer::Buffer;
@@ -47,6 +48,57 @@ fn without_color_keeps_dim_and_reversed_as_modifiers() {
     assert!(buffer.content[0].modifier.contains(Modifier::DIM));
     assert!(!buffer.content[1].modifier.contains(Modifier::DIM));
     assert!(buffer.content[2].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn shared_surface_palette_and_panel_geometry_follow_d3_bounds() {
+    assert_eq!(theme::ayu::BG, Color::Rgb(0x10, 0x16, 0x19));
+    assert_eq!(theme::ayu::PANEL, Color::Rgb(0x19, 0x22, 0x26));
+    assert_eq!(theme::ayu::SELECTION, Color::Rgb(0x2A, 0x3C, 0x40));
+    assert_eq!(theme::ayu::RAISED, Color::Rgb(0x22, 0x30, 0x35));
+    assert_eq!(theme::ayu::FG, Color::Rgb(0xE7, 0xED, 0xEB));
+    assert_eq!(theme::ayu::DIM, Color::Rgb(0xA1, 0xB1, 0xB3));
+    assert_eq!(theme::ayu::CYAN, Color::Rgb(0xA4, 0xDF, 0xCC));
+    assert_eq!(theme::ayu::GOLD, Color::Rgb(0xE9, 0xC5, 0x93));
+    assert_eq!(
+        panel_area(Rect::new(0, 0, 12, 5), 84),
+        Rect::new(0, 0, 12, 5)
+    );
+    let form = panel_area(Rect::new(0, 0, 120, 40), 84);
+    assert_eq!(form.width, 84);
+    assert_eq!(form.x, 18);
+    assert_eq!(form.y, 4);
+    assert_eq!(form.height, 32);
+    let list = list_area(Rect::new(0, 0, 120, 40));
+    assert_eq!(list.width, 72);
+    assert_eq!(list.x, 24);
+    assert_eq!(list.y, 4);
+}
+
+#[test]
+fn ctrl_t_cycles_delivery_while_details_composer_is_editing() {
+    let mut app = test_app();
+    let mut details = Details::new("worker:t1".into());
+    details.editing = true;
+    app.details = Some(details);
+    let draft_key = app.details.as_ref().unwrap().composer_key();
+    app.details
+        .as_ref()
+        .unwrap()
+        .drafts
+        .borrow_mut()
+        .entry(draft_key)
+        .or_default();
+
+    app.key(key_ctrl('t'));
+
+    let details = app.details.as_ref().unwrap();
+    let composer = details.drafts.borrow();
+    assert_eq!(
+        composer.values().next().unwrap().mode,
+        crate::lean::store::Delivery::Steer
+    );
+    assert_eq!(app.navigation.screen, Screen::Graph);
 }
 
 #[test]
@@ -1113,6 +1165,252 @@ pub fn key_press(code: KeyCode) -> event::KeyEvent {
 
 pub fn key_ctrl(ch: char) -> event::KeyEvent {
     event::KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+}
+
+#[test]
+fn global_navigation_shortcuts_route_before_screens_and_keep_editor_ctrl_k() {
+    let mut app = test_app();
+    app.diff = Some(DiffView::new("t1".into()));
+    assert!(app.key_inner(key_ctrl('p')));
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Commands);
+    app.picker = None;
+    assert!(app.key_inner(key_ctrl('f')));
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::History);
+
+    app.picker = None;
+    assert!(app.key_inner(key_ctrl('t')));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.navigation.target, WorkbenchTarget::Session);
+    assert!(app.details.is_some());
+    app.details = None;
+    app.navigation.screen = Screen::Graph;
+    app.editor = Some(Editor {
+        target: "comment:test".into(),
+        input: InputBuffer {
+            text: "hello world".into(),
+            cursor: 5,
+            preferred_col: None,
+        },
+    });
+    assert!(app.key_inner(key_ctrl('k')));
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "hello");
+    assert_eq!(app.navigation.screen, Screen::Graph);
+}
+
+#[test]
+fn active_picker_owns_global_shortcuts_and_escape_before_zoom() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation
+        .update_presentation(|presentation| presentation.split = true);
+    app.navigation.zoom(true);
+    app.focus = Focus::Graph;
+    app.picker = Some(Picker::new(Kind::History));
+    app.picker.as_mut().unwrap().query = "keep query".into();
+
+    for key in [
+        key_ctrl('p'),
+        key_ctrl('f'),
+        key_ctrl('t'),
+        key_ctrl('k'),
+        key_press(KeyCode::F(2)),
+    ] {
+        assert!(app.key_inner(key));
+        assert_eq!(app.picker.as_ref().unwrap().kind, Kind::History);
+        assert_eq!(app.picker.as_ref().unwrap().query, "keep query");
+        assert!(app.navigation.presentation().zoomed);
+        assert_eq!(app.navigation.screen, Screen::Workbench);
+    }
+    assert!(app.approval.is_none());
+    assert!(app.details.is_none());
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(app.picker.is_none());
+    assert!(app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+}
+
+#[test]
+fn interview_owns_global_navigation_shortcuts_except_its_command_palette() {
+    let mut app = test_app();
+    let question = serde_json::from_value(serde_json::json!({
+        "id": "scope",
+        "context": "Choose a scope.",
+        "question": "Which scope?",
+        "options": [{"label": "Small"}, {"label": "Full"}]
+    }))
+    .unwrap();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((42, question));
+    app.sync_interview();
+    app.interview_forms
+        .get_mut(&app.conversation)
+        .unwrap()
+        .paste("preserve this answer");
+
+    assert!(app.key_inner(key_ctrl('t')));
+    assert!(app.key_inner(key_ctrl('f')));
+    assert!(app.details.is_none());
+    assert!(app.picker.is_none());
+    assert_eq!(
+        app.interview_forms[&app.conversation].input.text,
+        "preserve this answer"
+    );
+
+    assert!(app.key_inner(key_ctrl('p')));
+    assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Commands);
+    assert_eq!(
+        app.interview_forms[&app.conversation].input.text,
+        "preserve this answer"
+    );
+}
+
+#[test]
+fn interview_escape_closes_the_form_before_restoring_zoomed_split() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.update_presentation(|p| p.split = true);
+    app.navigation.zoom(true);
+    let question = serde_json::from_value(serde_json::json!({
+        "id": "scope",
+        "context": "Choose a scope.",
+        "question": "Which scope?",
+        "options": [{"label": "Small"}, {"label": "Full"}]
+    }))
+    .unwrap();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((42, question));
+    app.sync_interview();
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(!app.interview_forms[&app.conversation].visible);
+    assert!(app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(!app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+}
+
+#[test]
+fn ctrl_k_deletes_to_end_in_editing_details_composer() {
+    let mut app = test_app();
+    let mut details = Details::default();
+    details.editing = true;
+    details.key = "worker:t1".into();
+    details.conversation = app.conversation.clone();
+    details.input_width = [40, 40];
+    let composer_key = details.composer_key();
+    details.drafts.borrow_mut().insert(
+        composer_key,
+        Composer {
+            input: InputBuffer {
+                text: "keep delete this".into(),
+                cursor: "keep ".len(),
+                preferred_col: None,
+            },
+            ..Composer::default()
+        },
+    );
+    app.details = Some(details);
+
+    assert!(app.key_inner(key_ctrl('k')));
+
+    let details = app.details.as_ref().unwrap();
+    let composer = details.drafts.borrow();
+    let input = &composer[&details.composer_key()].input;
+    assert_eq!(input.text, "keep ");
+    assert_eq!(input.cursor, "keep ".len());
+    assert!(details.editing);
+}
+
+#[test]
+fn escape_restores_zoom_split_before_leaving_workbench() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.update_presentation(|p| p.split = true);
+    app.navigation.zoom(true);
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(!app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert_eq!(app.navigation.screen, Screen::Graph);
+}
+
+#[test]
+fn escape_closes_details_editor_before_restoring_zoomed_split() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.update_presentation(|p| p.split = true);
+    app.navigation.zoom(true);
+    let mut details = Details::default();
+    details.editing = true;
+    app.details = Some(details);
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(!app.details.as_ref().unwrap().editing);
+    assert!(app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+    assert!(!app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+}
+
+#[test]
+fn escape_closes_comment_editor_before_restoring_zoomed_split() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.update_presentation(|p| p.split = true);
+    app.navigation.zoom(true);
+    app.editor = Some(Editor {
+        target: "worker:t1".into(),
+        input: InputBuffer::with_text("unsent comment"),
+    });
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+
+    assert!(app.editor.is_none());
+    assert_eq!(app.get_comment_draft("worker:t1").text, "unsent comment");
+    assert!(app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+}
+
+#[test]
+fn escape_closes_plan_view_before_restoring_zoomed_split() {
+    let mut app = test_app();
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.update_presentation(|p| p.split = true);
+    app.navigation.zoom(true);
+    app.plan_view = Some(PlanView::new("p1".into()));
+
+    assert!(app.key_inner(key_press(KeyCode::Esc)));
+
+    assert!(app.plan_view.is_none());
+    assert!(app.navigation.presentation().zoomed);
+    assert!(app.navigation.presentation().split);
+}
+
+#[test]
+fn f2_reopens_pending_decision_cards() {
+    let mut app = test_app();
+    app.view.approvals.push(view::PendingApproval {
+        request: "r1".into(),
+        role: "worker:t1".into(),
+        provider: "codex".into(),
+        summary: "Allow the requested action?".into(),
+        orchestrator: false,
+        options: vec![("allow".into(), "Allow".into(), "allow".into())],
+    });
+    app.approval_hidden.insert("r1".into());
+    assert!(app.key_inner(key_press(KeyCode::F(2))));
+    assert!(app.approval.is_some());
+    assert!(app.approval_hidden.is_empty());
 }
 
 #[test]

@@ -33,7 +33,12 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
     let Some(diff) = &mut app.diff else {
         return false;
     };
-    diff.draw(frame, &app.view);
+    let area = if app.navigation.screen == Screen::Workbench {
+        panel_area(frame.area(), 84)
+    } else {
+        frame.area()
+    };
+    diff.paint_at(frame, area, &app.view);
     true
 }
 
@@ -44,7 +49,12 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
     let Some(details) = &mut app.details else {
         return false;
     };
-    details.draw(frame, &app.view);
+    let area = if app.navigation.screen == Screen::Workbench {
+        list_area(frame.area())
+    } else {
+        frame.area()
+    };
+    details.draw_at(frame, area, &app.view);
     app.text_area = Some(details.text_area);
     app.text_origin = details.scroll;
     app.sync_native_views();

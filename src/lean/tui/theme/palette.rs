@@ -146,7 +146,7 @@ impl Theme {
 
     pub fn selected(&self) -> Style {
         self.pick(
-            card_style(ayu::SELECTION, ayu::TITLE),
+            card_style(ayu::SELECTION, ayu::FG),
             Style::default().add_modifier(Modifier::REVERSED),
         )
         .add_modifier(Modifier::BOLD)
@@ -169,7 +169,7 @@ impl Theme {
     /// The tab an open graph card shows: a filled label on the strip.
     pub fn tab_active(&self) -> Style {
         self.pick(
-            card_style(ayu::BLUE, ayu::BG),
+            card_style(ayu::SELECTION, ayu::FG),
             Style::default().add_modifier(Modifier::REVERSED),
         )
         .add_modifier(Modifier::BOLD)
@@ -184,10 +184,22 @@ impl Theme {
         .add_modifier(Modifier::BOLD)
     }
 
-    pub fn separator(&self, focused: bool) -> Style {
+    pub fn separator(&self, _focused: bool) -> Style {
+        self.pick(fg(ayu::FAINT), Style::default())
+    }
+
+    pub fn focus_surface(&self) -> Style {
+        self.pick(card_style(ayu::SELECTION, ayu::FG), Style::default())
+    }
+
+    pub fn metadata(&self) -> Style {
+        self.pick(fg(ayu::DIM), Style::default().add_modifier(Modifier::DIM))
+    }
+
+    pub fn decision(&self) -> Style {
         self.pick(
-            fg(if focused { ayu::BLUE } else { ayu::FAINT }),
-            Style::default(),
+            fg(ayu::GOLD),
+            Style::default().add_modifier(Modifier::REVERSED),
         )
     }
 

@@ -50,7 +50,7 @@ impl App {
         let trimmed = self.input.text.trim().to_owned();
         if trimmed.is_empty() {
             self.input = InputBuffer::with_text("/direct ");
-            self.focus = Focus::Chat;
+            self.set_focus(Focus::Chat);
             self.notice = Some("⚡ Wpisz polecenie po /direct i naciśnij Enter".into());
         } else if trimmed.starts_with("/direct") {
             self.submit();
@@ -78,7 +78,7 @@ impl App {
                 Err(error) => self.notice = Some(format!("✗ {error}")),
             }
         } else {
-            self.focus = Focus::Graph;
+            self.set_focus(Focus::Graph);
             self.graph_link_source = Some(target.id.clone());
             self.notice = Some(format!(
                 "🔗 Łączenie od {}: wybierz zadanie docelowe i wciśnij Enter/l (Esc anuluje)",

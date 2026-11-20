@@ -63,7 +63,10 @@ pub mod update_queue;
 pub mod view;
 pub mod workspace;
 
-pub use contracts::{ConversationState, Editor, Focus, Update};
+pub use contracts::{
+    ConversationState, Editor, Focus, NavigationFocus, NavigationState, Screen, Update,
+    WorkbenchPresentation, WorkbenchTab, WorkbenchTarget,
+};
 pub use details::Details;
 pub use diffview::DiffView;
 pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual_text_lines};
@@ -116,6 +119,28 @@ fn padded(area: Rect) -> Rect {
     } else {
         area
     }
+}
+
+/// Bound a centered panel while preserving the full viewport on small terminals.
+fn panel_area(area: Rect, max_width: u16) -> Rect {
+    if area.width < 16 || area.height < 7 {
+        return area;
+    }
+    let width = area.width.min(max_width.saturating_add(4));
+    let height = area.height.saturating_sub(4).max(1);
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let panel = Rect::new(x, y, width, height);
+    if width > 4 && height > 4 {
+        Rect::new(panel.x + 2, panel.y + 2, panel.width - 4, panel.height - 4)
+    } else {
+        panel
+    }
+}
+
+/// Center a list viewport with its own 72-column content limit.
+fn list_area(area: Rect) -> Rect {
+    panel_area(area, 72)
 }
 
 fn ascii_terminal() -> bool {

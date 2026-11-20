@@ -406,6 +406,13 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
+        self.navigation.screen = Screen::Workbench;
+        self.navigation.target = if key == "conversation" {
+            WorkbenchTarget::Session
+        } else {
+            WorkbenchTarget::Agent(key.clone())
+        };
+        self.navigation.focus = NavigationFocus::WorkbenchContent;
         self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);
         self.resolve_details_task();

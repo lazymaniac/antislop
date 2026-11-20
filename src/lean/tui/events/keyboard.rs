@@ -11,6 +11,18 @@ impl App {
         self.sync_interview();
         self.sync_approval();
         self.sync_rigor_recommendation();
+        if self.help.is_some()
+            && let Some(result) = self.route_overlays(key)
+        {
+            return result;
+        }
+        if self.picker.is_some() {
+            if key.code == KeyCode::F(1) {
+                self.show_help(Help::Picker);
+                return true;
+            }
+            return self.route_screen(key).unwrap_or(true);
+        }
         if let Some(result) = self.route_selection_and_config(key) {
             return result;
         }
@@ -19,6 +31,32 @@ impl App {
         }
         if let Some(result) = self.route_overlays(key) {
             return result;
+        }
+        // The visible interview form owns input before navigation shortcuts and
+        // zoom handling. Its own key handler keeps Ctrl+P/Ctrl+O exceptions.
+        if let Some(result) = self.route_interview(key) {
+            return result;
+        }
+        if self.details.as_ref().is_some_and(|details| details.editing)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('t')
+        {
+            return self.route_screen(key).unwrap_or(true);
+        }
+        if key.code == KeyCode::Esc
+            && self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.editing || details.searching)
+        {
+            self.details_key(key);
+            return true;
+        }
+        if key.code == KeyCode::Esc && (self.editor.is_some() || self.plan_view.is_some()) {
+            return self.route_screen(key).unwrap_or(true);
+        }
+        if self.route_navigation_escape(key) || self.route_frontend_shortcut(key) {
+            return true;
         }
         if let Some(result) = self.route_screen(key) {
             return result;
@@ -242,6 +280,76 @@ impl App {
             return self.route_graph(key);
         }
         self.chat_key(key)
+    }
+
+    fn route_navigation_escape(&mut self, key: KeyEvent) -> bool {
+        if key.code != KeyCode::Esc {
+            return false;
+        }
+        if self.navigation.presentation().zoomed {
+            self.navigation.zoom(false);
+            return true;
+        }
+        if self.navigation.screen == Screen::Workbench
+            && self.details.is_none()
+            && self.diff.is_none()
+            && self.plan_view.is_none()
+        {
+            self.navigation.screen = Screen::Graph;
+            self.set_focus(Focus::Graph);
+            return true;
+        }
+        false
+    }
+
+    fn route_frontend_shortcut(&mut self, key: KeyEvent) -> bool {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if control && key.code == KeyCode::Char('k') {
+            if self.editor.is_some()
+                || self.flow_editor.is_some()
+                || self.graph_filters.is_some()
+                || self.interview_visible()
+                || self.details.as_ref().is_some_and(|details| details.editing)
+                || self
+                    .details
+                    .as_ref()
+                    .is_some_and(|details| details.searching)
+            {
+                return false;
+            }
+            self.navigation.screen = Screen::Workbench;
+            self.navigation.target = WorkbenchTarget::Session;
+            self.navigation.focus = NavigationFocus::Composer;
+            self.focus = Focus::Chat;
+            return true;
+        }
+        if control {
+            match key.code {
+                KeyCode::Char('p') => {
+                    self.picker = Some(Picker::new(Kind::Commands));
+                    return true;
+                }
+                KeyCode::Char('t') => {
+                    self.navigation.screen = Screen::Workbench;
+                    self.navigation.target = WorkbenchTarget::Session;
+                    self.navigation.focus = NavigationFocus::WorkbenchContent;
+                    self.open_details("conversation".into());
+                    return true;
+                }
+                KeyCode::Char('f') => {
+                    self.navigation.screen = Screen::Workbench;
+                    self.navigation.target = WorkbenchTarget::Session;
+                    self.picker = Some(Picker::new(Kind::History));
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if key.code == KeyCode::F(2) && !self.interview_visible() {
+            self.show_pending_approvals();
+            return true;
+        }
+        false
     }
 
     fn route_global_shortcut(&mut self, key: KeyEvent) -> bool {
