@@ -680,3 +680,152 @@ Zachować cały run **`/Users/sebastian/.local/state/antislop/projects/fcd81498a
 R085/R243: diagnoza exec ma ślad przyczyny producenta i własny replay skutku; nie przypisano przyczyn samemu sąsiedztwu failures. R086:1099=1092+0+7;598=97×6+16;792=323+109+360;462/138 to referencje. R087: wszystkie nowe wejścia skonsumowane, jawne N/A/ignored/hostreported i rozdzielenie generacji. R241/R242: zakres wniosku odpowiada pełnym testom i scenariuszom, bez ekstrapolacji do live lub fontpx. R244/R245: progi user108, rzeczywisty contentRect i App::draw/key/transport mierzą odrębne wymagania. R246: run, źródło, build, env, cwd, argv, raw i pełne komórki zachowane. Brak stwierdzonego issue tych ryzyk w obecnej analizie. `unblocked_work_remaining=false`: cała dozwolona praca ukończona. `commit_message: docs(tui): verify composed capture and cwd repairs`.
 
 Aktualne pełne raw wymaganych suite, pięciu sekwencji i jawnego dodatkowego failure Git: `57f7ffc8-cb5e-418f-930b-59fc126fbd63`. Capture/draw-key: `66da7f5b-7eb2-4bd1-8c12-1921e7fe815d`; pełny lib/lista/cwd: `5336eda1-7e92-47e4-b80a-9d2c1023cb0b`. Historyczne evidence r15 i wcześniejsze pozostają cytowane i zachowane.
+
+
+## Finalizacja domyślnego UI — v2-default
+
+Ta sekcja opisuje finalizację w miejscu (zatwierdzony wariant A), na bazie
+`44bb7b3a0d6c4ff3e52301e57173382c55ba1860`. Poprzednie wyniki i ograniczenia
+pozostają historią. Zatwierdzony raport v2-readiness r17 był warunkiem rozpoczęcia
+usunięć, a nie zastępstwem walidacji zmian poniżej.
+
+Zwykłe wejście terminalowe już prowadziło do jednego `tui::run` i koordynatora
+Graph/Workbench. Finalizacja usuwa alternatywne pełnoekranowe gałęzie z tego
+koordynatora i kieruje pozostałe wejście Diff do Workbench; nie dodaje flagi,
+konfiguracji ani drugiego frontendu. Tryb tekstowy pozostaje własną funkcją CLI.
+
+| Usunięta lub zastąpiona ścieżka | Odpowiednik i sprawdzany scenariusz |
+| --- | --- |
+| `specialized_screens::draw_details`: pełny ekran poza Workbench | `open_details` → Workbench → `draw_workbench_at`; wejścia Enter/Ctrl+T, wszystkie dostępne zakładki, wynik i zaznaczenie Unicode przez rzeczywisty App::draw/key. |
+| `specialized_screens::draw_diff`: pełny ekran poza Workbench | `open_diff` → Workbench Diff z tym samym DiffView; `d` z grafu także przy zachowanej historycznej rundzie; komentarze/review/odświeżenie nadal używają tych samych requestów. Esc wybiera Podsumowanie. |
+| Pośrednie metody `Details::draw_at` / `draw_at_themed` | Wspólne `draw_at_inner` wywoływane bezpośrednio przez komponent Details i adapter Workbench. Dotychczasowe asercje komponentów, dashboardów, danych i błędów PTY pozostają. |
+| Stary wybór zakładek Details wewnątrz Workbench | Ctrl+Left/Right według istniejącego `workbench::neighbour_tab`; Tab zmienia panel. Cyfra nie rozjeżdża treści Results z nagłówkiem. Akcje ukończenia sesji 1–3 zachowują wcześniejszy priorytet. |
+
+Zachowano współdzielone renderery zawartości, samodzielny komponent `Details::draw`,
+adaptacyjny Graph/chat, osadzony inspektor grafu, plan/config/modale, oryginalne
+modele, szkice i korelacje odpowiedzi. Nie zmieniono protokołu ani schematu bazy.
+Nie usuwano materiałów `work/visualizations`. Graph nadal nie zawiera native PTY.
+
+Pomoc kontekstowa i README rozróżniają Ctrl+Left/Right (zakładki), Tab (panel),
+Ctrl+B (lista/inspektor), zoom, rozmiar splitu, przypięcie PTY, rundy i dokumenty.
+Globalne klawisze docierają również do Workbench/Diff; edytory, formularze, modale
+i native PTY zachowują priorytet. Native przekazuje każdy klawisz poza Ctrl+] do
+CLI, w tym Ctrl+C. Udokumentowano też Ctrl+I oraz Ctrl+Enter/Ctrl+M, zależnie od
+rozróżniania klawiszy przez terminal. W głównym czacie Ctrl+K otwiera composer
+sesji; opisy usuwania tekstu wskazują kontekst edytora i pustego szkicu.
+
+Hologram review: `hr1-892a8bbf0c3b6991a03f` jest świadomą zmianą powierzchni API:
++`load_diff`, −`draw_at`, −`draw_at_themed`. Odbiorcy usuniętych wrapperów zostali
+sprawdzeni; `Details::draw` używa teraz bezpośrednio wspólnego oryginału.
+`load_diff` zawiera dawną operację tworzenia/fetch DiffView i jest współdzielony
+z `open_details`, aby samo uzgadnianie wejścia nie zapętlało nawigacji ani nie
+powielało żądania. To rozpatrzona zmiana API, nie ukryty wynik „0 findings”.
+
+Izolację wejścia odtworzono dodatkowym testem rzeczywistego `App::key`: litery
+`p`, `z`, `,`, `.` trafiają w całości do composera agenta i edytora komentarza,
+bez zmiany rundy/zakładki/zoomu/przypięcia. Szkic czatu oraz niezależny szkic
+agenta pozostają zachowane. Nawigacja Workbench ustępuje edytorom, wyszukiwaniu
+i planowi; istniejący jawny Ctrl+W composera nadal przełącza rolę. Jest to nowy
+dowód własności klawiszy, a nie założenie wyprowadzone ze starego PASS readiness.
+
+### Końcowy replay v2-default
+
+Nowe pełne bufory i ich manifesty są indeksowane przez
+`artifacts/tui-redesign/default-ui-renders.json`. Oryginalny plik
+`reference-renders.json` pozostaje zatwierdzoną, niezmienioną historią
+(SHA-256 `59af4a2db2274fac43c1e750c817fbe25f961a97536efe5e6329b00f243439b6`).
+W każdym z czterech trybów odtworzono 97 fixture, 598 buforów i 1 811 230
+komórek; indeks nadal obejmuje 792 kombinacje. Niezależna walidacja sprawdza
+pełny obszar i unikalne współrzędne każdej komórki oraz identyczny zestaw nazw.
+**595 buforów na tryb jest identycznych z approved r17; zmieniły się wyłącznie
+trzy próbki pomocy: 100×30, 120×40 i 160×50.** Nie podmieniono pozostałych
+renderów ani nie wykorzystano starego PASS w miejsce nowego eksportu.
+
+Pełne testy budowano `./cargo.sh test --lib --tests --no-run
+--message-format=json`, następnie uruchamiano pełne wskazane binaria z trwałego
+cwd i `--test-threads=1`. `final-ui/` zawiera powtórzenie pełnego lib i lean_tui
+po ostatnich poprawkach własności klawiszy. Dokładne argv, cwd, env, hashe binariów,
+logi i skrypty są zachowane w runie. Build zachowuje zwykły PATH; lib/capture
+mają kontrolowany PATH z prawdziwym rustc/Python i narzędziami systemowymi,
+a integracje zwykły PATH wymagany przez preflight przykładowego AGY.
+
+| Kontrola | Wynik końcowy |
+| --- | --- |
+| fmt --check / check / clippy --all-targets -- -D warnings | exit 0 / 0 / 0 |
+| pełny lib | 1096 passed, 0 failed, 7 ignored, 0 filtered |
+| lean_tui / lean_core / lean_messages | 116 / 27 / 21 passed, 0 failed |
+| lean_plan / lean_plan_history | 13 / 4 passed, 0 failed |
+| lean_approvals / lean_projects / lean_recovery | 2 / 4 / 20 passed, 0 failed |
+| pełne message / rigor / plan_consent / recovery / navigation sequences | 1 / 1 / 1 / 4 / 2 passed, 0 failed; host clipboard 1 ignored |
+| capture contracts, każdy z czterech trybów | 2 passed, 1 ignored eksport; eksport wykonano osobno: 1 passed |
+| porównanie pełnych capture / git diff --check | exit 0 / 0 |
+| hologram review | exit 0, świadoma zmiana API opisana wyżej |
+
+Surowe pośrednie failures pozostają oddzielone od końcowych wyników: obcięty nowy
+tekst pomocy przy 68 kolumnach; utracona własność Tab inspektora; fixture
+zaznaczania wymagające nowego wejścia i Ctrl+Right; błędne założenia nowych testów
+co do zakładek roli. Zachowano dotychczasowe asercje, poprawiono routing lub setup
+i odtworzono pełne odpowiednie suite. Pierwsze przebiegi odzyskiwania znajdowały
+na odziedziczonym PATH rzeczywisty Codex; własne przebiegi walidacji przerwano,
+a lib odtworzono z kontrolowanym PATH. Brak rustc w tym PATH oraz wymóg AGY
+w testach aktywacji również mają jawne raw failures i pełne udane powtórzenia.
+Nie są przedstawiane jako PASS.
+
+Ograniczenia pozostają jawne: siedem ignored w pełnym lib; hostowy clipboard
+nie został ponownie zmierzony; TestBackend nie mierzy fizycznego fontu hosta.
+Build i testy nie dowodzą aktywacji demona użytkownika. Nie było potrzeby ani
+próby takiej aktywacji; testy aktywacji dotyczą izolowanych fixture.
+
+Zachować cały dokładny run:
+`/Users/sebastian/.local/state/antislop/projects/fcd81498ab4176caf43a61287ab0c59fbc3f6b16b7ff9af2a0ce856efad5fcd2/task-state/c31023d6-2ed2-475a-9e87-be31ab32be26/g13/run-20261121-delivery`.
+Zawiera cztery pary `capture-MODE/final-renders.json` i `manifest.json`,
+`capture-comparison.json`, skrypty weryfikacji i porównania, pełne logi, hashe
+źródeł i buildów, wersje narzędzi oraz essentials wymaganych kontroli.
+Rustc/cargo 1.98.1, Git 2.54.0 (Apple Git-157), hologram 0.17.0.
+
+C1–C3 potwierdzone dla finalizacji źródła i opisanych scenariuszy. Nowe UI jest
+jedyną ścieżką szczegółów aplikacji; współdzielone komponenty i modele zachowano.
+Nie pozostał zależny od zewnętrznego wejścia warunek wznowienia.
+
+### Korekta celu F5 po review (runda 2)
+
+Finding F5 / R151 / R271 / R274: globalny skrót przechwytywał F5 przed
+obsługą Details i rozstrzygał cel z zaznaczenia grafu lub retryable audit.
+W Workbench (również Diff), przy aktywnym Details i bez rozwiniętego grafu,
+F5 przechodzi teraz przez istniejące `details_key`, tak jak kontekstowe `u`.
+Jawny cel agenta/sesji pozostaje rozstrzygany przez oryginalne
+`details_primary_key`; nie zmieniono modeli ani reguł dostępności recovery.
+Graf zachowuje dotychczasowy globalny wybór celu, a edytory, wyszukiwanie,
+modale i native PTY zachowują wcześniejszy priorytet wejścia.
+
+Regresja `workbench_f5_targets_the_visible_agent_before_graph_and_audit`
+używa rzeczywistych App::draw/key, obu prezentacji Workbench/Diff i obu
+stanów audytu. Zaznaczenie grafu pozostaje na orkiestratorze, widoczny jest
+worker:t1. F5 wybiera t1 przy aktywnym zadaniu; przy approved t1 i retryable
+audit nie otwiera ani restartu orkiestratora, ani ponowienia audytu.
+Wynik i komunikat porównano z istniejącym `u`; szkic Unicode jest zachowany.
+
+Końcowa weryfikacja po korekcie: fmt --check/check/clippy --all-targets
+-- -D warnings oraz build lib/tests exit 0. Pełne suite z trwałego cwd,
+--test-threads=1: lib 1097 passed/0 failed/7 ignored; lean_tui 116,
+lean_core 27, lean_messages 21, lean_plan 13, lean_plan_history 4,
+lean_approvals 2, lean_projects 4, lean_recovery 20 — wszystkie exit 0.
+Pięć pełnych sekwencji: 1/1/1/4/2 passed; host clipboard 1 ignored.
+Cztery pełne capture kontrakty: każdy 2 passed/1 ignored, a jawny eksport
+1 passed. Na tryb 598 buforów/1811230 komórek; niezależne porównanie
+pełnych rekordów i współrzędnych wykazało 598/598 identycznych z końcem
+rundy 1 (zatem zachowany wcześniejszy wynik porównania z approved r17).
+Indeks default-ui-renders.json wskazuje bieżące hashe i nowe pełne pliki.
+
+Dokładny trwały run do zachowania w całości:
+`/Users/sebastian/.local/state/antislop/projects/fcd81498ab4176caf43a61287ab0c59fbc3f6b16b7ff9af2a0ce856efad5fcd2/task-state/c31023d6-2ed2-475a-9e87-be31ab32be26/g13/run-20261121-f5-final`.
+Zawiera argv/cwd/env skryptu verify.py, results.json, pełne logi, porównanie,
+cztery pełne eksporty i manifesty, hashe binariów i wersje. Poprzedni run
+run-20261121-delivery pozostaje historycznym dowodem, nie zastępuje powtórzeń.
+Rustc/cargo 1.98.1, Git 2.54.0 Apple Git-157, hologram 0.17.0.
+Hologram review 44bb7b3 --json: exit 0, count 1, ten sam świadomy finding
+hr1-892a8bbf0c3b6991a03f opisany wyżej; korekta nie dodaje API.
+Pierwsza próba check/clippy/build: exit 101, E0624 prywatne details_primary_key;
+naprawiono używając istniejącego details_key, kolejne pełne kontrole zielone.
+Ograniczenia fontu, hostowego clipboard i rozdzielenie source/build/live
+pozostają bez zmian; brak aktywacji demona użytkownika.

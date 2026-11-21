@@ -56,6 +56,31 @@ antislop "Review architecture"   # line mode, exits when idle
 antislop --config FILE --state DIR   # the directory you start it in is the project
 ```
 
+The default TUI opens the Graph with chat and the selected card's inspector.
+Enter opens the selected agent in Workbench; Ctrl+T opens the session Workbench.
+Worker deliveries start on Diff; other roles use their available tabs. The
+Workbench keeps each target's tab, round, scroll, query and draft independently.
+
+| Context | Keys |
+| --- | --- |
+| Graph | arrows select cards; Enter opens Workbench; Ctrl+B toggles inspector; `/` searches; `f` filters; `g` groups; 1–4 toggle relation types; `z`/Space folds cards; `d` opens task Diff |
+| Workbench | Ctrl+Left/Right changes tabs; Tab/Shift+Tab changes content/terminal focus; Ctrl+B toggles list; `z` zooms; Alt+Up/Down resizes the split; `p` pins the terminal owner |
+| Workbench history | `,`/`.` selects rounds; newest follows live; Alt+Left/Right selects result documents; historical PTY is read-only and unavailable snapshots are explicit |
+| Native PTY | focus terminal, `i` enters native input; Ctrl+] returns to Workbench navigation; every other key goes to the CLI, including Ctrl+C and function keys |
+| Agent composer | `a` opens draft; Ctrl+T cycles queue/steer/interrupt; Enter sends; Esc returns without discarding draft |
+| Global frontend navigation | F1 help, F2 decision inbox, Ctrl+P palette, Ctrl+T session Workbench (Ctrl+I where distinct from Tab), Ctrl+F search, Ctrl+K session composer, Ctrl+Y copies selected application text |
+| Global workflow keys | Ctrl+N new conversation, Ctrl+O conversation picker, Ctrl+G project picker, Ctrl+L plan, Ctrl+Enter / Ctrl+M rigor (Ctrl+M if distinct from Enter), F3 interview, F4 plan history, F5 task actions, F6 pause/continue, F7 reject plan, F8 configuration, Ctrl+X cancel |
+| Exit | Esc leaves the active editor/modal or zoom first; Ctrl+C quits the frontend outside native PTY; daemon work continues |
+
+Ctrl+R resumes the plan or opens history in Chat/Graph. Ctrl+W switches the
+worker/reviewer target in Workbench. Comment/agent editors and forms own their
+editing keys; Ctrl+K in main chat opens the session composer. Ctrl+P also exposes workflow actions; F1 shows contextual controls. In native PTY, leave input with
+Ctrl+] before using application shortcuts. Graph contains no native PTY.
+Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
+Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining
+a dirty draft. Chat sends with Enter/Ctrl+S; Alt+Enter/Ctrl+J inserts a newline,
+Ctrl+V attaches a clipboard image and Alt+Backspace removes the latest attachment.
+
 Runtime files live outside source checkouts. The root is `ANTISLOP_STATE_ROOT`,
 else `$XDG_STATE_HOME/antislop`, else `~/.local/state/antislop`. Each project gets
 `projects/<identity>` under that root. Linked Git worktrees share the identity of
