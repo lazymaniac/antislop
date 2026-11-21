@@ -404,6 +404,17 @@ impl App {
     }
 
     fn route_unblock(&mut self, key: KeyEvent) -> Option<bool> {
+        if let Some(modal) = self.recovery_consent.as_mut() {
+            match modal.key(key) {
+                consent::Outcome::None => {}
+                consent::Outcome::Close => self.recovery_consent = None,
+                consent::Outcome::Confirm => {
+                    let consent = self.recovery_consent.take().expect("consent modal exists");
+                    self.submit_recovery_consent(consent);
+                }
+            }
+            return Some(true);
+        }
         let modal = self.unblock.as_mut()?;
         match modal.key(key) {
             unblock::Outcome::None => {}
@@ -415,6 +426,37 @@ impl App {
             }
         }
         Some(true)
+    }
+
+    fn submit_recovery_consent(&self, consent: consent::RecoveryConsent) {
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let conversation = self.conversation.clone();
+        std::thread::spawn(move || {
+            let request = Request::Conversation(crate::lean::daemon::ConversationRequest::Recover(
+                crate::lean::TaskRecoveryRequest {
+                    conversation: conversation.clone(),
+                    plan: consent.plan.clone(),
+                    task: consent.task.clone(),
+                    action: crate::lean::RecoveryAction::IntegrateWithConsent,
+                    consent_files: Some(consent.selected_files()),
+                    freshness_token: consent.token,
+                    message: None,
+                },
+            ));
+            let notice = match client.call(&request) {
+                Ok(reply) => match reply["status"].as_str() {
+                    Some(status) => format!(
+                        "{}: {status} — {}",
+                        consent.task,
+                        reply["notice"].as_str().unwrap_or("recovery completed")
+                    ),
+                    None => format!("✗ recovery response has no final status: {reply}"),
+                },
+                Err(error) => format!("✗ {error}"),
+            };
+            let _ = updates.send(Update::Notice(notice));
+        });
     }
 
     fn route_screen(&mut self, key: KeyEvent) -> Option<bool> {
@@ -587,4 +629,151 @@ fn embedded_diff_graph_key(key: KeyEvent, allow_selection: bool) -> bool {
         key.code,
         KeyCode::Char('1'..='4' | ',' | '.') | KeyCode::Enter
     ) || (allow_selection && matches!(key.code, KeyCode::Left | KeyCode::Right))
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::lean::daemon::{Client, socket};
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn recovery_handler_loads_snapshot_and_submits_only_confirmed_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = socket(directory.path());
+        let listener = UnixListener::bind(socket).unwrap();
+        let (requests_tx, requests_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for response in [
+                json!({"freshness_token":"pre-review-token"}),
+                json!({"status":"needs_user","notice":"manual snapshot review ready"}),
+                json!({
+                    "status":"needs_user", "result":"snapshot-42", "round":3,
+                    "verdict":{"approved":true,"result":"snapshot-42","round":3},
+                    "base":"base-17", "freshness_token":"fresh-token-9",
+                    "spec":{"delivery":"code"},
+                    "feedback":{"manual_snapshot":{"result":"snapshot-42","round":3}}
+                }),
+                json!({"changed_files":["src/keep.rs","src/skip.rs"]}),
+                json!({"status":"needs_user","notice":"one selected file integrated"}),
+            ] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                requests_tx.send(request["request"].clone()).unwrap();
+                let mut writer = stream;
+                serde_json::to_writer(&mut writer, &json!({"data":response,"error":null})).unwrap();
+                writer.write_all(b"\n").unwrap();
+                writer.flush().unwrap();
+            }
+        });
+
+        let client = Client::at(directory.path());
+        let (mut app, updates) = App::test_app_with_client(client);
+        app.view.apply(&json!({
+            "seq":1,"kind":"plan_proposed",
+            "payload":{"plan":"plan-7","tasks":[{"id":"task-4","title":"Manual fix","change_kind":"code","status":"failed"}]}
+        }));
+        app.view.apply(&json!({
+            "seq":2,"kind":"task","payload":{"id":"task-4","status":"failed","reason":"worker exited"}
+        }));
+        app.open_unblock(Some("task-4".into()));
+        assert!(
+            app.unblock.as_ref().unwrap().choices.iter().any(|choice| {
+                choice.action == crate::lean::RecoveryAction::ReviewManualSnapshot
+            })
+        );
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        for _ in 0..3 {
+            app.route_unblock(key(KeyCode::Down));
+        }
+        app.route_unblock(key(KeyCode::Enter));
+        let notice = updates
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        app.apply_update(notice);
+        assert!(app.notice.as_deref().unwrap().contains("needs_user"));
+        let task_request = requests_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(task_request["op"], "task");
+        let review_request = requests_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(review_request["op"], "recover");
+        assert_eq!(review_request["action"], "review_manual_snapshot");
+        assert_eq!(review_request["freshness_token"], "pre-review-token");
+
+        app.view.apply(&json!({
+            "seq":3,"kind":"task","payload":{"id":"task-4","status":"needs_user"}
+        }));
+        app.open_unblock(Some("task-4".into()));
+        assert!(
+            app.unblock.as_ref().unwrap().choices.iter().any(|choice| {
+                choice.action == crate::lean::RecoveryAction::IntegrateWithConsent
+            })
+        );
+        app.route_unblock(key(KeyCode::Down));
+        app.route_unblock(key(KeyCode::Enter));
+        let conversation = app.conversation.clone();
+        let generation = app.generation;
+        let Update::RecoveryConsent { result, .. } = updates
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+        else {
+            panic!("recovery handler must return the loaded consent snapshot");
+        };
+        app.apply_update(Update::RecoveryConsent {
+            conversation,
+            generation,
+            plan: "plan-7".into(),
+            task: "task-4".into(),
+            result,
+        });
+        let consent = app.recovery_consent.as_ref().unwrap();
+        assert_eq!(consent.result, "snapshot-42");
+        assert_eq!(consent.token, "fresh-token-9");
+        assert_eq!(consent.target, "project working tree");
+
+        app.route_unblock(key(KeyCode::Down));
+        app.route_unblock(key(KeyCode::Char(' '))); // select only src/skip.rs
+        app.route_unblock(key(KeyCode::Enter));
+        assert!(app.recovery_consent.as_ref().unwrap().confirming);
+        app.route_unblock(key(KeyCode::Enter));
+
+        let task_request = requests_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(task_request["op"], "task");
+        assert_eq!(task_request["id"], "task-4");
+        assert_eq!(task_request["plan"], "plan-7");
+        let diff_request = requests_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(diff_request["op"], "diff");
+        let recover_request = requests_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(recover_request["op"], "recover");
+        assert_eq!(recover_request["task"], "task-4");
+        assert_eq!(recover_request["freshness_token"], "fresh-token-9");
+        assert_eq!(recover_request["consent_files"], json!(["src/skip.rs"]));
+
+        let notice = updates
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        app.apply_update(notice);
+        assert!(app.notice.as_deref().unwrap().contains("needs_user"));
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("one selected file integrated")
+        );
+        server.join().unwrap();
+    }
 }

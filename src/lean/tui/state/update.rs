@@ -92,6 +92,23 @@ impl App {
             update @ Update::ProjectReady { .. } => self.apply_project_ready(update),
             update @ Update::ProjectStatus { .. } => self.apply_project_status(update),
             update @ Update::Notice { .. } => self.apply_notice(update),
+            Update::RecoveryConsent {
+                conversation,
+                generation,
+                plan,
+                task: _,
+                result,
+            } => {
+                if conversation == self.conversation
+                    && generation == self.generation
+                    && self.view.plan.as_deref() == Some(&plan)
+                {
+                    match result {
+                        Ok(consent) => self.recovery_consent = Some(consent),
+                        Err(error) => self.notice = Some(format!("✗ {error}")),
+                    }
+                }
+            }
             update @ Update::TaskFailed { .. } => self.apply_task_failed(update),
             update @ Update::Task { .. } => self.apply_task(update),
             update @ Update::Diff { .. } => self.apply_diff(update),

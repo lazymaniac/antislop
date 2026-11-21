@@ -133,6 +133,7 @@ pub struct App {
     pub graph_viewport: Option<(u16, u16)>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
+    pub(super) recovery_consent: Option<consent::RecoveryConsent>,
     /// The visible agent CLI approval card.
     pub(super) approval: Option<super::approval::ApprovalCard>,
     /// Approvals the user put off; they stay open and the palette lists them.
@@ -256,6 +257,7 @@ macro_rules! initial_app {
             workbench_areas: super::workbench::WorkbenchAreas::default(),
             workbench_dragging: false,
             unblock: None,
+            recovery_consent: None,
             approval: None,
             approval_hidden: std::collections::HashSet::new(),
             decision_inbox: None,

@@ -8,6 +8,9 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
             .is_some_and(|v| v["approved"] == true),
         "independent review must approve the current result before integration",
     )?;
+    if manual_snapshot_current(work) {
+        return integrate_manual_snapshot(core, work);
+    }
     let (base, change) = integration_commits(work)?;
     let integration_project = integration_project(core, work)?;
     let all_changed = git::changed_files(&integration_project, &base, &change)?;
@@ -28,6 +31,105 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     mark_remaining_changes(work, &integration_project, &change, &all_changed)?;
     finish_integration(core, work, &notice, card)?;
     core.queue_worktree_cleanup(&work.task.id);
+    work.notice = Some(notice);
+    Ok(())
+}
+
+fn manual_snapshot_current(work: &RecoveryWork) -> bool {
+    let Some(result) = work.task.result.as_deref() else {
+        return false;
+    };
+    work.task.feedback.as_ref().is_some_and(|feedback| {
+        feedback["manual_snapshot"]["result"] == result
+            && feedback["manual_snapshot"]["round"] == work.task.round
+            && work.task.verdict.as_ref().is_some_and(|verdict| {
+                verdict["result"] == result && verdict["round"] == work.task.round
+            })
+    })
+}
+
+fn integrate_manual_snapshot(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
+    let (base, result) = integration_commits(work)?;
+    let all_changed = git::changed_files(&work.project, &base, &result)?;
+    let consent = work
+        .req
+        .consent_files
+        .as_deref()
+        .ok_or_else(|| Error::Invalid("explicit file consent is required".into()))?;
+    require(!consent.is_empty(), "choose at least one file to integrate")?;
+    require(
+        consent
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == consent.len(),
+        "file consent contains duplicate paths",
+    )?;
+    validate_consent(work, &all_changed)?;
+    work.spec.validate_change_paths(&all_changed)?;
+    if work.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+        require(
+            consent.iter().collect::<std::collections::BTreeSet<_>>()
+                == all_changed
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+            "untracked artifact recovery requires consent for every changed output",
+        )?;
+    }
+
+    // A manual recovery snapshot describes edits already in the project's
+    // working tree. Confirm each authorized path still has the reviewed tree
+    // entry, then commit those paths in place; applying the snapshot as a Git
+    // change would replay the same edits and could overwrite newer user work.
+    let mut completed = work
+        .task
+        .feedback
+        .as_ref()
+        .and_then(|feedback| feedback["manual_snapshot"]["integrated_files"].as_array())
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|file| file.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for file in consent {
+        if !completed.contains(file) {
+            completed.push(file.clone());
+        }
+    }
+    let current = git::snapshot(&work.project, git::CommitPurpose::WorkspaceSnapshot)?;
+    require(
+        git::matching_paths(&work.project, &result, &current, &completed)?.len() == completed.len(),
+        "manual recovery files changed after review; review the current working tree again",
+    )?;
+    let (notice, card) = if work.config.policy.local_commits && !consent.is_empty() {
+        let commit = git::commit_paths(&work.project, consent, git::CommitPurpose::ManualRecovery)?;
+        (
+            format!("integrated selected manual files as {commit}"),
+            (Outcome::Committed, Some(commit)),
+        )
+    } else {
+        (
+            "selected manual files remain applied in the project working tree".into(),
+            (Outcome::Applied, None),
+        )
+    };
+    if let Some(feedback) = work.task.feedback.as_mut()
+        && let Some(manual) = feedback["manual_snapshot"].as_object_mut()
+    {
+        manual.insert("integrated_files".into(), json!(completed));
+    }
+    work.integrated_files = consent.to_vec();
+    if all_changed.iter().all(|file| completed.contains(file)) {
+        work.task.status = status::APPROVED.into();
+    } else {
+        work.task.status = status::NEEDS_USER.into();
+    }
+    finish_integration(core, work, &notice, card)?;
+    if work.task.status == status::APPROVED {
+        core.queue_worktree_cleanup(&work.task.id);
+    }
     work.notice = Some(notice);
     Ok(())
 }

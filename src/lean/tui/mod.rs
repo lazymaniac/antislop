@@ -31,6 +31,7 @@ std::thread_local! {
 mod approval;
 pub mod clipboard;
 pub mod config;
+pub mod consent;
 mod contracts;
 mod dashboard;
 mod decision_inbox;
@@ -317,7 +318,15 @@ fn recover_task(
             }),
         ))
         .map_err(|e| e.to_string())?;
-    Ok(reply["notice"].as_str().unwrap_or("done").to_owned())
+    let status = reply["status"]
+        .as_str()
+        .ok_or_else(|| format!("recovery response has no final status: {reply}"))?;
+    let notice = reply["notice"].as_str().unwrap_or("");
+    Ok(if notice.is_empty() {
+        status.to_owned()
+    } else {
+        format!("{status}: {notice}")
+    })
 }
 
 fn recovery_token(client: &Client, plan: &str, task: &str) -> std::result::Result<String, String> {

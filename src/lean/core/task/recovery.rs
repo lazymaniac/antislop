@@ -95,9 +95,15 @@ impl Core {
                 return Ok(response);
             }
         }
-        let primary = (work.req.action == RecoveryAction::ReviewManualSnapshot)
-            .then(|| self.locks.primary(&work.project))
-            .transpose()?;
+        let primary = (work.req.action == RecoveryAction::ReviewManualSnapshot
+            || (work.req.action == RecoveryAction::IntegrateWithConsent
+                && work.task.feedback.as_ref().is_some_and(|feedback| {
+                    feedback["manual_snapshot"]["result"]
+                        == work.task.result.as_deref().unwrap_or("")
+                        && feedback["manual_snapshot"]["round"] == work.task.round
+                })))
+        .then(|| self.locks.primary(&work.project))
+        .transpose()?;
         let _primary = if let Some(lock) = primary.as_ref() {
             Some(
                 mail::lock_cancellable(lock, &operation.cancel)

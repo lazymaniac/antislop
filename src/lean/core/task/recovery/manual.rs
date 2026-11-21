@@ -13,14 +13,67 @@ struct ManualReview {
 pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     let review = prepare_review(core, work)?;
     update_review_state(work, &review)?;
-    let fixed =
-        git::changed_files(&work.project, &review.base, &review.snapshot).unwrap_or_default();
+    let fixed = git::changed_files(&work.project, &review.base, &review.snapshot)?;
     work.task.feedback = Some(feedback(&review, &work.spec, &fixed, work.task.round));
     if review.verdict.approved {
         finish::approve(core, work, &review, &fixed)
     } else {
         finish::reject(core, work, &review, &fixed)
     }
+}
+
+fn await_consent(
+    core: &Arc<Core>,
+    work: &mut RecoveryWork,
+    review: &ManualReview,
+    fixed: &[String],
+) -> Result<()> {
+    super::ensure_current(core, work)?;
+    work.spec.validate_change_paths(fixed)?;
+    work.task.result = Some(review.snapshot.clone());
+    work.task.status = status::NEEDS_USER.into();
+    let notice = format!(
+        "manual fix review approved snapshot {}; choose files to integrate",
+        review.snapshot
+    );
+    note(&mut work.task, notice.clone());
+    persist_manual(core, work, &notice, &review.snapshot, None)?;
+    work.notice = Some(notice);
+    Ok(())
+}
+
+fn persist_manual(
+    core: &Core,
+    work: &RecoveryWork,
+    notice: &str,
+    snapshot: &str,
+    findings: Option<&str>,
+) -> Result<()> {
+    let _graph = core.locks.graph();
+    let _integration = core.locks.integration();
+    super::ensure_current(core, work)?;
+    core.store.update_task(&work.task)?;
+    core.announce_task(&work.req.conversation, &work.task, findings);
+    manual_event(core, work, notice, snapshot, findings)?;
+    Ok(())
+}
+
+fn manual_event(
+    core: &Core,
+    work: &RecoveryWork,
+    notice: &str,
+    snapshot: &str,
+    findings: Option<&str>,
+) -> Result<()> {
+    let mut payload = json!({ "actor": work.actor, "task": work.task.id,
+        "action": tasks::action::REVIEW_MANUAL_SNAPSHOT, "status": work.task.status,
+        "detail": tasks::bound(notice, tasks::DETAIL_LIMIT) });
+    if findings.is_some() {
+        payload["findings"] = json!(work.task.verdict.as_ref().map(|v| &v["findings"]));
+    } else {
+        payload["result"] = json!(snapshot);
+    }
+    super::events::append(core, work, &payload)
 }
 
 fn prepare_review(core: &Core, work: &mut RecoveryWork) -> Result<ManualReview> {
@@ -602,7 +655,8 @@ fn feedback(
     let (effect, effect_cut) = tasks::effect(&review.stat, fixed);
     let obligations = tasks::obligations(spec);
     json!({ "round": round, "effect": effect, "effect_cut": effect_cut,
-        "coverage": tasks::coverage(&review.verdict, &obligations) })
+        "coverage": tasks::coverage(&review.verdict, &obligations),
+        "manual_snapshot": { "result": review.snapshot, "round": round } })
 }
 
 #[cfg(test)]

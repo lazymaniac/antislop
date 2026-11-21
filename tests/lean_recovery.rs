@@ -28,6 +28,7 @@ plans = {
   "second": [task("b1", "Second plan")],
   "write_chain": [task("w1", "Write file", writes=True), task("w2", "Follow up", ["w1"])],
   "manual_fix": [task("m1", "Manual fix", writes=True)],
+  "failed_manual": [task("f1", "Fail", writes=True)],
   "parallel": [task("t1", "Fail"), task("s1", "Slow")],
   "requeue": [task("t1", "Fail"), task("p1", "Patient")],
   "stubborn": [task("x1", "Stubborn")],
@@ -741,7 +742,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             task: w1_id.clone(),
             action: RecoveryAction::IntegrateWithConsent,
             consent_files: Some(vec!["hello.txt".into()]),
-            freshness_token: token,
+            freshness_token: token.clone(),
             message: None,
         })
         .unwrap_err();
@@ -771,7 +772,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             task: w1_id.clone(),
             action: RecoveryAction::IntegrateWithConsent,
             consent_files: Some(vec!["hello.txt".into()]),
-            freshness_token: token,
+            freshness_token: token.clone(),
             message: None,
         })
         .unwrap();
@@ -929,26 +930,35 @@ fn test_recover_task_review_manual_snapshot() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
-    let plan = propose(&core, &conversation, "manual_fix");
+    let plan = propose(&core, &conversation, "failed_manual");
     wait_idle(&core, &conversation);
 
-    // Set task to needs_user
-    let mut tasks = core.store.plan(&plan).unwrap();
-    tasks[0].status = "needs_user".into();
-    core.store.update_task(&tasks[0]).unwrap();
+    let tasks = core.store.plan(&plan).unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.spec["change_kind"] == "code")
+        .expect("the manual recovery test needs the source writer, not its options task")
+        .clone();
+    assert_eq!(task.status, "waiting", "the worker failure must be natural");
+    assert!(
+        task.report
+            .as_deref()
+            .is_some_and(|report| report.contains("not logged in"))
+    );
 
     // User makes a manual fix in the project
     std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
+    std::fs::write(project.join("notes.txt"), "manual note\n").unwrap();
     let head_before = git(&project, &["rev-parse", "HEAD"]);
 
     let token = core
-        .task_freshness_token(&conversation, &plan, &tasks[0].id)
+        .task_freshness_token(&conversation, &plan, &task.id)
         .unwrap();
     let resp = core
         .recover_task(TaskRecoveryRequest {
             conversation: conversation.clone(),
             plan: plan.clone(),
-            task: tasks[0].id.clone(),
+            task: task.id.clone(),
             action: RecoveryAction::ReviewManualSnapshot,
             consent_files: None,
             freshness_token: token,
@@ -956,9 +966,145 @@ fn test_recover_task_review_manual_snapshot() {
         })
         .unwrap();
 
-    assert_eq!(resp.status, "approved");
-    let updated = core.task_unscoped(&plan, &tasks[0].id).unwrap();
-    assert_eq!(updated.status, "approved");
+    assert_eq!(resp.status, "needs_user");
+    let updated = core.task_unscoped(&plan, &task.id).unwrap();
+    assert_eq!(updated.status, "needs_user");
+    assert_eq!(updated.verdict.as_ref().unwrap()["approved"], true);
+    assert!(
+        updated
+            .feedback
+            .as_ref()
+            .unwrap()
+            .get("integration")
+            .is_none()
+    );
+    let reviewed_snapshot = updated.result.clone().unwrap();
+    assert_eq!(
+        updated.feedback.as_ref().unwrap()["manual_snapshot"]["result"],
+        reviewed_snapshot
+    );
+    let diff = core.diff(&conversation, &plan, &task.id).unwrap();
+    assert_eq!(diff["head"], reviewed_snapshot);
+    assert_eq!(diff["changed_files"], json!(["hello.txt", "notes.txt"]));
+    assert_eq!(
+        git(&project, &["rev-parse", "HEAD"]),
+        head_before,
+        "manual snapshot review must not commit before explicit file consent"
+    );
+
+    std::fs::write(project.join("hello.txt"), "newer user edit\n").unwrap();
+    let changed_token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let changed = core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::IntegrateWithConsent,
+        consent_files: Some(vec!["hello.txt".into()]),
+        freshness_token: changed_token,
+        message: None,
+    });
+    assert!(
+        changed
+            .unwrap_err()
+            .to_string()
+            .contains("changed after review")
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "newer user edit\n",
+        "integration preserves a user edit made after snapshot review"
+    );
+    std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
+
+    let token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let no_consent = core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::IntegrateWithConsent,
+        consent_files: None,
+        freshness_token: token.clone(),
+        message: None,
+    });
+    assert!(
+        no_consent.is_err(),
+        "missing consent cannot integrate reviewed files"
+    );
+    assert_eq!(
+        core.task_unscoped(&plan, &task.id).unwrap().status,
+        "needs_user"
+    );
+    let partial = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task.id.clone(),
+            action: RecoveryAction::IntegrateWithConsent,
+            consent_files: Some(vec!["hello.txt".into()]),
+            freshness_token: token.clone(),
+            message: None,
+        })
+        .unwrap();
+    assert_eq!(partial.status, "needs_user");
+    assert_eq!(partial.integrated_files, ["hello.txt"]);
+
+    std::fs::write(project.join("hello.txt"), "newer user edit\n").unwrap();
+    let changed_token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let changed = core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::IntegrateWithConsent,
+        consent_files: Some(vec!["notes.txt".into()]),
+        freshness_token: changed_token,
+        message: None,
+    });
+    assert!(
+        changed
+            .unwrap_err()
+            .to_string()
+            .contains("changed after review")
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "newer user edit\n"
+    );
+    std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
+    let completion_token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let integrated = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task.id.clone(),
+            action: RecoveryAction::IntegrateWithConsent,
+            consent_files: Some(vec!["notes.txt".into()]),
+            freshness_token: completion_token,
+            message: None,
+        })
+        .unwrap();
+    assert_eq!(integrated.status, "approved");
+    assert_eq!(integrated.integrated_files, ["notes.txt"]);
+    let replay = core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task.id.clone(),
+        action: RecoveryAction::IntegrateWithConsent,
+        consent_files: Some(vec!["hello.txt".into()]),
+        freshness_token: token,
+        message: None,
+    });
+    assert!(
+        replay.is_err(),
+        "a token from before consent cannot be replayed"
+    );
 
     // Commit policy applies to manually reviewed work, too.
     let head_after = git(&project, &["rev-parse", "HEAD"]);
@@ -967,9 +1113,11 @@ fn test_recover_task_review_manual_snapshot() {
         git(&project, &["show", "HEAD:hello.txt"]),
         "manual user fix"
     );
+    assert_eq!(git(&project, &["show", "HEAD:notes.txt"]), "manual note");
 
     // Review task result points to the snapshot commit
     assert!(updated.result.is_some());
+    let updated = core.task_unscoped(&plan, &task.id).unwrap();
     let snap_commit = updated.result.unwrap();
     assert_ne!(snap_commit, head_after);
     assert_eq!(

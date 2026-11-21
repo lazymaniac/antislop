@@ -34,7 +34,7 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         return vec![restart_choice()];
     }
     let mut choices = vec![retry_choice()];
-    if task.change_kind.has_delivery() && task.status == "needs_user" {
+    if task.change_kind.has_delivery() && matches!(task.status.as_str(), "needs_user" | "failed") {
         choices.extend(written_recovery_choices());
     }
     choices.push(restart_choice());
@@ -69,7 +69,7 @@ fn written_recovery_choices() -> [Choice; 3] {
     [
         choice(
             RecoveryAction::IntegrateWithConsent,
-            "Integrate the independently reviewed change",
+            "Review integration readiness and choose files",
             false,
         ),
         choice(
@@ -341,6 +341,16 @@ mod tests {
         use RecoveryAction::*;
         assert_eq!(
             actions(&row("needs_user", true)),
+            [
+                RetryWithGuidance,
+                IntegrateWithConsent,
+                KeepOnBranch,
+                ReviewManualSnapshot,
+                RestartAgent,
+            ]
+        );
+        assert_eq!(
+            actions(&row("failed", true)),
             [
                 RetryWithGuidance,
                 IntegrateWithConsent,

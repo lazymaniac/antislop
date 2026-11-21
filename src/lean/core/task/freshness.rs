@@ -74,6 +74,18 @@ impl Core {
                 "task {id} has no change: it does not write files or has not started"
             ))
         })?;
+        let reviewed_result = task.result.as_deref().filter(|result| {
+            task.status == status::NEEDS_USER
+                && task.verdict.as_ref().is_some_and(|verdict| {
+                    verdict["approved"] == true
+                        && verdict["result"].as_str() == Some(*result)
+                        && verdict["round"] == task.round
+                })
+        });
+        if let Some(result) = reviewed_result {
+            let project = PathBuf::from(self.store.conversation(conversation)?.project);
+            return Ok((project, base, Some(result.to_owned())));
+        }
         let worktree = worktree_path(&self.state, task)?;
         if worktree.exists() {
             return Ok((worktree, base, None));
@@ -91,6 +103,11 @@ impl Core {
         let task = self.task_unscoped(plan, id)?;
         let (dir, base, result) = self.change(conversation, &task)?;
         let patch = git::patch(&dir, &base, result.as_deref())?;
+        let changed_files = result
+            .as_deref()
+            .map(|result| git::changed_files(&dir, &base, result))
+            .transpose()?
+            .unwrap_or_default();
         let (patch, truncated) = truncate_patch(patch);
         let revision_token = diff_revision_token(conversation, plan, id, &base, result.as_deref());
         let reviewer = reviewer_profile(&config, &task.spec);
@@ -99,6 +116,7 @@ impl Core {
             "base": base,
             "head": result,
             "files": diff::parse(&patch),
+            "changed_files": changed_files,
             "truncated": truncated,
             "revision_token": revision_token,
             "reviewer": reviewer,
@@ -128,6 +146,16 @@ fn freshness_seed(
     data.push_str(task.base.as_deref().unwrap_or(""));
     data.push('\0');
     data.push_str(task.result.as_deref().unwrap_or(""));
+    data.push('\0');
+    if let Some(feedback) = task.feedback.as_ref() {
+        data.push_str(&feedback["manual_snapshot"].to_string());
+    }
+    data.push('\0');
+    if let Some(verdict) = task.verdict.as_ref() {
+        data.push_str(&verdict["approved"].to_string());
+        data.push_str(&verdict["round"].to_string());
+        data.push_str(verdict["result"].as_str().unwrap_or_default());
+    }
     data.push('\0');
     data.push_str(head);
     data.push('\0');

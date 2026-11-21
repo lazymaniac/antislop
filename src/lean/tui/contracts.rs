@@ -71,6 +71,13 @@ pub enum Update {
         result: std::result::Result<String, String>,
     },
     Notice(String),
+    RecoveryConsent {
+        conversation: String,
+        generation: u64,
+        plan: String,
+        task: String,
+        result: std::result::Result<crate::lean::tui::consent::RecoveryConsent, String>,
+    },
     /// A project was opened: switch to it, to `conversation` if one was named.
     ProjectReady {
         conn: Box<workspace::ProjectConn>,
@@ -300,6 +307,7 @@ pub struct ConversationState {
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
     pub flow_editor: Option<flow_editor::FlowEditor>,
+    pub recovery_consent: Option<consent::RecoveryConsent>,
     pub graph_link_source: Option<String>,
 }
 
@@ -372,6 +380,7 @@ impl ConversationState {
         self.plan_view = app.plan_view.clone();
         self.flow_editor = app.flow_editor.clone();
         self.graph_link_source = app.graph_link_source.clone();
+        self.recovery_consent = app.recovery_consent.clone();
     }
 
     fn capture_requests(&mut self, app: &App) {
@@ -441,6 +450,7 @@ impl ConversationState {
         app.plan_view = self.plan_view.clone();
         app.flow_editor = self.flow_editor.clone();
         app.graph_link_source = self.graph_link_source.clone();
+        app.recovery_consent = self.recovery_consent.clone();
     }
 
     fn restore_requests(&self, app: &mut App) {
