@@ -12,6 +12,9 @@ impl App {
     }
 
     pub fn open(&mut self, conversation: String) {
+        if self.refuse_pending_deletion(&conversation) {
+            return;
+        }
         if let Some(project) = self.projects.get(self.active_project) {
             self.conversation_projects
                 .insert(conversation.clone(), project.path.clone());
@@ -28,6 +31,21 @@ impl App {
         self.schedule_output_document_fetch();
         self.reset_history_recall();
         self.start_poller();
+    }
+
+    pub(in crate::lean::tui) fn refuse_pending_deletion(&mut self, conversation: &str) -> bool {
+        if self
+            .conversation_deletions
+            .iter()
+            .any(|(_, id)| id == conversation)
+        {
+            self.notice = Some(format!(
+                "Session {conversation} deletion is pending; wait for its result before opening it."
+            ));
+            true
+        } else {
+            false
+        }
     }
 
     fn save_active_conversation(&mut self) {

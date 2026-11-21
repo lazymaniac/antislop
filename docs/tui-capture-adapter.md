@@ -8,7 +8,9 @@ The ordinary plan/history family contains both an active Plan viewer and a separ
 
 Configuration includes a clean parsed configuration, a validation error, applying status, and an unsaved draft with no provider/profile entries but retained scalar settings and routes. This last specimen means an empty editable provider/profile collection, **not** valid empty TOML or a zero-field editor (which the existing renderer does not support). No file is saved. `config-compact` takes the real compact renderer at 12×5. Separate compact Workbench specimens take the 40×12 layout without the task list or terminal split. Other surfaces whose model has no separate compact state still render their applicable data at all six geometries; compactness alone does not fabricate a new asynchronous or historical state.
 
-The r13/g23 readiness inventory (174 captured, 42 responsive N/A, 576 missing) is historical diagnostic input. It is neither a count of semantically required new fixtures nor a claim about this export. The two readiness outputs and historical buffers remain untouched.
+The r13/g23 readiness inventory (174 captured, 42 responsive N/A, 576 missing) is historical diagnostic input. It is neither a count of semantically required new fixtures nor a claim about this export. Historical buffer data is retained in the self-contained reference archive described below; the integration-gate generation is appended separately.
+
+The session picker now fetches and deletes asynchronously. Four additional specimens (`session-list-loading`, `session-list-error`, `session-delete-pending`, `session-delete-error`) cover the actual pending status and raw failures at all six geometries, including visible short markers at 12×5. Error specimens use the real `Update` handlers; deletion pending retains the exact target. These are states of the session list, not the pre-action delete-confirmation dialog. The palette heading therefore no longer classifies waiting/error as semantic N/A. The full export contains 101 fixtures and 622 buffers; the previous 598 buffers remain comparable without changing their data.
 
 The matrix adds both sides of, and the exact point at, these boundaries: graph inspector content 110 columns and 16 rows; Workbench list 100 columns and 24 rows; split terminal 24 rows; and the loaded Diff file list 90 columns. Graph terminal geometries are wider/taller than the target graph area because the production main screen reserves chat and footer space; the named samples are validated by whether the inspector actually renders. Workbench records the post-draw `workbench_areas`, including actual content dimensions and list/split visibility. `workbench-tab-diff` loads a deterministic `FileDiff` fixture and checks its rendered filename plus counts, so the 90-column assertion covers the real content panel behavior.
 
@@ -53,3 +55,33 @@ Semantic checks follow painted provenance: the failed Unblock reason uses `Theme
 `semantic_contracts_reject_corrupted_capture_evidence` tests wrong warning styling on the failed reason, hidden actual marker despite forged visibility metadata, wrong reached state/view, wrong sample/target, dimensions, truncated buffers, and invented responsive N/A. Run it in all four modes with the loop above. The independent `theme_modes_tests::environment_modes_are_isolated` regression exercises the compact production status behavior and key handling across all six sizes; it remains separate from adapter expectations.
 
 A successful adapter test/export proves capture integrity, identity and the stated model/content postconditions. It does not establish D1/D2/D3 design compliance, NO_COLOR/ASCII compliance, transport behavior, or completeness of the whole TUI. Read `rendering_finding` and the raw buffers before using samples for readiness decisions.
+
+## Self-contained reference archive
+
+`artifacts/tui-redesign/reference-renders.json` uses the versioned
+`antislop-reference-archive-v1` envelope. It contains **all** original JSON bytes,
+including historical generations, full cell buffers, styles, identities and
+indexes. It has no external payload dependencies. Its six fields are `format`,
+`encoding` (`gzip+base64`), `decoded_format`, `decoded_bytes`, `decoded_sha256`,
+and `payload`. Each payload string is an independently base64-encoded chunk;
+concatenate the decoded chunks to obtain one gzip stream. Gzip CRC, exact byte
+length and SHA-256 must all validate before publishing a decoded file.
+
+The standalone decoder uses only Python's standard library and also accepts
+legacy uncompressed reference files. Both commands require a **new** destination:
+
+```sh
+python3 scripts/reference_renders.py artifacts/tui-redesign/reference-renders.json "$ANTISLOP_TASK_STATE/reference-decoded.json"
+python3 scripts/reference_renders.py --pack "$ANTISLOP_TASK_STATE/reference-decoded.json" "$ANTISLOP_TASK_STATE/reference-repacked.json"
+```
+
+Query the decoded JSON using the original schema, for example
+`jq --stream empty "$ANTISLOP_TASK_STATE/reference-decoded.json"`. Do not treat the
+envelope as a replacement inventory or omit historical fields when repacking.
+The decoder refuses unknown envelope versions, invalid field types, duplicate
+keys, corrupt/trailing gzip data, mismatched hashes, and existing output paths.
+`python3 tests/test_reference_renders.py` checks compatibility and corruption.
+
+The capture exporter retains its original cells-v1 schema and streams one
+validated production buffer at a time to the JSON serializer. It no longer
+collects every buffer's cell tree before writing the catalog.

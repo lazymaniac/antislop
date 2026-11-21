@@ -77,8 +77,15 @@ impl Details {
         view: &View,
         theme: &Theme,
     ) -> bool {
-        let projection = crate::lean::tui::workbench_summary::project(view, &self.key);
-        super::specialized_summary::draw(frame, area, projection, &mut self.scroll, theme)
+        super::specialized_summary::draw(
+            frame,
+            area,
+            &self.key,
+            view,
+            &mut self.summary_cache,
+            &mut self.scroll,
+            theme,
+        )
     }
 
     fn draw_conversation(

@@ -9,7 +9,7 @@ mod specialized_details;
 mod specialized_details_layout;
 mod specialized_overview;
 mod specialized_screens;
-mod specialized_summary;
+pub(in crate::lean::tui) mod specialized_summary;
 mod transcript;
 pub(super) mod transcript_cache;
 mod transcript_cards;

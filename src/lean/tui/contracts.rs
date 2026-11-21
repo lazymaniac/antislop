@@ -1,6 +1,16 @@
 use super::*;
 
 pub enum Update {
+    Conversations {
+        state_dir: String,
+        request_id: u64,
+        result: std::result::Result<Value, String>,
+    },
+    ConversationDeleted {
+        project: String,
+        id: String,
+        result: std::result::Result<Value, String>,
+    },
     SessionAction {
         conversation: String,
         action: crate::lean::daemon::SessionActionKind,

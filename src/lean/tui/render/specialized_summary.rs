@@ -1,14 +1,35 @@
 use super::super::workbench_summary::{Completion, Recovery, Summary};
 use super::super::*;
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(in crate::lean::tui) struct SummaryCache {
+    key: String,
+    projection: Option<Summary>,
+    width: usize,
+    mode: Option<(bool, bool)>,
+    lines: Vec<Line<'static>>,
+}
+
 pub(super) fn draw(
     frame: &mut Frame,
     area: Rect,
-    summary: Summary,
+    key: &str,
+    view: &View,
+    cache: &mut SummaryCache,
     scroll: &mut usize,
     theme: &Theme,
 ) -> bool {
-    let title = match &summary {
+    let changed = cache.key != key
+        || !cache
+            .projection
+            .as_ref()
+            .is_some_and(|summary| super::super::workbench_summary::unchanged(summary, view, key));
+    if changed {
+        cache.projection = Some(super::super::workbench_summary::project(view, key));
+        cache.key = key.to_owned();
+    }
+    let summary = cache.projection.as_ref().unwrap();
+    let title = match summary {
         Summary::Recovery(_) => " Task status · recovery actions ",
         Summary::Completion(_) => " Session completion ",
         Summary::Empty => return false,
@@ -24,11 +45,16 @@ pub(super) fn draw(
         return true;
     }
     let width = usize::from(inner.width.saturating_sub(1)).max(1);
-    let lines = match &summary {
-        Summary::Recovery(recovery) => recovery_lines(recovery, width, theme),
-        Summary::Completion(completion) => completion_lines(completion, width, theme),
-        Summary::Empty => return false,
-    };
+    if changed || cache.width != width || cache.mode != Some((theme.color, theme.ascii)) {
+        cache.lines = match summary {
+            Summary::Recovery(recovery) => recovery_lines(recovery, width, theme),
+            Summary::Completion(completion) => completion_lines(completion, width, theme),
+            Summary::Empty => return false,
+        };
+        cache.width = width;
+        cache.mode = Some((theme.color, theme.ascii));
+    }
+    let lines = &cache.lines;
     let max_scroll = lines.len().saturating_sub(usize::from(inner.height));
     *scroll = (*scroll).min(max_scroll);
     let end = scroll
@@ -175,5 +201,66 @@ fn append_wrapped(
             Some(style) => Line::from(Span::styled(line, style)),
             None => Line::raw(line),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn summary_reuses_full_raw_projection_and_wrap_until_inputs_or_geometry_change() {
+        let mut app = App::test_app();
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
+        app.navigation.update_presentation(|state| {
+            state.tab = WorkbenchTab::Summary;
+            state.split = false;
+            state.list_visible = false;
+        });
+        app.details = Some(Details::new("worker:t1".into()));
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            status: "needs_user".into(),
+            reason: Some(format!("{}END-OF-RAW-CAUSE", "👩‍💻 é ".repeat(10000))),
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 23)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let cache = &app.details.as_ref().unwrap().summary_cache;
+        let Summary::Recovery(recovery) = cache.projection.as_ref().unwrap() else {
+            panic!()
+        };
+        let original_reason = recovery.reason.as_ptr();
+        let original_lines = cache.lines.as_ptr();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let cache = &app.details.as_ref().unwrap().summary_cache;
+        let Summary::Recovery(recovery) = cache.projection.as_ref().unwrap() else {
+            panic!()
+        };
+        assert_eq!(original_reason, recovery.reason.as_ptr());
+        assert_eq!(original_lines, cache.lines.as_ptr());
+        assert!(recovery.reason.ends_with("END-OF-RAW-CAUSE"));
+        app.view.tasks[0].reason = Some("Changed raw reason 👩‍💻".into());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let cache = &app.details.as_ref().unwrap().summary_cache;
+        assert!(
+            cache
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("Changed raw reason"))
+        );
+        terminal.backend_mut().resize(40, 12);
+        terminal.autoresize().unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let cache = &app.details.as_ref().unwrap().summary_cache;
+        assert!(cache.width < 40);
+        assert!(
+            cache
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("Changed raw reason"))
+        );
     }
 }

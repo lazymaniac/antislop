@@ -225,11 +225,13 @@ fn readable_goal_context(goal: &str) -> String {
         };
         let start = cursor + relative_start;
         output.push_str(&goal[cursor..start]);
-        if let Some(end) = json_value_end(goal, start) {
-            cursor = end;
-        } else {
-            output.push(bytes[start] as char);
-            cursor = start + 1;
+        match json_value_end(goal, start) {
+            Ok(end) => cursor = end,
+            Err(end) => {
+                // Keep malformed context verbatim and never rescan its suffix.
+                output.push_str(&goal[start..end]);
+                cursor = end;
+            }
         }
     }
     output
@@ -240,7 +242,7 @@ fn readable_goal_context(goal: &str) -> String {
         .join("\n")
 }
 
-fn json_value_end(text: &str, start: usize) -> Option<usize> {
+fn json_value_end(text: &str, start: usize) -> Result<usize, usize> {
     let bytes = text.as_bytes();
     let mut stack = Vec::new();
     let mut quoted = false;
@@ -260,25 +262,41 @@ fn json_value_end(text: &str, start: usize) -> Option<usize> {
             b'"' => quoted = true,
             b'{' | b'[' => stack.push(byte),
             b'}' | b']' => {
-                let opening = stack.pop()?;
+                let Some(opening) = stack.pop() else {
+                    return Err(offset + 1);
+                };
                 if !matches!((opening, byte), (b'{', b'}') | (b'[', b']')) {
-                    return None;
+                    return Err(offset + 1);
                 }
                 if stack.is_empty() {
                     let end = offset + 1;
-                    serde_json::from_str::<serde_json::Value>(&text[start..end]).ok()?;
-                    return Some(end);
+                    return serde_json::from_str::<serde_json::Value>(&text[start..end])
+                        .map(|_| end)
+                        .map_err(|_| end);
                 }
             }
             _ => {}
         }
     }
-    None
+    Err(bytes.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_json_goal_keeps_the_complete_unscanned_suffix() {
+        for length in [2_000, 4_000, 8_000, 16_000, 100_000] {
+            let text = format!("Goal 👩‍💻 {}", "[".repeat(length));
+            assert_eq!(readable_goal_context(&text), text);
+            assert_eq!(json_value_end(&text, "Goal 👩‍💻 ".len()), Err(text.len()));
+        }
+        assert_eq!(
+            readable_goal_context("before {invalid} after [1,2] end"),
+            "before {invalid} after  end"
+        );
+    }
 
     #[test]
     fn task_record_formats_full_context_without_embedded_json() {

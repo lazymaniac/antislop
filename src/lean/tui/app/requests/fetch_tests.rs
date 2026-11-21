@@ -173,3 +173,230 @@ fn changing_conversation_cancels_partial_content_before_fetching_the_new_session
         1
     );
 }
+
+#[test]
+fn session_owner_fetch_coalesces_repeated_keys_and_keeps_only_latest_target() {
+    let state = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut targets = Vec::new();
+        for index in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let request = crate::transport::read::<serde_json::Value>(&mut reader)
+                .unwrap()
+                .unwrap();
+            assert_eq!(request["request"]["op"], "sessions");
+            targets.push(
+                request["request"]["conversation"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+            if index == 0 {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            }
+            crate::transport::write(reader.get_mut(), &json!({"data":[],"error":null})).unwrap();
+        }
+        targets
+    });
+    let (updates, receiver) = crate::lean::tui::update_channel(8);
+    let mut app = App::test_app();
+    app.client = Client::at(state.path());
+    app.updates = updates;
+    app.conversation = "A".into();
+    app.fetch_workbench_sessions();
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    for _ in 0..1000 {
+        app.fetch_workbench_sessions();
+    }
+    assert_eq!(app.workbench_sessions_request_id, 1);
+    app.conversation = "B".into();
+    app.generation += 1;
+    app.fetch_workbench_sessions();
+    app.conversation = "C".into();
+    app.generation += 1;
+    app.fetch_workbench_sessions();
+    assert_eq!(app.workbench_sessions_request_id, 1);
+    release_tx.send(()).unwrap();
+    app.apply_update(
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+    );
+    assert_eq!(app.workbench_sessions_request_id, 2);
+    app.apply_update(
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+    );
+    assert!(app.workbench_sessions_inflight.is_none());
+    assert_eq!(server.join().unwrap(), ["A", "C"]);
+}
+
+#[test]
+fn conversation_picker_and_delete_return_before_daemon_reply_and_keep_new_context() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let state = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        for operation in ["conversations", "delete_session"] {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let request = crate::transport::read::<serde_json::Value>(&mut reader)
+                .unwrap()
+                .unwrap();
+            assert_eq!(request["request"]["op"], operation);
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let data = if operation == "conversations" {
+                json!([{"id":"other","goal":"Other session"}])
+            } else {
+                json!({})
+            };
+            crate::transport::write(reader.get_mut(), &json!({"data":data,"error":null})).unwrap();
+        }
+    });
+    let (updates, receiver) = crate::lean::tui::update_channel(8);
+    let mut app = App::test_app();
+    app.client = Client::at(state.path());
+    app.updates = updates;
+    app.input = InputBuffer::with_text("unsent 👩‍💻");
+    // These handlers must return while the server is held, without a timing threshold.
+    app.open_conversation_picker();
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        app.picker
+            .as_ref()
+            .unwrap()
+            .status
+            .as_ref()
+            .unwrap()
+            .contains("Loading")
+    );
+    app.picker.as_mut().unwrap().query = "Other".into();
+    release_tx.send(()).unwrap();
+    app.apply_update(
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+    );
+    assert_eq!(app.picker.as_ref().unwrap().query, "Other");
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let current = app.conversation.clone();
+    app.open("other".into());
+    assert_eq!(
+        app.conversation, current,
+        "cannot enter a session being deleted"
+    );
+    app.projects = vec![
+        workspace::ProjectConn {
+            path: state.path().join("project-a"),
+            name: "A".into(),
+            client: app.client.clone(),
+            branch: None,
+            conversations: Vec::new(),
+        },
+        workspace::ProjectConn {
+            path: state.path().join("project-b"),
+            name: "B".into(),
+            client: Client::at(&state.path().join("other-state")),
+            branch: None,
+            conversations: Vec::new(),
+        },
+    ];
+    app.switch_project(1, Some("other".into()));
+    assert_eq!(app.active_project, 0);
+    assert_eq!(app.client.state_dir(), state.path());
+    assert_eq!(app.conversation, current);
+    app.projects.clear();
+
+    app.picker = Some(Picker::new(Kind::Commands));
+    app.picker.as_mut().unwrap().query = "new query".into();
+    app.picker.as_mut().unwrap().selected = 3;
+    release_tx.send(()).unwrap();
+    app.apply_update(
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+    );
+    assert_eq!(app.picker.as_ref().unwrap().query, "new query");
+    assert_eq!(app.picker.as_ref().unwrap().selected, 3);
+    assert_eq!(app.input.text, "unsent 👩‍💻");
+    assert!(app.conversation_deletions.is_empty());
+    app.picker = Some(Picker::new(Kind::Conversations));
+    app.apply_conversations(
+        app.client.state_dir().to_string_lossy().into_owned(),
+        app.conversations_request_id,
+        Ok(json!([{"id":"other", "goal":"Stale deleted session"}])),
+    );
+    assert!(
+        !app.picker
+            .as_ref()
+            .unwrap()
+            .conversations
+            .iter()
+            .any(|item| item.id == "other")
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn deletion_replies_keep_other_pending_decisions_and_their_selection() {
+    let mut app = App::test_app();
+    let first = palette::ConversationItem {
+        id: "first".into(),
+        project: "p".into(),
+        title: "First".into(),
+    };
+    let second = palette::ConversationItem {
+        id: "second".into(),
+        project: "p".into(),
+        title: "Second".into(),
+    };
+    let mut picker = Picker::new(Kind::Conversations);
+    picker.conversations = vec![first.clone(), second.clone()];
+    picker.selected = 1;
+    picker.status = Some("Deleting session...".into());
+    picker.delete_target = Some(second.clone());
+    app.picker = Some(picker);
+    app.conversation_deletions
+        .insert((first.project.clone(), first.id.clone()));
+    app.conversation_deletions
+        .insert((second.project.clone(), second.id.clone()));
+    app.apply_conversation_deleted(
+        first.project.clone(),
+        first.id.clone(),
+        Err("RAW first deletion failure".into()),
+    );
+    assert!(app.notice.as_ref().unwrap().contains("first"));
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .contains("RAW first deletion failure")
+    );
+    let picker = app.picker.as_ref().unwrap();
+    assert_eq!(picker.delete_target, Some(second.clone()));
+    assert_eq!(picker.status.as_deref(), Some("Deleting session..."));
+    assert_eq!(picker.selected, 1);
+    app.apply_conversation_deleted(second.project.clone(), second.id.clone(), Ok(json!({})));
+    assert!(app.notice.as_ref().unwrap().contains("second"));
+    let picker = app.picker.as_ref().unwrap();
+    assert!(picker.delete_target.is_none());
+    assert_eq!(picker.conversations, vec![first]);
+    assert!(app.conversation_deletions.is_empty());
+}

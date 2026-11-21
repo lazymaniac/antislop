@@ -38,6 +38,7 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     let terminal_view_role = app.workbench_terminal_view_role();
     let terminal_round = workbench_terminal_round(
         &app.workbench_sessions,
+        app.workbench_sessions_after,
         app.details.as_ref(),
         &presentation,
         &terminal_owner,
@@ -167,6 +168,7 @@ fn draw_workbench_chrome(
 
 fn workbench_terminal_round(
     sessions: &[crate::lean::store::SessionInfo],
+    sessions_after: u64,
     details: Option<&super::super::Details>,
     presentation: &WorkbenchPresentation,
     owner: &str,
@@ -175,15 +177,17 @@ fn workbench_terminal_round(
     matching_details
         .and_then(|details| details.selected_round)
         .or_else(|| {
+            matching_details
+                .filter(|details| details.fetched_events >= sessions_after)
+                .and_then(|details| details.task.as_ref()?.get("round")?.as_u64())
+        })
+        .or_else(|| {
             sessions
                 .iter()
                 .filter(|session| session.role == owner)
                 .count()
                 .checked_sub(1)
                 .map(|index| index as u64)
-        })
-        .or_else(|| {
-            matching_details.and_then(|details| details.task.as_ref()?.get("round")?.as_u64())
         })
         .or(presentation.round.filter(|_| matching_details.is_some()))
 }

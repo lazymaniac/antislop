@@ -3967,7 +3967,20 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
     });
 
     let client = Client::at(dir.relative_path());
-    let (mut app, _rx_updates) = App::test_app_with_client(client);
+    let (mut app, rx_updates) = App::test_app_with_client(client);
+    let load_list = |app: &mut App| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let update = rx_updates
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .unwrap();
+            let listed = matches!(&update, Update::Conversations { .. });
+            app.apply_update(update);
+            if listed {
+                break;
+            }
+        }
+    };
     app.project = "my-project".into();
     app.conversation = "c-initial".into();
 
@@ -3979,6 +3992,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
     app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "conversations");
+    load_list(&mut app);
 
     assert!(app.picker.is_some());
     let picker = app.picker.as_ref().unwrap();
@@ -4014,6 +4028,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
     // 5. Open switcher again and switch back to c-initial
     app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    load_list(&mut app);
 
     for ch in "initial".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));

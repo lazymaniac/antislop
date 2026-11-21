@@ -75,6 +75,38 @@ impl App {
         let manual_plan = self.apply_view_events(events);
         self.view.idle = idle;
         self.refetch_stale_details();
+        let owner = self.workbench_terminal_owner();
+        let owner_changed = |event: &&Value| {
+            self.view
+                .agent_key(event["payload"]["role"].as_str().unwrap_or_default())
+                == self.view.agent_key(&owner)
+        };
+        let started = events
+            .iter()
+            .filter(owner_changed)
+            .any(|event| event["kind"] == "turn_started");
+        let finished = events
+            .iter()
+            .filter(owner_changed)
+            .any(|event| event["kind"] == "turn_finished");
+        if self.navigation.screen == Screen::Workbench && (started || finished) {
+            if started {
+                self.workbench_sessions_after = self.view.after;
+                self.navigation
+                    .update_presentation(|state| state.native_input = false);
+                self.workbench_sessions.clear();
+            }
+            if let Some(details) = &mut self.details
+                && started
+            {
+                details.sessions.clear();
+            }
+            if self.workbench_sessions_inflight.is_some() {
+                self.workbench_sessions_pending = true;
+            } else {
+                self.fetch_workbench_sessions();
+            }
+        }
         self.open_pending_plan(manual_plan);
         self.sync_rigor_recommendation();
     }

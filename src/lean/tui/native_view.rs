@@ -75,6 +75,83 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn visible_modals_isolate_keys_and_paste_from_live_and_preview_pty() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        for native in [false, true] {
+            for modal in ["config", "unblock", "consent", "filters"] {
+                let mut app = App::test_app();
+                app.navigation.screen = crate::lean::tui::Screen::Workbench;
+                app.navigation.target = WorkbenchTarget::Session;
+                app.navigation.focus = NavigationFocus::WorkbenchTerminal;
+                app.details = Some(Details::new("conversation".into()));
+                let received = app.bind_native_input_for_test();
+                app.navigation
+                    .update_presentation(|state| state.native_input = native);
+                match modal {
+                    "config" => {
+                        app.config_editor = Some(
+                            config::ConfigEditor::new(
+                                include_str!("../../../examples/antislop.toml"),
+                                "/unused/antislop.toml".into(),
+                            )
+                            .unwrap(),
+                        )
+                    }
+                    "unblock" => app.unblock = Some(unblock::Unblock::orchestrator()),
+                    "filters" => app.graph_filters = Some(Default::default()),
+                    "consent" => {
+                        app.recovery_consent = Some(consent::RecoveryConsent {
+                            plan: "p".into(),
+                            task: "t".into(),
+                            status: "needs_user".into(),
+                            target: "target".into(),
+                            base: "base".into(),
+                            result: "result".into(),
+                            token: "token".into(),
+                            require_all: false,
+                            files: vec![("file".into(), true)],
+                            selected: 0,
+                            scroll: 0,
+                            confirming: false,
+                            error: None,
+                        })
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(!app.native_focused(), "{modal}");
+                app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+                assert_eq!(
+                    app.navigation.presentation().native_input,
+                    native,
+                    "{modal}"
+                );
+                app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+                app.paste("MODAL-ONLY 👩‍💻");
+                app.mouse(event::MouseEvent {
+                    kind: event::MouseEventKind::ScrollDown,
+                    column: 2,
+                    row: 2,
+                    modifiers: KeyModifiers::NONE,
+                });
+                app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                assert!(
+                    received.try_recv().is_err(),
+                    "{modal} sent modal input to PTY"
+                );
+                if modal == "config" {
+                    let editor = app.config_editor.as_ref().unwrap();
+                    assert!(
+                        editor.fields[editor.selected]
+                            .input
+                            .text
+                            .contains("MODAL-ONLY")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn workbench_native_mode_routes_global_shortcuts_and_only_ctrl_bracket_exits() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut app = App::test_app();
@@ -118,6 +195,86 @@ mod tests {
         assert!(!app.native_focused());
         app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         assert!(app.native_focused());
+    }
+
+    #[test]
+    fn fresh_task_identity_retires_cached_session_and_history_stays_explicit() {
+        let mut app = App::test_app();
+        app.navigation.screen = crate::lean::tui::Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
+        app.navigation.focus = NavigationFocus::WorkbenchTerminal;
+        let mut details = Details::new("worker:t1".into());
+        details.task =
+            Some(json!({"round":1,"native_sessions":[{"role":"worker:t1","session_id":"new"}]}));
+        details.fetched_events = 10;
+        details.native_areas[0] = Rect::new(1, 1, 40, 10);
+        app.details = Some(details);
+        app.workbench_sessions = vec![crate::lean::store::SessionInfo {
+            turn_id: "old-turn".into(),
+            plan_id: None,
+            role: "worker:t1".into(),
+            provider: "codex".into(),
+            session_id: Some("old".into()),
+            status: "done".into(),
+            error: None,
+            upto_message: 0,
+            started_ms: 1,
+            finished_ms: Some(2),
+            pid: None,
+        }];
+        app.workbench_sessions_after = 5;
+        let key = format!("{}:worker:t1", app.conversation);
+        let (commands, _received) = mpsc::sync_channel(8);
+        let stopped = Arc::new(AtomicBool::new(false));
+        app.native_views.insert(
+            key.clone(),
+            View {
+                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+                commands,
+                stop: stopped.clone(),
+                dimensions: (40, 10),
+                identity: "old:run:0".into(),
+            },
+        );
+        app.navigation
+            .update_presentation(|state| state.native_input = true);
+        app.sync_native_views();
+        assert!(stopped.load(Ordering::SeqCst));
+        assert_eq!(app.native_views[&key].identity, "new:1");
+        assert!(!app.navigation.presentation().native_input);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            screen.contains(&format!(
+                "CLI worker:t1 {} r1",
+                Theme::from_env().glyphs().dot
+            )),
+            "{screen}"
+        );
+        // A more recent owner snapshot may supersede the older task snapshot.
+        app.workbench_sessions_after = 20;
+        app.workbench_sessions[0].session_id = Some("newer".into());
+        app.sync_native_views();
+        assert_eq!(app.native_views[&key].identity, "newer:1");
+        app.details.as_mut().unwrap().selected_round = Some(0);
+        app.sync_native_views();
+        assert!(
+            app.native_views.is_empty(),
+            "history never silently binds the live role"
+        );
+        app.details.as_mut().unwrap().resume_round = true;
+        app.sync_native_views();
+        assert_eq!(
+            app.native_views[&format!("{}:worker:t1#r0", app.conversation)].identity,
+            "round:0"
+        );
     }
 
     #[test]

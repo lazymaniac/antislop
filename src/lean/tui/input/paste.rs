@@ -85,7 +85,13 @@ impl App {
             self.native_send(crate::lean::terminal::Input::Paste { text: text.into() });
             return true;
         }
-        if self.plan_history.is_some() || self.help.is_some() {
+        if self.plan_history.is_some()
+            || self.help.is_some()
+            || self.decision_inbox.is_some()
+            || self.unblock.is_some()
+            || self.recovery_consent.is_some()
+            || self.graph_filters.is_some()
+        {
             return true;
         }
 

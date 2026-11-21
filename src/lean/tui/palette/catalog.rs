@@ -115,6 +115,7 @@ pub enum Kind {
 
 #[derive(Debug)]
 pub struct Picker {
+    pub status: Option<String>,
     pub kind: Kind,
     pub query: String,
     pub selected: usize,

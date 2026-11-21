@@ -30,6 +30,9 @@ impl App {
                 }
             },
         };
+        if self.refuse_pending_deletion(&conversation) {
+            return;
+        }
         self.restore_project_history(index, &conn);
         self.switch_config_workspace(&conn);
         self.active_project = index;
