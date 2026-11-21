@@ -75,7 +75,7 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn workbench_native_mode_routes_every_key_except_the_exit_chord() {
+    fn workbench_native_mode_routes_global_shortcuts_and_only_ctrl_bracket_exits() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut app = App::test_app();
         app.navigation.screen = crate::lean::tui::Screen::Workbench;
@@ -84,7 +84,7 @@ mod tests {
         let mut details = Details::new("conversation".into());
         details.native_areas[0] = Rect::new(1, 1, 50, 12);
         app.details = Some(details);
-        let (commands, received) = mpsc::sync_channel(8);
+        let (commands, received) = mpsc::sync_channel(16);
         app.native_views.insert(
             format!("{}:orchestrator", app.conversation),
             View {
@@ -97,22 +97,37 @@ mod tests {
         );
         app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         assert!(app.native_focused());
-        for key in [
+        let forwarded = [
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
-        ] {
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+            // This distinct KeyEvent is forwarded; a terminal decoder may
+            // encode Ctrl+5 identically to Ctrl+], which is not solvable here.
+            KeyEvent::new(KeyCode::Char('5'), KeyModifiers::CONTROL),
+        ];
+        for key in forwarded {
             app.key(key);
             assert!(matches!(
                 received.try_recv(),
-                Ok(Command::Input(Input::Key { .. }))
+                Ok(Command::Input(Input::Key { event })) if event == key
             ));
+            assert!(app.native_focused());
+            assert!(app.picker.is_none());
         }
         app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
         assert!(!app.native_focused());
         assert!(received.try_recv().is_err());
+        assert!(app.picker.is_none());
         app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert!(!app.native_focused());
+        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.native_focused());
     }
 
     #[test]

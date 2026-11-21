@@ -287,3 +287,62 @@ impl Drop for Session {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_input_reaches_the_cli_pty_as_encoded_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let received = directory.path().join("received");
+        let ready = directory.path().join("ready");
+        let script = format!(
+            "import os,sys,tty\ntty.setraw(0)\nopen({ready:?},'w').close()\ndata=os.read(0,1)\nopen({received:?},'wb').write(data)\n",
+            ready = ready.to_string_lossy(),
+            received = received.to_string_lossy(),
+        );
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let mut command = CommandBuilder::new("python3");
+        command.args(["-c", &script]);
+        let mut session =
+            Session::spawn(command, core.weak.get().unwrap(), "python3", 80, 24).unwrap();
+        let handle = "key-routing-test";
+        session.handles.insert(
+            handle.into(),
+            Handle {
+                scroll: 0,
+                sequence: 0,
+                seen: std::time::Instant::now(),
+            },
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "CLI did not enter raw mode"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        session
+            .input(
+                handle,
+                1,
+                Input::Key {
+                    event: KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                },
+            )
+            .unwrap();
+        while !received.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "CLI received no PTY bytes"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read(received).unwrap(), b"t");
+    }
+}
