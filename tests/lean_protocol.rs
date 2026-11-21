@@ -939,12 +939,14 @@ fn test_task_scoped_query_includes_freshness_token() {
         let task = daemon
             .call_raw(&json!({"op":"task_checks","conversation":conv_id,"plan":plan_id,"id":"t1"}))
             .unwrap();
-        if matches!(task["status"].as_str(), Some("queued" | "working")) {
+        // Pause prevents the turn from running, while scheduler preparation
+        // still transitions queued -> working. Wait for that persisted state.
+        if task["status"] == "working" {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "reviewed task was not queued: {task}"
+            "paused task was not prepared: {task}"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -958,6 +960,7 @@ fn test_task_scoped_query_includes_freshness_token() {
             "id": "t1"
         }))
         .unwrap();
+    assert_eq!(task_resp["status"], "working");
     assert!(task_resp["freshness_token"].is_string());
     let token = task_resp["freshness_token"].as_str().unwrap();
     assert!(!token.is_empty());
@@ -970,6 +973,7 @@ fn test_task_scoped_query_includes_freshness_token() {
             "id": "t1"
         }))
         .unwrap();
+    assert_eq!(task_resp2["status"], "working");
     assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
     daemon
         .call_raw(&json!({"op":"cancel","conversation":conv_id}))

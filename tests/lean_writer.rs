@@ -1665,7 +1665,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
     );
     assert_eq!(
         feedback["integration"]["branch"],
-        format!("antislop/{}", task.id)
+        support::task_branch(task)
     );
     assert!(
         feedback["integration"]["detail"]
@@ -1706,7 +1706,7 @@ fn repair_rounds_reuse_one_task_branch_and_keep_earlier_changes_visible() {
 
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(task.round, 2, "review finding caused a worker repair round");
-    let branch = format!("antislop/{}", task.id);
+    let branch = support::task_branch(&task);
     assert_eq!(
         git(&project, &["branch", "--list", &branch])
             .lines()
@@ -1787,7 +1787,7 @@ fn separate_writer_tasks_keep_separate_branches_and_checkouts() {
         "tasks use isolated checkouts"
     );
     for task in &tasks {
-        let branch = format!("antislop/{}", task.id);
+        let branch = support::task_branch(task);
         assert_eq!(
             git(&project, &["branch", "--list", &branch])
                 .lines()
@@ -1909,7 +1909,7 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "waiting");
-    let branch = format!("antislop/{}", task.id);
+    let branch = support::task_branch(&task);
     assert_eq!(
         git(&project, &["show", &format!("{branch}:hello.txt")]),
         "from worker"
@@ -1979,7 +1979,7 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     let conversation = run_plan(&core, &project);
     let session = support::session_worktree(&core, &project, &conversation);
     let task = original_tasks(&core, &conversation)[0].clone();
-    let branch = format!("antislop/{}", task.id);
+    let branch = support::task_branch(&task);
 
     core.recover_task(antislop::lean::TaskRecoveryRequest {
         conversation: conversation.clone(),

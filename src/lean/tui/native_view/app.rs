@@ -139,6 +139,13 @@ impl App {
 
     pub(in crate::lean::tui) fn native_input_blocked(&self) -> bool {
         self.help.is_some()
+            || self
+                .config_editor
+                .as_ref()
+                .is_some_and(|editor| editor.visible)
+            || self.unblock.is_some()
+            || self.recovery_consent.is_some()
+            || self.graph_filters.is_some()
             || self.decision_inbox.is_some()
             || self.picker.is_some()
             || self.editor.is_some()
@@ -275,6 +282,13 @@ impl App {
         {
             return (format!("{owner}#r{round}"), format!("round:{round}"));
         }
+        if details_match_terminal_owner(details, owner)
+            && details.task.is_some()
+            && details.fetched_events >= self.workbench_sessions_after
+            && native_session_id(details, owner) != "waiting"
+        {
+            return native_identity(details, owner);
+        }
         let run_index = self
             .workbench_sessions
             .iter()
@@ -287,16 +301,31 @@ impl App {
                 .iter()
                 .rfind(|session| session.role == owner),
         ) {
-            return (
-                owner.to_owned(),
+            let identity = if details_match_terminal_owner(details, owner)
+                && crate::lean::task_role(owner).is_some()
+                && details.task.is_some()
+            {
                 format!(
-                    "{}:run:{}",
+                    "{}:{}",
                     session.session_id.as_deref().unwrap_or("waiting"),
-                    index
-                ),
-            );
+                    native_round(details, owner)
+                )
+            } else {
+                format!(
+                    "{}:run:{index}",
+                    session.session_id.as_deref().unwrap_or("waiting")
+                )
+            };
+            return (owner.to_owned(), identity);
         }
-        if details_match_terminal_owner(details, owner) {
+        if details_match_terminal_owner(details, owner)
+            && details.fetched_events < self.workbench_sessions_after
+        {
+            (
+                owner.to_owned(),
+                format!("waiting:after:{}", self.workbench_sessions_after),
+            )
+        } else if details_match_terminal_owner(details, owner) {
             native_identity(details, owner)
         } else {
             (owner.to_owned(), "waiting:".into())

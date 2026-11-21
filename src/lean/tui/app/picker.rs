@@ -29,24 +29,73 @@ fn conversation_title(value: &Value, id: &str, current: bool) -> String {
 
 impl App {
     pub fn open_conversation_picker(&mut self) {
-        let mut items = self.daemon_conversations();
-        self.append_project_conversations(&mut items);
+        let mut items = Vec::new();
+        self.append_project_conversations(&mut items, true);
         self.append_saved_conversations(&mut items);
         self.ensure_active_conversation(&mut items);
         let mut picker = Picker::new(Kind::Conversations);
         picker.conversations = items;
+        picker.status = Some("Loading sessions...".into());
         self.picker = Some(picker);
+        self.conversations_request_id = self.conversations_request_id.wrapping_add(1);
+        let request_id = self.conversations_request_id;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let state_dir = client.state_dir().to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            let result = client.call(&Request::Control(
+                crate::lean::daemon::ControlRequest::Conversations,
+            ));
+            let _ = updates.send(Update::Conversations {
+                state_dir,
+                request_id,
+                result: result.map_err(|error| error.to_string()),
+            });
+        });
     }
 
-    fn daemon_conversations(&self) -> Vec<palette::ConversationItem> {
-        let Ok(Value::Array(list)) = self.client.call(&Request::Control(
-            crate::lean::daemon::ControlRequest::Conversations,
-        )) else {
-            return Vec::new();
+    pub(in crate::lean::tui) fn apply_conversations(
+        &mut self,
+        state_dir: String,
+        request_id: u64,
+        result: std::result::Result<Value, String>,
+    ) {
+        if state_dir != self.client.state_dir().to_string_lossy()
+            || request_id != self.conversations_request_id
+            || !self
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.kind == Kind::Conversations)
+        {
+            return;
+        }
+        let values = match result {
+            Ok(Value::Array(values)) => values,
+            Ok(_) => {
+                self.picker.as_mut().unwrap().status = Some("Invalid session list response".into());
+                return;
+            }
+            Err(error) => {
+                self.picker.as_mut().unwrap().status = Some(error.clone());
+                self.notice = Some(error);
+                return;
+            }
         };
-        list.iter()
+        let mut items = values
+            .iter()
             .filter_map(|value| self.daemon_conversation(value))
-            .collect()
+            .collect::<Vec<_>>();
+        self.append_project_conversations(&mut items, false);
+        self.append_saved_conversations(&mut items);
+        self.ensure_active_conversation(&mut items);
+        let picker = self.picker.as_mut().unwrap();
+        picker.set_conversations(items, &self.view);
+        if !picker.delete_target.as_ref().is_some_and(|target| {
+            self.conversation_deletions
+                .contains(&(target.project.clone(), target.id.clone()))
+        }) {
+            picker.status = None;
+        }
     }
 
     fn daemon_conversation(&self, value: &Value) -> Option<palette::ConversationItem> {
@@ -79,28 +128,51 @@ impl App {
         if id.is_empty() {
             return None;
         }
+        let project = if project.is_empty() {
+            active_path.unwrap_or_default()
+        } else {
+            project.to_owned()
+        };
+        if self
+            .deleted_conversations
+            .contains(&(std::path::PathBuf::from(&project), id.clone()))
+        {
+            return None;
+        }
         Some(palette::ConversationItem {
             title: conversation_title(value, &id, id == self.conversation),
-            project: if project.is_empty() {
-                active_path.unwrap_or_default()
-            } else {
-                project.to_owned()
-            },
+            project,
             id,
         })
     }
 
-    fn append_project_conversations(&self, items: &mut Vec<palette::ConversationItem>) {
+    fn append_project_conversations(
+        &self,
+        items: &mut Vec<palette::ConversationItem>,
+        include_active: bool,
+    ) {
         for (index, project) in self.projects.iter().enumerate() {
-            if index == self.active_project {
+            if index == self.active_project && !include_active {
                 continue;
             }
             for conversation in &project.conversations {
                 let Some(id) = conversation["id"].as_str().filter(|id| !id.is_empty()) else {
                     continue;
                 };
+                if self
+                    .deleted_conversations
+                    .contains(&(project.path.clone(), id.to_owned()))
+                {
+                    continue;
+                }
+                if items
+                    .iter()
+                    .any(|item| item.id == id && item.project == project.path.to_string_lossy())
+                {
+                    continue;
+                }
                 items.push(palette::ConversationItem {
-                    title: conversation_title(conversation, id, false),
+                    title: conversation_title(conversation, id, id == self.conversation),
                     project: project.path.to_string_lossy().into_owned(),
                     id: id.to_owned(),
                 });

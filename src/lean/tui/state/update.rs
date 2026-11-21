@@ -12,6 +12,16 @@ mod records;
 impl App {
     pub(in crate::lean::tui) fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::Conversations {
+                state_dir,
+                request_id,
+                result,
+            } => self.apply_conversations(state_dir, request_id, result),
+            Update::ConversationDeleted {
+                project,
+                id,
+                result,
+            } => self.apply_conversation_deleted(project, id, result),
             Update::SessionAction {
                 conversation,
                 action,
@@ -65,12 +75,19 @@ impl App {
                 request_id,
                 result,
             } => {
+                if self.workbench_sessions_inflight.as_ref()
+                    == Some(&(conversation.clone(), generation, request_id))
+                {
+                    self.workbench_sessions_inflight = None;
+                }
                 if conversation == self.conversation
                     && generation == self.generation
                     && request_id == self.workbench_sessions_request_id
+                    && !self.workbench_sessions_pending
                 {
                     match result {
                         Ok(sessions) => {
+                            self.workbench_sessions_after = self.workbench_sessions_fetch_after;
                             self.workbench_sessions = sessions.clone();
                             if let Some(details) = &mut self.details {
                                 details.sessions = sessions;
@@ -81,6 +98,9 @@ impl App {
                                 Some(format!("Could not load CLI session owners: {error}"))
                         }
                     }
+                }
+                if self.workbench_sessions_inflight.is_none() && self.workbench_sessions_pending {
+                    self.fetch_workbench_sessions();
                 }
             }
             update @ Update::PlanHistory { .. } => self.apply_plan_history(update),
@@ -139,6 +159,62 @@ mod tests {
             finished_ms: None,
             pid: None,
         }
+    }
+
+    #[test]
+    fn new_turn_invalidates_owner_cache_and_reissues_after_older_inflight_read() {
+        let mut app = App::test_app();
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Session;
+        app.details = Some(Details::new("conversation".into()));
+        app.workbench_sessions = vec![session("old")];
+        app.workbench_sessions_request_id = 1;
+        app.workbench_sessions_inflight = Some((app.conversation.clone(), app.generation, 1));
+        app.apply_update(Update::Events { conversation: app.conversation.clone(), generation: app.generation,
+            events: vec![serde_json::json!({"seq":1,"kind":"turn_started","payload":{"role":"orchestrator","provider":"codex"}})], idle:false, observer:false });
+        assert!(app.workbench_sessions.is_empty());
+        assert!(app.workbench_sessions_pending);
+        assert_eq!(app.workbench_sessions_request_id, 1);
+        for _ in 0..2 {
+            app.key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('p'),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            assert!(app.workbench_sessions_pending);
+            assert_eq!(app.workbench_sessions_request_id, 1);
+        }
+        app.apply_update(Update::WorkbenchSessions {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            request_id: 1,
+            result: Ok(vec![session("stale")]),
+        });
+        assert!(
+            app.workbench_sessions.is_empty(),
+            "old snapshot must not restore a retired owner"
+        );
+        assert_eq!(app.workbench_sessions_request_id, 2);
+        assert!(!app.workbench_sessions_pending);
+        assert!(app.details.as_ref().unwrap().sessions.is_empty());
+        assert_eq!(app.workbench_sessions_after, 1);
+        assert_eq!(app.workbench_sessions_fetch_after, 1);
+        app.apply_update(Update::WorkbenchSessions {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            request_id: 2,
+            result: Ok(vec![session("fresh")]),
+        });
+        assert_eq!(
+            app.workbench_sessions[0].session_id.as_deref(),
+            Some("fresh")
+        );
+        assert_eq!(
+            app.details.as_ref().unwrap().sessions[0]
+                .session_id
+                .as_deref(),
+            Some("fresh")
+        );
+        assert!(app.workbench_sessions_inflight.is_none());
     }
 
     #[test]

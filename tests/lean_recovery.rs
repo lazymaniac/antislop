@@ -1595,11 +1595,7 @@ fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
         git(&project, &["worktree", "remove", session.to_str().unwrap()]);
     }
     git(&project, &["branch", "-D", &session_branch]);
-    let task_branch = format!(
-        "antislop/{}-{}",
-        task.spec["checkout_name"].as_str().unwrap(),
-        antislop::hash(format!("{}:{}", task.plan_id, task.id))
-    );
+    let task_branch = support::task_branch(&task);
     for block in git(&project, &["worktree", "list", "--porcelain"]).split("\n\n") {
         if block
             .lines()

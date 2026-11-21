@@ -358,6 +358,7 @@ fn append_task_recipients(
 impl Picker {
     pub fn new(kind: Kind) -> Self {
         Picker {
+            status: None,
             kind,
             query: String::new(),
             selected: 0,
@@ -367,6 +368,22 @@ impl Picker {
             delete_target: None,
             recommendation: None,
         }
+    }
+
+    pub(in crate::lean::tui) fn set_conversations(
+        &mut self,
+        items: Vec<ConversationItem>,
+        view: &View,
+    ) {
+        let selected = self
+            .items(view)
+            .get(self.selected)
+            .map(|(_, action)| action.clone());
+        self.conversations = items;
+        let choices = self.items(view);
+        self.selected = selected
+            .and_then(|selected| choices.iter().position(|(_, action)| *action == selected))
+            .unwrap_or(self.selected.min(choices.len().saturating_sub(1)));
     }
 
     pub fn rigor(view: &View) -> Self {
@@ -462,11 +479,12 @@ impl Picker {
             self.items(view)
         };
         self.selected = self.selected.min(items.len().saturating_sub(1));
-        let header_rows = if self.recommendation.is_some() {
-            1 + usize::from(frame.area().height.saturating_sub(5).min(2))
-        } else {
-            1
-        };
+        let header_rows = usize::from(self.status.is_some())
+            + if self.recommendation.is_some() {
+                1 + usize::from(frame.area().height.saturating_sub(5).min(2))
+            } else {
+                1
+            };
         let Some(layout) = PickerLayout::new(frame.area(), items.len(), self.selected, header_rows)
         else {
             return;
@@ -501,6 +519,12 @@ impl Picker {
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        if let Some(status) = &self.status {
+            lines.push(Line::styled(
+                truncate(status, layout.inner),
+                theme.metadata(),
+            ));
+        }
         if let Some((team, reason)) = &self.recommendation
             && layout.header_rows >= 2
         {

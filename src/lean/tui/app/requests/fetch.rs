@@ -453,11 +453,20 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn fetch_workbench_sessions(&mut self) {
+        if let Some((conversation, generation, _)) = &self.workbench_sessions_inflight {
+            self.workbench_sessions_pending |=
+                conversation != &self.conversation || *generation != self.generation;
+            return;
+        }
         let Some(request_id) = self.workbench_sessions_request_id.checked_add(1) else {
             self.notice = Some("Could not load CLI session owners: request id exhausted".into());
             return;
         };
         self.workbench_sessions_request_id = request_id;
+        self.workbench_sessions_pending = false;
+        self.workbench_sessions_fetch_after = self.view.after;
+        self.workbench_sessions_inflight =
+            Some((self.conversation.clone(), self.generation, request_id));
         let client = self.client.clone();
         let updates = self.updates.clone();
         let conversation = self.conversation.clone();

@@ -365,6 +365,7 @@ mod tests {
         for expected in [libc::ENOENT, libc::EACCES] {
             let directory = tempfile::tempdir().unwrap();
             let state = directory.path();
+            std::fs::set_permissions(state, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::write(state.join("core.db"), []).unwrap();
             let config = state.join("antislop.toml");
             std::fs::write(&config, include_str!("../../../examples/antislop.toml")).unwrap();

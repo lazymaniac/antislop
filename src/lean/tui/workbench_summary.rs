@@ -95,6 +95,67 @@ pub fn project(view: &view::View, key: &str) -> Summary {
     })
 }
 
+/// Compare borrowed inputs before cloning or wrapping potentially large text.
+pub(in crate::lean::tui) fn unchanged(summary: &Summary, view: &view::View, key: &str) -> bool {
+    if key == "conversation" {
+        let card = view
+            .cards
+            .iter()
+            .rev()
+            .find(|card| matches!(card, TranscriptCard::Completion { .. }));
+        return match (summary, card) {
+            (Summary::Empty, None) => true,
+            (
+                Summary::Completion(old),
+                Some(TranscriptCard::Completion {
+                    branch,
+                    summary,
+                    actions,
+                    selected,
+                    latest_result,
+                    ..
+                }),
+            ) => {
+                &old.branch == branch
+                    && &old.summary == summary
+                    && &old.actions == actions
+                    && old.selected == *selected
+                    && &old.latest_result == latest_result
+            }
+            _ => false,
+        };
+    }
+    if key == view::AUDITOR
+        && view.audit_retryable()
+        && view.plan.is_some()
+        && view.audit_error.is_some()
+    {
+        return matches!(summary, Summary::Recovery(old) if old.task == view::AUDITOR && Some(old.reason.as_str()) == view.audit_error.as_deref());
+    }
+    if key == view::ORCHESTRATOR {
+        return matches!(summary, Summary::Recovery(old) if old.task == view::ORCHESTRATOR);
+    }
+    let task = key
+        .strip_prefix("worker:")
+        .or_else(|| key.strip_prefix("reviewer:"))
+        .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+        .filter(|task| {
+            unblock::is_blocked(&task.status)
+                || matches!(task.status.as_str(), "queued" | "working" | "reviewing")
+        });
+    match (summary, task) {
+        (Summary::Empty, None) => true,
+        (Summary::Recovery(old), Some(task)) => {
+            old.task == task.id
+                && old.title == task.title
+                && old.status == task.status
+                && old.reason == task.reason.as_deref().unwrap_or("no reason was recorded")
+                && old.choices == unblock::choices_for(task)
+        }
+        _ => false,
+    }
+}
+
 impl Recovery {
     fn from_unblock(state: unblock::Unblock) -> Self {
         Self {

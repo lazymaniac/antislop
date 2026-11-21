@@ -138,24 +138,79 @@ impl App {
             }
             return true;
         };
-        match client.call(&crate::lean::daemon::Request::Session(
-            crate::lean::daemon::SessionRequest::DeleteSession {
-                conversation: selected.id.clone(),
-            },
-        )) {
+        if !self
+            .conversation_deletions
+            .insert((selected.project.clone(), selected.id.clone()))
+        {
+            return true;
+        }
+        if let Some(picker) = &mut self.picker {
+            picker.status = Some("Deleting session...".into());
+            picker.confirm_delete = false;
+            picker.delete_target = Some(selected.clone());
+        }
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let result = client
+                .call(&crate::lean::daemon::Request::Session(
+                    crate::lean::daemon::SessionRequest::DeleteSession {
+                        conversation: selected.id.clone(),
+                    },
+                ))
+                .map_err(|error| error.to_string());
+            let _ = updates.send(crate::lean::tui::Update::ConversationDeleted {
+                project: selected.project,
+                id: selected.id,
+                result,
+            });
+        });
+        true
+    }
+
+    pub(in crate::lean::tui) fn apply_conversation_deleted(
+        &mut self,
+        project: String,
+        id: String,
+        result: Result<serde_json::Value, String>,
+    ) {
+        self.conversation_deletions
+            .remove(&(project.clone(), id.clone()));
+        let selected = super::ConversationItem {
+            project,
+            id,
+            title: String::new(),
+        };
+        if let Some(picker) = &mut self.picker
+            && picker.kind == Kind::Conversations
+            && picker.delete_target.as_ref().is_some_and(|target| {
+                target.id == selected.id && target.project == selected.project
+            })
+        {
+            picker.confirm_delete = false;
+            picker.delete_target = None;
+            picker.status = result.as_ref().err().cloned();
+        }
+        match result {
             Ok(_) => {
-                if let Some(picker) = &mut self.picker {
-                    picker.conversations.retain(|item| item.id != selected.id);
-                    picker.selected = picker
-                        .selected
-                        .min(picker.conversations.len().saturating_sub(1));
-                    picker.confirm_delete = false;
-                    picker.delete_target = None;
+                if let Some(picker) = &mut self.picker
+                    && picker.kind == Kind::Conversations
+                {
+                    let items = picker
+                        .conversations
+                        .iter()
+                        .filter(|item| item.id != selected.id || item.project != selected.project)
+                        .cloned()
+                        .collect();
+                    picker.set_conversations(items, &self.view);
                 }
                 self.conversation_states.remove(&selected.id);
                 self.conversation_drafts.remove(&selected.id);
                 self.interview_forms.remove(&selected.id);
                 self.conversation_projects.remove(&selected.id);
+                self.deleted_conversations.insert((
+                    std::path::PathBuf::from(&selected.project),
+                    selected.id.clone(),
+                ));
                 if let Some(project) = self
                     .projects
                     .iter_mut()
@@ -164,20 +219,19 @@ impl App {
                     project
                         .conversations
                         .retain(|item| item["id"] != selected.id);
-                    self.deleted_conversations
-                        .insert((project.path.clone(), selected.id.clone()));
                 }
-                self.notice = Some("Session and its history permanently deleted.".into());
+                self.notice = Some(format!(
+                    "Session {} ({}) and its history permanently deleted.",
+                    selected.id, selected.project
+                ));
             }
             Err(error) => {
-                self.notice = Some(error.to_string());
-                if let Some(picker) = &mut self.picker {
-                    picker.confirm_delete = false;
-                    picker.delete_target = None;
-                }
+                self.notice = Some(format!(
+                    "Could not delete session {} ({}): {error}",
+                    selected.id, selected.project
+                ));
             }
         }
-        true
     }
 
     fn erase_picker_query(picker: &mut Picker) {

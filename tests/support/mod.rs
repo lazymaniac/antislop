@@ -177,3 +177,15 @@ if _lr.search(r'^Task: Options for ', prompt, _lr.M):
     )
     .unwrap();
 }
+
+/// Canonical branch identity from the task's retained checkout contract.
+#[allow(dead_code)]
+pub fn task_branch(task: &antislop::lean::store::Task) -> String {
+    match task.spec["checkout_name"].as_str() {
+        Some(name) => format!(
+            "antislop/{name}-{}",
+            antislop::hash(format!("{}:{}", task.plan_id, task.id))
+        ),
+        None => format!("antislop/{}", task.id),
+    }
+}

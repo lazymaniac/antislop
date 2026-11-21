@@ -301,6 +301,10 @@ const SECTION_2_CATALOG: &[(&str, &[&str])] = &[
             "new-session",
             "palette-projects",
             "palette-sessions",
+            "session-list-loading",
+            "session-list-error",
+            "session-delete-pending",
+            "session-delete-error",
             "palette-agents",
             "palette-recipients",
             "palette-history",
@@ -325,6 +329,26 @@ const SECTION_2_CATALOG: &[(&str, &[&str])] = &[
 ];
 
 const FIXTURES: &[Fixture] = &[
+    Fixture {
+        id: "session-list-loading",
+        view: "picker-sessions",
+        state: "waiting",
+    },
+    Fixture {
+        id: "session-list-error",
+        view: "picker-sessions",
+        state: "error",
+    },
+    Fixture {
+        id: "session-delete-pending",
+        view: "picker-sessions",
+        state: "waiting",
+    },
+    Fixture {
+        id: "session-delete-error",
+        view: "picker-sessions",
+        state: "error",
+    },
     Fixture {
         id: "plan-history-ordinary",
         view: "plan-history",
@@ -1073,6 +1097,46 @@ fn apply_fixture(app: &mut App, id: &str) {
             picker.delete_target = picker.conversations.first().cloned();
             app.picker = Some(picker);
         }
+        "session-list-loading"
+        | "session-list-error"
+        | "session-delete-pending"
+        | "session-delete-error" => {
+            let target = palette::ConversationItem {
+                id: "old-session".into(),
+                project: app.project.clone(),
+                title: "Prior review session".into(),
+            };
+            let mut picker = Picker::new(Kind::Conversations);
+            picker.conversations.push(target.clone());
+            picker.status = Some(
+                if id.starts_with("session-delete") {
+                    "Deleting session..."
+                } else {
+                    "Loading sessions..."
+                }
+                .into(),
+            );
+            if id.starts_with("session-delete") {
+                picker.delete_target = Some(target.clone());
+                app.conversation_deletions
+                    .insert((target.project.clone(), target.id.clone()));
+            }
+            app.picker = Some(picker);
+            app.conversations_request_id = 7;
+            if id == "session-list-error" {
+                app.apply_update(Update::Conversations {
+                    state_dir: app.client.state_dir().to_string_lossy().into_owned(),
+                    request_id: 7,
+                    result: Err("RAW list failure".into()),
+                });
+            } else if id == "session-delete-error" {
+                app.apply_update(Update::ConversationDeleted {
+                    project: target.project,
+                    id: target.id,
+                    result: Err("RAW delete failure".into()),
+                });
+            }
+        }
         "new-session" => app.picker = Some(Picker::new(Kind::Conversations)),
         "palette-projects" | "palette-sessions" | "palette-agents" | "palette-recipients"
         | "palette-history" | "palette-slash" => {
@@ -1690,6 +1754,9 @@ fn state_marker(id: &str, geometry: Geometry) -> Option<&'static str> {
         _ => id,
     };
     Some(match id {
+        "session-list-loading" => "Loading",
+        "session-list-error" | "session-delete-error" => "RAW",
+        "session-delete-pending" => "Deleting",
         "graph-waiting" => "waiting",
         "graph-error" => "failed",
         "session-completion" => "Capture session completed",
@@ -1751,7 +1818,13 @@ fn responsive_na(fixture: Fixture, geometry: Geometry) -> Option<&'static str> {
         };
     }
     match fixture.id {
-        "flow-editor-error" | "flow-editor-waiting" | "plan-history-loading" => None,
+        "flow-editor-error"
+        | "flow-editor-waiting"
+        | "plan-history-loading"
+        | "session-list-loading"
+        | "session-list-error"
+        | "session-delete-pending"
+        | "session-delete-error" => None,
         "decision-inbox"
         | "cli-approval"
         | "flow-editor"
@@ -1915,6 +1988,13 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         "new-session-composer" => {
             workbench_renderer_reached && app.navigation.target == WorkbenchTarget::Session
         }
+        "session-list-loading"
+        | "session-list-error"
+        | "session-delete-pending"
+        | "session-delete-error" => app
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.kind == Kind::Conversations),
         "palette"
         | "palette-projects"
         | "palette-sessions"
@@ -1983,6 +2063,10 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         },
     };
     let reached_state = match fixture.id {
+        "session-list-loading" => app.picker.as_ref().is_some_and(|picker| picker.status.as_deref() == Some("Loading sessions...")),
+        "session-list-error" => app.picker.as_ref().is_some_and(|picker| picker.status.as_deref() == Some("RAW list failure")),
+        "session-delete-pending" => app.picker.as_ref().is_some_and(|picker| picker.status.as_deref() == Some("Deleting session...") && picker.delete_target.as_ref().is_some_and(|target| target.id == "old-session")) && !app.conversation_deletions.is_empty(),
+        "session-delete-error" => app.picker.as_ref().is_some_and(|picker| picker.status.as_deref() == Some("RAW delete failure")) && app.conversation_deletions.is_empty(),
         "graph-empty" => app.view.tasks.is_empty(),
         "graph-compact" => width == 40 && height == 12 && !graph_inspector,
         "workbench-chat-empty" => app.input.text.is_empty() && app.navigation.focus == NavigationFocus::Composer,
@@ -2076,7 +2160,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         .join(" ");
     let state_marker_visible =
         state_marker(fixture.id, geometry).map(|marker| rendered_text.contains(marker));
-    json!({"schema":1,"fixture":fixture.id,"target":fixture.view,"view":fixture.view,"state":fixture.state,
+    let mut record = json!({"schema":1,"fixture":fixture.id,"target":fixture.view,"view":fixture.view,"state":fixture.state,
         "geometry":geometry_id,
         "sample":format!("{}@{}",fixture.id,geometry_id),
         "name":format!("{}.{}.{}.{}.{}x{}",fixture.id,fixture.view,fixture.state,geometry_id,width,height),
@@ -2108,7 +2192,28 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         "reached_view":reached_view,"reached_state":reached_state,"state_marker":state_marker(fixture.id, geometry),"state_marker_visible":state_marker_visible,
         "decision_inbox":app.decision_inbox.is_some(),"flow_editor":app.flow_editor.is_some(),
         "unblock":app.unblock.is_some(),
-        "task_integration":app.view.tasks.first().and_then(|task| task.integration.clone())})
+        "task_integration":app.view.tasks.first().and_then(|task| task.integration.clone())});
+    if matches!(
+        fixture.id,
+        "session-list-loading"
+            | "session-list-error"
+            | "session-delete-pending"
+            | "session-delete-error"
+    ) {
+        record["model_state"]["picker_status"] = json!(
+            app.picker
+                .as_ref()
+                .and_then(|picker| picker.status.as_deref())
+        );
+        record["model_state"]["delete_target"] = json!(app.picker.as_ref().and_then(|picker| {
+            picker
+                .delete_target
+                .as_ref()
+                .map(|target| target.id.as_str())
+        }));
+        record["model_state"]["deletion_pending"] = json!(!app.conversation_deletions.is_empty());
+    }
+    record
 }
 
 fn text_has_inspector(cells: &[Value]) -> bool {
@@ -2124,6 +2229,33 @@ fn agent_selected(app: &App, key: &str) -> bool {
 }
 
 fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry) {
+    if matches!(
+        fixture.id,
+        "session-list-loading"
+            | "session-list-error"
+            | "session-delete-pending"
+            | "session-delete-error"
+    ) {
+        let expected = match fixture.id {
+            "session-list-loading" => "Loading sessions...",
+            "session-list-error" => "RAW list failure",
+            "session-delete-pending" => "Deleting session...",
+            _ => "RAW delete failure",
+        };
+        assert_eq!(record["model_state"]["picker_status"], expected);
+        assert_eq!(
+            record["model_state"]["deletion_pending"],
+            fixture.id == "session-delete-pending"
+        );
+        assert_eq!(
+            record["model_state"]["delete_target"],
+            if fixture.id == "session-delete-pending" {
+                json!("old-session")
+            } else {
+                Value::Null
+            }
+        );
+    }
     let Geometry { id, width, height } = geometry;
     assert_eq!(record["na_reason"], json!(responsive_na(fixture, geometry)));
     assert_eq!(record["fixture"], fixture.id);
@@ -2715,8 +2847,8 @@ fn semantic_na(catalog: usize, state: &str) -> Option<&'static str> {
         (16, "no_history") => {
             Some("Flow editor edits the current task contract, not retained history.")
         }
-        (17, "waiting" | "error" | "no_history") => Some(
-            "Pickers filter locally available entries synchronously; no fetch/error/history-availability flag exists. A history picker with no entries is empty.",
+        (17, "no_history") => Some(
+            "Session lists expose asynchronous fetch/deletion status, but no distinct history-availability flag. An empty history picker is the empty state.",
         ),
         (18, "empty" | "waiting" | "error" | "no_history") => Some(
             "Graph filters are a fixed set of local toggles; no empty collection, request lifecycle, or historical data is owned by this menu.",
@@ -2832,6 +2964,22 @@ fn fixture_contracts_reach_the_requested_views_and_export_full_buffers() {
 
 #[test]
 fn semantic_contracts_reject_corrupted_capture_evidence() {
+    for id in [
+        "session-list-loading",
+        "session-list-error",
+        "session-delete-pending",
+        "session-delete-error",
+    ] {
+        let fixture = *FIXTURES.iter().find(|fixture| fixture.id == id).unwrap();
+        let geometry = GEOMETRIES[2];
+        let mut corrupted = capture(fixture, geometry);
+        assert_capture_contract(&corrupted, fixture, geometry);
+        corrupted["model_state"]["picker_status"] = json!("invented status");
+        assert!(
+            std::panic::catch_unwind(|| assert_capture_contract(&corrupted, fixture, geometry))
+                .is_err()
+        );
+    }
     let fixture = *FIXTURES.iter().find(|f| f.id == "unblock-error").unwrap();
     let geometry = GEOMETRIES[1];
     let record = capture(fixture, geometry);
@@ -2902,6 +3050,34 @@ fn semantic_contracts_reject_corrupted_capture_evidence() {
     reject(bad);
 }
 
+/// Serialize one production buffer at a time; memory never holds the catalog's
+/// complete cell tree. The wire format remains the original cells-v1 object.
+struct RenderSamples<'a>(&'a [(Fixture, Geometry)]);
+
+impl serde::Serialize for RenderSamples<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for &(fixture, geometry) in self.0 {
+            let record = capture(fixture, geometry);
+            assert_capture_contract(&record, fixture, geometry);
+            sequence.serialize_element(&record)?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct RenderCatalog<'a> {
+    format: &'static str,
+    renders: RenderSamples<'a>,
+    source: &'static str,
+    states_note: &'static str,
+}
+
 #[test]
 #[ignore = "writes a new durable capture run; set ANTISLOP_CAPTURE_DIR to a new directory"]
 fn export_catalog() {
@@ -2911,22 +3087,16 @@ fn export_catalog() {
     std::fs::create_dir(path).expect("capture output directory must not already exist");
     let samples = selected_samples();
     let combinations = combination_index(&samples);
-    let mut renders = Vec::with_capacity(samples.len());
-    for (fixture, geometry) in samples {
-        let record = capture(fixture, geometry);
-        assert_capture_contract(&record, fixture, geometry);
-        renders.push(record);
-    }
     let mut file = BufWriter::new(
         std::fs::File::create(path.join("final-renders.json"))
             .expect("create final render catalog"),
     );
-    serde_json::to_writer_pretty(&mut file, &json!({
-        "format":"antislop-ratatui-testbackend-cells-v1",
-        "source":"App::draw on ratatui::Terminal<TestBackend>",
-        "states_note":"Fixture-level ordinary, empty, waiting, error, no_history, and compact states are separate real App fixtures where applicable. Each record includes na_reason for unavailable responsive states or surfaces. PTY panels use deterministic native terminal snapshots; no CLI provider starts.",
-        "renders":renders,
-    })).expect("serialize capture catalog");
+    serde_json::to_writer_pretty(&mut file, &RenderCatalog {
+        format: "antislop-ratatui-testbackend-cells-v1",
+        renders: RenderSamples(&samples),
+        source: "App::draw on ratatui::Terminal<TestBackend>",
+        states_note: "Fixture-level ordinary, empty, waiting, error, no_history, and compact states are separate real App fixtures where applicable. Each record includes na_reason for unavailable responsive states or surfaces. PTY panels use deterministic native terminal snapshots; no CLI provider starts.",
+    }).expect("serialize capture catalog");
     file.flush().expect("flush capture catalog");
     let mut manifest = BufWriter::new(
         std::fs::File::create(path.join("manifest.json")).expect("create capture manifest"),

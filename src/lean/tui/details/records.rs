@@ -1,10 +1,20 @@
 use super::*;
+use crate::lean::tui::view;
 mod checks;
 mod comments;
 mod overview;
 mod plan;
 mod results;
 mod review;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(super) struct ConversationCache {
+    key: String,
+    width: u16,
+    messages: std::collections::HashMap<String, (view::MessageEntry, Rc<DetailRecord>)>,
+    cards: Vec<(view::TranscriptCard, Vec<Rc<DetailRecord>>)>,
+    empty: Option<Rc<DetailRecord>>,
+}
 
 impl Details {
     pub(in crate::lean::tui) fn records(&mut self, view: &View) -> Vec<Rc<DetailRecord>> {
@@ -21,10 +31,20 @@ impl Details {
     }
 
     pub(in crate::lean::tui) fn project_dialogue_entries(
-        &self,
+        &mut self,
         view: &View,
     ) -> Vec<Rc<DetailRecord>> {
-        conversation::records(self, view)
+        let mut cache = std::mem::take(&mut self.conversation_cache);
+        if cache.key != self.key || cache.width != self.text_area.width {
+            cache = ConversationCache {
+                key: self.key.clone(),
+                width: self.text_area.width,
+                ..Default::default()
+            };
+        }
+        let records = conversation::records(self, view, &mut cache);
+        self.conversation_cache = cache;
+        records
     }
 }
 
@@ -36,60 +56,78 @@ mod conversation {
     use unicode_segmentation::UnicodeSegmentation;
     use unicode_width::UnicodeWidthStr;
 
-    pub(super) fn records(details: &Details, view: &View) -> Vec<Rc<DetailRecord>> {
+    pub(super) fn records(
+        details: &Details,
+        view: &View,
+        cache: &mut ConversationCache,
+    ) -> Vec<Rc<DetailRecord>> {
         let mut records = Vec::new();
-        let mut messages = view.messages.clone();
-        let mut retained_ids = messages
+        let mut retained_ids = HashSet::new();
+        for message in view
+            .messages
             .iter()
-            .map(|message| message.id.clone())
-            .collect::<HashSet<_>>();
-        for card in &view.cards {
-            if let TranscriptCard::Message(message) = card
-                && retained_ids.insert(message.id.clone())
-            {
-                messages.push(message.clone());
+            .chain(view.cards.iter().filter_map(|card| {
+                if let TranscriptCard::Message(message) = card {
+                    Some(message)
+                } else {
+                    None
+                }
+            }))
+        {
+            if !retained_ids.insert(message.id.as_str()) {
+                continue;
             }
-        }
-        for message in messages {
             if details.key != "conversation"
                 && normalize_identity(view, &message.sender) != details.key
                 && normalize_identity(view, &message.target) != details.key
             {
                 continue;
             }
-            push_message(&mut records, details, message);
-        }
-        if details.key == "conversation" {
-            for card in &view.cards {
-                if matches!(card, TranscriptCard::Message(_)) {
-                    continue;
-                }
-                push_event_card(&mut records, details, card);
+            if let Some((old, projected)) = cache.messages.get(&message.id)
+                && old == message
+            {
+                records.push(Rc::clone(projected));
+            } else {
+                let mut projected = Vec::new();
+                push_message(&mut projected, details, message.clone());
+                let projected = projected.pop().unwrap();
+                cache
+                    .messages
+                    .insert(message.id.clone(), (message.clone(), Rc::clone(&projected)));
+                records.push(projected);
             }
-        } else if let Some((role, task_id)) = details.key.split_once(':')
-            && matches!(role, "worker" | "reviewer")
-        {
-            let prefix = format!("{task_id} ");
-            for card in &view.cards {
-                let TranscriptCard::System {
+        }
+        cache
+            .messages
+            .retain(|id, _| retained_ids.contains(id.as_str()));
+        for (index, card) in view.cards.iter().enumerate() {
+            if let Some((old, projected)) = cache.cards.get(index)
+                && old == card
+            {
+                records.extend(projected.iter().map(Rc::clone));
+                continue;
+            }
+            let mut projected = Vec::new();
+            if details.key == "conversation" {
+                push_event_card(&mut projected, details, card);
+            } else if let Some((role, task_id)) = details.key.split_once(':')
+                && matches!(role, "worker" | "reviewer")
+                && let TranscriptCard::System {
                     title,
                     text,
                     sent_at,
                     ..
                 } = card
-                else {
-                    continue;
-                };
-                if title != "Progress" {
-                    continue;
-                }
+                && title == "Progress"
+            {
+                let prefix = format!("{task_id} ");
                 let lines = text
                     .lines()
                     .filter(|line| line.starts_with(&prefix))
                     .collect::<Vec<_>>();
                 if !lines.is_empty() {
                     push_record(
-                        &mut records,
+                        &mut projected,
                         details,
                         format!("Task progress · {task_id}"),
                         lines.join("\n"),
@@ -97,14 +135,23 @@ mod conversation {
                     );
                 }
             }
+            records.extend(projected.iter().map(Rc::clone));
+            if index < cache.cards.len() {
+                cache.cards[index] = (card.clone(), projected);
+            } else {
+                cache.cards.push((card.clone(), projected));
+            }
         }
+        cache.cards.truncate(view.cards.len());
         if records.is_empty() {
-            records.push(record(
-                vec![plain(
-                    "No retained conversation history is available for this target.".into(),
-                )],
-                " ",
-            ));
+            records.push(Rc::clone(cache.empty.get_or_insert_with(|| {
+                record(
+                    vec![plain(
+                        "No retained conversation history is available for this target.".into(),
+                    )],
+                    " ",
+                )
+            })));
         }
         records
     }
@@ -256,6 +303,52 @@ mod tests {
     use crate::lean::tui::view::TranscriptCard;
 
     #[test]
+    fn conversation_projection_reuses_unchanged_records_and_refreshes_changed_inputs() {
+        let mut details = Details::new("conversation".into());
+        details.text_area.width = 80;
+        let mut view = View::default();
+        let message = MessageEntry {
+            id: "a".into(),
+            sent_at: Some(1),
+            sender: "You".into(),
+            target: "orchestrator".into(),
+            text: "retained 👩‍💻 é".repeat(1000),
+            state: "sent".into(),
+            kind: "user".into(),
+        };
+        view.messages.push(message.clone());
+        let first = details.project_dialogue_entries(&view);
+        let unchanged = details.project_dialogue_entries(&view);
+        assert!(Rc::ptr_eq(&first[0], &unchanged[0]));
+        let mut next = message;
+        next.id = "b".into();
+        view.messages.push(next);
+        let appended = details.project_dialogue_entries(&view);
+        assert!(Rc::ptr_eq(&first[0], &appended[0]));
+        assert_eq!(appended.len(), 2);
+        let mut layout = super::super::model::LayoutCache::default();
+        layout.update(first, "", 80);
+        let incrementally_wrapped = layout.update(appended, "", 80).to_vec();
+        let mut fresh = super::super::model::LayoutCache::default();
+        assert_eq!(
+            incrementally_wrapped,
+            fresh.update(details.project_dialogue_entries(&view), "", 80)
+        );
+        view.messages[0].state = "delivered".into();
+        let changed = details.project_dialogue_entries(&view);
+        assert!(!Rc::ptr_eq(&unchanged[0], &changed[0]));
+        details.text_area.width = 40;
+        let resized = details.project_dialogue_entries(&view);
+        assert!(!Rc::ptr_eq(&changed[0], &resized[0]));
+        view.messages.clear();
+        assert!(
+            details.project_dialogue_entries(&view)[0]
+                .search_text
+                .contains("No retained")
+        );
+    }
+
+    #[test]
     fn record_search_text_joins_lines_with_the_screen_separator() {
         let lines = vec![plain("first".into()), plain("second".into())];
         assert_eq!(record(lines.clone(), " ").search_text, "first second");
@@ -351,7 +444,7 @@ mod tests {
             },
         ]);
 
-        let agent = Details::new("worker:t1".into());
+        let mut agent = Details::new("worker:t1".into());
         let agent_records = agent.project_dialogue_entries(&view);
         assert_eq!(agent_records.len(), 2);
         assert!(agent_records[0].search_text.contains("target task message"));
@@ -417,7 +510,7 @@ mod tests {
         );
         assert_eq!(view.messages.len(), 1);
 
-        let details = Details::new("worker:t1".into());
+        let mut details = Details::new("worker:t1".into());
         let records = details.project_dialogue_entries(&view);
         assert_eq!(records.len(), 1);
         assert!(records[0].search_text.contains("agent-only mail"));

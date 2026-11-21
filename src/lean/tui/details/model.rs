@@ -34,14 +34,30 @@ impl LayoutCache {
                 .zip(&records)
                 .all(|(a, b)| Rc::ptr_eq(a, b) || a == b);
         if !unchanged {
-            self.lines = Details::render_records(&records, query)
-                .into_iter()
-                .flat_map(|(style, text)| {
-                    wrap(&text, width)
-                        .into_iter()
-                        .map(move |line| Line::styled(line, style))
-                })
-                .collect();
+            let append_only = query.is_empty()
+                && self.width == width
+                && self.query == query
+                && self.records.len() <= records.len()
+                && self
+                    .records
+                    .iter()
+                    .zip(&records)
+                    .all(|(a, b)| Rc::ptr_eq(a, b));
+            let start = if append_only {
+                self.records.len()
+            } else {
+                self.lines.clear();
+                0
+            };
+            self.lines.extend(
+                Details::render_records(&records[start..], query)
+                    .into_iter()
+                    .flat_map(|(style, text)| {
+                        wrap(&text, width)
+                            .into_iter()
+                            .map(move |line| Line::styled(line, style))
+                    }),
+            );
             self.records = records;
             self.query = query.to_owned();
             self.width = width;
@@ -160,4 +176,6 @@ pub struct Details {
     pub dash_reveal: bool,
     pub(in crate::lean::tui) pending_g: bool,
     pub(in crate::lean::tui) layout_cache: LayoutCache,
+    pub(super) conversation_cache: super::records::ConversationCache,
+    pub(in crate::lean::tui) summary_cache: super::super::render::specialized_summary::SummaryCache,
 }

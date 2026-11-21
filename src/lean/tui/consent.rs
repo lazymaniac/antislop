@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryConsent {
@@ -50,15 +50,23 @@ impl RecoveryConsent {
             };
         }
         match key.code {
+            KeyCode::PageUp => {
+                self.scroll = self.scroll.saturating_sub(1);
+                Outcome::None
+            }
+            KeyCode::PageDown => {
+                self.scroll = self.scroll.saturating_add(1);
+                Outcome::None
+            }
             KeyCode::Esc | KeyCode::Char('q') => Outcome::Close,
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
-                self.scroll = self.selected;
+                self.scroll = 0;
                 Outcome::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(self.files.len().saturating_sub(1));
-                self.scroll = self.selected;
+                self.scroll = 0;
                 Outcome::None
             }
             KeyCode::Char(' ') => {
@@ -86,6 +94,7 @@ impl RecoveryConsent {
                 if self.files.iter().any(|(_, selected)| *selected) =>
             {
                 self.confirming = true;
+                self.scroll = 0;
                 Outcome::None
             }
             _ => Outcome::None,
@@ -118,10 +127,15 @@ impl RecoveryConsent {
         frame.render_widget(block, area);
         let files = if self.confirming {
             self.selected_files()
+                .iter()
+                .map(|path| format!("{path:?}"))
+                .collect::<Vec<_>>()
         } else {
             self.files
                 .iter()
-                .map(|(path, selected)| format!("{} {path}", if *selected { "[x]" } else { "[ ]" }))
+                .map(|(path, selected)| {
+                    format!("{} {path:?}", if *selected { "[x]" } else { "[ ]" })
+                })
                 .collect()
         };
         let mut lines = vec![
@@ -139,42 +153,106 @@ impl RecoveryConsent {
                 "Select files (Space toggle, a all, Enter review confirmation):"
             }),
         ];
-        let visible = usize::from(inner.height.saturating_sub(5)).max(1);
-        let start = if self.confirming {
-            self.scroll.min(files.len().saturating_sub(visible))
-        } else {
-            self.selected.saturating_sub(visible.saturating_sub(1))
-        };
-        lines.extend(files.into_iter().enumerate().skip(start).take(visible).map(
-            |(index, path)| {
-                let style = if !self.confirming && index == self.selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                Line::from(Span::styled(path, style)).alignment(Alignment::Left)
-            },
-        ));
+        // Scroll physical, grapheme-wrapped rows, not file indices: even one
+        // legal Git path can occupy more than the entire viewport.
+        let width = usize::from(inner.width).max(1);
+        let mut file_lines = Vec::new();
+        let mut selected_start = 0;
+        for (index, path) in files.iter().enumerate() {
+            if index == self.selected {
+                selected_start = file_lines.len();
+            }
+            let style = if !self.confirming && index == self.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            file_lines.extend(
+                theme::wrap(path, width)
+                    .into_iter()
+                    .map(|row| Line::from(Span::styled(row, style)).alignment(Alignment::Left)),
+            );
+        }
+        let mut body = lines
+            .drain(..)
+            .flat_map(|line| {
+                theme::wrap(&line.to_string(), width)
+                    .into_iter()
+                    .map(Line::raw)
+            })
+            .collect::<Vec<_>>();
+        let header_rows = body.len();
+        body.extend(file_lines);
         if self.require_all && !self.confirming {
-            lines.push(Line::from(
-                "All declared output files require consent for artifact delivery.",
-            ));
+            body.extend(
+                theme::wrap(
+                    "All declared output files require consent for artifact delivery.",
+                    width,
+                )
+                .into_iter()
+                .map(Line::raw),
+            );
         }
         if let Some(error) = &self.error {
-            lines.push(Line::from(Span::styled(error.clone(), theme.warning())));
+            body.extend(
+                theme::wrap(error, width)
+                    .into_iter()
+                    .map(|line| Line::styled(line, theme.warning())),
+            );
         }
-        lines.push(Line::from(if self.confirming {
+        let visible = usize::from(inner.height.saturating_sub(1));
+        let selection_start = if self.confirming || self.selected == 0 {
+            0
+        } else {
+            header_rows
+                .saturating_add(selected_start)
+                .saturating_sub(visible.saturating_sub(1))
+        };
+        let start = selection_start
+            .saturating_add(self.scroll)
+            .min(body.len().saturating_sub(visible));
+        let content = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
+        frame.render_widget(
+            Paragraph::new(
+                body.into_iter()
+                    .skip(start)
+                    .take(visible)
+                    .collect::<Vec<_>>(),
+            ),
+            content,
+        );
+        let hint = if inner.width < 40 {
+            "Enter/Esc".to_owned()
+        } else if self.confirming {
             theme.chrome("Enter integrates these files · ↑/↓ scroll · Esc returns to selection")
         } else {
-            theme.chrome("Esc cancels · current freshness token is held for confirmation")
-        }));
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+            theme.chrome("Space toggle · Enter review · PgUp/PgDn scroll · Esc cancel")
+        };
+        if inner.height > 0 {
+            frame.render_widget(
+                Paragraph::new(view::truncate(&hint, width)),
+                Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+            );
+        }
     }
 }
 
 fn centered(area: Rect) -> Rect {
-    let width = area.width.saturating_sub(4).clamp(12, 100);
-    let height = area.height.saturating_sub(4).clamp(5, 28);
+    let width = if area.width < 16 {
+        area.width
+    } else {
+        area.width.saturating_sub(4).min(84)
+    };
+    let height = if area.height < 9 {
+        area.height
+    } else {
+        area.height.saturating_sub(4).min(28)
+    };
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -228,6 +306,83 @@ mod tests {
         );
         assert!(!state.confirming);
         assert_eq!(state.selected_files(), ["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn consent_distinguishes_control_names_and_scrolls_to_long_path_suffix() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut state = consent();
+        let paths = ["a\tb.txt", "a\nb.txt", "ab.txt", "a\\nb.txt"];
+        state.files = paths.iter().map(|path| ((*path).into(), true)).collect();
+        state.confirming = true;
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let text = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        terminal.draw(|frame| state.draw(frame)).unwrap();
+        let rendered = text(&terminal);
+        for path in paths {
+            assert!(rendered.contains(&format!("{path:?}")), "{rendered}");
+        }
+        assert_eq!(state.selected_files(), paths);
+        let path = format!("{}END-OF-AUTHORIZED-PATH.txt", "segment/".repeat(180));
+        state.files = vec![(path.clone(), true)];
+        terminal.draw(|frame| state.draw(frame)).unwrap();
+        assert!(!text(&terminal).contains("END-OF-AUTHORIZED-PATH.txt"));
+        for _ in 0..100 {
+            state.key(KeyEvent::new(
+                KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        terminal.draw(|frame| state.draw(frame)).unwrap();
+        assert!(text(&terminal).contains("END-OF-AUTHORIZED-PATH.txt"));
+        assert!(text(&terminal).contains("Enter integrates"));
+        assert_eq!(state.selected_files(), [path]);
+    }
+
+    #[test]
+    fn consent_long_path_remains_readable_at_every_required_geometry() {
+        use ratatui::{Terminal, backend::TestBackend};
+        for (width, height) in [(12, 5), (40, 12), (80, 24), (100, 30), (120, 40), (160, 50)] {
+            let mut state = consent();
+            let path = format!("{}PATHEND", "segment/".repeat(180));
+            state.files = vec![(path.clone(), true)];
+            state.confirming = true;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut reached_end = false;
+            for _ in 0..200 {
+                terminal.draw(|frame| state.draw(frame)).unwrap();
+                let inner = centered(Rect::new(0, 0, width, height))
+                    .inner(ratatui::layout::Margin::new(1, 1));
+                let visible = (inner.y..inner.bottom().saturating_sub(1))
+                    .map(|y| {
+                        (inner.x..inner.right())
+                            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                            .collect::<String>()
+                            .trim_end()
+                            .to_owned()
+                    })
+                    .collect::<String>();
+                reached_end |= visible.contains("PATHEND");
+                let footer = (inner.x..inner.right())
+                    .map(|x| terminal.backend().buffer()[(x, inner.bottom() - 1)].symbol())
+                    .collect::<String>();
+                assert!(footer.contains("Enter"), "{width}x{height}");
+                state.key(KeyEvent::new(
+                    KeyCode::Down,
+                    crossterm::event::KeyModifiers::NONE,
+                ));
+            }
+            assert!(reached_end, "{width}x{height} hid the path suffix");
+            assert_eq!(state.selected_files(), [path]);
+        }
     }
 
     #[test]
