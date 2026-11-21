@@ -14,7 +14,7 @@ pub(super) struct Browser {
 
 impl Browser {
     pub fn new() -> Self {
-        Self {
+        let mut browser = Self {
             offset: 0,
             total: 0,
             loading: true,
@@ -22,7 +22,9 @@ impl Browser {
             plan: None,
             view: View::default(),
             plan_view: PlanView::new("history".into()),
-        }
+        };
+        browser.sync_document();
+        browser
     }
 
     pub fn loaded(&mut self, page: PlansPage) {

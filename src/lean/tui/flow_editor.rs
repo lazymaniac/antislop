@@ -140,6 +140,7 @@ pub struct FlowEditor {
     pub split_goal_b: InputBuffer,
     pub sending: bool,
     pub error: Option<String>,
+    status_scroll: std::cell::Cell<usize>,
 }
 
 impl FlowEditor {
@@ -177,6 +178,7 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
+            status_scroll: std::cell::Cell::new(0),
         }
     }
 
@@ -219,6 +221,7 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
+            status_scroll: std::cell::Cell::new(0),
         }
     }
 
@@ -263,19 +266,29 @@ impl FlowEditor {
             split_goal_b: InputBuffer::new(),
             sending: false,
             error: None,
+            status_scroll: std::cell::Cell::new(0),
         }
     }
 
     fn field_count(&self) -> usize {
         match self.mode {
-            FlowEditMode::Edit { .. } => 8,
-            FlowEditMode::AddDependent { .. } => 9,
+            FlowEditMode::Edit { .. } => 9,
+            FlowEditMode::AddDependent { .. } => 10,
             FlowEditMode::Split { .. } => 5,
             FlowEditMode::Retire { .. } => 1,
         }
     }
 
     pub fn key(&mut self, key: KeyEvent, view: &View) -> FlowEditorOutcome {
+        if self.error.is_some() && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            let offset = self.status_scroll.get();
+            self.status_scroll.set(if key.code == KeyCode::PageUp {
+                offset.saturating_sub(1)
+            } else {
+                offset.saturating_add(1)
+            });
+            return FlowEditorOutcome::None;
+        }
         if self.sending {
             if key.code == KeyCode::Esc {
                 self.sending = false;
@@ -304,6 +317,7 @@ impl FlowEditor {
         }
 
         self.error = None;
+        self.status_scroll.set(0);
         match &self.mode {
             FlowEditMode::Edit { .. } => self.edit_field_key(key, false),
             FlowEditMode::AddDependent { .. } => self.edit_field_key(key, true),
@@ -390,6 +404,7 @@ impl FlowEditor {
     }
 
     fn submit(&mut self, view: &View) -> FlowEditorOutcome {
+        self.status_scroll.set(0);
         match self.build_revision(view) {
             Ok((revision, request_ai_review)) => {
                 self.error = None;
@@ -792,7 +807,6 @@ impl FlowEditor {
             .title(truncate(title, usize::from(width.saturating_sub(2))));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
-        let text_w = usize::from(inner.width.saturating_sub(2)).max(1);
 
         let kind_str = work_kind_name(
             WORK_KINDS
@@ -826,53 +840,99 @@ impl FlowEditor {
         rows.push(("Status (Space)  ", hold_str.to_owned()));
         rows.push(("Tryb zapisu     ", mode_str.to_owned()));
 
+        let compact = inner.height < rows.len() as u16 + 3 || inner.width < 40;
+        let status_height = if self.error.is_some() { 2 } else { 1 };
+        let fields_height = inner.height.saturating_sub(status_height + 1).max(1);
+        let first = if compact { self.field } else { 0 };
         let mut lines = Vec::new();
-        for (idx, (label, value)) in rows.iter().enumerate() {
+        for (idx, (label, value)) in rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(usize::from(fields_height))
+        {
             let selected = self.field == idx;
-            let marker = if selected { "▸ " } else { "  " };
-            let val_style = if selected {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            let label = if compact {
+                [
+                    "ID", "Tyt", "Cel", "Typ", "Kod", "Dep", "Plik", "Kryt", "Stan", "Tryb",
+                ][idx + usize::from(!has_id_field)]
             } else {
-                theme.text()
+                label.trim()
             };
-            let display_val = if value.is_empty() && selected {
-                " ".to_owned()
-            } else {
-                value.clone()
-            };
+            let prefix = format!("{label}: ");
             lines.push(Line::from(vec![
-                Span::styled(format!("{marker}{label}: "), theme.dim()),
+                Span::styled(prefix.clone(), theme.dim()),
                 Span::styled(
-                    truncate(&display_val, text_w.saturating_sub(label.width() + 4)),
-                    val_style,
+                    truncate(
+                        value,
+                        usize::from(inner.width).saturating_sub(prefix.width()),
+                    ),
+                    if selected {
+                        theme
+                            .text()
+                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                    } else {
+                        theme.text()
+                    },
                 ),
             ]));
         }
-
+        frame.render_widget(
+            Paragraph::new(lines),
+            Rect {
+                height: fields_height,
+                ..inner
+            },
+        );
+        let status = Rect {
+            y: inner.y + fields_height,
+            height: inner.height.saturating_sub(fields_height),
+            ..inner
+        };
         if let Some(error) = &self.error {
-            lines.push(Line::from(Span::styled(
-                truncate(&format!("✗ {error}"), text_w),
-                theme.error(),
-            )));
-        } else if self.sending {
-            lines.push(Line::from(Span::styled(
-                truncate("Zapisywanie zmian w grafie…", text_w),
-                theme.accent(),
-            )));
+            let wrapped = super::theme::wrap(error, usize::from(inner.width).max(1));
+            let visible = usize::from(status.height.saturating_sub(1)).max(1);
+            let offset = self
+                .status_scroll
+                .get()
+                .min(wrapped.len().saturating_sub(visible));
+            self.status_scroll.set(offset);
+            let mut lines = vec![Line::styled("Err PgUp/Dn", theme.error())];
+            lines.extend(
+                wrapped
+                    .into_iter()
+                    .skip(offset)
+                    .take(visible)
+                    .map(|line| Line::styled(line, theme.error())),
+            );
+            frame.render_widget(Paragraph::new(lines), status);
         } else {
-            lines.push(Line::raw(""));
+            self.status_scroll.set(0);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::styled(
+                        if self.sending {
+                            if inner.width >= 28 {
+                                "Zapisywanie zmian w grafie..."
+                            } else {
+                                "Zapis..."
+                            }
+                        } else {
+                            ""
+                        },
+                        theme.accent(),
+                    ),
+                    Line::styled(
+                        truncate(
+                            &theme.chrome("Tab pole · Enter/Ctrl+S zapisz · Esc zamknij"),
+                            usize::from(inner.width),
+                        ),
+                        theme.dim(),
+                    ),
+                ]),
+                status,
+            );
         }
-        lines.push(Line::from(Span::styled(
-            truncate(
-                &theme.chrome(
-                    "Tab/↑/↓ pole · ←/→/Space przełącz · Enter/Ctrl+S zapisz · Esc zamknij",
-                ),
-                text_w,
-            ),
-            theme.dim(),
-        )));
-
-        frame.render_widget(Paragraph::new(lines), inner);
     }
 }
 
