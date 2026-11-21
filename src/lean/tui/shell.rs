@@ -1,8 +1,5 @@
 use super::super::{cli::Options, daemon::Client};
-use super::{
-    App, InputBuffer, ascii_terminal, clipboard, in_ascii, theme, to_indexed_colors,
-    truecolor_terminal, without_color, workspace,
-};
+use super::{App, InputBuffer, clipboard, theme, to_indexed_colors, truecolor_terminal, workspace};
 use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -27,7 +24,6 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
 
 struct Rendering {
     no_color: bool,
-    ascii: bool,
     truecolor: bool,
 }
 
@@ -35,7 +31,6 @@ impl Rendering {
     fn from_environment() -> Self {
         Self {
             no_color: std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
-            ascii: ascii_terminal(),
             truecolor: truecolor_terminal(),
         }
     }
@@ -127,14 +122,8 @@ fn draw_frame(
             );
         }
         app.draw(frame);
-        if rendering.no_color {
-            without_color(frame.buffer_mut());
-        }
         if !rendering.no_color && !rendering.truecolor {
             to_indexed_colors(frame.buffer_mut());
-        }
-        if rendering.ascii {
-            in_ascii(frame.buffer_mut());
         }
     })?;
     Ok(())

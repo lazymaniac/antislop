@@ -379,6 +379,27 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         .documents
         .insert("result".into(), result_for_test(state.path()));
 
+    app.view.tasks[0].title = "updated live title".into();
+    app.view.tasks[0].status = "failed".into();
+    app.view.tasks[0].round = 3;
+    for (color, ascii) in [(true, false), (true, true), (false, false), (false, true)] {
+        let theme = Theme::new(color, ascii);
+        let hero = app.details.as_ref().unwrap().hero(&app.view, &theme);
+        let identity = hero[0].to_string();
+        assert!(identity.contains("Round 1"));
+        assert!(identity.contains("retained round one details"));
+        assert!(!identity.contains("updated live title"));
+        assert!(!identity.contains("failed"));
+        assert!(identity.contains(theme.glyphs().dot));
+        assert_eq!(
+            hero[0].spans.last().unwrap().style,
+            theme.status("complete")
+        );
+        if ascii {
+            assert!(!identity.contains('·'));
+        }
+    }
+
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     for (tab, expected) in [
         (WorkbenchTab::Summary, "retained round one details"),
@@ -1209,7 +1230,7 @@ fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
                     "the incoming arrow remains visible at {width}x{height}"
                 );
                 let (_, _, expected_style) = graph
-                    .expanded_entry_arrows()
+                    .expanded_entry_arrows(&theme)
                     .into_iter()
                     .find(|(x, y, _)| *x == route_x && *y == route_y)
                     .expect("entry arrow style");

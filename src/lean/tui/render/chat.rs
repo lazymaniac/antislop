@@ -2,24 +2,25 @@ use super::super::*;
 use crate::lean::tui::layout::lines::{compute_visual_lines, visual_text_lines_from_layout};
 
 /// Match the core's initial `@recipient` and `/direct` routing rules.
-fn chat_header(text: &str, rigor: &str) -> String {
+fn chat_header(text: &str, rigor: &str, theme: &Theme) -> String {
+    let sep = theme.glyphs().dot;
     if text
         .trim()
         .strip_prefix("/direct")
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
-        return format!("Direct execution · {rigor}");
+        return format!("Direct execution {sep} {rigor}");
     }
     let Some(rest) = text.strip_prefix('@') else {
-        return format!("To · orchestrator · {rigor}");
+        return format!("To {sep} orchestrator {sep} {rigor}");
     };
     let Some((recipient, _)) = rest.split_once(char::is_whitespace) else {
-        return "Address · incomplete".into();
+        return theme.chrome("Address · incomplete");
     };
     if recipient.is_empty() {
-        return "Address · empty recipient".into();
+        return theme.chrome("Address · empty recipient");
     }
-    format!("To · {recipient} · {rigor}")
+    format!("To {sep} {recipient} {sep} {rigor}")
 }
 
 impl App {
@@ -32,7 +33,7 @@ impl App {
         self.draw_sending(frame, areas[1], theme);
         self.draw_transcript(frame, areas[0], theme);
         if let Some(approval) = &self.approval {
-            approval.draw(frame, areas[3]);
+            approval.draw_with_theme(frame, areas[3], theme);
         }
         self.draw_chat_input(frame, areas[4], input_lines, cursor, theme);
     }
@@ -112,7 +113,11 @@ impl App {
         let Some((label, command)) = self.phase_action() else {
             return;
         };
-        let text = format!("  {label} {}  ", if theme.ascii { ">" } else { "▶" });
+        let text = format!(
+            "  {} {}  ",
+            theme.chrome(label),
+            if theme.ascii { ">" } else { "▶" }
+        );
         let framed = area.height >= 3;
         let width = (unicode_width::UnicodeWidthStr::width(text.as_str()) as u16
             + 2 * u16::from(framed))
@@ -130,6 +135,7 @@ impl App {
             widget = widget.block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_set(theme.borders())
                     .border_style(theme.button()),
             );
         }
@@ -182,17 +188,18 @@ impl App {
                     .join(", ")
             })
             .unwrap_or_default();
+        let sep = theme.glyphs().dot;
         let attachment_status = if attachments.is_empty() {
-            "Attachments · drop or paste image".to_owned()
+            theme.chrome("Attachments · drop or paste image")
         } else {
-            format!("Attachments · {attachments}")
+            format!("Attachments {sep} {attachments}")
         };
-        let status = format!("Enter send · Alt+Enter newline · {attachment_status}");
+        let status = format!("Enter send {sep} Alt+Enter newline {sep} {attachment_status}");
         super::composer::draw_panel(
             frame,
             input,
             super::composer::Panel {
-                title: &chat_header(&self.input.text, self.view.rigor_label()),
+                title: &chat_header(&self.input.text, self.view.rigor_label(), theme),
                 status: &status,
                 lines: shown_lines,
                 focused,
@@ -223,24 +230,35 @@ mod tests {
     #[test]
     fn chat_header_matches_the_destination_parsed_by_submit() {
         assert_eq!(
-            chat_header("hello", "feature"),
+            chat_header("hello", "feature", &Theme::new(true, false)),
             "To · orchestrator · feature"
         );
-        assert_eq!(chat_header("@all", "feature"), "Address · incomplete");
         assert_eq!(
-            chat_header("@all notify everyone", "feature"),
+            chat_header("@all", "feature", &Theme::new(true, false)),
+            "Address · incomplete"
+        );
+        assert_eq!(
+            chat_header("@all notify everyone", "feature", &Theme::new(true, false)),
             "To · all · feature"
         );
         assert_eq!(
-            chat_header("@worker:task-1 please help", "feature"),
+            chat_header(
+                "@worker:task-1 please help",
+                "feature",
+                &Theme::new(true, false)
+            ),
             "To · worker:task-1 · feature"
         );
         assert_eq!(
-            chat_header("/direct implement this", "feature"),
+            chat_header(
+                "/direct implement this",
+                "feature",
+                &Theme::new(true, false)
+            ),
             "Direct execution · feature"
         );
         assert_eq!(
-            chat_header("/directive text", "feature"),
+            chat_header("/directive text", "feature", &Theme::new(true, false)),
             "To · orchestrator · feature"
         );
     }

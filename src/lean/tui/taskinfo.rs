@@ -145,7 +145,14 @@ pub use effects::{
 /// accounts for, both roles show how the result landed, concrete
 /// dependencies and the count of messages follow. Parts that do not fit
 /// the card drop from the right, so the line never overlaps a card edge.
-pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String {
+pub fn card_meta(
+    role: &str,
+    view: &View,
+    row: &TaskRow,
+    width: usize,
+    theme: &super::Theme,
+) -> String {
+    let separator = format!(" {} ", theme.chrome("·"));
     let mut parts: Vec<String> = Vec::new();
     if role == "reviewer" {
         parts.push(coverage_short(row));
@@ -168,7 +175,7 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
     }
     if let Some(meta) = view.task_meta.get(&row.id) {
         if meta.deferred {
-            parts.push("⏸ HELD".into());
+            parts.push(theme.chrome("⏸ HELD"));
         }
         if !meta.acceptance_criteria.is_empty() {
             parts.push(format!(
@@ -181,10 +188,10 @@ pub fn card_meta(role: &str, view: &View, row: &TaskRow, width: usize) -> String
             ));
         }
     }
-    while parts.len() > 1 && UnicodeWidthStr::width(parts.join(" · ").as_str()) > width {
+    while parts.len() > 1 && UnicodeWidthStr::width(parts.join(&separator).as_str()) > width {
         parts.pop();
     }
-    parts.join(" · ")
+    parts.join(&separator)
 }
 
 /// What the viewer can do next, naming only keys the frontend really

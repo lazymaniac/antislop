@@ -14,6 +14,7 @@ impl App {
         self.graph_area = None;
         self.now_area = None;
         self.text_area = None;
+        frame.render_widget(Block::default().style(theme.overlay()), frame.area());
         if draw_min_term_guard(frame, frame.area()) {
             self.text_selection = Default::default();
             return;
@@ -21,16 +22,16 @@ impl App {
         self.sync_native_views();
         self.sync_approval();
         self.sync_rigor_recommendation();
-        if super::plan_history::draw_plan_history(self, frame) {
+        if super::plan_history::draw_plan_history(self, frame, theme) {
             return;
         }
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
             self.text_selection = Default::default();
-            editor.draw(frame);
+            editor.draw_themed(frame, theme);
             return;
         }
         super::specialized_screens::draw_secondary_or_main(self, frame, theme);
-        super::overlays::draw_remaining(self, frame);
+        super::overlays::draw_remaining(self, frame, theme);
     }
 }
 

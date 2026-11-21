@@ -879,7 +879,7 @@ fn health_marks_problems_and_cards_have_no_frame() {
         },
     );
     assert_eq!(health(&view, ORCHESTRATOR), Health::Problem);
-    assert!(describe(&view, ORCHESTRATOR).contains("failed: boom"));
+    assert!(describe(&view, ORCHESTRATOR, &Theme::new(true, false)).contains("failed: boom"));
 
     let graph = Graph::new(&view);
     let mut canvas = Canvas::new(graph.width, graph.height);

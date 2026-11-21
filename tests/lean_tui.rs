@@ -3525,10 +3525,10 @@ fn tui_ascii_mode_and_theme_glyphs() {
     assert_eq!(t_ascii.glyphs().to, ">");
     assert_eq!(t_ascii.glyphs().done, "x");
 
-    // Unicode letter transliteration in ASCII mode
-    assert_eq!(t_ascii.clean("Abąćęł cńódź efżó"), "Abacel cnodz efzo");
+    // ASCII changes application chrome while preserving document graphemes.
+    assert_eq!(t_ascii.clean("Abąćęł cńódź efżó"), "Abąćęł cńódź efżó");
     assert_eq!(
-        t_ascii.clean("Step 1: ✓ approved → done…"),
+        t_ascii.chrome("Step 1: ✓ approved → done…"),
         "Step 1: + approved > done."
     );
 
@@ -3553,7 +3553,7 @@ fn tui_ascii_mode_and_theme_glyphs() {
     draw_rows(&mut buffer, Rect::new(0, 0, 40, 5), &rows);
     let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
     assert!(rendered.contains("|"));
-    assert!(rendered.contains("Abacel cnodz efzo"));
+    assert!(rendered.contains("Abąćęł cńódź efżó"));
     assert!(!rendered.contains("▌"));
 }
 

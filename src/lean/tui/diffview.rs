@@ -1,7 +1,7 @@
 use super::super::diff::{DiffLine, FileDiff, ReviewerProfile};
 mod header;
 mod render;
-use super::view::{Comment, View, clean, dim, truncate};
+use super::view::{Comment, View, clean, truncate};
 pub use header::{diff_footer_hint, diff_header, diff_header_with_reviewer};
 use ratatui::{
     Frame,

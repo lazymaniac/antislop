@@ -21,10 +21,17 @@ impl Details {
                 .and_then(|task| task["status"].as_str())
                 .unwrap_or_default();
             return Line::from(vec![
-                Span::styled(format!(" Round {round} · "), theme.dim()),
+                Span::styled(
+                    format!(" Round {round} {} ", theme.glyphs().dot),
+                    theme.dim(),
+                ),
                 Span::styled(theme.clean(title), theme.title()),
                 Span::styled(
-                    format!(" · {}", theme.clean(status_label(status))),
+                    format!(
+                        " {} {}",
+                        theme.glyphs().dot,
+                        theme.clean(status_label(status))
+                    ),
                     theme.status(status),
                 ),
             ]);
@@ -96,7 +103,11 @@ fn identity_kind(theme: &Theme, row: &super::super::super::view::TaskRow) -> Spa
         "report"
     };
     Span::styled(
-        format!("  {} · {access}", theme.clean(&row.kind)),
+        format!(
+            "  {} {} {access}",
+            theme.clean(&row.kind),
+            theme.glyphs().dot
+        ),
         theme.dim(),
     )
 }

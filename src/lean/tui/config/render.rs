@@ -4,9 +4,13 @@ use unicode_width::UnicodeWidthStr;
 
 impl ConfigEditor {
     pub fn draw(&self, frame: &mut Frame) {
+        self.draw_themed(frame, &Theme::from_env());
+    }
+
+    pub(in crate::lean::tui) fn draw_themed(&self, frame: &mut Frame, theme: &Theme) {
         self.draw_with_theme(
             frame,
-            &Theme::from_env(),
+            theme,
             crate::lean::paths::config_dir()
                 .ok()
                 .map(|p| p.join("antislop.toml"))
@@ -25,11 +29,19 @@ impl ConfigEditor {
             return;
         }
         frame.render_widget(Clear, area);
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(theme.overlay()),
+            area,
+        );
         if area.width < 40 || area.height < 9 {
             self.draw_compact(frame, area, theme);
             return;
         }
         let panel = super::super::panel_area(area, 84);
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(theme.panel()),
+            panel,
+        );
         let origin = if global == Some(std::path::Path::new(&self.path)) {
             "global"
         } else {

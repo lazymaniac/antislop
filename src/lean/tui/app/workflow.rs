@@ -145,41 +145,50 @@ impl App {
 
     /// The header as drawn, which is also what a click on it is read from.
     pub fn header_line(&self, width: u16) -> Line<'static> {
+        self.header_line_themed(width, &Theme::from_env())
+    }
+
+    pub(in crate::lean::tui) fn header_line_themed(
+        &self,
+        width: u16,
+        theme: &Theme,
+    ) -> Line<'static> {
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Graph => PanelFocus::Graph,
         };
-        let label = self.header_project_label();
-        let mut line = view::render_header_with(
+        let label = self.header_project_label(theme);
+        let mut line = view::render_header_themed(
             &label,
             &self.conversation,
-            self.header_status().trim_end_matches(" · "),
+            &theme.chrome(self.header_status().trim_end_matches(" · ")),
             panel_focus,
             width,
             self.view.controls(),
+            theme,
         );
-        self.prepend_header_notice(&mut line);
+        self.prepend_header_notice(&mut line, theme);
         line
     }
 
-    fn header_project_label(&self) -> String {
+    fn header_project_label(&self, theme: &Theme) -> String {
         let project = workspace::others_summary(&self.projects, self.active_project).map_or_else(
             || self.project.clone(),
             |others| format!("{} ({others})", self.project),
         );
         let branch = self.view.session_branch.as_ref();
         branch.map_or(project.clone(), |branch| {
-            format!("{project} · branch: {branch}")
+            format!("{project} {} branch: {branch}", theme.glyphs().dot)
         })
     }
 
-    fn prepend_header_notice(&self, line: &mut Line<'static>) {
+    fn prepend_header_notice(&self, line: &mut Line<'static>, theme: &Theme) {
         if let Some(notice) = &self.notice {
             line.spans.insert(
                 0,
                 Span::styled(
-                    format!(" {} · ", sanitize(notice)),
-                    Theme::from_env().title(),
+                    format!(" {} {} ", sanitize(notice), theme.glyphs().dot),
+                    theme.title(),
                 ),
             );
         }

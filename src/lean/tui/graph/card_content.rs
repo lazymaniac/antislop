@@ -15,10 +15,17 @@ pub(super) struct Content {
 }
 
 impl Content {
-    pub(super) fn new(view: &View, key: &str, width: u16, limit: u16, folded: bool) -> Self {
+    pub(super) fn new(
+        view: &View,
+        key: &str,
+        width: u16,
+        limit: u16,
+        folded: bool,
+        theme: &Theme,
+    ) -> Self {
         let inner = usize::from(width.saturating_sub(4));
         let mut rows = Vec::new();
-        if let Some(text) = reviewer_text(view, key) {
+        if let Some(text) = reviewer_text(view, key, theme) {
             rows.push((Tone::Status, text));
         }
         if folded {
@@ -36,7 +43,7 @@ impl Content {
         let metadata = task_card(view, key)
             .map(|(task, _)| {
                 let role = key.split_once(':').map_or("", |(role, _)| role);
-                taskinfo::card_meta(role, view, task, inner)
+                taskinfo::card_meta(role, view, task, inner, theme)
             })
             .filter(|text| !text.is_empty());
         let room =
@@ -77,7 +84,7 @@ impl Content {
 }
 
 pub(super) fn height(view: &View, key: &str, width: u16, limit: u16, folded: bool) -> u16 {
-    Content::new(view, key, width, limit, folded).height()
+    Content::new(view, key, width, limit, folded, &Theme::from_env()).height()
 }
 
 pub(super) fn pair_finished(task: &TaskRow, role: Role) -> bool {
@@ -88,7 +95,7 @@ pub(super) fn pair_finished(task: &TaskRow, role: Role) -> bool {
         )
 }
 
-pub(super) fn reviewer_text(view: &View, key: &str) -> Option<String> {
+pub(super) fn reviewer_text(view: &View, key: &str, theme: &Theme) -> Option<String> {
     let (task, role) = task_card(view, key)?;
     if pair_finished(task, role) {
         return None;
@@ -101,7 +108,7 @@ pub(super) fn reviewer_text(view: &View, key: &str) -> Option<String> {
         (Role::Pair, coverage) => Some(format!(
             "V: {}{}",
             taskinfo::reviewer_status(task),
-            coverage.map_or_default(|coverage| format!(" · {coverage}"))
+            coverage.map_or_default(|coverage| format!(" {} {coverage}", theme.chrome("·")))
         )),
         (Role::Reviewer, Some(coverage)) => Some(format!("coverage {coverage}")),
         _ => None,

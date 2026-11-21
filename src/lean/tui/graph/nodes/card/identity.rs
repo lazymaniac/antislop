@@ -138,11 +138,15 @@ impl Card<'_> {
 
     fn status_description(&self) -> String {
         if self.health != Health::Working {
-            let mut description = describe(self.view, &self.node.key);
+            let mut description = describe(self.view, &self.node.key, self.theme);
             if self.pair_finished()
                 && let Some(task) = self.task.filter(|task| task.obligations.is_some())
             {
-                description.push_str(&format!(" · {}", taskinfo::coverage_short(task)));
+                description.push_str(&format!(
+                    " {} {}",
+                    self.theme.chrome("·"),
+                    taskinfo::coverage_short(task)
+                ));
             }
             return description;
         }
@@ -153,7 +157,7 @@ impl Card<'_> {
             .filter(|round| *round > 0)
             .map_or_else(|| "working".into(), |round| format!("round {round}"));
         if let Some(clock) = self.view.agent_live_clock(&self.node.key, self.theme.ascii) {
-            base.push_str(&format!(" · {clock}"));
+            base.push_str(&format!(" {} {clock}", self.theme.chrome("·")));
         }
         base
     }

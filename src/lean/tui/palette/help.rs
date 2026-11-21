@@ -71,6 +71,7 @@ fn help_width(width: u16) -> u16 {
 }
 
 fn draw_help_box(frame: &mut Frame, area: Rect, width: u16, lines: Vec<String>, scroll: usize) {
+    let theme = crate::lean::tui::theme::Theme::from_env();
     let height = (lines.len() as u16 + 2).min(area.height).max(1);
     let box_area = help_box_area(area, width, height);
     let visible = usize::from(height.saturating_sub(2));
@@ -79,7 +80,7 @@ fn draw_help_box(frame: &mut Frame, area: Rect, width: u16, lines: Vec<String>, 
         .iter()
         .skip(scroll.min(max_scroll))
         .take(visible)
-        .map(|line| Line::raw(line.clone()))
+        .map(|line| Line::raw(theme.chrome(line)))
         .collect::<Vec<_>>();
     let title = help_title(width, max_scroll > 0);
     frame.render_widget(Clear, box_area);
@@ -87,6 +88,7 @@ fn draw_help_box(frame: &mut Frame, area: Rect, width: u16, lines: Vec<String>, 
         Paragraph::new(shown).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_set(theme.borders())
                 .border_style(Style::default())
                 .title(title),
         ),

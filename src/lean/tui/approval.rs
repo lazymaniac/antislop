@@ -2,7 +2,7 @@
 
 use super::sanitize::sanitize_bounded;
 use super::theme::{Theme, wrap};
-use super::view::{PendingApproval, truncate};
+use super::view::PendingApproval;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -47,18 +47,22 @@ impl ApprovalCard {
         }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+    pub(in crate::lean::tui) fn draw_with_theme(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let theme = Theme::from_env();
         let inner_width = usize::from(area.width.saturating_sub(2)).max(1);
         if area.height == 1 {
             let summary = bounded_clean(&self.approval.summary, usize::from(area.width));
             let text = if summary.is_empty() {
                 "! Approval".to_owned()
             } else {
-                truncate(&format!("! {summary}"), usize::from(area.width))
+                theme.fit(&format!("! {summary}"), usize::from(area.width))
             };
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(text, theme.warning())))
@@ -80,10 +84,11 @@ impl ApprovalCard {
             .min(visible_rows.saturating_sub(header_rows + footer_rows));
         let summary_rows = visible_rows.saturating_sub(header_rows + footer_rows + option_rows);
         let mut lines = vec![Line::from(Span::styled(
-            truncate(
+            theme.fit(
                 &format!(
-                    "{} asks permission · {} CLI",
+                    "{} asks permission {} {} CLI",
                     bounded_clean(&self.approval.role, inner_width),
+                    theme.glyphs().dot,
                     bounded_clean(&self.approval.provider, inner_width)
                 ),
                 inner_width,
@@ -97,7 +102,7 @@ impl ApprovalCard {
             )));
         }
         for summary_line in bounded_summary(&self.approval.summary, inner_width, summary_rows) {
-            lines.push(Line::raw(truncate(&summary_line, inner_width)));
+            lines.push(Line::raw(theme.fit(&summary_line, inner_width)));
         }
         for (index, (_, label, _)) in self.approval.options.iter().take(option_rows).enumerate() {
             let shortcut = index + 1;
@@ -108,29 +113,18 @@ impl ApprovalCard {
             };
             let option = format!("{binding}{}", bounded_clean(label, inner_width));
             lines.push(Line::from(Span::styled(
-                truncate(&option, inner_width),
+                theme.fit(&option, inner_width),
                 theme.selected(),
             )));
         }
         if footer_rows > 0 {
             lines.push(Line::from(Span::styled("Alt+0  decide later", theme.dim())));
         }
-        let mut block = Block::default()
+        let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(theme.warning())
+            .border_set(theme.borders())
+            .border_style(theme.separator(false))
             .title(" Approval ");
-        if theme.ascii {
-            block = block.border_set(ratatui::symbols::border::Set {
-                top_left: "+",
-                top_right: "+",
-                bottom_left: "+",
-                bottom_right: "+",
-                vertical_left: "|",
-                vertical_right: "|",
-                horizontal_top: "-",
-                horizontal_bottom: "-",
-            });
-        }
         frame.render_widget(
             Paragraph::new(lines).style(theme.raised()).block(block),
             area,

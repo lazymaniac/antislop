@@ -3,21 +3,21 @@ use super::super::*;
 mod editor;
 mod modal;
 
-pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
+pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame, theme: &Theme) {
     draw_selection(app, frame);
-    if editor::draw_editor(app, frame) {
+    if editor::draw_editor(app, frame, theme) {
         return;
     }
     if let Some(flow_editor) = &app.flow_editor {
-        flow_editor.draw(frame, &Theme::from_env());
+        flow_editor.draw(frame, theme);
         return;
     }
-    draw_interview(app, frame);
-    draw_picker(app, frame);
+    draw_interview(app, frame, theme);
+    draw_picker(app, frame, theme);
     draw_help(app, frame);
     modal::draw_unblock(app, frame);
     modal::draw_graph_filters(app, frame);
-    app.draw_decision_inbox(frame);
+    app.draw_decision_inbox(frame, theme);
 }
 
 fn draw_selection(app: &mut App, frame: &mut Frame) {
@@ -32,7 +32,7 @@ fn draw_selection(app: &mut App, frame: &mut Frame) {
     );
 }
 
-fn draw_interview(app: &mut App, frame: &mut Frame) {
+fn draw_interview(app: &mut App, frame: &mut Frame, theme: &Theme) {
     if app.editor.is_some()
         || app.help.is_some()
         || app.picker.is_some()
@@ -53,13 +53,13 @@ fn draw_interview(app: &mut App, frame: &mut Frame) {
         app.chat_area
     };
     if let Some(form) = app.interview_forms.get_mut(&app.conversation) {
-        form.draw(frame, area, &Theme::from_env());
+        form.draw(frame, area, theme);
     }
 }
 
-fn draw_picker(app: &mut App, frame: &mut Frame) {
+fn draw_picker(app: &mut App, frame: &mut Frame, theme: &Theme) {
     if let Some(picker) = &mut app.picker {
-        picker.draw_with_cursor(frame, &app.view, app.help.is_none());
+        picker.draw_themed(frame, &app.view, app.help.is_none(), theme);
     }
 }
 

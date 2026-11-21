@@ -13,6 +13,7 @@ impl Card<'_> {
             self.node.width,
             self.node.height,
             self.node.collapsed,
+            self.theme,
         );
         let (_, status) = super::content::status_style(self.theme, self.health);
         for (row, (tone, text)) in content.rows.iter().enumerate() {

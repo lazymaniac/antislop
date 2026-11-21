@@ -9,7 +9,17 @@ impl Details {
     }
 
     pub fn draw_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
-        self.draw_at_inner(frame, area, view, None, None);
+        self.draw_at_themed(frame, area, view, &Theme::from_env());
+    }
+
+    pub(in crate::lean::tui) fn draw_at_themed(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+    ) {
+        self.draw_at_inner(frame, area, view, None, None, theme);
     }
 
     pub(super) fn draw_workbench_at(
@@ -19,8 +29,9 @@ impl Details {
         terminal: Rect,
         view: &View,
         tab: WorkbenchTab,
+        theme: &Theme,
     ) {
-        self.draw_at_inner(frame, content, view, Some(terminal), Some(tab));
+        self.draw_at_inner(frame, content, view, Some(terminal), Some(tab), theme);
     }
 
     fn draw_at_inner(
@@ -30,52 +41,58 @@ impl Details {
         view: &View,
         terminal: Option<Rect>,
         workbench_tab: Option<WorkbenchTab>,
+        theme: &Theme,
     ) {
         self.normalize_tab();
         if area.width == 0 || area.height == 0 {
             if let Some(terminal) = terminal {
-                self.draw_workbench_terminal(frame, terminal, view);
+                self.draw_workbench_terminal(frame, terminal, view, theme);
             }
             return;
         }
         if let Some(tab) = workbench_tab {
             self.show_info = tab == WorkbenchTab::Summary;
         }
-        let theme = Theme::from_env();
-        let summary = self.summary(view, &theme);
+        let summary = self.summary(view, theme);
         let areas = detail_areas(area, self.overview(), summary.len());
-        self.draw_header(frame, &areas, summary, &theme, view, workbench_tab);
-        let body = self.draw_round_header(frame, areas.body, view, &theme);
+        self.draw_header(frame, &areas, summary, theme, view, workbench_tab);
+        let body = self.draw_round_header(frame, areas.body, view, theme);
         if workbench_tab == Some(WorkbenchTab::Conversation) {
-            self.draw_conversation(frame, body, areas.footer, view, &theme);
+            self.draw_conversation(frame, body, areas.footer, view, theme);
             if let Some(terminal) = terminal {
-                self.draw_workbench_terminal(frame, terminal, view);
+                self.draw_workbench_terminal(frame, terminal, view, theme);
             }
             return;
         }
         if workbench_tab == Some(WorkbenchTab::Summary)
-            && self.draw_workbench_summary(frame, body, view)
+            && self.draw_workbench_summary(frame, body, view, theme)
         {
             if let Some(terminal) = terminal {
-                self.draw_workbench_terminal(frame, terminal, view);
+                self.draw_workbench_terminal(frame, terminal, view, theme);
             }
             return;
         }
-        if self.draw_secondary_screen(frame, body, areas.footer, view, &theme, terminal.is_some()) {
+        if self.draw_secondary_screen(frame, body, areas.footer, view, theme, terminal.is_some()) {
             if let Some(terminal) = terminal {
-                self.draw_workbench_terminal(frame, terminal, view);
+                self.draw_workbench_terminal(frame, terminal, view, theme);
             }
             return;
         }
-        self.draw_detail_content(frame, body, areas.footer, view, &theme);
+        self.draw_detail_content(frame, body, areas.footer, view, theme);
         if let Some(terminal) = terminal {
-            self.draw_workbench_terminal(frame, terminal, view);
+            self.draw_workbench_terminal(frame, terminal, view, theme);
         }
     }
 
-    fn draw_workbench_summary(&mut self, frame: &mut Frame, area: Rect, view: &View) -> bool {
+    fn draw_workbench_summary(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+    ) -> bool {
         let projection = crate::lean::tui::workbench_summary::project(view, &self.key);
-        super::specialized_summary::draw(frame, area, projection, &mut self.scroll)
+        super::specialized_summary::draw(frame, area, projection, &mut self.scroll, theme)
     }
 
     fn draw_conversation(
@@ -97,14 +114,20 @@ impl Details {
             .saturating_add(usize::from(inner.height))
             .min(lines.len());
         frame.render_widget(
-            Paragraph::new(lines[self.scroll..end].to_vec()),
+            Paragraph::new(
+                lines[self.scroll..end]
+                    .iter()
+                    .cloned()
+                    .map(|line| theme.line(line))
+                    .collect::<Vec<_>>(),
+            ),
             self.text_area,
         );
         draw_record_scrollbar(frame, inner, lines.len(), self.scroll, theme);
         self.draw_footer_hint(
             frame,
             footer,
-            "↑/↓ scroll · Ctrl+F search history · G latest".into(),
+            theme.chrome("↑/↓ scroll · Ctrl+F search history · G latest"),
             theme,
         );
     }
@@ -143,7 +166,7 @@ impl Details {
                 .enumerate()
             {
                 if index > 0 {
-                    spans.push(Span::styled(" · ", theme.faint()));
+                    spans.push(Span::styled(theme.chrome(" · "), theme.faint()));
                 }
                 let style = if tab == active {
                     theme.title().add_modifier(Modifier::REVERSED)
@@ -180,7 +203,7 @@ impl Details {
         let latest = latest_round(self, view);
         let label = round_label(self, self.selected_round.unwrap_or(latest));
         frame.render_widget(
-            Paragraph::new(theme.clean(&label)).style(theme.dim()),
+            Paragraph::new(theme.chrome(&label)).style(theme.dim()),
             Rect::new(body.x, body.y, body.width, 1),
         );
         body.y = body.y.saturating_add(1);
@@ -218,7 +241,7 @@ impl Details {
             self.draw_footer_hint(
                 frame,
                 footer,
-                overview_split_hint(self.searching, &self.query, footer.width),
+                overview_split_hint(self.searching, &self.query, footer.width, theme),
                 theme,
             );
             return true;
@@ -249,7 +272,7 @@ impl Details {
         self.draw_footer_hint(
             frame,
             footer,
-            overview_split_hint(self.searching, &self.query, footer.width),
+            overview_split_hint(self.searching, &self.query, footer.width, theme),
             theme,
         );
         true
@@ -268,7 +291,7 @@ impl Details {
             self.draw_footer_hint(
                 frame,
                 footer,
-                overview_hint(self.searching, &self.query, footer.width),
+                overview_hint(self.searching, &self.query, footer.width, theme),
                 theme,
             );
             return true;
@@ -291,7 +314,7 @@ impl Details {
         self.draw_footer_hint(
             frame,
             footer,
-            dashboard_hint(self.searching, &self.query, footer.width),
+            dashboard_hint(self.searching, &self.query, footer.width, theme),
             theme,
         );
         true
@@ -378,7 +401,7 @@ impl Details {
         if self.visible_result_keys().len() > 1 {
             hint.push_str(" · ,/. documents");
         }
-        self.draw_footer_hint(frame, footer, hint, theme);
+        self.draw_footer_hint(frame, footer, theme.chrome(&hint), theme);
     }
 
     fn draw_document_result(
@@ -440,10 +463,21 @@ impl Details {
         );
         let end = (self.scroll + usize::from(inner.height)).min(lines.len());
         frame.render_widget(
-            Paragraph::new(lines[self.scroll..end].to_vec()),
+            Paragraph::new(
+                lines[self.scroll..end]
+                    .iter()
+                    .cloned()
+                    .map(|line| theme.line(line))
+                    .collect::<Vec<_>>(),
+            ),
             self.text_area,
         );
         draw_record_scrollbar(frame, inner, lines.len(), self.scroll, theme);
-        self.draw_footer_hint(frame, footer, records_hint(self, footer.width), theme);
+        self.draw_footer_hint(
+            frame,
+            footer,
+            records_hint(self, footer.width, theme),
+            theme,
+        );
     }
 }

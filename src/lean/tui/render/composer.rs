@@ -71,23 +71,23 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, panel: Panel<'_>, theme:
                 .set_style(border);
         }
         buffer[(area.x, area.y)]
-            .set_symbol(if theme.ascii { "+" } else { "╭" })
+            .set_symbol(if theme.ascii { "+" } else { "┌" })
             .set_style(border);
         buffer[(area.right() - 1, area.y)]
-            .set_symbol(if theme.ascii { "+" } else { "╮" })
+            .set_symbol(if theme.ascii { "+" } else { "┐" })
             .set_style(border);
         buffer[(area.x, area.bottom() - 1)]
-            .set_symbol(if theme.ascii { "+" } else { "╰" })
+            .set_symbol(if theme.ascii { "+" } else { "└" })
             .set_style(border);
         buffer[(area.right() - 1, area.bottom() - 1)]
-            .set_symbol(if theme.ascii { "+" } else { "╯" })
+            .set_symbol(if theme.ascii { "+" } else { "┘" })
             .set_style(border);
     }
     if area.height >= 1 && area.width > 2 {
         buffer.set_string(
             area.x + 1,
             area.y,
-            truncate(&theme.clean(panel.title), usize::from(area.width - 2)),
+            theme.fit(&theme.clean(panel.title), usize::from(area.width - 2)),
             fill.patch(theme.dim()),
         );
     }
@@ -95,7 +95,7 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, panel: Panel<'_>, theme:
         buffer.set_string(
             area.x + 1,
             area.bottom() - 1,
-            truncate(&theme.clean(panel.status), usize::from(area.width - 2)),
+            theme.fit(&theme.clean(panel.status), usize::from(area.width - 2)),
             fill.patch(theme.dim()),
         );
     }

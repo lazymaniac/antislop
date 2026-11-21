@@ -101,6 +101,8 @@ impl RecoveryConsent {
     }
 
     pub fn draw(&self, frame: &mut Frame) {
+        let theme = Theme::from_env();
+        let separator = theme.chrome("·");
         let area = centered(frame.area());
         frame.render_widget(Clear, area);
         let title = if self.confirming {
@@ -108,7 +110,10 @@ impl RecoveryConsent {
         } else {
             " Recovery integration consent "
         };
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_set(theme.borders())
+            .title(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let files = if self.confirming {
@@ -120,9 +125,12 @@ impl RecoveryConsent {
                 .collect()
         };
         let mut lines = vec![
-            Line::from(format!("Task: {} · status: {}", self.task, self.status)),
             Line::from(format!(
-                "Target: {} · base {} · snapshot {}",
+                "Task: {} {separator} status: {}",
+                self.task, self.status
+            )),
+            Line::from(format!(
+                "Target: {} {separator} base {} {separator} snapshot {}",
                 self.target, self.base, self.result
             )),
             Line::from(if self.confirming {
@@ -153,15 +161,12 @@ impl RecoveryConsent {
             ));
         }
         if let Some(error) = &self.error {
-            lines.push(Line::from(Span::styled(
-                error.clone(),
-                Theme::from_env().warning(),
-            )));
+            lines.push(Line::from(Span::styled(error.clone(), theme.warning())));
         }
         lines.push(Line::from(if self.confirming {
-            "Enter integrates these files · ↑/↓ scroll · Esc returns to selection"
+            theme.chrome("Enter integrates these files · ↑/↓ scroll · Esc returns to selection")
         } else {
-            "Esc cancels · current freshness token is held for confirmation"
+            theme.chrome("Esc cancels · current freshness token is held for confirmation")
         }));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }

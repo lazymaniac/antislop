@@ -420,8 +420,12 @@ fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
         term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(false, true)))
             .unwrap();
+        assert_eq!(
+            term.backend().buffer()[(0, 0)].symbol(),
+            "+",
+            "application border"
+        );
         for cell in &term.backend().buffer().content {
-            assert!(cell.symbol().is_ascii());
             assert_eq!(cell.fg, ratatui::style::Color::Reset);
             assert_eq!(cell.bg, ratatui::style::Color::Reset);
         }

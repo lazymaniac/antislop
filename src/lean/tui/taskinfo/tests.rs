@@ -1,5 +1,6 @@
 use super::*;
 use crate::lean::tasks::{UNKNOWN_ID_BYTES, UNKNOWN_ID_LIMIT};
+use crate::lean::tui::Theme;
 use crate::lean::tui::view::TaskRow;
 use serde_json::json;
 
@@ -368,11 +369,11 @@ fn card_meta_drops_the_least_important_part_first() {
         },
         t1.clone(),
     ];
-    let wide = card_meta("worker", &view, &t1, 40);
+    let wide = card_meta("worker", &view, &t1, 40, &Theme::from_env());
     assert!(
         wide.contains("D:t0") && wide.starts_with("not reported"),
         "{wide}"
     );
-    let narrow = card_meta("worker", &view, &t1, 12);
+    let narrow = card_meta("worker", &view, &t1, 12, &Theme::from_env());
     assert_eq!(narrow, "not reported", "deps give way, the label stays");
 }
