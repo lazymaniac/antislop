@@ -31,6 +31,19 @@ impl PlanView {
         self.task_rects.clear();
         self.button_rects = [Rect::default(); 4];
         frame.render_widget(Clear, area);
+        if let Some(navigation) = history_navigation
+            && (area.width < 14 || area.height < 8)
+        {
+            self.graph_area = Rect::default();
+            let block = graph::panel(" History ", true, theme);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let [status, document] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+            self.draw_history_navigation(frame, status, navigation, theme);
+            self.draw_document(frame, document, view, theme);
+            return;
+        }
         let Some(chunks) =
             self.frame_layout(frame, area, view, theme, history_navigation.is_some())
         else {
@@ -303,16 +316,11 @@ impl PlanView {
         theme: &Theme,
     ) {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("[", theme.accent()),
-                Span::styled(" older  ", theme.dim()),
-                Span::styled("]", theme.accent()),
-                Span::styled(
-                    " newer   v switch pane   arrows navigate   PgUp/PgDn scroll   Esc close",
-                    theme.dim(),
-                ),
-                Span::styled(format!("   {navigation}"), theme.accent()),
-            ])),
+            Paragraph::new(vec![
+                Line::styled(navigation.to_owned(), theme.accent()),
+                Line::styled("[ older  ] newer  v switch pane", theme.dim()),
+                Line::styled("arrows navigate  PgUp/PgDn scroll  Esc close", theme.dim()),
+            ]),
             area,
         );
     }

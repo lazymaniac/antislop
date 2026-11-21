@@ -26,6 +26,12 @@ impl Help {
     pub fn lines_for_width(self, inner: usize) -> Vec<String> {
         self.lines()
             .iter()
+            .chain(
+                matches!(self, Help::Chat | Help::Graph | Help::Details | Help::Diff)
+                    .then_some(help_global())
+                    .into_iter()
+                    .flatten(),
+            )
             .flat_map(|line| help_line(line, inner))
             .collect()
     }
@@ -207,10 +213,10 @@ fn help_chat() -> &'static [&'static str] {
         "↑/↓              line in draft; sent history at edges",
         "PgUp/PgDn        scroll conversation",
         SELECTION_HELP,
-        "Ctrl+D / Ctrl+U  half page down / up",
+        "Ctrl+D / Ctrl+U  half page down / up (empty draft)",
         "Tab              team panel",
         "Ctrl+A / Ctrl+R  line start / resume or history",
-        "Ctrl+U / Ctrl+K  delete to start / end of line",
+        "Ctrl+U / Ctrl+K  editors: delete to start / end of line",
         "Ctrl+W           delete word left",
         "Ctrl+E           move to end of line",
         "Ctrl+X           cancel running work",
@@ -261,15 +267,22 @@ fn help_graph() -> &'static [&'static str] {
 
 fn help_details() -> &'static [&'static str] {
     &[
-        "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
+        "Ctrl+Left/Right  previous / next Workbench tab (available for this role)",
+        "Tab/Shift+Tab    content / terminal focus",
+        "Ctrl+B           show / hide the task and agent list",
+        "z                zoom focused panel / restore split",
+        "Alt+Up/Down      resize terminal in split view",
+        "p                pin / unpin terminal owner",
+        "Alt+Left/Right   previous / next result document",
         "Workbench       , / . select round; . on newest follows live work",
         "F5 / u          task recovery actions; 1–3 session completion actions",
         "F6 / Ctrl+X     pause/continue or cancel the current session",
         "Ctrl+P          command palette",
         "i / a            native CLI focus / message composer",
         "Ctrl+T           composer: queue / steer / interrupt the running turn",
-        "Ctrl+]           leave PTY and return to Details",
-        "Ctrl+W           switch worker / reviewer panel",
+        "Ctrl+]           leave native PTY input; return to Workbench navigation",
+        "PTY: i / t       native input / navigation; all native keys except Ctrl+] go to CLI",
+        "Ctrl+W           switch worker / reviewer target",
         "h / r            JSON history / retry native attachment",
         "↑/↓ PgUp/PgDn    scroll; on Comments select",
         "gg / G           first / last entry; G follows live session",
@@ -289,12 +302,17 @@ fn help_diff() -> &'static [&'static str] {
         "↑/↓ PgUp/PgDn    select line (or file)",
         "Ctrl+D / Ctrl+U  half page down / up",
         "[/] or ←/→       previous / next file",
-        "Tab              file list / lines",
+        "Workbench: Tab   content / terminal focus (inspector: file list / lines)",
+        "Ctrl+Left/Right  previous / next Workbench tab",
+        "Ctrl+B / z       Workbench list / zoom focused panel",
+        "Alt+Up/Down / p  resize split / pin terminal owner",
+        ", / .            Workbench round; . on newest follows live",
+        "Terminal: i      enter native PTY; Ctrl+] returns; other keys go to CLI",
         "f                hide / show the file list",
         "c                comment on line or file",
         "R                code review of this change",
         "r                refresh",
-        "Esc              back",
+        "Esc              Workbench Summary / back from graph inspector",
     ]
 }
 
@@ -308,7 +326,7 @@ fn help_comment() -> &'static [&'static str] {
         "Home/End         start / end of line",
         "Alt/Ctrl+Home/End  start / end of comment",
         "Ctrl+A / Ctrl+E  start / end of line",
-        "Ctrl+U / Ctrl+K  delete to start / end of line",
+        "Ctrl+U / Ctrl+K  editors: delete to start / end of line",
         "Ctrl+W, Alt+Backspace  delete word left",
         "Esc              cancel comment (chat draft stays)",
     ]
@@ -333,5 +351,26 @@ fn help_picker() -> &'static [&'static str] {
         "Ctrl+R           refresh without losing a dirty draft",
         "Ctrl+P           open command palette",
         "Esc              close configuration",
+    ]
+}
+
+fn help_global() -> &'static [&'static str] {
+    &[
+        "Global navigation (outside editors, forms and native PTY)",
+        "F1 / F2          context help / decision inbox",
+        "Ctrl+P           command palette",
+        "Ctrl+T / Ctrl+I  session Workbench (Ctrl+I where distinct from Tab)",
+        "Ctrl+F / Ctrl+K  conversation search / session composer",
+        "Global workflow actions (also available through Ctrl+P):",
+        "Ctrl+N / Ctrl+O  new / switch conversation",
+        "Ctrl+G / Ctrl+L  project picker / plan",
+        "Ctrl+M / Ctrl+Enter  workflow rigor (Ctrl+M where distinct from Enter)",
+        "F3 / F4 / F5     interview question / plan history / task actions",
+        "F6 / F7 / F8     pause-continue / reject plan / configuration",
+        "Ctrl+X           cancel running work",
+        "Ctrl+Y           copy selected application text",
+        "Ctrl+C           quit frontend; daemon work continues",
+        "Editors keep their text-editing keys; Esc leaves the editor first",
+        "Native PTY owns all keys except Ctrl+]; leave it before shortcuts",
     ]
 }

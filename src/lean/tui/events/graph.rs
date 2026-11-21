@@ -260,7 +260,7 @@ impl App {
             .details
             .as_ref()
             .is_some_and(|details| details.selected_round.is_some());
-        if historical {
+        if historical && self.graph_expanded.is_some() {
             if let Some((_, task)) = key.split_once(':') {
                 self.diff = Some(DiffView::new(task.to_owned()));
             }

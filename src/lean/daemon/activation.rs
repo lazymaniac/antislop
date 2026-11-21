@@ -850,6 +850,47 @@ mod operation_tests {
 
     #[test]
     fn exec_failure_preserves_raw_error_and_the_operation_after_reopen() {
+        const RECEIPT: &str = "ANTISLOP_TEST_EXEC_FAILURE_RECEIPT";
+        let Some(receipt) = std::env::var_os(RECEIPT) else {
+            // CommandExt::exec changes this process's cwd even when exec fails.
+            // Keep the real exec and fixture cleanup in a child, so neither can
+            // invalidate the cwd shared by the rest of the test suite.
+            use std::os::unix::fs::MetadataExt;
+            let cwd = std::env::current_dir().unwrap();
+            let before = std::fs::metadata(".").unwrap();
+            let root = crate::lean::paths::state_root().unwrap().join("tests");
+            std::fs::create_dir_all(&root).unwrap();
+            let directory = tempfile::tempdir_in(root).unwrap();
+            let receipt = directory.path().join("completed");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::exec_failure_preserves_raw_error_and_the_operation_after_reopen"
+                    )
+                    .strip_prefix("antislop::")
+                    .unwrap(),
+                    "--nocapture",
+                ])
+                .env(RECEIPT, &receipt)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // A zero-test child would also exit successfully. Require proof that
+            // all assertions ran and that its real fixture was then cleaned.
+            let fixture = PathBuf::from(std::fs::read_to_string(receipt).unwrap());
+            assert!(!fixture.exists(), "child fixture was not cleaned");
+            assert_eq!(std::env::current_dir().unwrap(), cwd);
+            let after = std::fs::metadata(".").unwrap();
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            return;
+        };
         let (dir, core, config, binary) = fixture();
         request(
             &core,
@@ -882,6 +923,11 @@ mod operation_tests {
         let reopened = Core::open(&state, Config::load(&config).unwrap()).unwrap();
         assert!(active(&reopened).unwrap().is_none());
         assert_eq!(status(&state, Some("exec-failure")).unwrap(), failed);
+        assert_eq!(
+            std::env::current_dir().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+        std::fs::write(receipt, dir.path().to_str().unwrap()).unwrap();
     }
 
     #[test]

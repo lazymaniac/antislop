@@ -99,6 +99,7 @@ fn application_cells(buffer: &Buffer, theme: &Theme, owner: &str) {
 #[test]
 #[ignore = "invoked by environment_modes_are_isolated in four fresh processes"]
 fn actual_draw_mode_child() {
+    compact_statuses();
     let theme = Theme::from_env();
     assert_eq!(theme.color, std::env::var_os("NO_COLOR").is_none());
     assert_eq!(theme.ascii, std::env::var_os("ANTISLOP_ASCII").is_some());
@@ -569,4 +570,140 @@ fn separator_owner_states(theme: &Theme) {
     graph.view.tasks[0].status = "User · status".into();
     let buffer = draw(&mut graph, (240, 60));
     assert!(text(&buffer).contains(&format!("User · title {separator} User · status")));
+}
+
+fn compact_statuses() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::lean::Store::open(&directory.path().join("history.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    for _ in 0..2 {
+        store
+            .add_plan(
+                &conversation.id,
+                &[json!({"id":"saved", "title":"Saved task", "change_kind":"none"})],
+            )
+            .unwrap();
+    }
+    let page = store.plans_page(&conversation.id, 0, 1).unwrap();
+    let theme = Theme::from_env();
+    for size in [(12, 5), (40, 12), (80, 24), (100, 30), (120, 40), (160, 50)] {
+        let mut app = app();
+        app.flow_editor = Some(FlowEditor::edit_task(&app.view, &app.view.tasks[0]));
+        app.flow_editor.as_mut().unwrap().criteria_input =
+            InputBuffer::with_text("C1: Status remains accessible");
+        app.flow_editor.as_mut().unwrap().sending = true;
+        let buffer = draw(&mut app, size);
+        assert!(
+            text(&buffer).contains("Zapis"),
+            "{size:?}: {}",
+            text(&buffer)
+        );
+        application_cells(&buffer, &theme, "flow waiting");
+        let editor = app.flow_editor.as_mut().unwrap();
+        editor.sending = false;
+        let error = "BEGIN raw 👩‍💻 e\u{301} ".to_owned()
+            + &(0..30)
+                .map(|index| format!("segment-{index:02}-abcdefghij"))
+                .collect::<String>()
+            + " END";
+        editor.error = Some(error.clone());
+        let title = editor.title_input.text.clone();
+        let width = usize::from(size.0.saturating_sub(4).clamp(12, 82) - 2);
+        let expected = theme::wrap(&error, width);
+        let mut seen = vec![false; expected.len()];
+        let mut seen_end = false;
+        for _ in 0..error.len() {
+            let buffer = draw(&mut app, size);
+            assert!(
+                text(&buffer).contains("Err Pg"),
+                "{size:?}: {}",
+                text(&buffer)
+            );
+            application_cells(&buffer, &theme, "flow error");
+            let visible = text(&buffer);
+            for (row, found) in expected.iter().zip(&mut seen) {
+                *found |= visible.contains(row);
+            }
+            if visible.contains("END") {
+                seen_end = true;
+                break;
+            }
+            app.key(event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        }
+        assert!(seen_end, "{size:?}: error tail inaccessible");
+        assert!(
+            seen.iter().all(|found| *found),
+            "{size:?}: skipped visual error rows"
+        );
+        for _ in 0..expected.len() {
+            app.key(event::KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        }
+        assert!(text(&draw(&mut app, size)).contains("BEGIN"));
+        app.key(event::KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let editor = app.flow_editor.as_ref().unwrap();
+        assert_eq!(editor.error.as_deref(), Some(error.as_str()));
+        assert_eq!(editor.title_input.text, title);
+        assert_eq!(editor.field, 0);
+        let buffer = draw(&mut app, size);
+        assert!(text(&buffer).contains("Tyt:") || text(&buffer).contains("Tytuł:"));
+        for _ in 0..8 {
+            app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        assert_eq!(app.flow_editor.as_ref().unwrap().field, 8);
+        app.key(event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(app.flow_editor.as_ref().unwrap().request_ai_review);
+        let editor = app.flow_editor.as_ref().unwrap();
+        assert!(editor.build_revision(&app.view).unwrap().1);
+        let title = editor.title_input.text.clone();
+        app.flow_editor.as_mut().unwrap().title_input = InputBuffer::new();
+        app.key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.flow_editor.as_ref().unwrap().error.is_some());
+        assert!(!app.flow_editor.as_ref().unwrap().sending);
+        app.flow_editor.as_mut().unwrap().title_input = InputBuffer::with_text(title);
+        app.key(event::KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(app.flow_editor.as_ref().unwrap().sending);
+        assert!(text(&draw(&mut app, size)).contains("Zapis"));
+        app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.flow_editor.is_none());
+        app.plan_history = Some(planhistory::Browser::new());
+        let buffer = draw(&mut app, size);
+        assert!(
+            text(&buffer).contains("loading"),
+            "{size:?}: {}",
+            text(&buffer)
+        );
+        assert!(!text(&buffer).contains("No tasks proposed"));
+        application_cells(&buffer, &theme, "history loading");
+        app.apply_update(Update::PlanHistory {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            offset: 0,
+            reply: Ok(page.clone()),
+        });
+        let buffer = draw(&mut app, size);
+        assert!(
+            text(&buffer).contains("plan 1"),
+            "{size:?}: {}",
+            text(&buffer)
+        );
+        app.key(event::KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
+        let browser = app.plan_history.as_ref().unwrap();
+        assert!(browser.loading);
+        assert_eq!(browser.offset, 1);
+        let buffer = draw(&mut app, size);
+        assert!(text(&buffer).contains("loading"));
+        if size.0 >= 80 {
+            assert!(text(&buffer).contains("Original plan"));
+        }
+        app.key(event::KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
+        assert_eq!(app.plan_history.as_ref().unwrap().offset, 1);
+        app.key(event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.plan_history.is_none());
+        assert_eq!(app.input.text, "Zażółć 👩‍💻 e\u{301}");
+        assert_eq!(app.view.tasks.len(), 2);
+    }
 }

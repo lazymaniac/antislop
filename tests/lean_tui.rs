@@ -7018,10 +7018,13 @@ mod text_selection_acceptance {
                         title: "Selection in the session card".into(),
                         ..Default::default()
                     });
-                    let mut details = Details::new("worker:t1".into());
+                    app.open_details("worker:t1".into());
+                    app.navigation.update_presentation(|presentation| {
+                        presentation.tab = antislop::lean::tui::WorkbenchTab::Results;
+                    });
+                    let details = app.details.as_mut().unwrap();
                     details.task = Some(json!({"report": "sample café 👩‍👩‍👧‍👦"}));
                     details.switch_tab(antislop::lean::tui::details::RESULT);
-                    app.details = Some(details);
                 }
                 _ => {
                     app.view.plan_doc = "sample café 👩‍👩‍👧‍👦".into();
@@ -7073,7 +7076,7 @@ mod text_selection_acceptance {
             assert_eq!(app.text_selection.text().as_deref(), Some("sample"));
             assert_eq!(app.input.text, "retained draft");
             if mode == 1 {
-                app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
                 assert!(
                     app.text_selection.text().is_none(),
                     "tab changes invalidate immediately"

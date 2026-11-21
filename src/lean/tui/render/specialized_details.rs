@@ -5,21 +5,7 @@ use ratatui::widgets::Paragraph;
 
 impl Details {
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
-        self.draw_at(frame, frame.area(), view);
-    }
-
-    pub fn draw_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
-        self.draw_at_themed(frame, area, view, &Theme::from_env());
-    }
-
-    pub(in crate::lean::tui) fn draw_at_themed(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        view: &View,
-        theme: &Theme,
-    ) {
-        self.draw_at_inner(frame, area, view, None, None, theme);
+        self.draw_at_inner(frame, frame.area(), view, None, None, &Theme::from_env());
     }
 
     pub(super) fn draw_workbench_at(

@@ -484,3 +484,28 @@ fn a_wide_help_box_wraps_a_long_description_under_its_column() {
     let next = &lines[at + 1];
     assert!(next[..column].trim().is_empty() && !next[column..].starts_with(' '));
 }
+
+#[test]
+fn workbench_help_documents_navigation_and_native_key_ownership() {
+    let help = Help::Details.lines_for_width(200).join("\n");
+    for entry in [
+        "Ctrl+Left/Right",
+        "Tab/Shift+Tab",
+        "Ctrl+B",
+        "Alt+Up/Down",
+        "pin / unpin",
+        "Alt+Left/Right",
+        "Ctrl+]",
+        "F1 / F2",
+        "Ctrl+N / Ctrl+O",
+        "Ctrl+G / Ctrl+L",
+        "F3 / F4 / F5",
+        "F6 / F7 / F8",
+        "Ctrl+Y",
+        "Ctrl+C",
+    ] {
+        assert!(help.contains(entry), "missing {entry}");
+    }
+    assert!(!help.contains("1–4, Tab/Shift+Tab"));
+    assert!(help.contains("all native keys except Ctrl+] go to CLI"));
+}

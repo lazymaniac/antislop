@@ -3,6 +3,33 @@ use crate::lean::daemon::ConversationRequest;
 
 impl App {
     pub fn open_diff(&mut self, key: &str) {
+        if !key.contains(':') {
+            return;
+        }
+        if self.graph_expanded.is_none() {
+            if self.navigation.screen != Screen::Workbench
+                || self
+                    .details
+                    .as_ref()
+                    .is_none_or(|details| details.key != key)
+            {
+                self.open_details(key.to_owned());
+                if self.diff.is_some() && self.navigation.presentation().tab == WorkbenchTab::Diff {
+                    return;
+                }
+            }
+            self.result_fetch.cancel_document_fetch();
+            let previous = self.navigation.presentation().tab;
+            self.navigation
+                .update_presentation(|presentation| presentation.tab = WorkbenchTab::Diff);
+            if let Some(details) = &mut self.details {
+                details.prepare_workbench_details(Some(previous), WorkbenchTab::Diff);
+            }
+        }
+        self.load_diff(key);
+    }
+
+    pub(in crate::lean::tui) fn load_diff(&mut self, key: &str) {
         if let Some((_, task)) = key.split_once(':') {
             self.diff = Some(DiffView::new(task.to_owned()));
             self.fetch_diff();
@@ -67,7 +94,20 @@ impl App {
             return;
         };
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.diff = None,
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.diff = None;
+                if self.navigation.screen == Screen::Workbench && self.graph_expanded.is_none() {
+                    self.navigation.update_presentation(|presentation| {
+                        presentation.tab = WorkbenchTab::Summary;
+                    });
+                    if let Some(details) = &mut self.details {
+                        details.prepare_workbench_details(
+                            Some(WorkbenchTab::Diff),
+                            WorkbenchTab::Summary,
+                        );
+                    }
+                }
+            }
             KeyCode::Char('?') => self.show_help(Help::Diff),
             KeyCode::Char('c') => {
                 if historical_diff {

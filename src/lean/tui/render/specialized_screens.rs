@@ -3,10 +3,7 @@ use super::super::*;
 mod graph;
 
 pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame, theme: &Theme) {
-    if draw_plan(app, frame, theme)
-        || draw_diff(app, frame, theme)
-        || draw_details(app, frame, theme)
-    {
+    if draw_plan(app, frame, theme) || draw_workbench(app, frame, theme) {
         return;
     }
     app.draw_main(frame, theme);
@@ -29,40 +26,39 @@ fn draw_plan(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     true
 }
 
-fn draw_diff(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
-    if app.graph_expanded.is_some() {
+fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
+    if app.graph_expanded.is_some()
+        || app.navigation.screen != Screen::Workbench
+        || (app.diff.is_none() && app.details.is_none())
+    {
         return false;
     }
+    let presentation = app.navigation.presentation();
     let terminal_owner = app.workbench_terminal_owner();
     let terminal_view_role = app.workbench_terminal_view_role();
     let terminal_round = workbench_terminal_round(
         &app.workbench_sessions,
         app.details.as_ref(),
-        &app.navigation.presentation(),
+        &presentation,
         &terminal_owner,
     );
     let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
     let historical_diff = app.historical_diff_selected();
-    let Some(diff) = &mut app.diff else {
-        return false;
-    };
-    if app.navigation.screen == Screen::Workbench {
-        let presentation = app.navigation.presentation();
-        let areas =
-            super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
-        app.workbench_areas = areas;
-        draw_workbench_chrome(
-            frame,
-            areas,
-            &app.navigation.target,
-            &presentation,
-            &terminal_owner,
-            terminal_round,
-            theme,
-        );
-        if areas.list_visible {
-            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
-        }
+    let areas = super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
+    app.workbench_areas = areas;
+    draw_workbench_chrome(
+        frame,
+        areas,
+        &app.navigation.target,
+        &presentation,
+        &terminal_owner,
+        terminal_round,
+        theme,
+    );
+    if areas.list_visible {
+        draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
+    }
+    if let Some(diff) = &mut app.diff {
         if historical_diff {
             frame.render_widget(
                 Paragraph::new(theme.clean("No historical diff is retained for this round."))
@@ -72,60 +68,7 @@ fn draw_diff(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
         } else {
             diff.paint_with_theme(frame, areas.content, &app.view, theme);
         }
-        if let Some(details) = &mut app.details {
-            draw_workbench_terminal(
-                frame,
-                areas.terminal,
-                details,
-                &app.view,
-                &terminal_view_role,
-                presentation.native_input,
-                historical_terminal,
-                theme,
-            );
-        }
-    } else {
-        diff.paint_with_theme(frame, frame.area(), &app.view, theme);
-    }
-    if app.navigation.screen == Screen::Workbench {
-        app.sync_native_views();
-    }
-    true
-}
-
-fn draw_details(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
-    if app.graph_expanded.is_some() {
-        return false;
-    }
-    let terminal_owner = app.workbench_terminal_owner();
-    let terminal_view_role = app.workbench_terminal_view_role();
-    let terminal_round = workbench_terminal_round(
-        &app.workbench_sessions,
-        app.details.as_ref(),
-        &app.navigation.presentation(),
-        &terminal_owner,
-    );
-    let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
-    let Some(details) = &mut app.details else {
-        return false;
-    };
-    if app.navigation.screen == Screen::Workbench {
-        let presentation = app.navigation.presentation();
-        let areas =
-            super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
-        app.workbench_areas = areas;
-        draw_workbench_chrome(
-            frame,
-            areas,
-            &app.navigation.target,
-            &presentation,
-            &terminal_owner,
-            terminal_round,
-            theme,
-        );
-        if areas.list_visible {
-            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
-        }
+    } else if let Some(details) = &mut app.details {
         details.draw_workbench_at(
             frame,
             areas.content,
@@ -134,6 +77,8 @@ fn draw_details(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             presentation.tab,
             theme,
         );
+    }
+    if let Some(details) = &mut app.details {
         draw_workbench_terminal(
             frame,
             areas.terminal,
@@ -144,12 +89,11 @@ fn draw_details(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             historical_terminal,
             theme,
         );
-    } else {
-        app.workbench_areas = Default::default();
-        details.draw_at_themed(frame, frame.area(), &app.view, theme);
+        if app.diff.is_none() {
+            app.text_area = Some(details.text_area);
+            app.text_origin = details.scroll;
+        }
     }
-    app.text_area = Some(details.text_area);
-    app.text_origin = details.scroll;
     app.sync_native_views();
     true
 }

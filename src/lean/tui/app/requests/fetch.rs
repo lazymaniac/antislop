@@ -442,7 +442,7 @@ impl App {
         self.resolve_details_task();
         if self.graph_expanded.is_none() && self.navigation.presentation().tab == WorkbenchTab::Diff
         {
-            self.open_diff(&key);
+            self.load_diff(&key);
         } else {
             self.diff = None;
         }
