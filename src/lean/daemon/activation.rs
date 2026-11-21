@@ -849,6 +849,42 @@ mod operation_tests {
     }
 
     #[test]
+    fn exec_failure_preserves_raw_error_and_the_operation_after_reopen() {
+        let (dir, core, config, binary) = fixture();
+        request(
+            &core,
+            dir.path(),
+            &config,
+            &binary,
+            None,
+            None,
+            None,
+            Some("exec-failure"),
+        )
+        .unwrap();
+        wait_for(|| {
+            status(&core.state, Some("exec-failure")).unwrap()["state"] == "waiting_for_idle"
+        });
+        wait_for(|| core.runtime_activation_cancels.lock().unwrap().is_empty());
+        // Mode is deliberately not part of runtime build identity; this forces
+        // a real exec EACCES after successful validation without changing build.
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = apply_when_idle(&core).unwrap_err();
+        assert!(
+            matches!(error, Error::Io(ref e) if e.raw_os_error() == Some(libc::EACCES)),
+            "{error}"
+        );
+        let failed = status(&core.state, Some("exec-failure")).unwrap();
+        assert_eq!(failed["state"], "failed");
+        assert_eq!(failed["error"], error.to_string());
+        let state = core.state.clone();
+        drop(core);
+        let reopened = Core::open(&state, Config::load(&config).unwrap()).unwrap();
+        assert!(active(&reopened).unwrap().is_none());
+        assert_eq!(status(&state, Some("exec-failure")).unwrap(), failed);
+    }
+
+    #[test]
     fn restart_ends_the_recorded_validator_and_interrupts_its_operation() {
         let (dir, core, config, binary) = fixture();
         std::fs::write(dir.path().join("hold"), []).unwrap();

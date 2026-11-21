@@ -96,7 +96,7 @@ impl Client {
                     && state.join("core.db").exists()
                     && !state.join("stopped").exists() =>
             {
-                Self::connect(project, config, state, executable).map_err(|_| error)?;
+                Self::connect(project, config, state, executable)?;
                 self.call_once(request)
             }
             (result, _) => result,
@@ -357,6 +357,49 @@ mod tests {
     use crate::lean::daemon::SessionRequest;
     use serde_json::json;
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn reconnect_reports_the_launch_failure_instead_of_the_lost_socket() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for expected in [libc::ENOENT, libc::EACCES] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = directory.path();
+            std::fs::write(state.join("core.db"), []).unwrap();
+            let config = state.join("antislop.toml");
+            std::fs::write(&config, include_str!("../../../examples/antislop.toml")).unwrap();
+            let executable = state.join("successor");
+            if expected == libc::EACCES {
+                std::fs::write(&executable, "invalid executable").unwrap();
+                std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            let listener = UnixListener::bind(super::super::socket(state)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let _: Value = crate::transport::read(&mut BufReader::new(stream))
+                    .unwrap()
+                    .unwrap();
+                // Closing without a response reproduces Events lost during exec.
+            });
+            let mut client = Client::at(state);
+            client.origin = Some((state.into(), config, state.into(), executable));
+            let error = client
+                .call(&Request::History(
+                    crate::lean::daemon::HistoryRequest::Events {
+                        conversation: "retained".into(),
+                        after: 0,
+                        wait_ms: 0,
+                    },
+                ))
+                .unwrap_err();
+            server.join().unwrap();
+            assert!(
+                matches!(error, Error::Io(ref e) if e.raw_os_error() == Some(expected)),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn reusable_connection_authenticates_multiple_document_chunk_requests() {

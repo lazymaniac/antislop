@@ -230,6 +230,14 @@ fn an_operation_runs_once_and_a_failed_attempt_can_be_retried() {
         assert_eq!(result, serde_json::json!({"seq": 1}));
     }
     assert_eq!(runs, 1);
+    drop(store);
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let result = store
+        .idempotent(&conversation.id, &id, "send", || {
+            panic!("reopened operation must reuse its durable response")
+        })
+        .unwrap();
+    assert_eq!(result, serde_json::json!({"seq": 1}));
 }
 
 #[test]
