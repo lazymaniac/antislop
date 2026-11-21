@@ -1678,7 +1678,7 @@ fn additional_state_reached(app: &App, fixture: Fixture) -> bool {
     }
 }
 
-fn state_marker(id: &str) -> Option<&'static str> {
+fn state_marker(id: &str, geometry: Geometry) -> Option<&'static str> {
     let id = match id {
         "summary-compact" => "workbench-summary",
         "conversation-compact" => "workbench-tab-conversation",
@@ -1693,6 +1693,7 @@ fn state_marker(id: &str) -> Option<&'static str> {
         "graph-waiting" => "waiting",
         "graph-error" => "failed",
         "session-completion" => "Capture session completed",
+        "flow-editor-waiting" if geometry.width == 12 => "Zapis...",
         "flow-editor-waiting" => "Zapisywanie zmian",
         "flow-editor-empty" => "add task after",
         "interview-error" => "Fixture answer delivery failed",
@@ -1730,7 +1731,8 @@ fn state_marker(id: &str) -> Option<&'static str> {
         "config-waiting" => "Applying...",
         "decision-inbox-empty" => "No open decisions",
         "comment-editor-empty" => "Comment",
-        "flow-editor-error" => "Fixture flow update failed",
+        "flow-editor-error" if geometry.width == 12 => "Err PgUp/D",
+        "flow-editor-error" => "Err PgUp/Dn",
         _ => return None,
     })
 }
@@ -1775,28 +1777,42 @@ fn responsive_na(fixture: Fixture, geometry: Geometry) -> Option<&'static str> {
     }
 }
 
-fn rendering_finding(fixture: Fixture, geometry: Geometry) -> Option<&'static str> {
-    match fixture.id {
-        "flow-editor-error" | "flow-editor-waiting" if geometry.height < 12 => Some(
-            "flow-status-clipped: FlowEditor::draw_contract_form appends submission status after fixed rows without scrolling; the status exists in the model but is not visible. Expected: scrollable fields and visible submission status on small terminals. Source: src/lean/tui/flow_editor.rs::draw_contract_form. Capture success does not establish responsive or design compliance.",
-        ),
-        "plan-history-loading" if geometry.width < 93 => Some(
-            "history-loading-hidden: Browser::new sets loading=true but leaves the document projection empty, so the body falls back to No tasks proposed yet. The loading label follows 84 columns of fixed footer hints and is clipped below 93 terminal columns. Expected: visible history loading state. Sources: src/lean/tui/planhistory.rs::Browser::new and src/lean/tui/planview/render.rs::draw_history_navigation. This capture records the production gap, not N/A or responsive success.",
-        ),
-        _ => None,
-    }
+fn rendering_finding(_fixture: Fixture, _geometry: Geometry) -> Option<&'static str> {
+    // compact-status-repair exposes these required statuses. Contracts below now
+    // require their painted markers at every geometry, including 12x5.
+    None
 }
 
 /// Measure the square form border from actual painted cells, not a second layout.
-fn rendered_form_rect(cells: &[Value]) -> Option<Value> {
-    let corners = cells
-        .iter()
-        .filter(|cell| matches!(cell["text"].as_str(), Some("┌" | "┐" | "└" | "┘")))
-        .collect::<Vec<_>>();
-    let x = corners.iter().filter_map(|cell| cell["x"].as_u64()).min()?;
-    let y = corners.iter().filter_map(|cell| cell["y"].as_u64()).min()?;
-    let right = corners.iter().filter_map(|cell| cell["x"].as_u64()).max()?;
-    let bottom = corners.iter().filter_map(|cell| cell["y"].as_u64()).max()?;
+fn rendered_form_rect(cells: &[Value], title_prefix: &str) -> Option<Value> {
+    // Background graph panels can also have square corners. Locate the form
+    // title first, then measure its own corners rather than their global union.
+    let left = cells.iter().enumerate().find_map(|(index, cell)| {
+        if !matches!(cell["text"].as_str(), Some("┌" | "+")) {
+            return None;
+        }
+        let title = cells
+            .iter()
+            .skip(index + 1)
+            .take(title_prefix.len())
+            .filter_map(|c| c["text"].as_str())
+            .collect::<String>();
+        title.starts_with(title_prefix).then_some(cell)
+    })?;
+    let x = left["x"].as_u64()?;
+    let y = left["y"].as_u64()?;
+    let right = cells.iter().find(|c| {
+        c["y"] == y
+            && c["x"].as_u64().is_some_and(|v| v > x)
+            && matches!(c["text"].as_str(), Some("┐" | "+"))
+    })?["x"]
+        .as_u64()?;
+    let bottom = cells.iter().find(|c| {
+        c["x"] == x
+            && c["y"].as_u64().is_some_and(|v| v > y)
+            && matches!(c["text"].as_str(), Some("└" | "+"))
+    })?["y"]
+        .as_u64()?;
     Some(json!({"x":x,"y":y,"width":right-x+1,"height":bottom-y+1}))
 }
 
@@ -1850,7 +1866,13 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
                 .iter()
                 .filter_map(|cell| cell["text"].as_str())
                 .collect::<String>();
-            line.contains("capture.rs") && line.contains("+1") && line.contains("−1")
+            line.contains("capture.rs")
+                && line.contains("+1")
+                && line.contains(if Theme::from_env().ascii {
+                    "-1"
+                } else {
+                    "−1"
+                })
         });
     let workbench_renderer_reached = app.navigation.screen == Screen::Workbench
         && app.details.is_some()
@@ -2053,7 +2075,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         .collect::<Vec<_>>()
         .join(" ");
     let state_marker_visible =
-        state_marker(fixture.id).map(|marker| rendered_text.contains(marker));
+        state_marker(fixture.id, geometry).map(|marker| rendered_text.contains(marker));
     json!({"schema":1,"fixture":fixture.id,"target":fixture.view,"view":fixture.view,"state":fixture.state,
         "geometry":geometry_id,
         "sample":format!("{}@{}",fixture.id,geometry_id),
@@ -2061,7 +2083,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         "width":width,"height":height,"cell_count":cells.len(),"cells":cells,
         "na_reason":na_reason,"native_panel":native_panel,
         "rendering_finding":rendering_finding(fixture,geometry),
-        "flow_form_rect":fixture.view.eq("flow-editor").then(|| rendered_form_rect(&cells)).flatten(),
+        "flow_form_rect":fixture.view.eq("flow-editor").then(|| rendered_form_rect(&cells, " Flow")).flatten(),
         "panels":{"workbench_list_visible":app.workbench_areas.list_visible,
             "workbench_split":app.workbench_areas.split,
             "workbench_content":{"x":app.workbench_areas.content.x,"y":app.workbench_areas.content.y,"width":app.workbench_areas.content.width,"height":app.workbench_areas.content.height},
@@ -2083,7 +2105,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
             "selected_round":app.details.as_ref().and_then(|details| details.selected_round)},
         "active_tab":format!("{:?}",app.navigation.presentation().tab),
         "workbench_header":workbench_header,
-        "reached_view":reached_view,"reached_state":reached_state,"state_marker":state_marker(fixture.id),"state_marker_visible":state_marker_visible,
+        "reached_view":reached_view,"reached_state":reached_state,"state_marker":state_marker(fixture.id, geometry),"state_marker_visible":state_marker_visible,
         "decision_inbox":app.decision_inbox.is_some(),"flow_editor":app.flow_editor.is_some(),
         "unblock":app.unblock.is_some(),
         "task_integration":app.view.tasks.first().and_then(|task| task.integration.clone())})
@@ -2103,6 +2125,7 @@ fn agent_selected(app: &App, key: &str) -> bool {
 
 fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry) {
     let Geometry { id, width, height } = geometry;
+    assert_eq!(record["na_reason"], json!(responsive_na(fixture, geometry)));
     assert_eq!(record["fixture"], fixture.id);
     assert_eq!(record["target"], fixture.view);
     assert_eq!(record["view"], fixture.view);
@@ -2182,6 +2205,37 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
                 .iter()
                 .filter_map(|cell| cell["text"].as_str())
                 .collect::<String>()
+        );
+    }
+    match fixture.id {
+        "flow-editor-waiting" => {
+            assert_eq!(record["model_state"]["flow_sending"], true);
+            assert!(record["model_state"]["flow_error"].is_null());
+        }
+        "flow-editor-error" => {
+            assert_eq!(record["model_state"]["flow_sending"], false);
+            assert_eq!(
+                record["model_state"]["flow_error"],
+                "Fixture flow update failed"
+            );
+        }
+        "plan-history-loading" => assert_eq!(record["model_state"]["history_loading"], true),
+        _ => {}
+    }
+    if fixture.id == "flow-editor-error" {
+        let painted = record["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cell| cell["text"].as_str())
+            .collect::<String>();
+        assert!(
+            painted.contains(if width == 12 {
+                "Fixture"
+            } else {
+                "Fixture flow update failed"
+            }),
+            "the visible error label must accompany the actual cause"
         );
     }
     let geometry_id = geometry.id;
@@ -2353,14 +2407,40 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
             fixture.id
         );
         let theme = Theme::from_env();
-        let mut expected = expected_surface_style(fixture, &theme);
-        if expected.fg.is_none() && expected.bg.is_none() && expected.add_modifier.is_empty() {
-            expected = theme.title();
+        let expected = expected_surface_style(fixture, &theme);
+        let semantic_cells = semantic_surface_cells(record, fixture);
+        let visible = semantic_cells.as_ref().unwrap_or(&visible);
+        if semantic_cells.is_some() {
+            for cell in visible {
+                assert_eq!(
+                    cell["fg"],
+                    color(expected.fg.unwrap_or(ratatui::style::Color::Reset)),
+                    "{} semantic element foreground",
+                    fixture.id
+                );
+                assert_eq!(
+                    cell["bg"],
+                    color(expected.bg.unwrap_or(ratatui::style::Color::Reset)),
+                    "{} semantic element background",
+                    fixture.id
+                );
+                assert_eq!(
+                    cell["modifiers"],
+                    format!("{:?}", expected.add_modifier),
+                    "{} semantic element modifiers",
+                    fixture.id
+                );
+            }
         }
         let expected_fg = expected.fg.map(|color| format!("{color:?}"));
         let expected_bg = expected.bg.map(|color| format!("{color:?}"));
         let expected_modifiers = format!("{:?}", expected.add_modifier);
-        let expected_style_present = visible.iter().any(|cell| {
+        let style_matches = |cell: &&Value| {
+            if expected == ratatui::style::Style::default() {
+                return cell["fg"] == "Reset"
+                    && cell["bg"] == "Reset"
+                    && cell["modifiers"] == "NONE";
+            }
             expected_fg.as_ref().is_none_or(|fg| cell["fg"] == *fg)
                 && expected_bg.as_ref().is_none_or(|bg| cell["bg"] == *bg)
                 && (expected.add_modifier.is_empty()
@@ -2369,7 +2449,12 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
                             actual.split(" | ").any(|actual| actual == modifier)
                         })
                     }))
-        });
+        };
+        let expected_style_present = if semantic_cells.is_some() {
+            visible.iter().all(style_matches)
+        } else {
+            visible.iter().any(style_matches)
+        };
         let observed_styles = visible
             .iter()
             .map(|cell| {
@@ -2390,6 +2475,46 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
     }
 }
 
+/// Select the painted semantic element, never unrelated document/native cells.
+fn semantic_surface_cells(record: &Value, fixture: Fixture) -> Option<Vec<&Value>> {
+    let cells = record["cells"].as_array().unwrap();
+    if matches!(fixture.id, "flow-editor-empty" | "graph-filters") {
+        let rect = if fixture.id == "graph-filters" {
+            rendered_form_rect(cells, " Graph filters").expect("painted filter panel")
+        } else {
+            record["flow_form_rect"].clone()
+        };
+        let x = rect["x"].as_u64().expect("painted form x");
+        let y = rect["y"].as_u64().expect("painted form y");
+        return Some(vec![
+            cells.iter().find(|c| c["x"] == x && c["y"] == y).unwrap(),
+        ]);
+    }
+    let marker = match fixture.id {
+        "flow-editor-waiting" => record["state_marker"].as_str().unwrap(),
+        "flow-editor-error" => record["state_marker"].as_str().unwrap(),
+        "unblock-error" => "Fixture worker process failed",
+        "plan-history-loading" => "loading",
+        _ => return None,
+    };
+    let width = record["width"].as_u64().unwrap() as usize;
+    for row in cells.chunks(width) {
+        for start in 0..row.len() {
+            let mut text = String::new();
+            for end in start..row.len() {
+                text.push_str(row[end]["text"].as_str().unwrap());
+                if text == marker {
+                    return Some(row[start..=end].iter().collect());
+                }
+                if !marker.starts_with(&text) {
+                    break;
+                }
+            }
+        }
+    }
+    panic!("{} lacks painted semantic marker {marker:?}", fixture.id);
+}
+
 fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::Style {
     if matches!(fixture.id, "palette-empty" | "new-session") {
         return theme.dim();
@@ -2398,8 +2523,11 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         fixture.id,
         "flow-editor-empty" | "flow-editor-waiting" | "flow-editor-error"
     ) {
-        // Empty/truncated selected values may contain only spaces; require the actual form border.
-        return ratatui::style::Style::default().fg(theme::ayu::BLUE);
+        return match fixture.id {
+            "flow-editor-waiting" => theme.accent(),
+            "flow-editor-error" => theme.error(),
+            _ => theme.separator(true),
+        };
     }
     match fixture.view {
         "decision-inbox" => theme.card(),
@@ -2409,7 +2537,7 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         "composer" => theme.card(),
         "flow-editor" => ratatui::style::Style::default()
             .add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::REVERSED),
-        "filters" => ratatui::style::Style::default().fg(theme::ayu::BLUE),
+        "filters" => theme.separator(true),
         "new-session" => theme.dim(),
         "palette"
         | "picker-projects"
@@ -2422,7 +2550,7 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "delete-confirmation" => {
             ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
         }
-        "unblock" => theme.warning(),
+        "unblock" => theme.error(),
         "graph" => theme.panel(),
         "workbench"
         | "workbench-agent"
@@ -2435,6 +2563,11 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "workbench-diff"
         | "session-native-pty" => theme.card(),
         "configuration" => theme.title(),
+        // History navigation is painted inside planview::graph::panel: the
+        // accent span inherits the focused card's background.
+        "plan-history" if fixture.id == "plan-history-loading" => {
+            theme.card().patch(theme.accent())
+        }
         "plan-history" => theme.accent(),
         "comment-editor" => theme.accent(),
         "plan" => theme.accent(),
@@ -2695,6 +2828,78 @@ fn fixture_contracts_reach_the_requested_views_and_export_full_buffers() {
         let record = capture(fixture, geometry);
         assert_capture_contract(&record, fixture, geometry);
     }
+}
+
+#[test]
+fn semantic_contracts_reject_corrupted_capture_evidence() {
+    let fixture = *FIXTURES.iter().find(|f| f.id == "unblock-error").unwrap();
+    let geometry = GEOMETRIES[1];
+    let record = capture(fixture, geometry);
+    assert_capture_contract(&record, fixture, geometry);
+    let reject = |bad: Value| {
+        assert!(
+            std::panic::catch_unwind(|| assert_capture_contract(&bad, fixture, geometry)).is_err()
+        );
+    };
+    // An unrelated correctly styled cell cannot rescue a warning-colored reason.
+    let mut bad = record.clone();
+    let coordinates = semantic_surface_cells(&record, fixture)
+        .unwrap()
+        .iter()
+        .map(|c| (c["x"].clone(), c["y"].clone()))
+        .collect::<Vec<_>>();
+    for cell in bad["cells"].as_array_mut().unwrap() {
+        if coordinates
+            .iter()
+            .any(|(x, y)| cell["x"] == *x && cell["y"] == *y)
+        {
+            cell["fg"] = json!("Rgb(255, 180, 84)");
+            cell["modifiers"] = json!("NONE");
+        }
+    }
+    let unrelated = bad["cells"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|cell| {
+            !coordinates
+                .iter()
+                .any(|(x, y)| cell["x"] == *x && cell["y"] == *y)
+        })
+        .unwrap();
+    let error = Theme::from_env().error();
+    unrelated["text"] = json!("X");
+    unrelated["fg"] = json!(color(error.fg.unwrap_or(ratatui::style::Color::Reset)));
+    unrelated["bg"] = json!("Reset");
+    unrelated["modifiers"] = json!(format!("{:?}", error.add_modifier));
+    reject(bad);
+    for (key, value) in [
+        ("reached_state", json!(false)),
+        ("reached_view", json!(false)),
+        ("state_marker_visible", json!(false)),
+        ("width", json!(41)),
+        ("target", json!("plan-history")),
+        ("sample", json!("wrong@compact-40x12")),
+        ("na_reason", json!("invented responsive exclusion")),
+    ] {
+        let mut bad = record.clone();
+        bad[key] = value;
+        reject(bad);
+    }
+    let mut bad = record.clone();
+    bad["cells"].as_array_mut().unwrap().pop();
+    reject(bad);
+    // Even forged marker metadata cannot hide removal from the actual buffer.
+    let mut bad = record.clone();
+    for cell in bad["cells"].as_array_mut().unwrap() {
+        if coordinates
+            .iter()
+            .any(|(x, y)| cell["x"] == *x && cell["y"] == *y)
+        {
+            cell["text"] = json!(" ");
+        }
+    }
+    reject(bad);
 }
 
 #[test]
