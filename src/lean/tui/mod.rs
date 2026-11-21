@@ -67,6 +67,7 @@ pub mod theme;
 pub mod unblock;
 pub mod update_queue;
 pub mod view;
+pub mod work_units;
 mod workbench;
 pub mod workbench_summary;
 pub mod workspace;

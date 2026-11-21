@@ -339,6 +339,7 @@ fn replay_all_events(app: &mut App, client: &Client, conversation: &str) {
 
 fn select_from_composer_or_palette(app: &mut App, team: Team, slash: bool) {
     if slash {
+        app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
         app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     } else {
         app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));

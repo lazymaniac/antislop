@@ -26,7 +26,7 @@ fn shares_expanded_frame(builder: &Builder<'_>, unit: &Unit) -> bool {
 }
 
 /// Rows between a frame's border and its cards.
-const FRAME_Y: u16 = 1;
+const FRAME_Y: u16 = 0;
 /// Columns between two lanes beside the rows.
 const LANE_STEP: u16 = 2;
 /// Layouts tried while making room for the lanes, which may need more.

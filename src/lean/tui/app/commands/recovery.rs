@@ -5,6 +5,9 @@ impl App {
     /// Opens actions for the named or selected step, falling back to a
     /// stopped step or an active task that can be restarted.
     pub fn open_unblock(&mut self, named: Option<String>) {
+        let named = named.map(|key| self.view.agent_key(&key)).map(|key| {
+            crate::lean::task_role(&key).map_or_else(|| key.clone(), |(id, _)| id.to_owned())
+        });
         if self.view.audit_retryable()
             && (named.is_none() || named.as_deref() == Some(view::AUDITOR))
         {
@@ -35,8 +38,10 @@ impl App {
     }
 
     fn targets_orchestrator(&self, named: &Option<String>) -> bool {
-        named.as_deref() == Some(ORCHESTRATOR)
-            || (named.is_none() && self.selected == ORCHESTRATOR)
+        matches!(
+            named.as_deref(),
+            Some(ORCHESTRATOR | crate::lean::PLANNER | crate::lean::COMMENT_ORCHESTRATOR)
+        ) || (named.is_none() && self.selected == ORCHESTRATOR)
             || self.view.plan.is_none()
     }
 

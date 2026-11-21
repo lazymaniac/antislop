@@ -215,6 +215,7 @@ fn plan_review_acceptance_is_tokened_and_keeps_tui_state_correlated() {
         "only an independently reviewed proposal is eligible for this flow"
     );
 
+    app.key(key(KeyCode::Esc));
     app.key(key_ctrl('l'));
     assert!(app.plan_view.is_some());
     draw(&mut app);
@@ -435,6 +436,7 @@ fn plan_review_acceptance_is_tokened_and_keeps_tui_state_correlated() {
         "rejection proposal is no longer proposed: {:?}",
         latest_statuses(&state, &rejection_id)
     );
+    rejected.key(key(KeyCode::Esc));
     rejected.key(key_ctrl('l'));
     let action = rejected
         .plan_view

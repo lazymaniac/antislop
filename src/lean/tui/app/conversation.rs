@@ -49,6 +49,7 @@ impl App {
     }
 
     fn save_active_conversation(&mut self) {
+        self.remember_workbench();
         if self.conversation.is_empty() {
             return;
         }
@@ -115,7 +116,7 @@ impl App {
         self.offset = (0, 0);
         self.scroll = 0;
         self.navigation = NavigationState::default();
-        self.set_focus(Focus::Chat);
+        self.set_focus(Focus::Graph);
         self.graph_scope = Scope::default();
         self.graph_visibility_exception = None;
         self.graph_revealed = None;

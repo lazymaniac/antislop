@@ -58,7 +58,7 @@ impl Graph {
             .iter()
             .map(|node| (node.key.as_str(), node))
             .collect();
-        let selected = card_key(view, selected);
+        let selected = self.work.card_key(selected);
         let critical_path: std::collections::HashSet<String> =
             view.critical_path_chain().into_iter().collect();
         self.render_frames(view, canvas, &selected, &critical_path, theme);
@@ -170,7 +170,7 @@ impl Graph {
         critical_path: &std::collections::HashSet<String>,
         theme: &Theme,
     ) {
-        if !self.frames.iter().any(|frame| frame.visible) {
+        if self.expanded.is_none() || !self.frames.iter().any(|frame| frame.visible) {
             return;
         }
         let group = self
@@ -352,6 +352,22 @@ impl Graph {
                     .filter(|n| n.visible && Some(n.key.as_str()) == expanded),
             );
         for node in ordered {
+            if expanded != Some(node.key.as_str())
+                && let Some(unit) = self.work.for_stage(&node.key)
+            {
+                super::super::grouped::draw(
+                    view,
+                    canvas,
+                    node,
+                    unit,
+                    node.key == selected,
+                    unit.task
+                        .as_ref()
+                        .is_some_and(|task| critical_path.contains(task)),
+                    theme,
+                );
+                continue;
+            }
             draw_node_with_critical_path(
                 view,
                 canvas,

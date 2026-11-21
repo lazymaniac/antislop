@@ -51,7 +51,7 @@ impl App {
         if trimmed.is_empty() {
             self.input = InputBuffer::with_text("/direct ");
             self.set_focus(Focus::Chat);
-            self.notice = Some("⚡ Wpisz polecenie po /direct i naciśnij Enter".into());
+            self.notice = Some("Enter a command after /direct and press Enter".into());
         } else if trimmed.starts_with("/direct") {
             self.submit();
         } else {
@@ -62,12 +62,12 @@ impl App {
 
     pub fn toggle_flow_link(&mut self) {
         let Some(target) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            self.notice = Some("No task is selected on the Canvas".into());
             return;
         };
         if let Some(source_id) = self.graph_link_source.take() {
             if source_id == target.id {
-                self.notice = Some("Anulowano łączenie krawędzi (wybrano to samo zadanie).".into());
+                self.notice = Some("Dependency linking cancelled (same task selected).".into());
                 return;
             }
             match flow_editor::toggle_dependency_edge_revision(&self.view, &source_id, &target.id) {
@@ -81,42 +81,26 @@ impl App {
             self.set_focus(Focus::Graph);
             self.graph_link_source = Some(target.id.clone());
             self.notice = Some(format!(
-                "🔗 Łączenie od {}: wybierz zadanie docelowe i wciśnij Enter/l (Esc anuluje)",
+                "Link from {}: select a target and press Enter/l (Esc cancels)",
                 target.id
             ));
         }
     }
 
     pub(in crate::lean::tui) fn sync_rigor_recommendation(&mut self) {
-        if !self.view.team_recommended
-            || self.observer
-            || self
+        if self.view.team_recommended
+            && !self.observer
+            && self
                 .rigor_recommendations_shown
-                .contains(&self.conversation)
-            || self.native_focused()
-            || self.picker.is_some()
-            || self.help.is_some()
-            || self.editor.is_some()
-            || self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.editing || details.searching)
-            || self.flow_editor.is_some()
-            || self
-                .config_editor
-                .as_ref()
-                .is_some_and(|editor| editor.visible)
-            || self.plan_history.is_some()
-            || self.unblock.is_some()
-            || self.graph_filters.is_some()
-            || self.approval.is_some()
-            || self.interview_visible()
+                .insert(self.conversation.clone())
+            && self.notice.is_none()
         {
-            return;
+            self.notice = Some(format!(
+                "Rigor recommendation: {} · {} · Ctrl+P rigor to review",
+                self.view.team.map_or("feature", |team| team.name()),
+                self.view.team_reason
+            ));
         }
-        self.rigor_recommendations_shown
-            .insert(self.conversation.clone());
-        self.picker = Some(Picker::rigor(&self.view));
     }
 
     pub fn apply_rigor_team(&mut self, team: crate::lean::tasks::Team) {
@@ -131,21 +115,21 @@ impl App {
     }
 
     pub fn active_graph_task(&self) -> Option<&view::TaskRow> {
-        let id = self
-            .selected
-            .split_once(':')
-            .map(|(_, id)| id)
-            .unwrap_or(&self.selected);
-        self.view
-            .tasks
-            .iter()
-            .find(|task| task.id == id)
-            .or_else(|| self.view.tasks.first())
+        let key = if self.navigation.screen == Screen::Workbench {
+            self.details
+                .as_ref()
+                .map(|details| details.key.as_str())
+                .unwrap_or(&self.selected)
+        } else {
+            &self.selected
+        };
+        let id = key.split_once(':').map_or(key, |(_, id)| id);
+        self.view.tasks.iter().find(|task| task.id == id)
     }
 
     pub fn open_flow_edit(&mut self) {
         let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie do edycji".into());
+            self.notice = Some("No task is selected on the Canvas to edit".into());
             return;
         };
         self.flow_editor = Some(flow_editor::FlowEditor::edit_task(&self.view, &task));
@@ -153,7 +137,7 @@ impl App {
 
     pub fn open_flow_add_dependent(&mut self) {
         if self.view.plan.is_none() && self.view.tasks.is_empty() {
-            self.notice = Some("✗ brak aktywnego planu do dodania zadania".into());
+            self.notice = Some("No active plan for adding a task".into());
             return;
         };
         let after_id = self
@@ -167,7 +151,7 @@ impl App {
 
     pub fn open_flow_split(&mut self) {
         let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie do podziału".into());
+            self.notice = Some("No task is selected on the Canvas to split".into());
             return;
         };
         self.flow_editor = Some(flow_editor::FlowEditor::split_task(&self.view, &task));
@@ -175,7 +159,7 @@ impl App {
 
     pub fn open_flow_retire(&mut self) {
         let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie do wycofania".into());
+            self.notice = Some("No task is selected on the Canvas to retire".into());
             return;
         };
         self.flow_editor = Some(flow_editor::FlowEditor::retire_task(&task));
@@ -183,7 +167,7 @@ impl App {
 
     pub fn toggle_flow_hold(&mut self) {
         let Some(task) = self.active_graph_task().cloned() else {
-            self.notice = Some("✗ brak wybranego zadania w grafie".into());
+            self.notice = Some("No task is selected on the Canvas".into());
             return;
         };
         match flow_editor::toggle_hold_revision(&self.view, &task) {
@@ -195,12 +179,14 @@ impl App {
     }
 
     pub fn open_live_steer(&mut self) {
-        let key = if self.selected.contains(':') || self.selected == ORCHESTRATOR {
-            self.selected.clone()
-        } else if let Some(task) = self.active_graph_task() {
-            format!("worker:{}", task.id)
+        let key = if self.navigation.screen == Screen::Workbench {
+            self.details
+                .as_ref()
+                .map(|details| details.key.clone())
+                .unwrap_or_else(|| ORCHESTRATOR.into())
         } else {
-            ORCHESTRATOR.to_owned()
+            self.selected_work_stage()
+                .unwrap_or_else(|| ORCHESTRATOR.into())
         };
         self.graph_expanded = None;
         self.open_details(key);

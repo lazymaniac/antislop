@@ -37,13 +37,13 @@ fn command_palette_keeps_only_actions_without_a_direct_route() {
         Help::Chat
             .lines_for_width(100)
             .iter()
-            .any(|line| line.contains("Ctrl+T") && line.contains("conversation details"))
+            .any(|line| line.contains("Ctrl+T") && line.contains("session Workbench"))
     );
     assert!(
         Help::Graph
             .lines_for_width(100)
             .iter()
-            .any(|line| line.contains("Ctrl+T") && line.contains("conversation details"))
+            .any(|line| line.contains("Ctrl+T") && line.contains("session Workbench"))
     );
 }
 
@@ -216,7 +216,7 @@ fn agents_are_found_by_role_or_task_title() {
     view.apply(
         &serde_json::json!({"seq": 1, "kind": "plan_proposed", "payload": {
             "plan": "p",
-            "tasks": [{"change_kind":"none","id": "t1", "title": "Parser"}, {"change_kind":"none","id": "t2", "title": "Docs"}]}}),
+            "tasks": [{"change_kind":"none","id": "t1", "title": "Parser", "reviewer":{"summary":"Review parser"}}, {"change_kind":"none","id": "t2", "title": "Docs"}]}}),
     );
     let mut picker = Picker::new(Kind::Agents);
     picker.query = "pars revi".into();
@@ -422,7 +422,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
     let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
 
     // Check shortcuts and their complete descriptions
-    assert!(rendered.contains("send message to orchestrator"));
+    assert!(rendered.contains("send to the displayed recipient"));
     assert!(rendered.contains("newline in draft"));
     assert!(rendered.contains("line in draft"));
     assert!(rendered.contains("scroll conversation"));
@@ -444,26 +444,32 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
         );
     }
 
-    assert!(rendered2.contains("line start / resume"));
+    assert!(rendered2.contains("line start / end"));
     assert!(rendered2.contains("delete to start / end"));
     assert!(rendered2.contains("attach an image from the system clipboard"));
     assert!(rendered2.contains("remove the latest pending image"));
     assert!(rendered2.contains("cancel running work"));
-    assert!(rendered2.contains("pause new steps / continue"));
+    assert!(rendered2.contains("pause / continue outside editors"));
     assert!(rendered2.contains("always sent as chat"));
     assert!(rendered2.contains("search conversation"));
     assert!(rendered2.contains("command palette"));
-    assert!(rendered2.contains("back/clear draft"));
+    assert!(rendered2.contains("close composer and retain draft"));
 
     // 3. Graph help at 60x12: review long filter relation description is fully accessible without clipping
-    terminal
-        .draw(|frame| {
-            Help::Graph.draw_scroll(frame, 2);
-        })
-        .unwrap();
-
-    let buffer_graph = terminal.backend().buffer();
-    let rendered_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
+    let mut rendered_graph = String::new();
+    for scroll in 0..=Help::Graph.max_scroll(Rect::new(0, 0, 60, 12)) {
+        terminal
+            .draw(|frame| Help::Graph.draw_scroll(frame, scroll))
+            .unwrap();
+        rendered_graph.extend(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol()),
+        );
+    }
     assert!(rendered_graph.contains("show / hide"));
     assert!(rendered_graph.contains("dependencies"));
     assert!(rendered_graph.contains("review"));
@@ -507,5 +513,5 @@ fn workbench_help_documents_navigation_and_native_key_ownership() {
         assert!(help.contains(entry), "missing {entry}");
     }
     assert!(!help.contains("1–4, Tab/Shift+Tab"));
-    assert!(help.contains("all native keys except Ctrl+] go to CLI"));
+    assert!(help.contains("every other key goes to CLI"));
 }

@@ -26,7 +26,35 @@ impl Details {
         }
         let content_area = self.text_area;
         let content_scroll = self.scroll;
-        self.draw_session_panel(frame, view, key, 0, area, theme);
+        let block = session_block(
+            self,
+            key,
+            true,
+            view.agents.get(key).is_some_and(|agent| agent.running),
+            theme,
+        );
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        self.native_areas[0] = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
+        let editing = std::mem::replace(&mut self.editing, false);
+        if !self.draw_native_panel(frame, key, 0, true, inner, theme) {
+            let status = self
+                .native
+                .get(key)
+                .and_then(|snapshot| snapshot.error.as_deref())
+                .map(|error| theme.clean(error))
+                .unwrap_or_else(|| {
+                    theme
+                        .chrome("native session has not started · t input/retry · Ctrl+K direction")
+                });
+            frame.render_widget(Paragraph::new(status).style(theme.dim()), inner);
+        }
+        self.editing = editing;
         self.text_area = content_area;
         self.scroll = content_scroll;
         self.native_areas[1] = Rect::default();
@@ -225,7 +253,7 @@ fn native_status(
         .unwrap_or(if details.native_focus && active {
             "Ctrl+] preview"
         } else {
-            "i native input · a message · r retry"
+            "t native input · Ctrl+K message · r retry"
         })
         .to_owned()
 }
@@ -318,7 +346,7 @@ mod delivery_tests {
     use crate::lean::store::Delivery;
 
     #[test]
-    fn terminal_panel_preserves_content_scroll_and_reserves_cursor_space() {
+    fn terminal_preview_preserves_content_scroll_and_excludes_inline_composer() {
         use ratatui::{Terminal, backend::TestBackend};
         for theme in [Theme::new(true, false), Theme::new(false, true)] {
             let mut details = Details::new("orchestrator".into());
@@ -335,10 +363,16 @@ mod delivery_tests {
             assert_eq!(details.text_area, content);
             assert_eq!(details.scroll, 17);
             let inner = session_block(&details, "orchestrator", true, false, &theme).inner(area);
-            assert_eq!(
-                details.input_width[0],
-                super::super::composer::panel_wrap_width(composer_status_area(inner))
-            );
+            assert_eq!(details.native_areas[0].width, inner.width);
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("native session has not started"));
+            assert!(!text.contains("To "));
             assert_eq!(
                 terminal.backend().buffer()[(0, 12)].symbol(),
                 if theme.ascii { "+" } else { "┌" }

@@ -119,7 +119,7 @@ mod tests {
                     _ => unreachable!(),
                 }
                 assert!(!app.native_focused(), "{modal}");
-                app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+                app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
                 assert_eq!(
                     app.navigation.presentation().native_input,
                     native,
@@ -162,7 +162,7 @@ mod tests {
         details.native_areas[0] = Rect::new(1, 1, 50, 12);
         app.details = Some(details);
         let received = app.bind_native_input_for_test();
-        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert!(app.native_focused());
         let forwarded = [
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -192,8 +192,9 @@ mod tests {
         assert!(received.try_recv().is_err());
         assert!(app.picker.is_none());
         app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
-        assert!(!app.native_focused());
-        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.native_focused());
+        app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+        app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert!(app.native_focused());
     }
 
@@ -454,6 +455,7 @@ mod tests {
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
         app.navigation.screen = crate::lean::tui::Screen::Workbench;
         app.navigation.target = WorkbenchTarget::Session;
+        app.navigation.focus = NavigationFocus::WorkbenchTerminal;
         let mut details = Details::new("orchestrator".into());
         details.task = Some(json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}));
         app.details = Some(details);
@@ -589,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn workbench_pty_follows_options_task_owner_transitions() {
+    fn workbench_pty_retains_each_explicit_options_stage() {
         use crossterm::event::KeyEvent;
 
         let mut app = App::test_app();
@@ -624,6 +626,11 @@ mod tests {
             ("working", "worker"),
         ] {
             app.view.tasks[0].status = phase.into();
+            let address = format!("{role}:options");
+            app.navigation.target = WorkbenchTarget::Agent(address.clone());
+            app.navigation
+                .update_presentation(|presentation| presentation.native_input = false);
+            app.details.as_mut().unwrap().key = address;
             let (commands, received) = mpsc::sync_channel(8);
             let stopped = Arc::new(AtomicBool::new(false));
             let marker = format!("{role}-pty");
@@ -655,7 +662,7 @@ mod tests {
             assert!(app.native_views.contains_key(&key));
             assert_eq!(
                 app.navigation.target,
-                WorkbenchTarget::Agent("worker:options".into())
+                WorkbenchTarget::Agent(format!("{role}:options"))
             );
             if let Some(previous) = previous {
                 assert!(previous.load(Ordering::SeqCst));
@@ -673,7 +680,7 @@ mod tests {
             );
             while received.try_recv().is_ok() {}
             if !app.native_focused() {
-                app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+                app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
             }
             assert!(app.native_focused());
             app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

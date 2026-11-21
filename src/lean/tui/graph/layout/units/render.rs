@@ -1,4 +1,4 @@
-use super::build::{member_keys, shown_members};
+use super::build::shown_members;
 use super::*;
 use std::collections::{HashMap, HashSet};
 
@@ -25,14 +25,7 @@ pub(super) fn push_admin(builder: &mut Builder<'_>, rows: &[Vec<&str>], tops: &[
             x: spot.map_or(0, |(x, _)| x),
             y: spot.map_or(0, |(_, y)| y),
             width: builder.size.width(key, true),
-            height: card_content::height(
-                builder.view,
-                key,
-                builder.size.width(key, true),
-                builder.size.layout_height(key, true),
-                false,
-            )
-            .max(if builder.size.expanded_key.as_deref() == Some(key) {
+            height: 8_u16.max(if builder.size.expanded_key.as_deref() == Some(key) {
                 builder.size.layout_height(key, true)
             } else {
                 0
@@ -71,23 +64,6 @@ fn push_cards(builder: &mut Builder<'_>, unit: &Unit, spot: &Placed, top: u16, g
         let x = spot.x + if single_expanded { 0 } else { FRAME_X + offset };
         push_card(builder, key, *folded, x, y, group, &mut previous);
         offset += builder.size.width(key, false) + CARD_GAP;
-    }
-    // The expanded card's partners step aside until it closes.
-    for (key, folded) in member_keys(builder.view, unit)
-        .into_iter()
-        .zip(&unit.folded)
-        .filter(|(key, _)| !shown.iter().any(|(shown, _)| shown == key))
-    {
-        builder.graph.nodes.push(Node {
-            key: key.clone(),
-            x: 0,
-            y: 0,
-            width: builder.size.width(&key, false),
-            height: builder.size.h,
-            visible: false,
-            group: Some(group.to_owned()),
-            collapsed: *folded,
-        });
     }
 }
 
@@ -147,20 +123,16 @@ pub(super) fn push_hidden(builder: &mut Builder<'_>, units: &[Unit], placed: &[P
             continue;
         }
         let group = format!("task:{}", builder.view.tasks[unit.task].id);
-        for (key, folded) in member_keys(builder.view, unit)
-            .into_iter()
-            .zip(&unit.folded)
-        {
-            builder.graph.nodes.push(Node {
-                key: key.clone(),
-                x: 0,
-                y: 0,
-                width: builder.size.width(&key, false),
-                height: builder.size.h,
-                visible: false,
-                group: Some(group.clone()),
-                collapsed: *folded,
-            });
-        }
+        let key = format!("worker:{}", builder.view.tasks[unit.task].id);
+        builder.graph.nodes.push(Node {
+            key: key.clone(),
+            x: 0,
+            y: 0,
+            width: builder.size.width(&key, false),
+            height: builder.size.h,
+            visible: false,
+            group: Some(group),
+            collapsed: unit.folded.first().copied().unwrap_or(false),
+        });
     }
 }

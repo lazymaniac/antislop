@@ -47,7 +47,8 @@ impl App {
         let lines = visual_text_lines_from_layout(&self.input.text, &layout);
         let input_height =
             (lines.len().clamp(1, 6) as u16 + 2).min(area.height.saturating_sub(1).max(1));
-        let status_height = u16::from(self.sending);
+        let status_height =
+            u16::from(self.sending || self.view.activity.is_some() || !self.view.idle);
         // A framed button three rows high, when there is room for it.
         let action_height = match self.phase_action() {
             Some(_) if area.height >= input_height + 8 => 3,
@@ -143,16 +144,16 @@ impl App {
     }
 
     fn draw_sending(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        if self.sending {
-            frame.render_widget(
-                Paragraph::new(format!(
-                    "{} orchestrator sending…",
-                    theme.spinner(self.tick)
-                ))
-                .style(theme.bar()),
-                area,
-            );
-        }
+        let text = if self.sending {
+            format!("{} orchestrator sending…", theme.spinner(self.tick))
+        } else if let Some(activity) = &self.view.activity {
+            activity.clone()
+        } else if !self.view.idle {
+            "waiting for the orchestrator to start".into()
+        } else {
+            String::new()
+        };
+        frame.render_widget(Paragraph::new(theme.clean(&text)).style(theme.dim()), area);
     }
 
     fn draw_chat_input(

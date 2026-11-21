@@ -222,7 +222,29 @@ impl App {
     }
 
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
+        let before = self.navigation.clone();
+        let overlay_before = (
+            self.help,
+            self.picker.is_some(),
+            self.plan_view.is_some(),
+            self.plan_history.is_some(),
+            self.decision_inbox.is_some(),
+            self.editor.is_some(),
+        );
         let keep_running = self.key_inner(key);
+        if self.navigation != before
+            || overlay_before
+                != (
+                    self.help,
+                    self.picker.is_some(),
+                    self.plan_view.is_some(),
+                    self.plan_history.is_some(),
+                    self.decision_inbox.is_some(),
+                    self.editor.is_some(),
+                )
+        {
+            self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        }
         self.text_selection
             .invalidate_context(&self.selection_context());
         if self.selection_blocked() {

@@ -112,6 +112,29 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        let before = (
+            self.navigation.clone(),
+            self.selected.clone(),
+            self.details.as_ref().map(|details| details.key.clone()),
+        );
+        let result = self.mouse_inner(mouse);
+        let after = (
+            self.navigation.clone(),
+            self.selected.clone(),
+            self.details.as_ref().map(|details| details.key.clone()),
+        );
+        if before != after {
+            self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        }
+        result
+    }
+
+    fn mouse_inner(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.navigation.focus == NavigationFocus::Composer
+            || self.details.as_ref().is_some_and(|details| details.editing)
+        {
+            return true;
+        }
         if self.handle_workbench_mouse(mouse) {
             return true;
         }
@@ -213,9 +236,14 @@ impl App {
                 .list
                 .contains((mouse.column, mouse.row).into())
         {
-            let row = mouse.row.saturating_sub(self.workbench_areas.list.y) as usize;
-            if let Some((key, _)) = super::super::workbench::target_at(&self.view, row) {
-                self.open_details(key);
+            let row = mouse.row.saturating_sub(self.workbench_areas.list.y) as usize
+                + super::super::workbench::visible_start(
+                    &self.view,
+                    &self.navigation.target,
+                    self.workbench_areas.list.height,
+                );
+            if let Some(row) = super::super::workbench::sidebar(&self.view).get(row) {
+                self.open_work_card_or_stage(row);
             }
             return true;
         }
@@ -223,6 +251,16 @@ impl App {
     }
 
     fn handle_content_mouse(&mut self, mouse: event::MouseEvent) {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some((_, action)) = self
+                .inspector_hits
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                .cloned()
+        {
+            self.activate_inspector(action);
+            return;
+        }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && self
                 .now_area

@@ -54,7 +54,7 @@ impl Graph {
             step,
         )
         .build();
-        graph.expanded = expanded;
+        graph.expanded = expanded.map(|key| graph.work.card_key(&key));
         graph.expanded_tab = expanded_tab;
         graph
     }

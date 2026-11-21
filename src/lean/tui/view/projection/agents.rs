@@ -36,7 +36,7 @@ fn start_role_activity(view: &mut View, key: &str, provider: &str, payload: &Val
     if key == AUDITOR {
         view.audit_error = None;
     }
-    if key == ORCHESTRATOR {
+    if matches!(key, ORCHESTRATOR | crate::lean::COMMENT_ORCHESTRATOR) {
         let comments: Vec<_> = payload["comments"]
             .as_array()
             .into_iter()
@@ -98,7 +98,10 @@ pub(super) fn on_turn_finished(
                 .unwrap_or_else(|| "final audit interrupted".into()),
         );
     }
-    if key == ORCHESTRATOR {
+    if matches!(
+        key.as_str(),
+        ORCHESTRATOR | crate::lean::COMMENT_ORCHESTRATOR
+    ) {
         finish_orchestrator(view, payload, turn, failed);
     } else if key == crate::lean::PLANNER && failed {
         report_planner_failure(view, payload);

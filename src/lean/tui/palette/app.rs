@@ -1,5 +1,6 @@
 use super::super::{App, Focus};
 use super::{Action, Command, Help, Kind, Picker};
+use crate::lean::tui::{InputBuffer, NavigationFocus};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -298,17 +299,26 @@ impl App {
     fn select_picker_node(&mut self, key: String) {
         self.close_picker_views();
         self.set_focus(Focus::Graph);
-        self.select_node(key);
+        self.select_work_stage(key);
     }
 
     fn show_picker_entry(&mut self, entry: usize) {
         self.close_picker_views();
+        self.open_details("conversation".into());
+        self.navigation.update_presentation(|presentation| {
+            presentation.tab = crate::lean::tui::WorkbenchTab::Conversation
+        });
+        if let Some(details) = &mut self.details {
+            details.prepare_workbench_details(None, crate::lean::tui::WorkbenchTab::Conversation);
+        }
         self.set_focus(Focus::Chat);
         self.found = Some(entry);
         self.scroll = usize::MAX;
     }
 
     fn close_picker_views(&mut self) {
+        self.remember_workbench();
+        self.navigation.screen = crate::lean::tui::Screen::Graph;
         self.details = None;
         self.diff = None;
         self.plan_view = None;
@@ -349,6 +359,29 @@ impl App {
     }
 
     fn address_recipient(&mut self, recipient: &str) {
+        if self.details.as_ref().is_some_and(|details| details.editing) {
+            self.open_details(recipient.to_owned());
+            if let Some(details) = &mut self.details {
+                details.editing = true;
+            }
+            self.navigation.focus = NavigationFocus::Composer;
+            return;
+        }
+        if self.navigation.focus == NavigationFocus::Composer {
+            let text = self
+                .input
+                .text
+                .strip_prefix('@')
+                .and_then(|rest| rest.split_once(char::is_whitespace).map(|(_, text)| text))
+                .unwrap_or(&self.input.text)
+                .to_owned();
+            self.input = InputBuffer::with_text(if recipient == "orchestrator" {
+                text
+            } else {
+                format!("@{recipient} {text}")
+            });
+            return;
+        }
         self.close_picker_views();
         self.set_focus(Focus::Chat);
         let formatted = format!("@{recipient} ");

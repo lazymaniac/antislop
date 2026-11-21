@@ -425,7 +425,7 @@ impl FlowEditor {
         let plan = view
             .plan
             .clone()
-            .ok_or_else(|| "Brak aktywnego planu do edycji.".to_owned())?;
+            .ok_or_else(|| "No active plan do edycji.".to_owned())?;
         let base_revision = view.plan_head_revision;
 
         match &self.mode {
@@ -448,10 +448,10 @@ impl FlowEditor {
             FlowEditMode::AddDependent { after_id } => {
                 let new_id = self.id_input.text.trim();
                 if new_id.is_empty() {
-                    return Err("ID zadania nie może być puste.".into());
+                    return Err("Task ID must not be empty.".into());
                 }
                 if view.tasks.iter().any(|t| t.id == new_id) {
-                    return Err(format!("Zadanie o ID '{new_id}' już istnieje w grafie."));
+                    return Err(format!("Task ID '{new_id}' already exists in the graph."));
                 }
                 let contract = self.build_single_contract(view, new_id)?;
                 Ok((
@@ -473,19 +473,16 @@ impl FlowEditor {
                     .tasks
                     .iter()
                     .find(|t| &t.id == original_id)
-                    .ok_or_else(|| format!("Nie znaleziono zadania {original_id}"))?;
+                    .ok_or_else(|| format!("Task {original_id} was not found"))?;
                 if orig_row.status == "approved" {
-                    return Err(
-                        "Ukończonego (approved) zadania nie można podzielić; dodaj zadanie zależne (a)."
-                            .into(),
-                    );
+                    return Err("Approved tasks cannot be split; add a dependent task (a).".into());
                 }
                 let title_a = self.split_title_a.text.trim();
                 let goal_a = self.split_goal_a.text.trim();
                 let title_b = self.split_title_b.text.trim();
                 let goal_b = self.split_goal_b.text.trim();
                 if title_a.is_empty() || title_b.is_empty() {
-                    return Err("Tytuły obu części dzielonego zadania są wymagane.".into());
+                    return Err("Both split tasks need a title.".into());
                 }
                 let id_a = unique_split_id(view, original_id, "a");
                 let id_b = unique_split_id(view, original_id, "b");
@@ -546,7 +543,7 @@ impl FlowEditor {
     ) -> std::result::Result<TaskContract, String> {
         let title = self.title_input.text.trim();
         if title.is_empty() {
-            return Err("Tytuł zadania nie może być pusty.".into());
+            return Err("Task title must not be empty.".into());
         }
         let goal_trimmed = self.goal_input.text.trim();
         let goal = if goal_trimmed.is_empty() {
@@ -556,13 +553,11 @@ impl FlowEditor {
         };
         let depends_on = split_csv(&self.depends_input.text);
         if depends_on.iter().any(|dep| dep == id) {
-            return Err("Zadanie nie może zależeć od samego siebie.".into());
+            return Err("A task cannot depend on itself.".into());
         }
         let outputs = split_csv(&self.outputs_input.text);
         if self.change_kind == ChangeKind::Artifact && outputs.is_empty() {
-            return Err(
-                "Dla change_kind = artifact podaj przynajmniej jedną ścieżkę w Outputs.".into(),
-            );
+            return Err("Artifact delivery needs at least one output path.".into());
         }
         let acceptance_criteria = self
             .criteria_input
@@ -572,9 +567,9 @@ impl FlowEditor {
             .map(|line| {
                 let (id, text) = line
                     .split_once(':')
-                    .ok_or("Kryterium musi mieć format C1: opis")?;
+                    .ok_or("Use C1: description for each criterion")?;
                 if id.trim().is_empty() || text.trim().is_empty() {
-                    return Err("Podaj identyfikator i opis kryterium");
+                    return Err("Enter a criterion ID and description");
                 }
                 Ok(crate::lean::tasks::AcceptanceCriterion {
                     id: id.trim().into(),
@@ -674,33 +669,33 @@ impl FlowEditor {
             .borders(Borders::ALL)
             .border_set(theme.borders())
             .border_style(theme.warning())
-            .title(format!(" Flow Editor {separator} usuń zadanie {task_id} "));
+            .title(format!(" Flow Editor {separator} retire task {task_id} "));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
         let text_w = usize::from(inner.width.saturating_sub(2)).max(1);
         let mode_label = if self.request_ai_review {
-            "AI Plan Review (pełna weryfikacja)"
+            "AI plan review"
         } else {
-            "Fast-Path (natychmiastowy zapis DAG)"
+            "Apply graph changes immediately"
         };
         let mut lines = vec![
             Line::from(Span::styled(
                 truncate(
-                    &format!("Wycofać zadanie {task_id}: {}?", clean(task_title)),
+                    &format!("Retire task {task_id}: {}?", clean(task_title)),
                     text_w,
                 ),
                 theme.title().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 truncate(
-                    "Zadania zależne zostaną automatycznie przepięte do poprzedników.",
+                    "Dependent tasks will reconnect to this task’s predecessors.",
                     text_w,
                 ),
                 theme.dim(),
             )),
             Line::raw(""),
             Line::from(vec![
-                Span::styled("Tryb zapisu (Space): ", theme.dim()),
+                Span::styled("Save mode (Space): ", theme.dim()),
                 Span::styled(
                     truncate(mode_label, text_w.saturating_sub(21)),
                     theme.accent().add_modifier(Modifier::BOLD),
@@ -717,7 +712,7 @@ impl FlowEditor {
         }
         lines.push(Line::from(Span::styled(
             truncate(
-                &theme.chrome("Enter potwierdź · Space przełącz Fast-Path/AI · Esc anuluj"),
+                &theme.chrome("Enter confirm · Space immediate/AI review · Esc cancel"),
                 text_w,
             ),
             theme.dim(),
@@ -736,7 +731,7 @@ impl FlowEditor {
             .border_set(theme.borders())
             .border_style(theme.separator(true))
             .title(format!(
-                " Flow Editor {separator} podziel zadanie {original_id} na 2 kroki "
+                " Flow Editor {separator} split task {original_id} into two steps "
             ));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
@@ -744,14 +739,14 @@ impl FlowEditor {
         let mode_label = if self.request_ai_review {
             "AI Plan Review"
         } else {
-            "Fast-Path (natychmiast)"
+            "Apply immediately"
         };
         let fields = [
-            ("1. Tytuł kroku A", self.split_title_a.text.as_str()),
-            ("2. Cel kroku A  ", self.split_goal_a.text.as_str()),
-            ("3. Tytuł kroku B", self.split_title_b.text.as_str()),
-            ("4. Cel kroku B  ", self.split_goal_b.text.as_str()),
-            ("5. Tryb zapisu  ", mode_label),
+            ("1. Step A title", self.split_title_a.text.as_str()),
+            ("2. Step A goal ", self.split_goal_a.text.as_str()),
+            ("3. Step B title", self.split_title_b.text.as_str()),
+            ("4. Step B goal ", self.split_goal_b.text.as_str()),
+            ("5. Save mode   ", mode_label),
         ];
         let mut lines = Vec::new();
         for (idx, (label, val)) in fields.iter().enumerate() {
@@ -763,7 +758,7 @@ impl FlowEditor {
                 theme.text()
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("{prefix}{label}: "), theme.dim()),
+                Span::styled(theme.chrome(&format!("{prefix}{label}: ")), theme.dim()),
                 Span::styled(
                     truncate(val, text_w.saturating_sub(label.width() + 4)),
                     style,
@@ -780,7 +775,7 @@ impl FlowEditor {
         }
         lines.push(Line::from(Span::styled(
             truncate(
-                &theme.chrome("Tab/↑/↓ pole · Enter/Ctrl+S zapisz · Esc zamknij"),
+                &theme.chrome("Tab/↑/↓ field · Enter/Ctrl+S save · Esc close"),
                 text_w,
             ),
             theme.dim(),
@@ -816,29 +811,29 @@ impl FlowEditor {
         );
         let change_str = change_kind_label(self.change_kind);
         let hold_str = if self.deferred {
-            "⏸ wstrzymane (held / deferred)"
+            "Paused (held / deferred)"
         } else {
-            "▶ aktywne (schedulable)"
+            "Active (schedulable)"
         };
         let mode_str = if self.request_ai_review {
-            "AI Plan Review (pełny przegląd)"
+            "AI plan review"
         } else {
-            "⚡ Fast-Path (natychmiastowy zapis bez replanowania)"
+            "Apply immediately without replanning"
         };
 
         let mut rows: Vec<(&str, String)> = Vec::new();
         if has_id_field {
-            rows.push(("ID zadania      ", self.id_input.text.clone()));
+            rows.push(("Task ID         ", self.id_input.text.clone()));
         }
-        rows.push(("Tytuł           ", self.title_input.text.clone()));
-        rows.push(("Cel (goal)      ", self.goal_input.text.clone()));
-        rows.push(("Rodzaj (←/→)    ", kind_str.to_owned()));
-        rows.push(("Dostawa (←/→)   ", change_str.to_owned()));
-        rows.push(("Zależności (ID) ", self.depends_input.text.clone()));
-        rows.push(("Pliki wyjściowe ", self.outputs_input.text.clone()));
-        rows.push(("Kryteria (C1: opis) ", self.criteria_input.text.clone()));
+        rows.push(("Title           ", self.title_input.text.clone()));
+        rows.push(("Goal            ", self.goal_input.text.clone()));
+        rows.push(("Kind (←/→)      ", kind_str.to_owned()));
+        rows.push(("Delivery (←/→)  ", change_str.to_owned()));
+        rows.push(("Dependencies    ", self.depends_input.text.clone()));
+        rows.push(("Output paths    ", self.outputs_input.text.clone()));
+        rows.push(("Criteria (C1: text) ", self.criteria_input.text.clone()));
         rows.push(("Status (Space)  ", hold_str.to_owned()));
-        rows.push(("Tryb zapisu     ", mode_str.to_owned()));
+        rows.push(("Save mode       ", mode_str.to_owned()));
 
         let compact = inner.height < rows.len() as u16 + 3 || inner.width < 40;
         let status_height = if self.error.is_some() { 2 } else { 1 };
@@ -854,7 +849,8 @@ impl FlowEditor {
             let selected = self.field == idx;
             let label = if compact {
                 [
-                    "ID", "Tyt", "Cel", "Typ", "Kod", "Dep", "Plik", "Kryt", "Stan", "Tryb",
+                    "ID", "Title", "Goal", "Kind", "Delivery", "Deps", "Paths", "Criteria",
+                    "State", "Mode",
                 ][idx + usize::from(!has_id_field)]
             } else {
                 label.trim()
@@ -913,9 +909,9 @@ impl FlowEditor {
                     Line::styled(
                         if self.sending {
                             if inner.width >= 28 {
-                                "Zapisywanie zmian w grafie..."
+                                "Saving graph changes..."
                             } else {
-                                "Zapis..."
+                                "Saving..."
                             }
                         } else {
                             ""
@@ -924,7 +920,7 @@ impl FlowEditor {
                     ),
                     Line::styled(
                         truncate(
-                            &theme.chrome("Tab pole · Enter/Ctrl+S zapisz · Esc zamknij"),
+                            &theme.chrome("Tab field · Enter/Ctrl+S save · Esc close"),
                             usize::from(inner.width),
                         ),
                         theme.dim(),
@@ -978,9 +974,9 @@ pub fn toggle_hold_revision(
     let plan = view
         .plan
         .clone()
-        .ok_or_else(|| "Brak aktywnego planu do edycji.".to_owned())?;
+        .ok_or_else(|| "No active plan do edycji.".to_owned())?;
     if task.status == "approved" {
-        return Err("Zadanie jest już ukończone (approved).".into());
+        return Err("The task is already approved.".into());
     }
     let mut contract = contract_from_view(view, task);
     contract.deferred = !contract.deferred;
@@ -1015,12 +1011,12 @@ fn build_retire_revision(
         .tasks
         .iter()
         .find(|t| t.id == task_id)
-        .ok_or_else(|| format!("Nie znaleziono zadania {task_id}"))?;
+        .ok_or_else(|| format!("Task not found: {task_id}"))?;
     if target.status == "approved" {
-        return Err("Nie można wycofać ukończonego (approved) zadania.".into());
+        return Err("An approved task cannot be retired.".into());
     }
     if view.tasks.len() <= 1 {
-        return Err("Plan musi zawierać co najmniej jedno zadanie.".into());
+        return Err("A plan must contain at least one task.".into());
     }
     let parent_deps = target.depends_on.clone();
     let mut rewired_tasks = Vec::new();
@@ -1069,27 +1065,27 @@ pub fn toggle_dependency_edge_revision(
     to_id: &str,
 ) -> std::result::Result<(PlanRevision, String), String> {
     if from_id == to_id {
-        return Err("Zadanie nie może zależeć od samego siebie.".into());
+        return Err("A task cannot depend on itself.".into());
     }
     let plan = view
         .plan
         .clone()
-        .ok_or_else(|| "Brak aktywnego planu w tej konwersacji.".to_owned())?;
+        .ok_or_else(|| "No active plan w tej konwersacji.".to_owned())?;
     let base_revision = view.plan_head_revision.max(1);
     let from_row = view
         .tasks
         .iter()
         .find(|t| t.id == from_id)
-        .ok_or_else(|| format!("Nie znaleziono zadania źródłowego {from_id}"))?;
+        .ok_or_else(|| format!("Source task not found: {from_id}"))?;
     let to_row = view
         .tasks
         .iter()
         .find(|t| t.id == to_id)
-        .ok_or_else(|| format!("Nie znaleziono zadania docelowego {to_id}"))?;
+        .ok_or_else(|| format!("Task not found: docelowego {to_id}"))?;
 
     if to_row.depends_on.iter().any(|d| d == from_id) {
         if to_row.status == "approved" {
-            return Err("Ukończonego (approved) zadania nie można przepinać.".into());
+            return Err("Dependencies of approved tasks cannot be changed.".into());
         }
         let mut contract = contract_from_view(view, to_row);
         contract.depends_on.retain(|d| d != from_id);
@@ -1104,13 +1100,13 @@ pub fn toggle_dependency_edge_revision(
                 redo: Vec::new(),
                 replacements: BTreeMap::new(),
             },
-            format!("Rozłączono krawędź {from_id} ↛ {to_id}"),
+            format!("Unlinked dependency {from_id} ↛ {to_id}"),
         ));
     }
 
     if from_row.depends_on.iter().any(|d| d == to_id) {
         if from_row.status == "approved" {
-            return Err("Ukończonego (approved) zadania nie można przepinać.".into());
+            return Err("Dependencies of approved tasks cannot be changed.".into());
         }
         let mut contract = contract_from_view(view, from_row);
         contract.depends_on.retain(|d| d != to_id);
@@ -1125,16 +1121,16 @@ pub fn toggle_dependency_edge_revision(
                 redo: Vec::new(),
                 replacements: BTreeMap::new(),
             },
-            format!("Rozłączono krawędź {to_id} ↛ {from_id}"),
+            format!("Unlinked dependency {to_id} ↛ {from_id}"),
         ));
     }
 
     if to_row.status == "approved" {
-        return Err("Ukończonego (approved) zadania nie można przepinać.".into());
+        return Err("Dependencies of approved tasks cannot be changed.".into());
     }
     if depends_transitively(view, from_id, to_id) {
         return Err(format!(
-            "Nie można dodać krawędzi {from_id} → {to_id}: powstałby cykl w grafie."
+            "Cannot link {from_id} → {to_id}: this would create a dependency cycle."
         ));
     }
     let mut contract = contract_from_view(view, to_row);
@@ -1150,7 +1146,7 @@ pub fn toggle_dependency_edge_revision(
             redo: Vec::new(),
             replacements: BTreeMap::new(),
         },
-        format!("Połączono krawędź {from_id} → {to_id}"),
+        format!("Linked dependency {from_id} → {to_id}"),
     ))
 }
 
@@ -1518,7 +1514,7 @@ mod tests {
         let view = sample_view_with_plan();
         // t2 currently depends on t1: toggling (t1, t2) unlinks t1 ↛ t2
         let (rev_unlink, msg) = toggle_dependency_edge_revision(&view, "t1", "t2").unwrap();
-        assert!(msg.contains("Rozłączono"));
+        assert!(msg.contains("Unlinked"));
         assert!(rev_unlink.tasks[0].depends_on.is_empty());
 
         // Self-loop is rejected
@@ -1617,7 +1613,10 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(rendered.contains("⚡ 1"), "{rendered}");
-        assert!(rendered.contains("round 1 · ⏱ 01:"), "{rendered}");
+        assert!(
+            rendered.contains("critical path · 1 downstream"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("01:"), "{rendered}");
     }
 }

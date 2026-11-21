@@ -25,10 +25,12 @@ impl<'a> Builder<'a> {
         expanded: Option<String>,
         step: u8,
     ) -> Self {
+        let mut graph = empty_graph(scope, collapsed, grouping);
+        graph.work = super::super::super::work_units::WorkUnits::new(view);
+        let expanded = expanded.map(|key| graph.work.card_key(&key));
         let size = Size::fit(viewport, expanded).animated(step);
-        let graph = empty_graph(scope, collapsed, grouping);
         let index = task_index(view);
-        let extra_agents = extra_agents(view);
+        let extra_agents = extra_agents(view, &graph.work);
         let admin = admin_agents(view, &extra_agents, &graph);
         Self {
             view,
@@ -51,7 +53,7 @@ impl<'a> Builder<'a> {
     }
 
     pub(super) fn matches_query(&self, key: &str) -> bool {
-        scope_matches(self.view, &self.graph.scope, key)
+        unit_matches(self.view, &self.graph, key)
     }
 }
 
@@ -61,6 +63,7 @@ fn empty_graph(
     grouping: GroupingMode,
 ) -> Graph {
     Graph {
+        work: Default::default(),
         nodes: Vec::new(),
         frames: Vec::new(),
         edges: Vec::new(),
@@ -82,15 +85,22 @@ fn task_index(view: &View) -> HashMap<&str, usize> {
         .collect()
 }
 
-fn extra_agents(view: &View) -> Vec<&str> {
+fn extra_agents<'a>(
+    view: &'a View,
+    work: &crate::lean::tui::work_units::WorkUnits,
+) -> Vec<&'a str> {
     let mut agents: Vec<_> = view
         .agents
         .keys()
         .map(String::as_str)
         .filter(|key| {
-            !matches!(*key, PLAN_REVIEWER | ORCHESTRATOR | AUDITOR)
-                && !key.starts_with("worker:")
-                && !key.starts_with("reviewer:")
+            work.card_key(key) == *key
+                && !matches!(
+                    *key,
+                    PLAN_REVIEWER | ORCHESTRATOR | AUDITOR | crate::lean::PLANNER
+                )
+                && !crate::lean::task_role(key)
+                    .is_some_and(|(id, _)| view.tasks.iter().any(|task| task.id == id))
         })
         .collect();
     agents.sort_unstable();
@@ -98,18 +108,15 @@ fn extra_agents(view: &View) -> Vec<&str> {
 }
 
 fn admin_agents<'a>(view: &View, extra: &[&'a str], builder: &Graph) -> Vec<(&'a str, bool)> {
-    let mut agents = vec![(
-        ORCHESTRATOR,
-        scope_matches(view, &builder.scope, ORCHESTRATOR),
-    )];
-    for key in [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR] {
-        if view.agents.contains_key(key) {
-            agents.push((key, scope_matches(view, &builder.scope, key)));
+    let mut agents = vec![(ORCHESTRATOR, unit_matches(view, builder, ORCHESTRATOR))];
+    for key in [crate::lean::PLANNER, AUDITOR] {
+        if builder.work.for_stage(key).is_some() {
+            agents.push((key, unit_matches(view, builder, key)));
         }
     }
     for key in extra {
         if !agents.iter().any(|(known, _)| known == key) {
-            agents.push((key, scope_matches(view, &builder.scope, key)));
+            agents.push((key, unit_matches(view, builder, key)));
         }
     }
     agents.sort_by_key(|(key, _)| (workflow_stage(key), *key));
@@ -192,4 +199,15 @@ fn set_graph_bounds(graph: &mut Graph) {
     graph.width = graph.width.max(right);
     // Keep the row below the final cards available for report links.
     graph.height = graph.height.max(bottom.saturating_add(1));
+}
+
+fn unit_matches(view: &View, graph: &Graph, key: &str) -> bool {
+    graph.work.for_stage(key).map_or_else(
+        || scope_matches(view, &graph.scope, key),
+        |unit| {
+            unit.stages
+                .iter()
+                .any(|stage| scope_matches(view, &graph.scope, &stage.id.0))
+        },
+    )
 }

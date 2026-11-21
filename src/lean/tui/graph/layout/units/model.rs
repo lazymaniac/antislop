@@ -1,6 +1,7 @@
 pub(super) struct Unit {
     pub(super) task: usize,
-    pub(super) options: Option<usize>,
+    pub(super) tasks: Vec<usize>,
+    pub(super) members: Vec<String>,
     pub(super) parents: Vec<usize>,
     pub(super) visible: bool,
     pub(super) folded: Vec<bool>,

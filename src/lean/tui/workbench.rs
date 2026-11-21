@@ -6,32 +6,53 @@
 use super::{NavigationFocus, WorkbenchPresentation, WorkbenchTab, WorkbenchTarget};
 use ratatui::layout::{Constraint, Layout, Rect};
 
-pub fn target_at(view: &super::view::View, row: usize) -> Option<(String, String)> {
-    if row == 0 {
-        return Some(("conversation".to_owned(), "Session".to_owned()));
-    }
-    let mut index = 1;
-    for task in &view.tasks {
-        if index == row {
-            return Some((
-                format!("worker:{}", task.id),
-                format!("Worker: {}", task.title),
-            ));
+#[derive(Debug, Clone)]
+pub struct SidebarRow {
+    pub key: String,
+    pub label: String,
+    pub stage: bool,
+}
+
+pub fn sidebar(view: &super::view::View) -> Vec<SidebarRow> {
+    let projection = super::work_units::WorkUnits::new(view);
+    let mut rows = vec![SidebarRow {
+        key: "conversation".into(),
+        label: "Session".into(),
+        stage: false,
+    }];
+    for unit in &projection.units {
+        rows.push(SidebarRow {
+            key: unit.card.clone(),
+            label: unit.title.clone(),
+            stage: false,
+        });
+        for stage in &unit.stages {
+            rows.push(SidebarRow {
+                key: stage.id.0.clone(),
+                label: format!("  {}", stage.label),
+                stage: true,
+            });
         }
-        index += 1;
-        let reviewer = format!("reviewer:{}", task.id);
-        if view.agents.contains_key(&reviewer) {
-            if index == row {
-                return Some((reviewer, format!("Reviewer: {}", task.title)));
-            }
-            index += 1;
-        }
     }
-    None
+    rows
+}
+
+pub fn visible_start(view: &super::view::View, target: &WorkbenchTarget, height: u16) -> usize {
+    let rows = sidebar(view);
+    let selected = match target {
+        WorkbenchTarget::Session => "conversation",
+        WorkbenchTarget::Agent(key) => key,
+    };
+    let at = rows
+        .iter()
+        .position(|row| row.stage && row.key == selected)
+        .or_else(|| rows.iter().position(|row| row.key == selected))
+        .unwrap_or(0);
+    at.saturating_sub(usize::from(height.saturating_sub(2)))
 }
 
 const MIN_PANEL_HEIGHT: u16 = 8;
-const LIST_WIDTH: u16 = 24;
+const LIST_WIDTH: u16 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchRole {
@@ -96,8 +117,9 @@ pub fn areas(
         Constraint::Length(1),
     ])
     .areas(viewport);
-    let wide_enough = viewport.width >= 100 && viewport.height >= 24;
-    let list_visible = wide_enough && presentation.list_visible;
+    let wide_enough = viewport.width >= 120;
+    let list_visible = (wide_enough && presentation.list_visible)
+        || (presentation.list_requested && viewport.width >= 60);
     let (list, work) = if list_visible {
         let [list, _, work] = Layout::horizontal([
             Constraint::Length(LIST_WIDTH),
@@ -109,7 +131,7 @@ pub fn areas(
     } else {
         (Rect::default(), body)
     };
-    let can_split = viewport.height >= 24
+    let can_split = viewport.height >= 30
         && presentation.split
         && !presentation.zoomed
         && work.height > MIN_PANEL_HEIGHT * 2;
@@ -132,7 +154,7 @@ pub fn areas(
         } else {
             (work, Rect::default(), Rect::default())
         }
-    } else if viewport.height < 24 && focus == NavigationFocus::WorkbenchTerminal {
+    } else if viewport.height < 30 && focus == NavigationFocus::WorkbenchTerminal {
         (Rect::default(), Rect::default(), work)
     } else {
         (work, Rect::default(), Rect::default())
@@ -171,13 +193,10 @@ pub fn resize_at(viewport: Rect, presentation: &mut WorkbenchPresentation, row: 
 pub fn tabs_for(key: &str, delivers_changes: bool) -> Vec<WorkbenchTab> {
     let role = key.split_once(':').map_or(key, |(role, _)| role);
     let mut tabs = vec![WorkbenchTab::Summary, WorkbenchTab::Conversation];
-    if matches!(
-        role,
-        "worker" | "reviewer" | "planner" | "plan-reviewer" | "auditor" | "orchestrator"
-    ) {
+    if key != "conversation" {
         tabs.push(WorkbenchTab::Results);
     }
-    if role == "reviewer" {
+    if matches!(role, "worker" | "reviewer") {
         tabs.push(WorkbenchTab::Checks);
     }
     tabs.push(WorkbenchTab::Comments);
@@ -187,11 +206,11 @@ pub fn tabs_for(key: &str, delivers_changes: bool) -> Vec<WorkbenchTab> {
     tabs
 }
 
-pub fn default_tab(_key: &str, delivers_changes: bool) -> WorkbenchTab {
-    if delivers_changes {
+pub fn default_tab(key: &str, delivers_changes: bool) -> WorkbenchTab {
+    if delivers_changes && key.starts_with("worker:") {
         WorkbenchTab::Diff
     } else {
-        WorkbenchTab::Conversation
+        WorkbenchTab::Summary
     }
 }
 
@@ -206,6 +225,38 @@ pub fn neighbour_tab(
     tabs[(at + direction).rem_euclid(tabs.len() as isize) as usize]
 }
 
+pub(super) fn tab_line(
+    key: &str,
+    delivers: bool,
+    active: WorkbenchTab,
+    theme: &super::Theme,
+) -> ratatui::text::Line<'static> {
+    use ratatui::text::Span;
+    let mut spans = Vec::new();
+    for (index, tab) in tabs_for(key, delivers).into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("  ", theme.dim()));
+        }
+        let label = match tab {
+            WorkbenchTab::Summary => "Summary",
+            WorkbenchTab::Conversation => "Conversation",
+            WorkbenchTab::Results => "Results",
+            WorkbenchTab::Checks => "Checks",
+            WorkbenchTab::Comments => "Comments",
+            WorkbenchTab::Diff => "Diff",
+        };
+        spans.push(Span::styled(
+            label,
+            if tab == active {
+                theme.accent()
+            } else {
+                theme.dim()
+            },
+        ));
+    }
+    ratatui::text::Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,14 +265,14 @@ mod tests {
     fn shell_threshold_split_and_small_viewport_focus_are_bounded() {
         let presentation = WorkbenchPresentation::default();
         let below = areas(
-            Rect::new(0, 0, 99, 24),
+            Rect::new(0, 0, 119, 29),
             &presentation,
             NavigationFocus::WorkbenchContent,
         );
         assert!(!below.list_visible);
-        assert!(below.split);
+        assert!(!below.split);
         let at = areas(
-            Rect::new(0, 0, 100, 24),
+            Rect::new(0, 0, 120, 30),
             &presentation,
             NavigationFocus::WorkbenchContent,
         );
@@ -230,7 +281,7 @@ mod tests {
         assert!(at.content.height >= MIN_PANEL_HEIGHT);
         assert!(at.terminal.height >= MIN_PANEL_HEIGHT);
         let short = areas(
-            Rect::new(0, 0, 80, 23),
+            Rect::new(0, 0, 80, 24),
             &presentation,
             NavigationFocus::WorkbenchTerminal,
         );
@@ -259,12 +310,9 @@ mod tests {
     #[test]
     fn tab_policy_defaults_to_diff_only_for_delivery_agents() {
         assert_eq!(default_tab("worker:task", true), WorkbenchTab::Diff);
-        assert_eq!(
-            default_tab("reviewer:task", false),
-            WorkbenchTab::Conversation
-        );
+        assert_eq!(default_tab("reviewer:task", false), WorkbenchTab::Summary);
         assert!(tabs_for("reviewer:task", false).contains(&WorkbenchTab::Checks));
-        assert!(!tabs_for("worker:task", true).contains(&WorkbenchTab::Checks));
+        assert!(tabs_for("worker:task", true).contains(&WorkbenchTab::Checks));
         assert!(!tabs_for("worker:task", false).contains(&WorkbenchTab::Diff));
     }
 

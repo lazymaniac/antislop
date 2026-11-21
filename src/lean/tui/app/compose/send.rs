@@ -150,6 +150,7 @@ pub(super) struct AgentMessageSend {
     pub(super) target: AgentMessageTarget,
     pub(super) operation: String,
     pub(super) text: String,
+    pub(super) broadcast: Option<Vec<crate::lean::store::AgentMessage>>,
 }
 
 impl AgentMessageSend {
@@ -158,23 +159,40 @@ impl AgentMessageSend {
     }
 
     fn send(self) {
-        let result = self
-            .client
-            .call(&Request::Conversation(
-                crate::lean::daemon::ConversationRequest::SendToAgent {
-                    message: crate::lean::store::AgentMessage {
+        let result = if let Some(messages) = self.broadcast {
+            send_addressed_deliveries(&self.client, messages)
+        } else if self.target.recipient == "all"
+            && self.target.delivery == crate::lean::store::Delivery::Queue
+        {
+            self.client
+                .call(&Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::Send {
                         conversation: self.target.conversation.clone(),
-                        plan: self.target.plan,
-                        recipient: self.target.addressed,
-                        operation_id: self.operation.clone(),
-                        expected_round: self.target.expected_round,
-                        expected_run: self.target.expected_run,
-                        delivery: self.target.delivery,
+                        operation_id: Some(self.operation.clone()),
                         text: self.text.clone(),
+                        to: Some("all".into()),
+                        images: Vec::new(),
                     },
-                },
-            ))
-            .map_err(|error| error.to_string());
+                ))
+                .map_err(|error| error.to_string())
+        } else {
+            self.client
+                .call(&Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::SendToAgent {
+                        message: crate::lean::store::AgentMessage {
+                            conversation: self.target.conversation.clone(),
+                            plan: self.target.plan,
+                            recipient: self.target.addressed,
+                            operation_id: self.operation.clone(),
+                            expected_round: self.target.expected_round,
+                            expected_run: self.target.expected_run,
+                            delivery: self.target.delivery,
+                            text: self.text.clone(),
+                        },
+                    },
+                ))
+                .map_err(|error| error.to_string())
+        };
         let _ = self.updates.send(Update::AgentMessage {
             conversation: self.target.conversation,
             recipient: self.target.recipient,
@@ -183,4 +201,108 @@ impl AgentMessageSend {
             result,
         });
     }
+}
+
+pub(super) fn addressed_deliveries(
+    view: &View,
+    conversation: &str,
+    operation: &str,
+    text: &str,
+    delivery: crate::lean::store::Delivery,
+) -> std::result::Result<Vec<crate::lean::store::AgentMessage>, String> {
+    let (recipient, body) = text
+        .strip_prefix('@')
+        .and_then(|rest| rest.split_once(char::is_whitespace))
+        .unwrap_or((ORCHESTRATOR, text));
+    let recipients = if recipient == "all" {
+        view.tasks
+            .iter()
+            .map(|task| format!("worker:{}", task.id))
+            .collect::<Vec<_>>()
+    } else {
+        vec![recipient.to_owned()]
+    };
+    if recipients.is_empty() {
+        return Err("no valid recipients for broadcast in current plan".into());
+    }
+    recipients
+        .into_iter()
+        .map(|recipient| {
+            let task_role = crate::lean::task_role(&recipient).or_else(|| {
+                view.tasks
+                    .iter()
+                    .any(|task| task.id == recipient)
+                    .then_some((recipient.as_str(), false))
+            });
+            let (address, round) = if let Some((id, reviewer)) = task_role {
+                let task = view
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == id || task.uuid.as_deref() == Some(id))
+                    .ok_or_else(|| format!("Task {id} is not in the current plan"))?;
+                let uuid = task
+                    .uuid
+                    .as_deref()
+                    .ok_or_else(|| format!("Task {id} has no runtime identity yet"))?;
+                (
+                    format!("{}:{uuid}", if reviewer { "reviewer" } else { "worker" }),
+                    Some(task.round as u32),
+                )
+            } else {
+                (recipient.clone(), None)
+            };
+            Ok(crate::lean::store::AgentMessage {
+                conversation: conversation.into(),
+                plan: view.plan.clone(),
+                recipient: address,
+                operation_id: format!("{operation}:{recipient}"),
+                expected_round: round,
+                expected_run: None,
+                delivery,
+                text: body.into(),
+            })
+        })
+        .collect()
+}
+
+pub(super) fn send_addressed_deliveries(
+    client: &Client,
+    messages: Vec<crate::lean::store::AgentMessage>,
+) -> std::result::Result<Value, String> {
+    let mut sessions = None;
+    let mut receipts = Vec::new();
+    let mut steered = false;
+    for mut message in messages {
+        if !message.recipient.contains(':') {
+            if sessions.is_none() {
+                let reply = client
+                    .call(&Request::Session(
+                        crate::lean::daemon::SessionRequest::Sessions {
+                            conversation: message.conversation.clone(),
+                        },
+                    ))
+                    .map_err(|error| error.to_string())?;
+                sessions = Some(
+                    serde_json::from_value::<Vec<crate::lean::store::SessionInfo>>(reply)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+            message.expected_run = sessions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .rfind(|session| session.role == message.recipient)
+                .map(|session| session.turn_id.clone());
+        }
+        let receipt = client
+            .call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::SendToAgent { message },
+            ))
+            .map_err(|error| error.to_string())?;
+        steered |= receipt["state"] == "steered";
+        receipts.extend(receipt["mail"].as_u64());
+    }
+    Ok(
+        serde_json::json!({"mail_ids":receipts,"recipient":"all","state":if steered { "steered" } else { "queued" }}),
+    )
 }

@@ -60,15 +60,30 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
         draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
     }
     if let Some(diff) = &mut app.diff {
+        let [tabs, content] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(areas.content);
+        if let Some(details) = &app.details {
+            frame.render_widget(
+                super::super::workbench::tab_line(&details.key, true, WorkbenchTab::Diff, theme),
+                tabs,
+            );
+        }
         if historical_diff {
             frame.render_widget(
                 Paragraph::new(theme.clean("No historical diff is retained for this round."))
                     .style(theme.dim()),
-                areas.content,
+                content,
             );
         } else {
-            diff.paint_with_theme(frame, areas.content, &app.view, theme);
+            diff.paint_with_theme(frame, content, &app.view, theme);
         }
+    } else if app
+        .details
+        .as_ref()
+        .is_some_and(|details| details.key == "conversation")
+        && presentation.tab == WorkbenchTab::Conversation
+    {
+        app.draw_chat(frame, areas.content, theme);
     } else if let Some(details) = &mut app.details {
         details.draw_workbench_at(
             frame,
@@ -90,10 +105,16 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             historical_terminal,
             theme,
         );
-        if app.diff.is_none() {
+        if app.diff.is_none() && details.key != "conversation" {
             app.text_area = Some(details.text_area);
             app.text_origin = details.scroll;
         }
+    }
+    if let Some(notice) = &app.notice {
+        frame.render_widget(
+            Paragraph::new(theme.clean(notice)).style(theme.warning()),
+            areas.footer,
+        );
     }
     app.sync_native_views();
     true
@@ -115,16 +136,17 @@ fn draw_workbench_chrome(
         WorkbenchTarget::Agent(key) => key.clone(),
     };
     let tab = match presentation.tab {
-        WorkbenchTab::Summary => "Podsumowanie",
-        WorkbenchTab::Conversation => "Rozmowa",
-        WorkbenchTab::Results => "Wyniki",
-        WorkbenchTab::Checks => "Sprawdzenia",
-        WorkbenchTab::Comments => "Komentarze",
+        WorkbenchTab::Summary => "Summary",
+        WorkbenchTab::Conversation => "Conversation",
+        WorkbenchTab::Results => "Results",
+        WorkbenchTab::Checks => "Checks",
+        WorkbenchTab::Comments => "Comments",
         WorkbenchTab::Diff => "Diff",
     };
     frame.render_widget(
         Paragraph::new(format!(
-            " {identity} {sep} {tab} {sep} CLI {terminal_owner} {sep} r{} {sep} {}{}",
+            " {} antislop / {identity} {sep} {tab} {sep} CLI {terminal_owner} {sep} r{} {sep} {}{}",
+            theme.glyphs().arrow_right,
             terminal_round.map_or_else(|| theme.chrome("—"), |round| round.to_string()),
             if presentation.native_input {
                 "native input"
@@ -141,9 +163,9 @@ fn draw_workbench_chrome(
         areas.header,
     );
     let split_hint = if areas.split {
-        "Tab panel · F6 pause/continue · Ctrl+X cancel · Ctrl+P actions · Alt+↑/↓ resize · z zoom · Ctrl+B list"
+        "Ctrl+K direction · Tab panes · Space pause/continue · Ctrl+X cancel · Ctrl+P actions · Alt+↑/↓ resize · z zoom · Ctrl+B list"
     } else {
-        "Tab panel · F6 pause/continue · Ctrl+X cancel · Ctrl+P actions · Ctrl+B list · Esc back"
+        "Ctrl+K direction · Tab panes · Space pause/continue · Ctrl+X cancel · Ctrl+P actions · Ctrl+B list · Esc back"
     };
     frame.render_widget(
         Paragraph::new(theme.chrome(split_hint)).style(theme.bar()),
@@ -245,21 +267,41 @@ fn draw_workbench_list(
     target: &WorkbenchTarget,
     theme: &Theme,
 ) {
-    for index in 0..usize::from(area.height) {
-        let Some((item, label)) = super::super::workbench::target_at(view, index) else {
-            break;
-        };
-        let selected = match target {
-            WorkbenchTarget::Session => item == "conversation",
-            WorkbenchTarget::Agent(key) => item == *key,
-        };
-        let style = if selected {
-            theme.title().add_modifier(Modifier::REVERSED)
+    let rows = super::super::workbench::sidebar(view);
+    let start = super::super::workbench::visible_start(view, target, area.height);
+    let selected = match target {
+        WorkbenchTarget::Session => "conversation",
+        WorkbenchTarget::Agent(key) => key,
+    };
+    for (index, row) in rows
+        .iter()
+        .skip(start)
+        .take(usize::from(area.height))
+        .enumerate()
+    {
+        let style = if row.stage && row.key == selected {
+            theme.selected()
+        } else if row.stage {
+            theme.dim()
         } else {
             theme.text()
         };
+        let label = if row.stage {
+            let health = crate::lean::tui::graph::health(view, &row.key);
+            format!(
+                "  {} {}",
+                theme.status_glyph(health.name()),
+                row.label.trim_start()
+            )
+        } else {
+            row.label.clone()
+        };
         frame.render_widget(
-            Paragraph::new(label).style(style),
+            Paragraph::new(theme.fit(
+                &theme.clean(&label),
+                usize::from(area.width.saturating_sub(1)),
+            ))
+            .style(style),
             Rect::new(
                 area.x,
                 area.y + index as u16,
@@ -299,44 +341,38 @@ impl App {
         let area = frame.area();
         let bar_height = Self::bar_height(area);
         let [body, _, footer] = Self::main_areas(area);
-        if area.width >= SIDE_BY_SIDE_BREAKPOINT {
-            let chat_width = (body.width / 3).max(34);
-            let [chat, _, team] = Layout::horizontal([
-                Constraint::Length(chat_width),
-                Constraint::Length(1),
-                Constraint::Min(1),
-            ])
-            .areas(body);
-            self.chat_area = chat;
-            self.draw_chat(frame, chat, theme);
-            self.draw_graph(frame, team, theme);
-        } else if self.focus == Focus::Chat {
-            self.chat_area = body;
-            self.draw_chat(frame, body, theme);
-        } else if self.approval.is_some() && body.height > 1 {
-            let desired = self.approval.as_ref().map_or(6, |approval| {
-                let text_width = usize::from(body.width.saturating_sub(2)).max(1);
-                super::super::approval::approval_panel_height(
-                    &approval.approval.summary,
-                    text_width,
-                    approval.approval.options.len(),
-                    usize::from(body.height),
-                    7,
-                    usize::from(body.height),
-                )
-            });
-            let chat_height = desired
-                .min((body.height / 2).max(5))
-                .min(body.height.saturating_sub(1));
-            let [team, chat] =
-                Layout::vertical([Constraint::Min(1), Constraint::Length(chat_height)]).areas(body);
-            self.chat_area = chat;
-            self.draw_graph(frame, team, theme);
-            self.draw_chat(frame, chat, theme);
-        } else {
-            self.chat_area = body;
-            self.draw_graph(frame, body, theme);
-        }
+        self.chat_area = body;
+        let [identity, canvas, invitation] = Layout::vertical([
+            Constraint::Length(u16::from(body.height >= 10)),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .areas(body);
+        let pending = self.view.approvals.len()
+            + usize::from(
+                self.view.interview_question.is_some()
+                    && (self.view.user_decision
+                        || self.view.workflow_phase.as_deref() == Some("interview")),
+            );
+        frame.render_widget(
+            Paragraph::new(format!(
+                " {} antislop   {} / {}   Canvas   {pending} decisions",
+                theme.glyphs().arrow_right,
+                theme.fit(&theme.clean(&self.project), 26),
+                theme.fit(&theme.clean(&self.conversation), 22)
+            ))
+            .style(theme.text()),
+            identity,
+        );
+        self.draw_graph(frame, canvas, theme);
+        frame.render_widget(
+            Paragraph::new(theme.chrome(
+                "  Ctrl+K  Give direction, change scope, ask a question…
+  Arrows select · Enter Workbench · Tab stages · d decisions · h history · Space pause",
+            ))
+            .style(theme.card()),
+            invitation,
+        );
 
         self.draw_footer(frame, footer, bar_height, theme);
     }

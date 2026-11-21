@@ -24,6 +24,7 @@ pub struct ApprovalCard {
 }
 
 impl ApprovalCard {
+    #[cfg(test)]
     pub fn new(approval: PendingApproval) -> Self {
         Self { approval }
     }
@@ -183,13 +184,6 @@ impl super::App {
         {
             self.approval = None;
         }
-        if self.approval.is_none()
-            && let Some(next) = self.view.approvals.iter().find(|pending| {
-                !pending.orchestrator && !self.approval_hidden.contains(&pending.request)
-            })
-        {
-            self.approval = Some(ApprovalCard::new(next.clone()));
-        }
     }
 
     pub(super) fn route_approval(&mut self, key: KeyEvent) -> Option<bool> {
@@ -231,8 +225,7 @@ impl super::App {
     /// Shows approvals again, including ones put off or left to the orchestrator.
     pub(super) fn show_pending_approvals(&mut self) {
         self.approval_hidden.clear();
-        self.approval = self.view.approvals.first().cloned().map(ApprovalCard::new);
-        if self.approval.is_none() {
+        if self.view.approvals.is_empty() {
             self.notice = Some("No approval is waiting.".into());
         }
         self.open_decision_inbox();
@@ -326,199 +319,40 @@ mod tests {
     }
 
     #[test]
-    fn approval_card_deferral_advances_and_resolution_closes_the_card() {
+    fn approvals_update_badges_without_stealing_focus_and_open_in_the_inbox() {
         let mut app = crate::lean::tui::tests::test_app();
-        app.view.apply(&requested("r1", "user"));
-        app.view.apply(&requested("r2", "user"));
-        app.sync_approval();
-        assert_eq!(app.approval.as_ref().unwrap().approval.request, "r1");
-        assert!(app.header_status().contains("2 approval(s) waiting"));
-        assert_eq!(
-            app.route_approval(KeyEvent::new(
-                KeyCode::Char('0'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT
-            )),
-            Some(true)
-        );
-        app.sync_approval();
-        assert_eq!(app.approval.as_ref().unwrap().approval.request, "r2");
-        app.show_pending_approvals();
-        assert_eq!(app.approval.as_ref().unwrap().approval.request, "r1");
-        app.view.apply(&event(
-            "approval_resolved",
-            serde_json::json!({"request":"r1","state":"answered","choice":"1"}),
-        ));
-        app.sync_approval();
-        assert_eq!(app.approval.as_ref().unwrap().approval.request, "r2");
-    }
-
-    #[test]
-    fn choices_work_from_both_focus_states_once_and_preserve_chat_draft() {
-        for focus in [
-            super::super::contracts::Focus::Chat,
-            super::super::contracts::Focus::Graph,
-        ] {
-            let directory = tempfile::tempdir().unwrap();
-            let listener = std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(
-                directory.path(),
-            ))
-            .unwrap();
-            let (request_tx, request_rx) = std::sync::mpsc::channel();
-            let server = std::thread::spawn(move || {
-                let (stream, _) = listener.accept().unwrap();
-                let mut reader = std::io::BufReader::new(stream);
-                let request: serde_json::Value =
-                    crate::transport::read(&mut reader).unwrap().unwrap();
-                request_tx.send(request).unwrap();
-                crate::transport::write(
-                    reader.get_mut(),
-                    &serde_json::json!({"data": {}, "error": null}),
-                )
-                .unwrap();
-            });
-            let mut app = crate::lean::tui::tests::test_app();
-            app.client = crate::lean::daemon::Client::at(directory.path());
-            app.view.apply(&requested("r1", "user"));
+        app.input = super::super::InputBuffer::with_text("draft 👩‍💻 é");
+        let navigation = app.navigation.clone();
+        for decider in ["user", "orchestrator"] {
+            app.view.apply(&requested(decider, decider));
             app.sync_approval();
-            app.focus = focus;
-            app.input = super::super::InputBuffer::with_text("draft 👩‍👩‍👧‍👦");
-            let choice = KeyEvent::new(
-                KeyCode::Char('2'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT,
-            );
-            assert!(app.key_inner(choice));
-            assert_eq!(app.input.text, "draft 👩‍👩‍👧‍👦");
             assert!(app.approval.is_none());
-            assert!(app.approval_hidden.contains("r1"));
-            assert_eq!(
-                app.route_approval(choice),
-                None,
-                "the same request is answered once"
-            );
-            let delivered = request_rx
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .unwrap();
-            let encoded = delivered.to_string();
-            assert!(encoded.contains("answer_approval"));
-            assert!(encoded.contains("\"request\":\"r1\""));
-            assert!(encoded.contains("\"choice\":\"2\""));
-            server.join().unwrap();
-            assert!(
-                request_rx.try_recv().is_err(),
-                "only one CLI answer was delivered"
-            );
+            assert!(app.decision_inbox.is_none());
+            assert_eq!(app.navigation, navigation);
         }
+        assert!(app.header_status().contains("approval(s) waiting"));
+        app.show_pending_approvals();
+        assert!(app.decision_inbox.is_some());
+        assert_eq!(app.input.text, "draft 👩‍💻 é");
+        app.key_inner(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.decision_inbox.is_none());
+        assert_eq!(app.input.text, "draft 👩‍💻 é");
     }
 
     #[test]
-    fn ordinary_graph_and_chat_keys_fall_through_while_card_is_visible() {
+    fn escalated_approval_stays_in_the_inbox_until_explicitly_opened() {
         let mut app = crate::lean::tui::tests::test_app();
-        app.view.apply(&requested("r1", "user"));
-        app.sync_approval();
-        app.input = super::super::InputBuffer::with_text("keep");
-        app.focus = super::super::contracts::Focus::Chat;
-        assert!(app.key_inner(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)));
-        assert_eq!(app.input.text, "keepx");
-        app.focus = super::super::contracts::Focus::Graph;
-        assert!(app.key_inner(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
-        assert_eq!(app.input.text, "keepx");
-        assert!(app.approval.is_some());
-        assert!(!app.key_inner(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
-    }
-
-    #[test]
-    fn approval_card_renders_in_chat_and_keeps_narrow_graph_visible() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        for (width, focus) in [
-            (80, super::super::contracts::Focus::Chat),
-            (60, super::super::contracts::Focus::Graph),
-        ] {
-            let mut app = crate::lean::tui::tests::test_app();
-            app.view.apply(&requested("r1", "user"));
-            app.sync_approval();
-            app.focus = focus;
-            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
-            terminal.draw(|frame| app.draw(frame)).unwrap();
-            let rendered = (0..30)
-                .map(|row| {
-                    (0..width)
-                        .map(|column| terminal.backend().buffer()[(column, row)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(rendered.contains("touch /tmp/x"));
-            assert!(rendered.contains("Alt+1"));
-            assert!(rendered.contains("Yes"));
-            if focus == super::super::contracts::Focus::Graph {
-                assert!(app.graph_area.is_some());
-                assert!(app.chat_area.height > 0);
-            }
-        }
-
-        for focus in [
-            super::super::contracts::Focus::Chat,
-            super::super::contracts::Focus::Graph,
-        ] {
-            let mut app = crate::lean::tui::tests::test_app();
-            app.view.apply(&requested("r1", "user"));
-            app.sync_approval();
-            app.focus = focus;
-            let mut terminal = Terminal::new(TestBackend::new(12, 5)).unwrap();
-            terminal.draw(|frame| app.draw(frame)).unwrap();
-            let rendered = (0..5)
-                .map(|row| {
-                    (0..12)
-                        .map(|column| terminal.backend().buffer()[(column, row)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(rendered.contains("touch /tm"), "{rendered}");
-            if focus == super::super::contracts::Focus::Graph {
-                assert!(app.graph_area.is_some());
-            }
-        }
-
-        let mut app = crate::lean::tui::tests::test_app();
-        app.view.apply(&requested("r1", "user"));
-        app.sync_approval();
-        let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
-        tiny.draw(|frame| app.draw(frame)).unwrap();
-        let rendered = (0..4)
-            .map(|row| {
-                (0..11)
-                    .map(|column| tiny.backend().buffer()[(column, row)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            rendered
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .contains("Terminal too small")
-        );
-    }
-
-    #[test]
-    fn the_user_is_not_interrupted_by_what_the_orchestrator_decides() {
-        let mut app = crate::lean::tui::tests::test_app();
-        app.view.apply(&event(
-            "approval_mode_changed",
-            serde_json::json!({"mode":"autonomous"}),
-        ));
         app.view.apply(&requested("r1", "orchestrator"));
-        app.sync_approval();
-        assert!(app.approval.is_none());
-        assert!(app.header_status().contains("approvals: auto"));
         app.view.apply(&event(
             "approval_escalated",
             serde_json::json!({"request":"r1"}),
         ));
         app.sync_approval();
-        assert!(app.approval.is_some());
+        assert!(app.approval.is_none());
+        assert!(app.decision_inbox.is_none());
+        app.show_pending_approvals();
+        assert!(app.decision_inbox.is_some());
+        assert_eq!(app.view.approvals[0].summary, "touch /tmp/x");
+        assert_eq!(app.view.approvals[0].options.len(), 2);
     }
 }

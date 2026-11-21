@@ -72,7 +72,7 @@ fn an_attached_terminal_fills_the_session_panel() {
     terminal.draw(|frame| details.draw(frame, &view)).unwrap();
     let drawn = screen(&terminal);
     assert!(drawn.contains("agent says hello"));
-    assert!(drawn.contains("i terminal"));
+    assert!(drawn.contains("t terminal"));
 }
 
 #[test]
@@ -172,8 +172,8 @@ fn tab_window_keeps_the_active_tab_visible_at_minimum_width() {
 #[test]
 fn details_footer_hints_prioritized_by_width() {
     // COMMENTS tab
-    assert!(details_footer_hint(COMMENTS, 100).contains("d diff"));
-    assert!(!details_footer_hint(COMMENTS, 30).contains("d diff"));
+    assert!(details_footer_hint(COMMENTS, 100).contains("Ctrl+→ changes"));
+    assert!(!details_footer_hint(COMMENTS, 30).contains("Ctrl+→ changes"));
     assert!(details_footer_hint(COMMENTS, 30).contains("Esc"));
 
     // Other tabs
@@ -274,7 +274,10 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             .map(|tab| tab_name(key, tab))
             .collect()
     };
-    assert_eq!(names("worker:t1"), ["Worker", "Results", "Comments"]);
+    assert_eq!(
+        names("worker:t1"),
+        ["Worker", "Results", "Checks", "Comments"]
+    );
     assert_eq!(
         names("reviewer:t1"),
         ["Reviewer", "Review", "Checks", "Comments"]
@@ -299,11 +302,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             assert_eq!(details.nth_tab(n), Some(*tab));
         }
         assert_eq!(details.nth_tab(tabs.len()), None);
-        let hidden = if key.starts_with("worker:") {
-            CHECKS
-        } else {
-            PLAN
-        };
+        let hidden = PLAN;
         details.switch_tab(hidden);
         assert_eq!(details.tab, COMMENTS, "hidden tabs cannot be selected");
         let rendered = format_tabs(key, tabs[0], 120)
@@ -492,7 +491,7 @@ fn result_document_loading_state_keeps_document_navigation_visible() {
         .unwrap();
     let shown = screen(&terminal);
     assert!(shown.contains("Loading result document"), "{shown}");
-    assert!(shown.contains(",/. documents"), "{shown}");
+    assert!(shown.contains("Alt+←/→ documents"), "{shown}");
 }
 
 #[test]

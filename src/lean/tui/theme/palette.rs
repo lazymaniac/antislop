@@ -62,26 +62,9 @@ impl Theme {
 
     /// The accent color of an agent kind; `kind` is the task's work kind.
     pub fn role_accent(&self, key: &str, kind: &str) -> Style {
-        let role = key.split_once(':').map_or(key, |(role, _)| role);
-        let color = match role {
-            "plan_reviewer" | "plan-reviewer" => ayu::PURPLE,
-            "auditor" => ayu::CYAN,
-            "worker" | "reviewer" => {
-                let base = match kind {
-                    "analysis" => ayu::BLUE,
-                    "implementation" => ayu::GREEN,
-                    "static_analysis" => ayu::YELLOW,
-                    "testing" => ayu::ORANGE,
-                    "integration" => ayu::PINK,
-                    _ => ayu::CYAN,
-                };
-                // A reviewer shares its worker's hue, dimmed below.
-                base
-            }
-            _ => ayu::PURPLE,
-        };
-        let style = self.pick(fg(color), Style::default());
-        if role == "reviewer" {
+        let style = self.pick(fg(ayu::CYAN), Style::default());
+        let _ = kind;
+        if key.starts_with("reviewer:") {
             style.add_modifier(Modifier::DIM)
         } else {
             style
@@ -207,10 +190,10 @@ impl Theme {
 
     pub fn status(&self, status: &str) -> Style {
         let color = match tone(status) {
-            Tone::Active => ayu::BLUE,
-            Tone::Done => ayu::GREEN,
+            Tone::Active => ayu::CYAN,
+            Tone::Done => ayu::CYAN,
             Tone::Failed => ayu::RED,
-            Tone::Waiting => ayu::YELLOW,
+            Tone::Waiting => ayu::GOLD,
             Tone::Queued => ayu::DIM,
         };
         self.pick(fg(color), Style::default())

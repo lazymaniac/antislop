@@ -56,26 +56,34 @@ antislop "Review architecture"   # line mode, exits when idle
 antislop --config FILE --state DIR   # the directory you start it in is the project
 ```
 
-The default TUI opens the Graph with chat and the selected card's inspector.
-Enter opens the selected agent in Workbench; Ctrl+T opens the session Workbench.
-Worker deliveries start on Diff; other roles use their available tabs. The
-Workbench keeps each target's tab, round, scroll, query and draft independently.
+The TUI opens the Canvas. Cards represent work: orchestration, planning and plan
+review, tasks with their dedicated options and applicable reviewer stages, and
+final audit. Shared options and work without an established owner stay separate.
+Tab selects an underlying stage in the inspector; Enter opens that stage's
+Workbench. Each stage retains its own history, results, evidence, checks,
+comments, recovery actions, draft, and native terminal.
 
-| Context | Keys |
-| --- | --- |
-| Graph | arrows select cards; Enter opens Workbench; Ctrl+B toggles inspector; `/` searches; `f` filters; `g` groups; 1–4 toggle relation types; `z`/Space folds cards; `d` opens task Diff |
-| Workbench | Ctrl+Left/Right changes tabs; Tab/Shift+Tab changes content/terminal focus; Ctrl+B toggles list; `z` zooms; Alt+Up/Down resizes the split; `p` pins the terminal owner |
-| Workbench history | `,`/`.` selects rounds; newest follows live; Alt+Left/Right selects result documents; historical PTY is read-only and unavailable snapshots are explicit |
-| Native PTY | focus terminal, `i` enters native input; Ctrl+] returns to Workbench navigation; every other key goes to the CLI, including Ctrl+C and function keys |
-| Agent composer | `a` opens draft; Ctrl+T cycles queue/steer/interrupt; Enter sends; Esc returns without discarding draft |
-| Global frontend navigation | F1 help, F2 decision inbox, Ctrl+P palette, Ctrl+T session Workbench (Ctrl+I where distinct from Tab), Ctrl+F search, Ctrl+K session composer, Ctrl+Y copies selected application text |
-| Global workflow keys | Ctrl+N new conversation, Ctrl+O conversation picker, Ctrl+G project picker, Ctrl+L plan, Ctrl+Enter / Ctrl+M rigor (Ctrl+M if distinct from Enter), F3 interview, F4 plan history, F5 task actions, F6 pause/continue, F7 reject plan, F8 configuration, Ctrl+X cancel |
-| Exit | Esc leaves the active editor/modal or zoom first; Ctrl+C quits the frontend outside native PTY; daemon work continues |
+| Context | Controls |
+|---|---|
+| Navigation | Ctrl+P actions; Ctrl+K composer; Ctrl+T session Workbench; F1 help |
+| Sessions and projects | Ctrl+N new; Ctrl+O sessions; Ctrl+G projects |
+| Workflow | `d` decisions; `h` plan history; Ctrl+L plan; Space pause/continue; Ctrl+X cancel |
+| Canvas | arrows select; Enter Workbench; Tab/Shift+Tab stages; `/` search; `f` filters; `g` grouping; 1–4 relations; `z` fold/expand |
+| Workbench | Ctrl+Left/Right tabs; Tab/Shift+Tab panes; arrows select sidebar stages; `,`/`.` rounds; Alt+Left/Right result documents |
+| Presentation | Ctrl+B inspector/sidebar; `p` pin terminal; `z` zoom; Alt+Up/Down resize |
+| Native PTY | `t` focuses and enables native input; Ctrl+] returns to app navigation; every other key goes to the CLI |
+| Composer | displayed, changeable recipient; Ctrl+R recipients/broadcast; Ctrl+T queue/steer/interrupt; Enter send; Alt+Enter/Ctrl+J newline; Esc retains draft |
+| Editing and exit | editors and modals own their keys; Ctrl+C exits outside native input; Ctrl+Y copies selected application text |
 
-Ctrl+R resumes the plan or opens history in Chat/Graph. Ctrl+W switches the
-worker/reviewer target in Workbench. Comment/agent editors and forms own their
-editing keys; Ctrl+K in main chat opens the session composer. Ctrl+P also exposes workflow actions; F1 shows contextual controls. In native PTY, leave input with
-Ctrl+] before using application shortcuts. Graph contains no native PTY.
+At 160×50 the Canvas inspector is 36 columns and the Workbench sidebar is 30
+columns, with equal content and PTY shares. Below 120 columns secondary panes
+hide until requested with Ctrl+B. Below 30 rows Tab switches content and terminal
+instead of splitting. Layout preferences survive resizing. New decisions update
+badges; open full questions and approvals with `d` or the inspector. Ctrl+P keeps
+plan acceptance/rejection/revision, task editing/addition/splitting/holding/retirement,
+dependency linking, direct execution, rigor, recovery, approval mode, takeover,
+configuration and completion actions available.
+
 Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
 Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining
 a dirty draft. Chat sends with Enter/Ctrl+S; Alt+Enter/Ctrl+J inserts a newline,

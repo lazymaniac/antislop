@@ -49,6 +49,8 @@ pub struct App {
     pub focus: Focus,
     /// Frontend screen, workbench target, focus and per-target presentation.
     pub navigation: NavigationState,
+    pub navigation_revision: u64,
+    pub send_navigation: std::collections::HashMap<(String, u64), (u64, u64)>,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
     /// The relations the graph draws.
@@ -119,10 +121,13 @@ pub struct App {
     pub graph_tab: usize,
     /// Whether the graph inspector is shown when the terminal meets its minimum size.
     pub graph_inspector_visible: bool,
+    pub inspector_hits: Vec<(Rect, super::work_units::InspectorAction)>,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
     /// The expanded card's content area as last drawn, for hit testing.
     pub graph_card_area: Option<Rect>,
+    pub detail_states: std::collections::HashMap<(String, String), Details>,
+    pub diff_states: std::collections::HashMap<(String, String), DiffView>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
@@ -193,8 +198,13 @@ macro_rules! initial_app {
             notice: None,
             updates: $updates,
             result_fetch: app::requests::ResultFetchCoordinator::new(),
-            focus: Focus::Chat,
-            navigation: NavigationState::default(),
+            focus: Focus::Graph,
+            navigation: NavigationState {
+                focus: NavigationFocus::Graph,
+                ..Default::default()
+            },
+            navigation_revision: 0,
+            send_navigation: Default::default(),
             selected: ORCHESTRATOR.into(),
             relations: graph::Relations::default(),
             offset: (0, 0),
@@ -255,8 +265,11 @@ macro_rules! initial_app {
             graph_anim_anchor: None,
             graph_tab: 0,
             graph_inspector_visible: true,
+            inspector_hits: Vec::new(),
             graph_card_scroll: 0,
             graph_card_area: None,
+            detail_states: Default::default(),
+            diff_states: Default::default(),
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,

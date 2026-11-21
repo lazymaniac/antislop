@@ -6,9 +6,14 @@ impl App {
             let form = self
                 .interview_forms
                 .entry(self.conversation.clone())
-                .or_insert_with(|| interview::Form::new(*event, question.clone()));
+                .or_insert_with(|| {
+                    let mut form = interview::Form::new(*event, question.clone());
+                    form.visible = false;
+                    form
+                });
             if form.event != *event {
                 *form = interview::Form::new(*event, question.clone());
+                form.visible = false;
             }
             form.sync_scope_summary(
                 self.view.scope_confirmation_summary.as_deref(),

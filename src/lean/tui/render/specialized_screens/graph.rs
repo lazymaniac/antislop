@@ -2,7 +2,6 @@ use super::super::super::*;
 
 impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress, inspector) = self.graph_areas(frame, area, theme);
         self.now_area = now_area;
         if self.graph_anim.is_some() {
@@ -24,11 +23,12 @@ impl App {
                 step,
             },
         );
+        self.selected = graph.work.card_key(&self.selected);
         self.now_click_targets = progress
             .iter()
             .map(|entry| {
                 entry.agent.as_ref().map(|agent| {
-                    let key = graph::card_key(&self.view, agent);
+                    let key = graph.work.card_key(agent);
                     (
                         agent.clone(),
                         graph.node(&key).is_some_and(|node| node.visible),
@@ -59,7 +59,7 @@ impl App {
             theme,
         );
         if let Some(inspector) = inspector {
-            self.draw_graph_inspector(frame, inspector, theme);
+            self.draw_graph_inspector(frame, inspector, &graph, theme);
         }
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
@@ -316,8 +316,12 @@ impl App {
         Option<Rect>,
     ) {
         let mut frame_inner = self.draw_graph_frame(frame, area, theme);
-        let inspector = if self.graph_inspector_visible && area.width >= 110 && area.height >= 16 {
-            let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(34)])
+        let inspector = if (self.graph_inspector_visible && area.width >= 120
+            || self.navigation.compact_secondary)
+            && area.width >= 50
+            && area.height >= 10
+        {
+            let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(36)])
                 .areas::<2>(frame_inner);
             frame_inner = columns[0];
             Some(columns[1])
@@ -354,132 +358,200 @@ impl App {
         (inner, now_area, progress, inspector)
     }
 
-    fn draw_graph_inspector(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let separator = theme.chrome("·");
-        if area.width == 0 || area.height == 0 {
+    fn draw_graph_inspector(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        graph: &Graph,
+        theme: &Theme,
+    ) {
+        use crate::lean::tui::work_units::InspectorAction;
+        frame.render_widget(Block::default().style(theme.card()), area);
+        let Some(unit) = graph.work.for_stage(&self.selected) else {
             return;
-        }
-        frame.render_widget(ratatui::widgets::Clear, area);
-        frame.render_widget(Block::default().style(theme.overlay()), area);
-        let selected = graph::card_key(&self.view, &self.selected);
-        let agent = self
-            .view
-            .agents
-            .get(&self.selected)
-            .or_else(|| self.view.agents.get(&selected));
-        let task_id = self
-            .selected
-            .rsplit_once(':')
-            .map(|(_, id)| id)
-            .or_else(|| selected.rsplit_once(':').map(|(_, id)| id));
-        let task = self
-            .view
-            .tasks
-            .iter()
-            .find(|task| task_id == Some(task.id.as_str()));
-        let role = if self.selected.starts_with("reviewer:") {
-            "Reviewer"
-        } else if task.is_some_and(|task| task.kind == "options") {
-            "Options"
-        } else if self.selected.starts_with("worker:") {
-            "Worker"
-        } else {
-            "Session agent"
         };
-        let mut lines = vec![Line::styled(
-            "INSPECTOR",
-            theme.accent().add_modifier(Modifier::BOLD),
-        )];
-        if let Some(task) = task {
-            let goal = crate::lean::tui::view::task_goal(
-                &task.kind,
-                &task.title,
-                &task.goal,
-                task.summary.as_deref(),
-            );
-            lines.push(Line::raw(truncate(
-                &format!("Goal: {goal}"),
-                usize::from(area.width.saturating_sub(2)),
-            )));
-            lines.push(Line::raw(format!(
-                "Role: {role} {separator} {}",
-                task.status
-            )));
-            lines.push(Line::raw(if task.round == 0 {
-                "Round: pending".into()
+        let selected = self
+            .selected_work_stage()
+            .unwrap_or_else(|| unit.active_stage(&self.view).id.0.clone());
+        let width = usize::from(area.width.saturating_sub(2));
+        let mut lines = vec![
+            Line::styled(theme.chrome("INSPECTOR · SELECTED WORK"), theme.dim()),
+            Line::raw(unit.title.clone()),
+            Line::raw(""),
+        ];
+        let mut hits = Vec::new();
+        for stage in &unit.stages {
+            let state = graph::health(&self.view, &stage.id.0);
+            let style = if stage.id.0 == selected {
+                theme.selected()
             } else {
-                format!("Round: {}", task.round)
-            }));
-            let activity = if !task.activity.is_empty() {
-                task.activity.as_str()
-            } else if let Some(activity) = agent.map(|agent| agent.activity.as_str()) {
-                if activity.is_empty() {
-                    "No active task operation"
-                } else {
-                    activity
-                }
-            } else {
-                "No active task operation"
+                theme.dim()
             };
-            lines.push(Line::raw(truncate(
-                &format!("Activity: {activity}"),
-                usize::from(area.width.saturating_sub(2)),
-            )));
-            let agent_error = agent
-                .map(|agent| agent.activity.as_str())
-                .filter(|activity| activity.starts_with('✗') || activity.starts_with('⚠'));
-            let cause = task.reason.as_deref().or(agent_error).unwrap_or("—");
-            lines.push(Line::raw(truncate(
-                &format!("Waiting/error: {cause}"),
-                usize::from(area.width.saturating_sub(2)),
-            )));
-            lines.push(Line::raw(truncate(
-                &format!(
-                    "Result: {}",
-                    task.effect.as_deref().unwrap_or("No result yet")
-                ),
-                usize::from(area.width.saturating_sub(2)),
-            )));
-        } else {
-            lines.push(Line::raw(format!("Role: {role}")));
-            lines.push(Line::raw(format!(
-                "Activity: {}",
-                agent.map_or("Idle", |agent| if agent.running {
-                    "Running"
-                } else if agent.activity.is_empty() {
-                    "Idle"
-                } else {
-                    agent.activity.as_str()
-                })
-            )));
+            hits.push((lines.len(), InspectorAction::Stage(stage.id.0.clone())));
+            lines.push(Line::styled(
+                format!("{} {}", theme.status_glyph(state.name()), stage.label),
+                style,
+            ));
         }
-        lines.push(Line::raw("Enter: open Workbench"));
-        lines.push(Line::raw(theme.chrome("c comment · e edit · l dependency")));
-        lines.push(Line::raw("Ctrl+B hide inspector"));
+        lines.push(Line::raw(""));
+        let active_task = selected
+            .split_once(':')
+            .and_then(|(_, id)| self.view.tasks.iter().find(|task| task.id == id));
+        let task = active_task.or_else(|| {
+            unit.task
+                .as_deref()
+                .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
+        });
+        if let Some(task) = task {
+            for line in wrap(
+                &format!(
+                    "Goal: {}",
+                    view::task_goal(&task.kind, &task.title, &task.goal, task.summary.as_deref())
+                ),
+                width,
+            ) {
+                lines.push(Line::raw(line));
+            }
+            if let Some(meta) = self.view.task_meta.get(&task.id) {
+                for criterion in &meta.acceptance_criteria {
+                    for line in wrap(
+                        &format!("{} {}", theme.status_glyph(&task.status), criterion.text),
+                        width,
+                    ) {
+                        lines.push(Line::styled(line, theme.dim()));
+                    }
+                }
+            }
+            lines.push(Line::styled(
+                format!("{} {} round {}", selected, theme.glyphs().dot, task.round),
+                theme.dim(),
+            ));
+            if let Some(reason) = &task.reason {
+                for line in wrap(&view::clean(reason), width) {
+                    lines.push(Line::styled(line, theme.error()));
+                }
+            }
+            if let Some(effect) = &task.effect {
+                for line in wrap(&view::clean(effect), width).into_iter().take(3) {
+                    lines.push(Line::raw(line));
+                }
+            }
+        }
+        for stage in &unit.stages {
+            if let Some(agent) = self.view.agents.get(&stage.id.0) {
+                let problem = graph::health(&self.view, &stage.id.0) == graph::Health::Problem;
+                if stage.id.0 == selected || problem {
+                    for line in wrap(
+                        &format!("{}: {}", stage.label, view::clean(&agent.activity)),
+                        width,
+                    )
+                    .into_iter()
+                    .take(4)
+                    {
+                        lines.push(Line::styled(
+                            line,
+                            if problem { theme.error() } else { theme.dim() },
+                        ));
+                    }
+                }
+            }
+        }
+        for member in &unit.stages {
+            if let Some((_, id)) = member.id.0.split_once(':')
+                && let Some(member_task) = self.view.tasks.iter().find(|task| task.id == id)
+                && task.is_none_or(|selected| selected.id != member_task.id)
+                && let Some(reason) = &member_task.reason
+            {
+                for line in wrap(&format!("{}: {}", member.label, view::clean(reason)), width) {
+                    lines.push(Line::styled(line, theme.error()));
+                }
+            }
+        }
+        // Keep exact internal relation endpoints in stage details.
+        for ((from, to), link) in &self.view.links {
+            if (from == &selected || to == &selected)
+                && graph
+                    .work
+                    .for_stage(from)
+                    .is_some_and(|other| other.id == unit.id)
+                && graph
+                    .work
+                    .for_stage(to)
+                    .is_some_and(|other| other.id == unit.id)
+            {
+                for line in wrap(&format!("{from} → {to} · {} messages", link.count), width) {
+                    lines.push(Line::styled(line, theme.dim()));
+                }
+            }
+        }
+        let action_start = lines.len();
+        let decisions = unit.decisions(&self.view);
+        if decisions > 0 {
+            hits.push((lines.len(), InspectorAction::Decisions));
+            lines.push(Line::styled(
+                theme.chrome(&format!("{decisions} pending decision(s) · d open")),
+                theme.decision(),
+            ));
+        }
+        hits.push((lines.len(), InspectorAction::Results(selected.clone())));
+        lines.push(Line::styled(
+            theme.chrome("Results & evidence · o"),
+            theme.accent(),
+        ));
+        if task.is_some_and(|task| task.change_kind.has_delivery()) {
+            hits.push((lines.len(), InspectorAction::Diff(selected.clone())));
+            lines.push(Line::styled(theme.chrome("Changes · v"), theme.accent()));
+        }
+        if task.is_some_and(|task| {
+            matches!(
+                task.status.as_str(),
+                "failed" | "needs_user" | "coordinating"
+            )
+        }) {
+            hits.push((lines.len(), InspectorAction::Recovery(selected)));
+            lines.push(Line::styled(
+                theme.chrome("Recovery actions · u"),
+                theme.decision(),
+            ));
+        }
+        lines.push(Line::styled(
+            theme.chrome("Enter Workbench · Tab stage"),
+            theme.dim(),
+        ));
         let content = Rect::new(
-            area.x.saturating_add(1),
-            area.y.saturating_add(1),
+            area.x + 1,
+            area.y + 1,
             area.width.saturating_sub(2),
             area.height.saturating_sub(2),
         );
-        frame.render_widget(
-            Paragraph::new(lines)
-                .style(theme.text())
-                .wrap(ratatui::widgets::Wrap { trim: true }),
-            content,
+        let available = usize::from(content.height);
+        if lines.len() > available {
+            let actions = lines.split_off(action_start);
+            let keep = available.saturating_sub(actions.len());
+            lines.truncate(keep);
+            hits.retain(|(row, _)| *row < keep || *row >= action_start);
+            for (row, _) in &mut hits {
+                if *row >= action_start {
+                    *row = keep + *row - action_start;
+                }
+            }
+            lines.extend(actions);
+        }
+        self.inspector_hits.extend(
+            hits.into_iter()
+                .filter(|(row, _)| *row < usize::from(content.height))
+                .map(|(row, action)| {
+                    (
+                        Rect::new(content.x, content.y + row as u16, content.width, 1),
+                        action,
+                    )
+                }),
         );
+        frame.render_widget(Paragraph::new(lines).style(theme.text()), content);
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {
-        let fill = if self.focus == Focus::Graph {
-            if theme.color {
-                theme.panel()
-            } else {
-                theme.panel().add_modifier(Modifier::REVERSED)
-            }
-        } else {
-            theme.overlay()
-        };
+        let fill = theme.overlay();
         let title = if let Some(src) = &self.graph_link_source {
             truncate(
                 &format!(" 🔗 LINKING FROM {src} (Enter/l: toggle edge, Esc: cancel) "),
@@ -846,18 +918,18 @@ fn graph_title(relations: &str, filtered: bool, grouping: &str, width: u16) -> S
     let cards = if filtered { "some" } else { "all" };
     [
         format!(
-            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) · flow: e/a/S/l "
+            " Canvas · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) · flow: e/a/S/l "
         ),
         format!(
-            " team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) "
+            " Canvas · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) "
         ),
-        format!(" team · relations: {relations} · cards: {cards} · groups: {grouping} "),
-        format!(" team · {relations} · {cards} · {grouping} "),
-        format!(" team · {relations} "),
+        format!(" Canvas · relations: {relations} · cards: {cards} · groups: {grouping} "),
+        format!(" Canvas · {relations} · {cards} · {grouping} "),
+        format!(" Canvas · {relations} "),
     ]
     .into_iter()
     .find(|title| unicode_width::UnicodeWidthStr::width(title.as_str()) <= usize::from(width))
-    .unwrap_or_else(|| " team ".into())
+    .unwrap_or_else(|| " Canvas ".into())
 }
 
 fn graph_progress_areas(area: Rect, progress_lines: usize) -> (Rect, Option<Rect>) {
@@ -934,18 +1006,18 @@ mod tests {
         let full = graph_title("DRM", false, "dependencies", 200);
         assert_eq!(
             full,
-            " team · relations: DRM (1-4) · cards: all (f) · groups: dependencies (g) · flow: e/a/S/l "
+            " Canvas · relations: DRM (1-4) · cards: all (f) · groups: dependencies (g) · flow: e/a/S/l "
         );
         // A phone-wide panel: the keys go, every word stays whole.
         let narrow = graph_title("DRM", false, "dependencies", 68);
         assert_eq!(
             narrow,
-            " team · relations: DRM · cards: all · groups: dependencies "
+            " Canvas · relations: DRM · cards: all · groups: dependencies "
         );
         assert_eq!(
             graph_title("DRM", true, "status", 30),
-            " team · DRM · some · status "
+            " Canvas · DRM · some · status "
         );
-        assert_eq!(graph_title("DRM", false, "dependencies", 4), " team ");
+        assert_eq!(graph_title("DRM", false, "dependencies", 4), " Canvas ");
     }
 }

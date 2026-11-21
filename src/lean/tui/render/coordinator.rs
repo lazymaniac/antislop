@@ -9,6 +9,7 @@ impl App {
         self.phase_action_area = None;
         self.phase_action_command = None;
         self.now_click_targets.clear();
+        self.inspector_hits.clear();
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
@@ -180,13 +181,17 @@ mod tests {
             KeyCode::Right,
             event::KeyModifiers::CONTROL,
         ));
-        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Comments);
-        assert_eq!(app.details.as_ref().unwrap().tab, details::COMMENTS);
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Checks);
+        assert_eq!(app.details.as_ref().unwrap().tab, details::CHECKS);
     }
 
     #[test]
     fn task_diff_uses_workbench_and_keeps_the_chat_draft() {
         let mut app = App::test_app();
+        app.view.tasks = vec![view::TaskRow {
+            id: "t1".into(),
+            ..Default::default()
+        }];
         app.input = InputBuffer::with_text("draft 👩‍💻 é");
         assert_eq!(app.navigation.screen, Screen::Graph);
         app.open_diff("worker:t1");
@@ -214,11 +219,13 @@ mod tests {
         assert_eq!(app.input.text, "draft 👩‍💻 é");
 
         app.details.as_mut().unwrap().selected_round = Some(1);
-        app.navigation.screen = Screen::Graph;
-        app.focus = Focus::Graph;
+        app.key(event::KeyEvent::new(
+            KeyCode::Esc,
+            event::KeyModifiers::NONE,
+        ));
         app.selected = "worker:t1".into();
         app.key(event::KeyEvent::new(
-            KeyCode::Char('d'),
+            KeyCode::Char('v'),
             event::KeyModifiers::NONE,
         ));
         assert_eq!(app.navigation.screen, Screen::Workbench);
@@ -239,30 +246,15 @@ mod tests {
                     .draw(|frame| app.draw_with_theme(frame, &theme))
                     .unwrap();
                 assert_eq!(app.terminal_area, Rect::new(0, 0, width, height));
-                if width >= SIDE_BY_SIDE_BREAKPOINT || focus == Focus::Graph {
-                    let graph_area = app.graph_area.expect("graph panel rendered");
-                    assert_eq!(
-                        app.graph_viewport,
-                        Some((graph_area.width, graph_area.height))
-                    );
-                    assert!(graph_area.right() >= width.saturating_sub(3));
-                    let fill = if focus == Focus::Graph {
-                        theme.panel()
-                    } else {
-                        theme.overlay()
-                    };
-                    for y in [0, graph_area.y] {
-                        let edge = &terminal.backend().buffer()[(width - 1, y)];
-                        assert_eq!(edge.symbol(), " ", "canvas has no outer border");
-                        assert_eq!(edge.bg, fill.bg.unwrap());
-                    }
-                    if width >= SIDE_BY_SIDE_BREAKPOINT {
-                        assert!(graph_area.x > app.chat_area.right());
-                    }
-                } else {
-                    assert!(app.graph_area.is_none());
-                    assert_eq!(app.chat_area.width, width);
-                }
+                let graph_area = app.graph_area.expect("Canvas always renders");
+                assert_eq!(
+                    app.graph_viewport,
+                    Some((graph_area.width, graph_area.height))
+                );
+                assert!(graph_area.right() <= width);
+                assert!(
+                    graph_area.right() >= width.saturating_sub(if width >= 120 { 39 } else { 3 })
+                );
             }
         }
 

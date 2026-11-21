@@ -36,7 +36,7 @@ fn help_key_ownership_preserves_picker_query_and_chat_draft() {
 }
 
 #[test]
-fn recommendation_popup_preselects_rigor_and_preserves_other_drafts() {
+fn recommendation_notice_preserves_focus_and_explicit_picker_preselects_rigor() {
     use super::super::{App, InputBuffer, Update};
     use crate::lean::tasks::Team;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -60,6 +60,8 @@ fn recommendation_popup_preselects_rigor_and_preserves_other_drafts() {
     assert_eq!(app.picker.as_ref().unwrap().query, "saved query");
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.sync_rigor_recommendation();
+    assert!(app.picker.is_none());
+    app.run_workflow(Command::OpenRigorPicker);
     let picker = app.picker.as_ref().unwrap();
     assert_eq!(picker.kind, Kind::Rigor);
     assert_eq!(
@@ -153,6 +155,8 @@ fn recommendation_enter_sends_confirmation_or_an_alternative_rigor() {
         app.view.team = Some(Team::SmallChange);
         app.view.team_recommended = true;
         app.sync_rigor_recommendation();
+        assert!(app.picker.is_none());
+        app.run_workflow(Command::OpenRigorPicker);
         if alternative {
             app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }

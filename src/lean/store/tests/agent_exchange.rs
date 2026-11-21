@@ -678,3 +678,38 @@ fn delivered_receipts_are_scoped_and_failure_artifacts_remain_in_history() {
             .any(|e| e.kind == "message_classified")
     );
 }
+
+#[test]
+fn planning_and_comment_stages_accept_only_messages_for_their_selected_run() {
+    let (_directory, store, conversation, _, _) = fixture();
+    for role in [crate::lean::PLANNER, crate::lean::COMMENT_ORCHESTRATOR] {
+        let turn = store
+            .start_turn(&conversation, role, "fixture", 0, None)
+            .unwrap();
+        let mut message = crate::lean::store::AgentMessage {
+            conversation: conversation.clone(),
+            plan: None,
+            recipient: role.into(),
+            operation_id: crate::id(),
+            expected_run: Some(turn.id.clone()),
+            expected_round: None,
+            text: "Keep the selected direction".into(),
+            delivery: crate::lean::store::Delivery::Queue,
+        };
+        let receipt = store.enqueue_agent_message(&message).unwrap();
+        assert_eq!(receipt["recipient"], role);
+        assert_eq!(
+            store.enqueue_agent_message(&message).unwrap()["mail"],
+            receipt["mail"]
+        );
+        message.operation_id = crate::id();
+        message.expected_run = None;
+        assert!(
+            store
+                .enqueue_agent_message(&message)
+                .unwrap_err()
+                .to_string()
+                .contains("stale run")
+        );
+    }
+}

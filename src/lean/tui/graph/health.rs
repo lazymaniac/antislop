@@ -39,7 +39,6 @@ pub fn health(view: &View, key: &str) -> Health {
         Some((task, Role::Worker)) => worker_health(view, task),
         Some((task, Role::Reviewer)) => reviewer_health(view, task),
         Some((task, Role::Pair)) => task_health(view, task),
-        None if key.contains(':') => Health::Idle,
         None => admin_health(view, key),
     }
 }
@@ -140,6 +139,8 @@ fn admin_health(view: &View, key: &str) -> Health {
         .is_some_and(|agent| agent.activity.starts_with('✗') || agent.activity.starts_with('⚠'))
     {
         Health::Problem
+    } else if agents.iter().any(|agent| agent.turns > 0) {
+        Health::Done
     } else {
         Health::Idle
     }

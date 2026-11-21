@@ -107,7 +107,7 @@ fn validate_role_recipient(tx: &rusqlite::Transaction<'_>, request: &AgentMessag
     crate::require(
         matches!(
             request.recipient.as_str(),
-            "orchestrator" | "auditor" | "plan-reviewer"
+            "orchestrator" | "auditor" | "plan-reviewer" | "planner" | "comment-orchestrator"
         ),
         "unknown agent role",
     )?;
