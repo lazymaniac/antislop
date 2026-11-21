@@ -70,6 +70,16 @@ impl App {
         {
             return true;
         }
+        if self.editor.is_none()
+            && self.plan_view.is_none()
+            && !self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.editing || details.searching)
+            && self.route_global_shortcut(key)
+        {
+            return true;
+        }
         if let Some(result) = self.route_screen(key) {
             return result;
         }
@@ -77,9 +87,17 @@ impl App {
     }
 
     fn route_workbench_navigation(&mut self, key: KeyEvent) -> bool {
+        let switching_role =
+            key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w');
         if self.navigation.screen != Screen::Workbench
             || self.graph_expanded.is_some()
             || self.interview_visible()
+            || self.editor.is_some()
+            || self.plan_view.is_some()
+            || self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.searching || (details.editing && !switching_role))
         {
             return false;
         }
@@ -521,7 +539,8 @@ impl App {
     }
 
     fn route_base_layout(&mut self, key: KeyEvent) -> bool {
-        if self.route_global_shortcut(key) {
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            self.toggle_focus();
             return true;
         }
         if self.focus == Focus::Graph {
@@ -612,12 +631,19 @@ impl App {
             KeyCode::Char('l') if control => self.run_workflow(Command::Plan),
             KeyCode::F(3) => self.run_workflow(Command::InterviewQuestion),
             KeyCode::F(4) => self.run_workflow(Command::Plans),
+            KeyCode::F(5)
+                if self.navigation.screen == Screen::Workbench
+                    && self.graph_expanded.is_none()
+                    && self.details.is_some() =>
+            {
+                self.details_key(key);
+            }
             KeyCode::F(5) => self.run_workflow(Command::TaskActions),
             KeyCode::F(6) => self.run_workflow(Command::PauseOrContinue),
             KeyCode::F(7) => self.run_workflow(Command::Reject),
             KeyCode::F(8) => self.run_workflow(Command::Config),
             KeyCode::Char('g') if control => self.open_projects_picker(),
-            KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
+            KeyCode::Char('x') if control => self.run_workflow(Command::Cancel),
             _ => return false,
         }
         true

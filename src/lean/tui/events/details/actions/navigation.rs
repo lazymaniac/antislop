@@ -28,6 +28,9 @@ impl App {
     }
 
     pub(in crate::lean::tui::events::details) fn details_tab_key(&mut self, key: KeyEvent) -> bool {
+        if self.navigation.screen == Screen::Workbench {
+            return false;
+        }
         let Some(details) = &mut self.details else {
             return false;
         };
