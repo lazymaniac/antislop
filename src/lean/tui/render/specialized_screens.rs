@@ -3,7 +3,10 @@ use super::super::*;
 mod graph;
 
 pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame, theme: &Theme) {
-    if draw_plan(app, frame, theme) || draw_diff(app, frame) || draw_details(app, frame) {
+    if draw_plan(app, frame, theme)
+        || draw_diff(app, frame, theme)
+        || draw_details(app, frame, theme)
+    {
         return;
     }
     app.draw_main(frame, theme);
@@ -26,7 +29,7 @@ fn draw_plan(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     true
 }
 
-fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
+fn draw_diff(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     if app.graph_expanded.is_some() {
         return false;
     }
@@ -55,20 +58,19 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
             &presentation,
             &terminal_owner,
             terminal_round,
+            theme,
         );
         if areas.list_visible {
-            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
+            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
         }
         if historical_diff {
             frame.render_widget(
-                Paragraph::new(
-                    Theme::from_env().clean("No historical diff is retained for this round."),
-                )
-                .style(Theme::from_env().dim()),
+                Paragraph::new(theme.clean("No historical diff is retained for this round."))
+                    .style(theme.dim()),
                 areas.content,
             );
         } else {
-            diff.paint_at(frame, areas.content, &app.view);
+            diff.paint_with_theme(frame, areas.content, &app.view, theme);
         }
         if let Some(details) = &mut app.details {
             draw_workbench_terminal(
@@ -79,10 +81,11 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
                 &terminal_view_role,
                 presentation.native_input,
                 historical_terminal,
+                theme,
             );
         }
     } else {
-        diff.paint_at(frame, frame.area(), &app.view);
+        diff.paint_with_theme(frame, frame.area(), &app.view, theme);
     }
     if app.navigation.screen == Screen::Workbench {
         app.sync_native_views();
@@ -90,7 +93,7 @@ fn draw_diff(app: &mut App, frame: &mut Frame) -> bool {
     true
 }
 
-fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
+fn draw_details(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     if app.graph_expanded.is_some() {
         return false;
     }
@@ -118,9 +121,10 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
             &presentation,
             &terminal_owner,
             terminal_round,
+            theme,
         );
         if areas.list_visible {
-            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target);
+            draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
         }
         details.draw_workbench_at(
             frame,
@@ -128,6 +132,7 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
             Rect::default(),
             &app.view,
             presentation.tab,
+            theme,
         );
         draw_workbench_terminal(
             frame,
@@ -137,10 +142,11 @@ fn draw_details(app: &mut App, frame: &mut Frame) -> bool {
             &terminal_view_role,
             presentation.native_input,
             historical_terminal,
+            theme,
         );
     } else {
         app.workbench_areas = Default::default();
-        details.draw_at(frame, frame.area(), &app.view);
+        details.draw_at_themed(frame, frame.area(), &app.view, theme);
     }
     app.text_area = Some(details.text_area);
     app.text_origin = details.scroll;
@@ -155,8 +161,9 @@ fn draw_workbench_chrome(
     presentation: &WorkbenchPresentation,
     terminal_owner: &str,
     terminal_round: Option<u64>,
+    theme: &Theme,
 ) {
-    let theme = Theme::from_env();
+    let sep = theme.glyphs().dot;
     let context = super::super::workbench::context(target, presentation);
     let identity = match &context.target {
         WorkbenchTarget::Session => "Session".to_owned(),
@@ -172,17 +179,17 @@ fn draw_workbench_chrome(
     };
     frame.render_widget(
         Paragraph::new(format!(
-            " {identity} · {tab} · CLI {terminal_owner} · r{} · {}{}",
-            terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
+            " {identity} {sep} {tab} {sep} CLI {terminal_owner} {sep} r{} {sep} {}{}",
+            terminal_round.map_or_else(|| theme.chrome("—"), |round| round.to_string()),
             if presentation.native_input {
                 "native input"
             } else {
                 "preview"
             },
             if presentation.pinned {
-                " · pinned"
+                theme.chrome(" · pinned")
             } else {
-                " · following"
+                theme.chrome(" · following")
             }
         ))
         .style(theme.bar()),
@@ -193,7 +200,10 @@ fn draw_workbench_chrome(
     } else {
         "Tab panel · F6 pause/continue · Ctrl+X cancel · Ctrl+P actions · Ctrl+B list · Esc back"
     };
-    frame.render_widget(Paragraph::new(split_hint).style(theme.bar()), areas.footer);
+    frame.render_widget(
+        Paragraph::new(theme.chrome(split_hint)).style(theme.bar()),
+        areas.footer,
+    );
     if !areas.separator.is_empty() {
         frame.render_widget(
             Paragraph::new(if theme.ascii { "-" } else { "─" }),
@@ -204,6 +214,7 @@ fn draw_workbench_chrome(
         frame.render_widget(
             Block::default()
                 .borders(Borders::RIGHT)
+                .border_set(theme.borders())
                 .border_style(theme.faint()),
             areas.list,
         );
@@ -250,6 +261,7 @@ fn details_match_terminal_owner(details: &super::super::Details, owner: &str) ->
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_workbench_terminal(
     frame: &mut Frame,
     area: Rect,
@@ -258,27 +270,33 @@ fn draw_workbench_terminal(
     role: &str,
     native_input: bool,
     historical: bool,
+    theme: &Theme,
 ) {
     if historical {
         details.native_focus = false;
         details.native_areas = [Rect::default(); 2];
         frame.render_widget(
             Paragraph::new(
-                Theme::from_env().clean(
+                theme.clean(
                     "Historical PTY is read-only; no retained terminal snapshot is available.",
                 ),
             )
-            .style(Theme::from_env().dim()),
+            .style(theme.dim()),
             area,
         );
     } else {
         details.native_focus = native_input;
-        details.draw_workbench_terminal_for(frame, area, view, role);
+        details.draw_workbench_terminal_for(frame, area, view, role, theme);
     }
 }
 
-fn draw_workbench_list(frame: &mut Frame, area: Rect, view: &View, target: &WorkbenchTarget) {
-    let theme = Theme::from_env();
+fn draw_workbench_list(
+    frame: &mut Frame,
+    area: Rect,
+    view: &View,
+    target: &WorkbenchTarget,
+    theme: &Theme,
+) {
     for index in 0..usize::from(area.height) {
         let Some((item, label)) = super::super::workbench::target_at(view, index) else {
             break;
@@ -312,7 +330,7 @@ impl App {
         let [status, help] =
             Layout::horizontal([Constraint::Length(content_width), Constraint::Length(4)])
                 .areas(text_area);
-        let line = self.header_line(content_width);
+        let line = self.header_line_themed(content_width, theme);
         // A taller bar makes its buttons taller too: each is filled on the
         // rows around its label.
         let buttons = button_rows(&line);

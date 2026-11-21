@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::tui::theme::Theme;
 
 #[allow(clippy::too_many_arguments)]
 pub fn diff_header_with_reviewer(
@@ -11,6 +12,31 @@ pub fn diff_header_with_reviewer(
     reviewer: Option<&ReviewerProfile>,
     width: usize,
 ) -> Line<'static> {
+    diff_header_themed(
+        task,
+        range,
+        file_count,
+        added,
+        removed,
+        truncated,
+        reviewer,
+        width,
+        &Theme::from_env(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::lean::tui) fn diff_header_themed(
+    task: &str,
+    range: &str,
+    file_count: usize,
+    added: usize,
+    removed: usize,
+    truncated: bool,
+    reviewer: Option<&ReviewerProfile>,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
     render_diff_header(
         task,
         HeaderSummary {
@@ -21,6 +47,7 @@ pub fn diff_header_with_reviewer(
             truncated,
             reviewer,
             width,
+            theme,
         },
     )
 }
@@ -33,6 +60,7 @@ struct HeaderSummary<'a> {
     truncated: bool,
     reviewer: Option<&'a ReviewerProfile>,
     width: usize,
+    theme: &'a Theme,
 }
 
 fn render_diff_header(task: &str, summary: HeaderSummary<'_>) -> Line<'static> {
@@ -47,30 +75,36 @@ fn render_diff_header(task: &str, summary: HeaderSummary<'_>) -> Line<'static> {
     } else if summary.width >= 50 {
         count_detail(&summary)
     } else {
-        format!("+{} −{}", summary.added, summary.removed)
+        summary
+            .theme
+            .chrome(&format!("+{} −{}", summary.added, summary.removed))
     };
-    Line::from(vec![task, Span::styled(details, dim())])
+    Line::from(vec![task, Span::styled(details, summary.theme.dim())])
 }
 
 fn range_detail(summary: &HeaderSummary<'_>, include_files: bool) -> String {
+    let sep = summary.theme.glyphs().dot;
+    let minus = if summary.theme.ascii { "-" } else { "−" };
     let files = if include_files {
-        format!(" · files: {}", summary.file_count)
+        format!(" {sep} files: {}", summary.file_count)
     } else {
         String::new()
     };
     format!(
-        "{}{files} · +{} −{}{}{}",
+        "{}{files} {sep} +{} {minus}{}{}{}",
         summary.range,
         summary.added,
         summary.removed,
-        truncation(summary.truncated),
-        reviewer_label(summary.reviewer)
+        summary.theme.chrome(truncation(summary.truncated)),
+        reviewer_label(summary.reviewer, summary.theme)
     )
 }
 
 fn count_detail(summary: &HeaderSummary<'_>) -> String {
+    let sep = summary.theme.glyphs().dot;
+    let minus = if summary.theme.ascii { "-" } else { "−" };
     format!(
-        "+{} −{} · {} file(s){}",
+        "+{} {minus}{} {sep} {} file(s){}",
         summary.added,
         summary.removed,
         summary.file_count,
@@ -82,11 +116,12 @@ fn truncation(truncated: bool) -> &'static str {
     if truncated { " · truncated" } else { "" }
 }
 
-fn reviewer_label(reviewer: Option<&ReviewerProfile>) -> String {
+fn reviewer_label(reviewer: Option<&ReviewerProfile>, theme: &Theme) -> String {
+    let sep = theme.glyphs().dot;
     match reviewer {
         Some(reviewer) => match &reviewer.model {
-            Some(model) => format!(" · reviewer: {} ({model})", reviewer.provider),
-            None => format!(" · reviewer: {}", reviewer.provider),
+            Some(model) => format!(" {sep} reviewer: {} ({model})", reviewer.provider),
+            None => format!(" {sep} reviewer: {}", reviewer.provider),
         },
         None => String::new(),
     }

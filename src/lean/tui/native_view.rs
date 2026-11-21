@@ -84,17 +84,7 @@ mod tests {
         let mut details = Details::new("conversation".into());
         details.native_areas[0] = Rect::new(1, 1, 50, 12);
         app.details = Some(details);
-        let (commands, received) = mpsc::sync_channel(16);
-        app.native_views.insert(
-            format!("{}:orchestrator", app.conversation),
-            View {
-                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
-                commands,
-                stop: Arc::new(AtomicBool::new(false)),
-                dimensions: (50, 12),
-                identity: "waiting:".into(),
-            },
-        );
+        let received = app.bind_native_input_for_test();
         app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         assert!(app.native_focused());
         let forwarded = [

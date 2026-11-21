@@ -1,4 +1,5 @@
-use super::super::{Comment, DiffLine, FileDiff, View, clean, dim, truncate};
+use super::super::{Comment, DiffLine, FileDiff, View, clean};
+use crate::lean::tui::theme::Theme;
 use ratatui::{
     style::{Modifier, Style},
     text::Line,
@@ -21,6 +22,7 @@ pub(super) fn file_comments<'a>(view: &'a View, target: &str) -> Vec<&'a Comment
         .collect()
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct DiffRows<'a> {
     pub(super) file: &'a FileDiff,
     pub(super) comments: &'a [&'a Comment],
@@ -31,74 +33,65 @@ pub(super) struct DiffRows<'a> {
     pub(super) selected_line: usize,
     pub(super) on_files: bool,
     pub(super) width: usize,
+    pub(super) theme: &'a Theme,
 }
 
 pub(super) fn diff_rows(input: DiffRows<'_>) -> (Vec<Line<'static>>, usize) {
-    let DiffRows {
-        file,
-        comments,
-        task,
-        file_index,
-        file_count,
-        compact,
-        selected_line,
-        on_files,
-        width,
-    } = input;
-    let target = format!("diff:{task}:{}", file.path);
-    let mut rows = diff_file_prefix(
-        file, comments, &target, file_index, file_count, compact, width,
-    );
-    let cursor_row = append_diff_lines(
-        &mut rows,
-        file,
-        comments,
-        &target,
-        selected_line,
-        on_files,
-        width,
-    );
+    let target = format!("diff:{}:{}", input.task, input.file.path);
+    let mut rows = diff_file_prefix(input, &target);
+    let cursor_row = append_diff_lines(&mut rows, input, &target);
     (rows, cursor_row)
 }
 
-fn diff_file_prefix(
-    file: &FileDiff,
-    comments: &[&Comment],
-    target: &str,
-    file_index: usize,
-    file_count: usize,
-    compact: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let mut rows = vec![file_title(file, file_index, file_count, compact, width)];
+fn diff_file_prefix(input: DiffRows<'_>, target: &str) -> Vec<Line<'static>> {
+    let DiffRows {
+        file,
+        comments,
+        file_index,
+        file_count,
+        compact,
+        width,
+        theme,
+        ..
+    } = input;
+    let mut rows = vec![file_title(
+        file, file_index, file_count, compact, width, theme,
+    )];
     append_comments(
         &mut rows,
         comments
             .iter()
             .copied()
             .filter(|comment| comment.target == target),
+        theme,
     );
     if file.binary {
-        rows.push(Line::styled("  binary file", dim()));
+        rows.push(Line::styled("  binary file", theme.dim()));
     }
     rows
 }
 
-fn append_diff_lines(
-    rows: &mut Vec<Line<'static>>,
-    file: &FileDiff,
-    comments: &[&Comment],
-    target: &str,
-    selected_line: usize,
-    on_files: bool,
-    width: usize,
-) -> usize {
+fn append_diff_lines(rows: &mut Vec<Line<'static>>, input: DiffRows<'_>, target: &str) -> usize {
+    let DiffRows {
+        file,
+        comments,
+        selected_line,
+        on_files,
+        width,
+        theme,
+        ..
+    } = input;
     let mut cursor_row = 0;
     for (index, line) in file.lines.iter().enumerate() {
         if index == selected_line && !on_files {
             cursor_row = rows.len();
         }
-        rows.extend(diff_line(line, index == selected_line && !on_files, width));
+        rows.extend(diff_line(
+            line,
+            index == selected_line && !on_files,
+            width,
+            theme,
+        ));
         if let Some(key) = comment_target(target, line) {
             append_comments(
                 rows,
@@ -106,6 +99,7 @@ fn append_diff_lines(
                     .iter()
                     .copied()
                     .filter(|comment| comment.target == key),
+                theme,
             );
         }
     }
@@ -118,38 +112,44 @@ fn file_title(
     count: usize,
     compact: bool,
     width: usize,
+    theme: &Theme,
 ) -> Line<'static> {
     let title = if let Some(old) = &file.old_path {
-        format!(" {old} → {}", file.path)
+        format!(" {old} {} {}", theme.glyphs().to, file.path)
     } else if compact && count > 1 {
         format!(" [{}/{}] {} [Tab: files]", index + 1, count, file.path)
     } else {
         format!(" {}", file.path)
     };
     Line::styled(
-        truncate(&title, width),
+        theme.fit(&title, width),
         Style::default().add_modifier(Modifier::BOLD),
     )
 }
 
-fn append_comments<'a>(rows: &mut Vec<Line<'static>>, comments: impl Iterator<Item = &'a Comment>) {
-    rows.extend(comments.map(comment_line));
+fn append_comments<'a>(
+    rows: &mut Vec<Line<'static>>,
+    comments: impl Iterator<Item = &'a Comment>,
+    theme: &Theme,
+) {
+    rows.extend(comments.map(|comment| comment_line(comment, theme)));
 }
 
-fn comment_line(comment: &Comment) -> Line<'static> {
+fn comment_line(comment: &Comment, theme: &Theme) -> Line<'static> {
     let resolved = if comment.status == "resolved" {
         " (resolved)"
     } else {
         ""
     };
     let style = if comment.status == "open" {
-        Style::default().fg(super::super::super::theme::ayu::BLUE)
+        theme.accent()
     } else {
-        dim()
+        theme.dim()
     };
     Line::styled(
         format!(
-            "              ✎ #{} {}{resolved}",
+            "              {} #{} {}{resolved}",
+            theme.chrome("✎"),
             comment.id,
             clean(&comment.text)
         ),
@@ -167,24 +167,24 @@ fn comment_target(target: &str, line: &DiffLine) -> Option<String> {
 
 /// One diff line wrapped to `width`: the first row carries the gutter, the
 /// rows after it continue the text under the code column.
-fn diff_line(line: &DiffLine, selected: bool, width: usize) -> Vec<Line<'static>> {
-    let (sign, style) = diff_style(&line.kind);
+fn diff_line(line: &DiffLine, selected: bool, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let (sign, style) = diff_style(&line.kind, theme);
     let style = if selected {
         style.add_modifier(Modifier::REVERSED)
     } else {
         style
     };
-    let (first, text, indent) = diff_text(line, sign);
+    let (first, text, indent) = diff_text(line, sign, theme);
     let room = width.saturating_sub(indent);
     if room < 8 {
         // Too narrow to wrap under the gutter: cut the line as before.
         return vec![Line::styled(
-            truncate(&format!("{first}{text}"), width),
+            theme.fit(&format!("{first}{text}"), width),
             style,
         )];
     }
     let continuation = if indent == GUTTER {
-        format!("{}│", " ".repeat(GUTTER - 1))
+        format!("{}{}", " ".repeat(GUTTER - 1), theme.glyphs().vertical)
     } else {
         " ".repeat(indent)
     };
@@ -217,34 +217,29 @@ fn wrap_graphemes(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
-fn diff_style(kind: &str) -> (&'static str, Style) {
+fn diff_style(kind: &str, theme: &Theme) -> (&'static str, Style) {
     match kind {
-        "add" => (
-            "+",
-            Style::default().fg(super::super::super::theme::ayu::GREEN),
-        ),
-        "del" => (
-            "-",
-            Style::default().fg(super::super::super::theme::ayu::RED),
-        ),
+        "add" => ("+", theme.ok()),
+        "del" => ("-", theme.err()),
         "hunk" => (
             "",
-            Style::default().fg(super::super::super::theme::ayu::BLUE),
+            theme.style(Style::default().fg(crate::lean::tui::theme::ayu::BLUE)),
         ),
         _ => (" ", Style::default()),
     }
 }
 
 /// A diff line's first-row prefix, its text and the column the text starts at.
-fn diff_text(line: &DiffLine, sign: &str) -> (String, String, usize) {
+fn diff_text(line: &DiffLine, sign: &str, theme: &Theme) -> (String, String, usize) {
     if line.kind == "hunk" {
         (" ".repeat(HUNK_INDENT), line.text.clone(), HUNK_INDENT)
     } else {
         (
             format!(
-                "{} {} {sign}│",
+                "{} {} {sign}{}",
                 diff_number(line.old),
-                diff_number(line.new)
+                diff_number(line.new),
+                theme.glyphs().vertical
             ),
             line.text.replace('\t', "    "),
             GUTTER,

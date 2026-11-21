@@ -136,7 +136,7 @@ impl App {
             for line in wrap(&entry.text, usize::from(width)) {
                 rows.extra.push(Row::new(
                     theme.card(),
-                    vec![Span::styled(theme.clean(&line), style)],
+                    vec![Span::styled(theme.clean(&line), theme.style(style))],
                 ));
             }
         }

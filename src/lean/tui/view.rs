@@ -272,7 +272,7 @@ pub struct View {
 }
 
 pub fn dim() -> Style {
-    Style::default().fg(super::theme::ayu::DIM)
+    super::theme::Theme::from_env().dim()
 }
 
 impl View {

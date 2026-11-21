@@ -15,14 +15,14 @@ pub fn target_at(view: &super::view::View, row: usize) -> Option<(String, String
         if index == row {
             return Some((
                 format!("worker:{}", task.id),
-                format!("Worker · {}", task.title),
+                format!("Worker: {}", task.title),
             ));
         }
         index += 1;
         let reviewer = format!("reviewer:{}", task.id);
         if view.agents.contains_key(&reviewer) {
             if index == row {
-                return Some((reviewer, format!("Reviewer · {}", task.title)));
+                return Some((reviewer, format!("Reviewer: {}", task.title)));
             }
             index += 1;
         }

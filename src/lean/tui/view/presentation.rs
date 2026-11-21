@@ -171,8 +171,8 @@ pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
             Paragraph::new(msg)
                 .wrap(ratatui::widgets::Wrap { trim: false })
                 .style(
-                    Style::default()
-                        .fg(crate::lean::tui::theme::ayu::YELLOW)
+                    crate::lean::tui::theme::Theme::from_env()
+                        .warning()
                         .add_modifier(Modifier::BOLD),
                 ),
             area,

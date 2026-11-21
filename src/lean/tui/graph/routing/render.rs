@@ -62,7 +62,7 @@ impl Graph {
         let critical_path: std::collections::HashSet<String> =
             view.critical_path_chain().into_iter().collect();
         self.render_frames(view, canvas, &selected, &critical_path, theme);
-        self.render_edges(canvas, relations, &selected, &nodes);
+        self.render_edges(canvas, relations, &selected, &nodes, theme);
         self.render_nodes(view, canvas, selected, &critical_path, theme, tick);
         self.render_expanded_frame_overlay(view, canvas, &nodes, theme);
     }
@@ -96,15 +96,18 @@ impl Graph {
         if let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) {
             Self::draw_frame_title(canvas, frame, task, true, false, theme);
         }
-        for (x, y, style) in self.expanded_entry_arrows() {
-            canvas.put(x, y, '▼', style);
+        for (x, y, style) in self.expanded_entry_arrows(theme) {
+            canvas.put(x, y, if theme.ascii { 'v' } else { '▼' }, style);
         }
     }
 
     /// Incoming routes that reach the expanded task from the row above it.
     /// The same coordinates and styles are painted once more after the
     /// expanded title panel so its text cannot hide the entry glyphs.
-    pub(in crate::lean::tui) fn expanded_entry_arrows(&self) -> Vec<(u16, u16, Style)> {
+    pub(in crate::lean::tui) fn expanded_entry_arrows(
+        &self,
+        theme: &Theme,
+    ) -> Vec<(u16, u16, Style)> {
         let Some(node) = self
             .expanded
             .as_deref()
@@ -133,7 +136,11 @@ impl Graph {
             .filter_map(|edge| {
                 let path = self.edge_path(edge, &nodes)?;
                 let &(x, y) = path.last()?;
-                (y.saturating_add(1) == node.y).then_some((x, node.y, edge.kind.style()))
+                (y.saturating_add(1) == node.y).then_some((
+                    x,
+                    node.y,
+                    theme.style(edge.kind.style()),
+                ))
             })
             .collect()
     }
@@ -144,11 +151,12 @@ impl Graph {
         relations: Relations,
         selected: &str,
         nodes: &HashMap<&str, &Node>,
+        theme: &Theme,
     ) {
         let shown = |edge: &&Edge| relations.shows(edge, Some(selected));
         for edge in self.edges.iter().filter(shown) {
             if let Some(path) = self.edge_path(edge, nodes) {
-                self.render_edge(canvas, edge, &path);
+                self.render_edge(canvas, edge, &path, theme);
             }
         }
     }
@@ -229,16 +237,25 @@ impl Graph {
         );
     }
 
-    fn render_edge(&self, canvas: &mut Canvas, edge: &Edge, path: &[(u16, u16)]) {
+    fn render_edge(&self, canvas: &mut Canvas, edge: &Edge, path: &[(u16, u16)], theme: &Theme) {
         let mut path = path.to_vec();
         path.dedup();
-        canvas.path(&path, edge.kind.style());
+        canvas.path(&path, theme.style(edge.kind.style()));
         if let Some(&(x, y)) = path.last() {
             let arrow = self
                 .node(&edge.to)
                 .and_then(|to| Self::entry_arrow(to, (x, y)))
                 .unwrap_or_else(|| Self::arrow(&path));
-            canvas.put(x, y, arrow, edge.kind.style());
+            canvas.put(
+                x,
+                y,
+                if theme.ascii {
+                    crate::lean::tui::theme::ascii_character(arrow)
+                } else {
+                    arrow
+                },
+                theme.style(edge.kind.style()),
+            );
         }
         // A worker and its reviewer answer each other: their arrow points
         // both ways.
@@ -247,12 +264,23 @@ impl Graph {
             && let [(x, y), (next_x, _), ..] = path.as_slice()
             && next_x > x
         {
-            canvas.put(*x, *y, '◀', edge.kind.style());
+            canvas.put(
+                *x,
+                *y,
+                if theme.ascii { '<' } else { '◀' },
+                theme.style(edge.kind.style()),
+            );
         }
-        self.render_edge_label(canvas, edge, &path);
+        self.render_edge_label(canvas, edge, &path, theme);
     }
 
-    fn render_edge_label(&self, canvas: &mut Canvas, edge: &Edge, path: &[(u16, u16)]) {
+    fn render_edge_label(
+        &self,
+        canvas: &mut Canvas,
+        edge: &Edge,
+        path: &[(u16, u16)],
+        theme: &Theme,
+    ) {
         let (Some(label), [(x, y), (next_x, next_y), ..]) = (&edge.label, path) else {
             return;
         };
@@ -300,7 +328,7 @@ impl Graph {
             .chain(further)
             .find(|&(lx, ly)| !covered(lx, ly))
             .unwrap_or(other_side);
-        canvas.text(lx, ly, label, edge.kind.style());
+        canvas.text(lx, ly, label, theme.style(edge.kind.style()));
     }
 
     fn render_nodes(

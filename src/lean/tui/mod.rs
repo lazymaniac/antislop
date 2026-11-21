@@ -21,6 +21,8 @@ mod app {
 mod capture;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod theme_modes_tests;
 
 #[cfg(test)]
 std::thread_local! {
@@ -153,18 +155,6 @@ fn panel_area(area: Rect, max_width: u16) -> Rect {
 /// Center a list viewport with its own 72-column content limit.
 fn list_area(area: Rect) -> Rect {
     panel_area(area, 72)
-}
-
-fn ascii_terminal() -> bool {
-    if std::env::var_os("ANTISLOP_ASCII").is_some_and(|value| !value.is_empty()) {
-        return true;
-    }
-    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
-        .iter()
-        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    !(locale.contains("utf-8") || locale.contains("utf8"))
 }
 
 /// The ASCII stand-in for a character the screen uses; `?` for others.

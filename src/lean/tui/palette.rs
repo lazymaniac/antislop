@@ -6,7 +6,7 @@ mod picker;
 mod picker_layout;
 
 use super::graph::Graph;
-use super::view::{View, agent_name, dim, truncate};
+use super::view::{View, agent_name, truncate};
 use ratatui::{
     Frame,
     layout::Rect,

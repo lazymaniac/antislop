@@ -138,29 +138,30 @@ impl Browser {
         }
     }
 
+    #[cfg(test)]
     pub fn draw(&mut self, frame: &mut Frame) {
+        self.draw_with_theme(frame, &Theme::from_env());
+    }
+
+    pub fn draw_with_theme(&mut self, frame: &mut Frame, theme: &Theme) {
+        let separator = theme.chrome("·");
         let navigation = if self.loading {
-            format!("loading · {} total", self.total)
+            format!("loading {separator} {} total", self.total)
         } else if let Some(plan) = &self.plan {
             format!(
-                "plan {} of {} · {}",
+                "plan {} of {} {separator} {}",
                 self.offset + 1,
                 self.total,
                 plan.status
             )
         } else {
-            format!("no plans · {} total", self.total)
+            format!("no plans {separator} {} total", self.total)
         };
         if self.error.is_some() {
             self.view.plan_doc = self.report_text();
         }
-        self.plan_view.draw_history(
-            frame,
-            frame.area(),
-            &self.view,
-            &Theme::from_env(),
-            &navigation,
-        );
+        self.plan_view
+            .draw_history(frame, frame.area(), &self.view, theme, &navigation);
     }
 
     fn sync_document(&mut self) {

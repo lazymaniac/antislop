@@ -142,14 +142,19 @@ impl PlanGraph {
         // Clear edge segments beneath cards, including long edges crossing a layer.
         for y in rect.y..rect.bottom() {
             for x in rect.x..rect.right() {
-                canvas.put(x, y, ' ', theme.text());
+                canvas.put(
+                    x,
+                    y,
+                    ' ',
+                    if selected {
+                        theme.focus_surface()
+                    } else {
+                        theme.card()
+                    },
+                );
             }
         }
-        let border = if selected {
-            theme.accent()
-        } else {
-            theme.dim()
-        };
+        let border = theme.separator(selected);
         let horizontal = theme
             .glyphs()
             .horizontal
@@ -157,7 +162,7 @@ impl PlanGraph {
         let corners = if theme.ascii {
             ["+", "+", "+", "+"]
         } else {
-            ["╭", "╮", "╰", "╯"]
+            ["┌", "┐", "└", "┘"]
         };
         canvas.text(
             rect.x,
@@ -201,8 +206,9 @@ impl PlanGraph {
             rect.y + 4,
             &theme.fit(
                 &format!(
-                    "{} · {}",
+                    "{} {} {}",
                     task.kind,
+                    theme.glyphs().dot,
                     super::super::view::status_label(&task.status)
                 ),
                 width,

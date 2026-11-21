@@ -1,7 +1,7 @@
 use super::super::details::{RESULT, REVIEW, details_footer_hint_for, is_overview};
 use super::super::view::fit_hint;
 use super::super::*;
-use ratatui::widgets::{BorderType, Padding, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Padding, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 pub(super) struct DetailAreas {
     pub(super) header: Rect,
@@ -34,13 +34,7 @@ pub(super) fn detail_areas(area: Rect, overview: bool, summary_len: usize) -> De
 pub(super) fn clean_header_spans(spans: &mut [Span<'static>], theme: &Theme) {
     for span in spans {
         span.content = theme.clean(&span.content).into();
-        if !theme.color {
-            span.style = Style {
-                fg: None,
-                bg: None,
-                ..span.style
-            };
-        }
+        span.style = theme.style(span.style);
     }
 }
 
@@ -76,7 +70,10 @@ pub(super) fn round_label(details: &Details, selected: u64) -> String {
 
 pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Block<'static> {
     if !details.overview() {
-        return Block::default().borders(Borders::TOP);
+        return Block::default()
+            .borders(Borders::TOP)
+            .border_set(theme.borders())
+            .border_style(theme.separator(false));
     }
     let title = if details.show_info {
         " Task info · m session "
@@ -87,10 +84,10 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
     };
     Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.borders())
         .border_style(theme.faint())
         .style(Style::default())
-        .title(title)
+        .title(theme.chrome(title))
         .padding(Padding::horizontal(u16::from(body.width >= 20)))
 }
 
@@ -191,14 +188,19 @@ pub(super) fn reveal_check_scroll(lines: &[Line<'static>], scroll: &mut usize, h
     }
 }
 
-pub(super) fn records_hint(details: &Details, width: u16) -> String {
+pub(super) fn records_hint(details: &Details, width: u16, theme: &Theme) -> String {
     if details.searching {
         format!(
-            "Search records: {}_ (Enter: confirm · Esc: cancel)",
-            details.query
+            "Search records: {}{}",
+            theme.clean(&details.query),
+            theme.chrome("_ (Enter: confirm · Esc: cancel)")
         )
     } else {
-        details_footer_hint_for(&details.key, details.tab, usize::from(width))
+        theme.chrome(&details_footer_hint_for(
+            &details.key,
+            details.tab,
+            usize::from(width),
+        ))
     }
 }
 
@@ -222,11 +224,16 @@ pub(super) fn overview_split(body: Rect) -> Option<[Rect; 2]> {
     }
 }
 
-pub(super) fn overview_split_hint(searching: bool, query: &str, width: u16) -> String {
+pub(super) fn overview_split_hint(
+    searching: bool,
+    query: &str,
+    width: u16,
+    theme: &Theme,
+) -> String {
     if searching {
-        return format!("Search: {query}_ · Enter confirm · Esc cancel");
+        return search_hint(query, theme);
     }
-    fit_hint(
+    theme.chrome(&fit_hint(
         &[
             "↑/↓ card",
             "Enter fold",
@@ -240,14 +247,14 @@ pub(super) fn overview_split_hint(searching: bool, query: &str, width: u16) -> S
         ],
         usize::from(width),
         true,
-    )
+    ))
 }
 
-pub(super) fn overview_hint(searching: bool, query: &str, width: u16) -> String {
+pub(super) fn overview_hint(searching: bool, query: &str, width: u16, theme: &Theme) -> String {
     if searching {
-        return format!("Search: {query}_ · Enter confirm · Esc cancel");
+        return search_hint(query, theme);
     }
-    fit_hint(
+    theme.chrome(&fit_hint(
         &[
             "i terminal",
             "a message",
@@ -258,14 +265,14 @@ pub(super) fn overview_hint(searching: bool, query: &str, width: u16) -> String 
         ],
         usize::from(width),
         true,
-    )
+    ))
 }
 
-pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16) -> String {
+pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16, theme: &Theme) -> String {
     if searching {
-        return format!("Search: {query}_ · Enter confirm · Esc cancel");
+        return search_hint(query, theme);
     }
-    fit_hint(
+    theme.chrome(&fit_hint(
         &[
             "↑/↓ card",
             "Enter fold/expand",
@@ -279,6 +286,14 @@ pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16) -> String
         ],
         usize::from(width),
         true,
+    ))
+}
+
+fn search_hint(query: &str, theme: &Theme) -> String {
+    format!(
+        "Search: {}{}",
+        theme.clean(query),
+        theme.chrome("_ · Enter confirm · Esc cancel")
     )
 }
 
@@ -286,6 +301,23 @@ pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16) -> String
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn overview_search_hints_separate_chrome_from_query() {
+        let query = "Zażółć 👩‍💻 e\u{301} │ ·";
+        for ascii in [false, true] {
+            for color in [false, true] {
+                let theme = Theme::new(color, ascii);
+                let expected = format!(
+                    "Search: {query}{}",
+                    theme.chrome("_ · Enter confirm · Esc cancel")
+                );
+                for hint in [overview_split_hint, overview_hint, dashboard_hint] {
+                    assert_eq!(hint(true, query, 160, &theme), expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn overview_details_block_renders_square_corners() {

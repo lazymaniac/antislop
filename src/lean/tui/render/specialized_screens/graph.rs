@@ -40,7 +40,7 @@ impl App {
         if step < graph::FULL_STEP {
             self.center_animated_card(&graph, step);
         }
-        self.draw_graph_position_markers(frame, inner, &graph);
+        self.draw_graph_position_markers(frame, inner, &graph, theme);
         let mut canvas =
             Canvas::new_window(self.offset.0, self.offset.1, inner.width, inner.height);
         graph.render_with(
@@ -51,16 +51,22 @@ impl App {
             theme,
             self.tick,
         );
-        canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
+        canvas.show_with_theme(
+            frame.buffer_mut(),
+            inner,
+            self.offset.0,
+            self.offset.1,
+            theme,
+        );
         if let Some(inspector) = inspector {
             self.draw_graph_inspector(frame, inspector, theme);
         }
         self.graph_card_area = None;
         if step == graph::FULL_STEP {
-            self.draw_expanded_card_panels(frame, inner, &graph);
+            self.draw_expanded_card_panels(frame, inner, &graph, theme);
             self.draw_expanded_entry_arrows(frame, inner, &graph, theme);
         }
-        self.draw_progress(frame, now_area, &progress);
+        self.draw_progress(frame, now_area, &progress, theme);
     }
 
     /// Restore incoming arrows after the expanded title has painted its row.
@@ -74,8 +80,8 @@ impl App {
         theme: &Theme,
     ) {
         let visible = viewport.intersection(frame.area());
-        let arrow = theme.clean("▼");
-        for (x, y, style) in graph.expanded_entry_arrows() {
+        let arrow = theme.chrome("▼");
+        for (x, y, style) in graph.expanded_entry_arrows(theme) {
             let screen_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
             let screen_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
             if screen_x < i32::from(visible.x)
@@ -158,7 +164,13 @@ impl App {
         self.offset.1 = (node_y - top).clamp(0, max_y.max(0)) as u16;
     }
 
-    fn draw_graph_position_markers(&self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
+    fn draw_graph_position_markers(
+        &self,
+        frame: &mut Frame,
+        viewport: Rect,
+        graph: &Graph,
+        theme: &Theme,
+    ) {
         let Some((_, height)) = self.graph_viewport else {
             return;
         };
@@ -170,7 +182,6 @@ impl App {
             return;
         }
 
-        let theme = Theme::from_env();
         let style = Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let x = viewport.x.saturating_add(viewport.width / 2);
         if above && has_top_margin {
@@ -185,7 +196,13 @@ impl App {
         }
     }
 
-    fn draw_expanded_card_panels(&mut self, frame: &mut Frame, viewport: Rect, graph: &Graph) {
+    fn draw_expanded_card_panels(
+        &mut self,
+        frame: &mut Frame,
+        viewport: Rect,
+        graph: &Graph,
+        theme: &Theme,
+    ) {
         let Some(key) = self.graph_expanded.clone() else {
             return;
         };
@@ -208,7 +225,7 @@ impl App {
             // A dependency entry can share the title row. Keep the title
             // painter out of that cell so its suffix is not cut in half
             // before the final arrow pass restores the route glyph.
-            for (x, y, _) in graph.expanded_entry_arrows() {
+            for (x, y, _) in graph.expanded_entry_arrows(theme) {
                 let arrow_x = i32::from(viewport.x) + i32::from(x) - i32::from(self.offset.0);
                 let arrow_y = i32::from(viewport.y) + i32::from(y) - i32::from(self.offset.1);
                 if arrow_y == i32::from(title.y)
@@ -218,13 +235,13 @@ impl App {
                     title.width = title.width.min((arrow_x - i32::from(title.x)) as u16);
                 }
             }
-            render_card_title(frame, title, self.details.as_ref(), &self.view, &key);
+            render_card_title(frame, title, self.details.as_ref(), &self.view, &key, theme);
         }
         if content.is_empty() {
             return;
         }
         if self.graph_tab == 0 {
-            self.draw_card_details(frame, content, &key);
+            self.draw_card_details(frame, content, &key, theme);
         }
 
         if self.graph_tab == 2
@@ -239,12 +256,14 @@ impl App {
                     frame,
                     content,
                     "No historical diff is retained for this round.",
+                    theme,
                 );
             } else {
-                diff.paint_at(
+                diff.paint_with_theme(
                     frame,
                     Rect::new(card.x, content.y, card.width, content.height),
                     &self.view,
+                    theme,
                 );
             }
         }
@@ -258,6 +277,7 @@ impl App {
                 content,
                 self.graph_card_scroll,
                 self.details.as_ref(),
+                theme,
             )
         {
             self.graph_card_scroll = scroll;
@@ -266,8 +286,7 @@ impl App {
 
     /// The Details tab shows the agent's dashboard: its task, state, checks,
     /// findings and history, scrolled within the card.
-    fn draw_card_details(&mut self, frame: &mut Frame, content: Rect, key: &str) {
-        let theme = Theme::from_env();
+    fn draw_card_details(&mut self, frame: &mut Frame, content: Rect, key: &str, theme: &Theme) {
         let Some(details) = self
             .details
             .as_mut()
@@ -282,7 +301,7 @@ impl App {
         frame.render_widget(Block::default().style(theme.raised()), content);
         // One blank row parts the tabs from the first card.
         let body = Rect::new(content.x, content.y + 1, content.width, content.height - 1);
-        details.draw_dashboard(frame, &self.view, body, &theme);
+        details.draw_dashboard(frame, &self.view, body, theme);
     }
 
     fn graph_areas(
@@ -311,8 +330,7 @@ impl App {
         {
             let [banner, rest] =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame_inner);
-            let theme = Theme::from_env();
-            self.draw_phase_action(frame, banner, &theme);
+            self.draw_phase_action(frame, banner, theme);
             frame_inner = rest;
         }
         let max_rows = if frame_inner.height / 2 >= 3 {
@@ -337,6 +355,7 @@ impl App {
     }
 
     fn draw_graph_inspector(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let separator = theme.chrome("·");
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -382,7 +401,10 @@ impl App {
                 &format!("Goal: {goal}"),
                 usize::from(area.width.saturating_sub(2)),
             )));
-            lines.push(Line::raw(format!("Role: {role} · {}", task.status)));
+            lines.push(Line::raw(format!(
+                "Role: {role} {separator} {}",
+                task.status
+            )));
             lines.push(Line::raw(if task.round == 0 {
                 "Round: pending".into()
             } else {
@@ -432,7 +454,7 @@ impl App {
             )));
         }
         lines.push(Line::raw("Enter: open Workbench"));
-        lines.push(Line::raw("c comment · e edit · l dependency"));
+        lines.push(Line::raw(theme.chrome("c comment · e edit · l dependency")));
         lines.push(Line::raw("Ctrl+B hide inspector"));
         let content = Rect::new(
             area.x.saturating_add(1),
@@ -471,6 +493,7 @@ impl App {
                 area.width.saturating_sub(2),
             )
         };
+        let title = theme.chrome(&title);
         let title_style = if self.graph_link_source.is_some() {
             theme.warning()
         } else {
@@ -572,6 +595,7 @@ impl App {
         frame: &mut Frame,
         area: Option<Rect>,
         progress: &[crate::lean::tui::view::ProgressEntry],
+        theme: &Theme,
     ) {
         let Some(area) = area else {
             return;
@@ -586,7 +610,8 @@ impl App {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme::ayu::YELLOW))
+                    .border_style(theme.separator(false))
+                    .border_set(theme.borders())
                     .title(" now ")
                     .padding(ratatui::widgets::Padding::horizontal(1)),
             ),
@@ -603,11 +628,12 @@ fn render_card_title(
     details: Option<&Details>,
     view: &View,
     key: &str,
+    theme: &Theme,
 ) {
+    let separator = theme.chrome("·");
     if row.width < 4 {
         return;
     }
-    let theme = Theme::from_env();
     let details = details.filter(|details| details.key == key);
     let task = key
         .split_once(':')
@@ -626,17 +652,20 @@ fn render_card_title(
             if status.is_empty() {
                 title
             } else {
-                format!("{title} · {status}")
+                format!("{title} {separator} {status}")
             }
         }
-        None => graph::agent_heading(view, key),
+        None => graph::agent_heading(view, key, theme),
     };
     let mut spans = vec![Span::styled(
         theme.clean(&heading),
         theme.title().add_modifier(Modifier::BOLD),
     )];
-    if let Some(round) = task.map(|task| round_label(details, task.round)) {
-        spans.push(Span::styled(format!(" · {round}"), theme.accent()));
+    if let Some(round) = task.map(|task| round_label(details, task.round, theme)) {
+        spans.push(Span::styled(
+            format!(" {separator} {round}"),
+            theme.accent(),
+        ));
     }
     let line = Line::from(spans);
     let width = usize::from(row.width);
@@ -667,7 +696,7 @@ fn render_card_title(
 
 /// The round an open task card shows, its place among the retained rounds,
 /// and the keys that move to the neighbouring ones.
-fn round_label(details: Option<&Details>, latest: u64) -> String {
+fn round_label(details: Option<&Details>, latest: u64, theme: &Theme) -> String {
     let mut rounds = details.map_or_else(Vec::new, |details| details.available_rounds.clone());
     let latest = if latest > 0 {
         latest
@@ -695,10 +724,10 @@ fn round_label(details: Option<&Details>, latest: u64) -> String {
         + 1;
     let mut label = format!("Round {selected} ({position}/{})", rounds.len());
     if position > 1 {
-        label.push_str(" · , previous");
+        label.push_str(&theme.chrome(" · , previous"));
     }
     if position < rounds.len() {
-        label.push_str(" · . next");
+        label.push_str(&theme.chrome(" · . next"));
     }
     label
 }
@@ -710,9 +739,10 @@ fn render_card_round_data(
     area: Rect,
     scroll: usize,
     details: Option<&Details>,
+    theme: &Theme,
 ) -> Option<usize> {
     let Some(details) = details else {
-        render_card_history_message(frame, area, "Round data is unavailable.");
+        render_card_history_message(frame, area, "Round data is unavailable.", theme);
         return None;
     };
     if details.task.is_none() {
@@ -723,10 +753,9 @@ fn render_card_round_data(
         } else {
             "No stored data is available for this round.".to_owned()
         };
-        render_card_history_message(frame, area, &message);
+        render_card_history_message(frame, area, &message, theme);
         return None;
     }
-    let theme = Theme::from_env();
     if let Some(document) = details.documents.get("result") {
         match document.viewport_filtered(
             usize::from(area.width),
@@ -750,23 +779,29 @@ fn render_card_round_data(
                 return Some(settled);
             }
             Ok(None) => {
-                render_card_history_message(frame, area, "Preparing selected round results…")
+                render_card_history_message(frame, area, "Preparing selected round results…", theme)
             }
             Err(error) => render_card_history_message(
                 frame,
                 area,
                 &format!("Could not render selected round results: {error}"),
+                theme,
             ),
         }
     } else {
-        render_card_history_message(frame, area, "No result data is retained for this round.");
+        render_card_history_message(
+            frame,
+            area,
+            "No result data is retained for this round.",
+            theme,
+        );
     }
     None
 }
 
-fn render_card_history_message(frame: &mut Frame, area: Rect, message: &str) {
+fn render_card_history_message(frame: &mut Frame, area: Rect, message: &str, theme: &Theme) {
     frame.render_widget(
-        Paragraph::new(Theme::from_env().clean(message)).style(Theme::from_env().dim()),
+        Paragraph::new(theme.clean(message)).style(theme.dim()),
         area,
     );
 }

@@ -1,7 +1,7 @@
 use super::*;
 
 fn test_tempdir() -> tempfile::TempDir {
-    let root = std::env::current_dir().unwrap().join(".antislop/tmp");
+    let root = crate::lean::paths::state_root().unwrap().join("tests");
     std::fs::create_dir_all(&root).unwrap();
     tempfile::tempdir_in(root).unwrap()
 }
@@ -15,17 +15,31 @@ fn removed_trust_flag_is_rejected_without_a_compatibility_mode() {
 #[test]
 fn parsing_the_options_creates_nothing() {
     let fixture = test_tempdir();
+    let config = fixture.path().join("config.toml");
+    let source = include_str!("../../../examples/antislop.toml");
+    std::fs::write(&config, source).unwrap();
+    let before = std::fs::read_dir(fixture.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
     let state = fixture.path().join("state");
     assert!(!state.exists(), "test state path must start absent");
     let options = Options::parse(&[
         "--config".into(),
-        "Cargo.toml".into(),
+        config.to_string_lossy().into_owned(),
         "--state".into(),
         state.to_string_lossy().into_owned(),
         "hi".into(),
     ])
     .unwrap();
+    assert_eq!(options.config, config.canonicalize().unwrap());
     assert_eq!(options.state, state);
+    let after = std::fs::read_dir(fixture.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(after, before, "parsing must not change fixture entries");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), source);
     assert!(!state.exists(), "parsing must not create the state path");
     assert_eq!(options.message.as_deref(), Some("hi"));
 }

@@ -96,8 +96,13 @@ fn current_round<'a>(view: &View, members: &[&'a str]) -> Option<&'a str> {
 
 /// What an open card's title row names when the card has no task: the
 /// card's name and its current state.
-pub(in crate::lean::tui) fn agent_heading(view: &View, key: &str) -> String {
-    format!("{} · {}", node_name(key), health::describe(view, key))
+pub(in crate::lean::tui) fn agent_heading(view: &View, key: &str, theme: &Theme) -> String {
+    format!(
+        "{} {} {}",
+        node_name(key),
+        theme.chrome("·"),
+        health::describe(view, key, theme)
+    )
 }
 
 fn node_name(key: &str) -> String {

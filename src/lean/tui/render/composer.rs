@@ -21,6 +21,11 @@ pub(super) fn panel_editor_area(area: Rect) -> Rect {
     )
 }
 
+/// Reserve an interior cell for the insertion cursor after a full visual line.
+pub(super) fn panel_wrap_width(area: Rect) -> usize {
+    usize::from(panel_editor_area(area).width.saturating_sub(1)).max(1)
+}
+
 pub(super) struct Panel<'a> {
     pub title: &'a str,
     pub status: &'a str,
@@ -66,23 +71,23 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, panel: Panel<'_>, theme:
                 .set_style(border);
         }
         buffer[(area.x, area.y)]
-            .set_symbol(if theme.ascii { "+" } else { "╭" })
+            .set_symbol(if theme.ascii { "+" } else { "┌" })
             .set_style(border);
         buffer[(area.right() - 1, area.y)]
-            .set_symbol(if theme.ascii { "+" } else { "╮" })
+            .set_symbol(if theme.ascii { "+" } else { "┐" })
             .set_style(border);
         buffer[(area.x, area.bottom() - 1)]
-            .set_symbol(if theme.ascii { "+" } else { "╰" })
+            .set_symbol(if theme.ascii { "+" } else { "└" })
             .set_style(border);
         buffer[(area.right() - 1, area.bottom() - 1)]
-            .set_symbol(if theme.ascii { "+" } else { "╯" })
+            .set_symbol(if theme.ascii { "+" } else { "┘" })
             .set_style(border);
     }
     if area.height >= 1 && area.width > 2 {
         buffer.set_string(
             area.x + 1,
             area.y,
-            truncate(&theme.clean(panel.title), usize::from(area.width - 2)),
+            theme.fit(&theme.clean(panel.title), usize::from(area.width - 2)),
             fill.patch(theme.dim()),
         );
     }
@@ -90,7 +95,7 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, panel: Panel<'_>, theme:
         buffer.set_string(
             area.x + 1,
             area.bottom() - 1,
-            truncate(&theme.clean(panel.status), usize::from(area.width - 2)),
+            theme.fit(&theme.clean(panel.status), usize::from(area.width - 2)),
             fill.patch(theme.dim()),
         );
     }
@@ -106,25 +111,23 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, panel: Panel<'_>, theme:
                     .collect::<Vec<_>>(),
             )
             .style(fill.patch(theme.text())),
-            editor,
+            Rect {
+                width: editor.width.saturating_sub(1),
+                ..editor
+            },
         );
         if panel.focused
             && let Some((column, row, first_line)) = panel.cursor
         {
             let cursor_x = editor
                 .x
-                .saturating_add(column.min(editor.width))
-                .min(area.right().saturating_sub(1));
+                .saturating_add(column.min(editor.width.saturating_sub(1)))
+                .min(editor.right().saturating_sub(1));
             let cursor_y = editor
                 .y
                 .saturating_add(row.saturating_sub(first_line) as u16)
                 .min(editor.bottom().saturating_sub(1));
             frame.set_cursor_position((cursor_x, cursor_y));
-            if cursor_x == area.right().saturating_sub(1) {
-                frame.buffer_mut()[(cursor_x, cursor_y)]
-                    .set_symbol(" ")
-                    .set_style(fill.patch(theme.text()));
-            }
         }
     }
     editor

@@ -91,10 +91,13 @@ fn piece_spans(
 ) -> Vec<Span<'static>> {
     let mut spans = vec![
         Span::styled(
-            gutter(doc.number, selected, piece.index),
+            theme.chrome(&gutter(doc.number, selected, piece.index)),
             gutter_style(selected, theme),
         ),
-        Span::styled(piece.text.to_owned(), document_style(doc, selected)),
+        Span::styled(
+            piece.text.to_owned(),
+            theme.style(document_style(doc, selected)),
+        ),
     ];
     if piece.index + 1 == piece.count {
         append_heading_badge(&mut spans, plan, doc, theme);
@@ -104,9 +107,7 @@ fn piece_spans(
 
 fn gutter_style(selected: bool, theme: &Theme) -> Style {
     if selected {
-        Style::default()
-            .fg(crate::lean::tui::theme::ayu::YELLOW)
-            .add_modifier(Modifier::BOLD)
+        theme.warning()
     } else {
         theme.dim()
     }
@@ -153,7 +154,7 @@ fn append_heading_badge(
     if let Some((text, color)) = heading_badge(plan, doc, theme) {
         spans.push(Span::styled(
             text,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            theme.style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
         ));
     }
 }
@@ -209,7 +210,8 @@ fn comment_lines(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut text = format!(
-        "{indent}✎ #{} [{}]: {}",
+        "{}#{} [{}]: {}",
+        theme.chrome(&format!("{indent}✎ ")),
         comment.id,
         view.comment_state(comment.id),
         clean(&comment.text)
@@ -226,9 +228,7 @@ fn comment_lines(
 
 fn comment_style(comment: &Comment, theme: &Theme) -> Style {
     if comment.status == "open" {
-        Style::default()
-            .fg(crate::lean::tui::theme::ayu::YELLOW)
-            .add_modifier(Modifier::BOLD)
+        theme.warning()
     } else {
         theme.dim()
     }

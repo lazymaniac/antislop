@@ -605,6 +605,7 @@ impl FlowEditor {
     }
 
     pub fn draw(&self, frame: &mut Frame, theme: &Theme) {
+        let separator = theme.chrome("·");
         let area = frame.area();
         if area.width < 12 || area.height < 5 {
             return;
@@ -615,7 +616,7 @@ impl FlowEditor {
                 self.draw_contract_form(
                     frame,
                     area,
-                    &format!(" Flow Editor · edit task {original_id} "),
+                    &format!(" Flow Editor {separator} edit task {original_id} "),
                     false,
                     theme,
                 );
@@ -624,7 +625,7 @@ impl FlowEditor {
                 self.draw_contract_form(
                     frame,
                     area,
-                    &format!(" Flow Editor · add task after {after_id} "),
+                    &format!(" Flow Editor {separator} add task after {after_id} "),
                     true,
                     theme,
                 );
@@ -649,14 +650,16 @@ impl FlowEditor {
         task_title: &str,
         theme: &Theme,
     ) {
+        let separator = theme.chrome("·");
         let width = area.width.saturating_sub(4).clamp(12, 72);
         let height = 10.min(area.height);
         let boxed = centered_rect(area, width, height);
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_set(theme.borders())
             .border_style(theme.warning())
-            .title(format!(" Flow Editor · usuń zadanie {task_id} "));
+            .title(format!(" Flow Editor {separator} usuń zadanie {task_id} "));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
         let text_w = usize::from(inner.width.saturating_sub(2)).max(1);
@@ -699,7 +702,7 @@ impl FlowEditor {
         }
         lines.push(Line::from(Span::styled(
             truncate(
-                "Enter potwierdź · Space przełącz Fast-Path/AI · Esc anuluj",
+                &theme.chrome("Enter potwierdź · Space przełącz Fast-Path/AI · Esc anuluj"),
                 text_w,
             ),
             theme.dim(),
@@ -708,15 +711,17 @@ impl FlowEditor {
     }
 
     fn draw_split_form(&self, frame: &mut Frame, area: Rect, original_id: &str, theme: &Theme) {
+        let separator = theme.chrome("·");
         let width = area.width.saturating_sub(4).clamp(12, 78);
         let height = 14.min(area.height);
         let boxed = centered_rect(area, width, height);
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(super::theme::ayu::BLUE))
+            .border_set(theme.borders())
+            .border_style(theme.separator(true))
             .title(format!(
-                " Flow Editor · podziel zadanie {original_id} na 2 kroki "
+                " Flow Editor {separator} podziel zadanie {original_id} na 2 kroki "
             ));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
@@ -759,7 +764,10 @@ impl FlowEditor {
             lines.push(Line::raw(""));
         }
         lines.push(Line::from(Span::styled(
-            truncate("Tab/↑/↓ pole · Enter/Ctrl+S zapisz · Esc zamknij", text_w),
+            truncate(
+                &theme.chrome("Tab/↑/↓ pole · Enter/Ctrl+S zapisz · Esc zamknij"),
+                text_w,
+            ),
             theme.dim(),
         )));
         frame.render_widget(Paragraph::new(lines), inner);
@@ -779,7 +787,8 @@ impl FlowEditor {
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(super::theme::ayu::BLUE))
+            .border_set(theme.borders())
+            .border_style(theme.separator(true))
             .title(truncate(title, usize::from(width.saturating_sub(2))));
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
@@ -855,7 +864,9 @@ impl FlowEditor {
         }
         lines.push(Line::from(Span::styled(
             truncate(
-                "Tab/↑/↓ pole · ←/→/Space przełącz · Enter/Ctrl+S zapisz · Esc zamknij",
+                &theme.chrome(
+                    "Tab/↑/↓ pole · ←/→/Space przełącz · Enter/Ctrl+S zapisz · Esc zamknij",
+                ),
                 text_w,
             ),
             theme.dim(),

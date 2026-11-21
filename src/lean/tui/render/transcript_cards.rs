@@ -97,7 +97,15 @@ fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &T
             text,
             tone,
             ..
-        } => system_rows(title, meta, text, tone, found, width, theme),
+        } => system_rows(
+            title,
+            &card_metadata(meta, sent_at, width, theme),
+            text,
+            tone,
+            found,
+            width,
+            theme,
+        ),
         TranscriptCard::Completion {
             branch,
             summary,
@@ -144,7 +152,7 @@ fn standard_card_rows(entry: &TranscriptCard, found: bool, width: u16, theme: &T
             }
             system_rows(
                 "Session completed",
-                "",
+                &card_metadata("", sent_at, width, theme),
                 &text,
                 &Tone::Done,
                 found,
@@ -385,6 +393,7 @@ mod tests {
                 json!({"plan":"p","tasks":[{"id":"t1","title":"Task","change_kind":"code"},{"id":"t1-options","title":"Options","change_kind":"none"}]}),
             ),
             ("notice", json!({"text":"Preserve 👩‍💻e\u{301}"})),
+            ("session_completed", json!({"summary":"Retained result"})),
             (
                 "comment",
                 json!({"id":1,"target":"plan:p","text":"Check scope","status":"open","label":"Plan","message":1}),
@@ -446,6 +455,74 @@ mod tests {
             &json!({"seq":100,"kind":"notice","payload":{"text":"Legacy event has no timestamp"}}),
         );
         assert_eq!(app.view.cards[before].sent_at(), None);
+    }
+
+    #[test]
+    fn narrow_headers_keep_graphemes_and_event_time_in_rightmost_cells() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        use unicode_segmentation::UnicodeSegmentation;
+
+        let title = "e\u{301}👩‍💻".repeat(20);
+        let sent_at = 1_700_000_000_000;
+        let app = App::test_app();
+        for ascii in [false, true] {
+            let theme = Theme::new(false, ascii);
+            for time in [Some(sent_at), None] {
+                let card = TranscriptCard::System {
+                    title: title.clone(),
+                    meta: title.clone(),
+                    text: "Retained body".into(),
+                    tone: Tone::Active,
+                    sent_at: time,
+                };
+                for width in [12, 20, 24, 34, 50, 120] {
+                    let rows = app.transcript_card_rows(&card, false, width, &theme);
+                    let header = &rows[0];
+                    let mut buffer = Buffer::empty(Rect::new(0, 0, width, 1));
+                    draw_rows(&mut buffer, Rect::new(0, 0, width, 1), [header]);
+                    let clean_title = theme.clean(&title);
+                    for cell in &buffer.content {
+                        for grapheme in cell.symbol().graphemes(true) {
+                            assert!(
+                                clean_title.graphemes(true).any(|g| g == grapheme)
+                                    || grapheme.is_ascii()
+                                    || [
+                                        theme.glyphs().bar,
+                                        theme.glyphs().ellipsis,
+                                        theme.glyphs().dot
+                                    ]
+                                    .contains(&grapheme),
+                                "broken header grapheme: {grapheme:?}"
+                            );
+                        }
+                    }
+                    let right = &header.line.spans.last().unwrap().content;
+                    if time.is_some() {
+                        let timestamp = card_metadata("", time, width, &theme);
+                        assert!(right.ends_with(&timestamp), "{width}: {right}");
+                        let start = usize::from(width) - timestamp.width();
+                        for (offset, expected) in timestamp.chars().enumerate() {
+                            assert_eq!(
+                                buffer[(start as u16 + offset as u16, 0)].symbol(),
+                                expected.to_string()
+                            );
+                        }
+                    } else {
+                        let text = header
+                            .line
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>();
+                        assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
+                    }
+                    assert!(header.line.spans.iter().any(|s| {
+                        s.content
+                            .contains(clean_title.graphemes(true).next().unwrap())
+                    }));
+                }
+            }
+        }
     }
 
     #[test]

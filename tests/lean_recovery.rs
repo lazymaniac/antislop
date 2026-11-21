@@ -33,6 +33,8 @@ plans = {
   "requeue": [task("t1", "Fail"), task("p1", "Patient")],
   "stubborn": [task("x1", "Stubborn")],
 }
+if os.path.exists(os.path.join(os.path.dirname(sys.argv[0]), "legacy-writer")):
+    plans["chain"][0] = task("t1", "Fail", writes=True)
 # A first orchestrator turn can include history after the current request.
 import re
 requests = re.findall(r'\[user\]\n([^\n]+)', prompt)
@@ -124,6 +126,12 @@ answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in p
 if "Automatic integration conflict" in prompt:
     answer = "```integration_question\nKeep the concurrent user edit or apply the worker change?\n```"
 answer = cover(answer)
+if "Task: Write file" in prompt and os.path.exists(os.path.join(here, "stop-write-review")):
+    if "You review" in prompt:
+        print("fixture reviewer stopped after completed writer checkpoint", file=sys.stderr)
+        sys.exit(18)
+    if "You audit" not in prompt:
+        answer = json.dumps({"type":"completed", "summary":"Created hello.txt", "report":"Worker checkpoint contains hello.txt", "commit_message":"feat: add hello file"})
 # A reviewer that rejects the same obligation every round.
 if "Task: Stubborn" in prompt and "You review" in prompt:
     answer = cover("```verdict\n" + json.dumps({"approved": False, "findings": [
@@ -799,13 +807,15 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     let project = init_git_project(dir.path());
     std::fs::write(dir.path().join("concurrent-user-edit"), "").unwrap();
 
+    std::fs::write(dir.path().join("stop-write-review"), "").unwrap();
+    let main = git(&project, &["rev-parse", "main"]);
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
-    let mut task = core
+    assert_eq!(statuses(&core, &plan), ["failed", "queued"]);
+    let task = core
         .store
         .plan(&plan)
         .unwrap()
@@ -814,9 +824,20 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
         .unwrap()
         .clone();
     let w1_id = task.id.clone();
-    task.status = "needs_user".into();
-    core.store.update_task(&task).unwrap();
-    let branch = format!("antislop/{w1_id}");
+    assert!(task.report.is_some());
+    assert!(task.result.is_some());
+    assert_ne!(task.base, task.result);
+    let dependent = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "w2")
+        .unwrap();
+    assert!(dependent.report.is_none());
+    assert!(dependent.result.is_none());
+    let session_branch = support::session_branch(&core, &conversation);
+    assert_eq!(git(&project, &["rev-parse", &session_branch]), main);
     let token = core
         .task_freshness_token(&conversation, &plan, &w1_id)
         .unwrap();
@@ -840,16 +861,34 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
     );
+    assert!(resp.integrated_files.is_empty());
+    let branch = resp.preserved_branch.as_ref().unwrap();
+    assert_eq!(git(&project, &["rev-parse", "main"]), main);
     // Branch still exists and contains worker change
     assert_eq!(
         git(&project, &["show", &format!("{branch}:hello.txt")]),
         "from worker"
     );
 
-    // This recovery preserves the task branch without rolling back an already
-    // completed dependent task on the session integration line.
+    // Keeping the checkpoint does not integrate it or release its dependent.
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["needs_user", "approved"]);
+    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
+    assert_eq!(git(&project, &["rev-parse", &session_branch]), main);
+    let retained = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == task.id)
+        .unwrap();
+    assert_eq!(retained.result, task.result);
+    assert!(
+        retained
+            .report
+            .as_deref()
+            .unwrap()
+            .starts_with(task.report.as_deref().unwrap())
+    );
 }
 
 #[test]
@@ -1493,12 +1532,13 @@ fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
     let project = init_git_project(dir.path());
     let main = git(&project, &["rev-parse", "main"]);
     std::fs::write(project.join("user-draft.txt"), "unsent user work\n").unwrap();
+    std::fs::write(dir.path().join("legacy-writer"), "").unwrap();
     let core = open(dir.path());
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     wait_idle(&core, &conversation);
-    let session = support::session_worktree(&core, &project, &conversation);
-    let session_branch = git(&session, &["symbolic-ref", "--short", "HEAD"]);
+    let session_branch = support::session_branch(&core, &conversation);
+    let session = support::session_worktree_if_present(&project, &session_branch);
     core.store
         .append_event(
             &conversation,
@@ -1508,7 +1548,13 @@ fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
             &json!({"branch":"main"}),
         )
         .unwrap();
-    let mut task = core.store.plan(&plan).unwrap().remove(0);
+    let mut task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
 
     let checkpoint_dir = dir.path().join("checkpoint");
     git(
@@ -1545,9 +1591,15 @@ fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
             .collect::<String>(),
     );
     std::fs::remove_file(record).unwrap();
-    git(&project, &["worktree", "remove", session.to_str().unwrap()]);
+    if let Some(session) = session {
+        git(&project, &["worktree", "remove", session.to_str().unwrap()]);
+    }
     git(&project, &["branch", "-D", &session_branch]);
-    let task_branch = format!("antislop/{}", task.id);
+    let task_branch = format!(
+        "antislop/{}-{}",
+        task.spec["checkout_name"].as_str().unwrap(),
+        antislop::hash(format!("{}:{}", task.plan_id, task.id))
+    );
     for block in git(&project, &["worktree", "list", "--porcelain"]).split("\n\n") {
         if block
             .lines()
@@ -1576,6 +1628,7 @@ fn legacy_branch_bootstrap_reopens_and_retries_a_retained_checkpoint() {
 if worker and "You review" not in prompt and os.path.exists(os.path.join(here, "logged-in")):
     assert open("retained.txt").read() == "checkpoint evidence\n", "checkpoint missing from resumed allocation"
     open(os.path.join(here, "retained-checkpoint-seen"), "w").close()
+    answer = json.dumps({{"type":"completed", "summary":"Retained checkpoint verified", "report":"Verified retained.txt from the reopened checkpoint", "commit_message":"fix: retain recovered checkpoint"}})
 {anchor}
 "#))).unwrap();
 
@@ -1587,8 +1640,8 @@ if worker and "You review" not in prompt and os.path.exists(os.path.join(here, "
     assert_eq!(restored.result, task.result);
     assert_eq!(
         git(
-            &support::session_worktree(&core, &project, &conversation),
-            &["rev-parse", "HEAD"]
+            &project,
+            &["rev-parse", &support::session_branch(&core, &conversation)]
         ),
         main
     );
@@ -1608,7 +1661,12 @@ if worker and "You review" not in prompt and os.path.exists(os.path.join(here, "
     })
     .unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+    assert_eq!(
+        statuses(&core, &plan),
+        ["approved", "approved", "approved"],
+        "{:?}",
+        core.store.plan(&plan).unwrap()
+    );
     assert!(dir.path().join("retained-checkpoint-seen").exists());
     assert_eq!(git(&project, &["rev-parse", "main"]), main);
     assert_eq!(

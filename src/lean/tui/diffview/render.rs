@@ -1,5 +1,6 @@
-use super::header::{diff_footer_hint, diff_header_with_reviewer};
+use super::header::{diff_footer_hint, diff_header_themed};
 use super::*;
+use crate::lean::tui::theme::Theme;
 
 mod files;
 mod lines;
@@ -10,6 +11,10 @@ impl DiffView {
     }
 
     pub fn paint_at(&mut self, frame: &mut Frame, area: Rect, view: &View) {
+        self.paint_with_theme(frame, area, view, &Theme::from_env());
+    }
+
+    pub fn paint_with_theme(&mut self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -19,29 +24,37 @@ impl DiffView {
             Constraint::Length(1),
         ])
         .areas(area);
-        draw_header_footer(frame, self, header, footer);
-        self.draw_body(frame, body, view);
+        draw_header_footer(frame, self, header, footer, theme);
+        self.draw_body(frame, body, view, theme);
     }
 
-    fn draw_body(&mut self, frame: &mut Frame, body: Rect, view: &View) {
-        if !draw_placeholder(frame, body, &self.files) {
+    fn draw_body(&mut self, frame: &mut Frame, body: Rect, view: &View, theme: &Theme) {
+        if !draw_placeholder(frame, body, &self.files, theme) {
             return;
         }
-        self.draw_loaded_body(frame, body, view);
+        self.draw_loaded_body(frame, body, view, theme);
     }
 
-    fn draw_loaded_body(&mut self, frame: &mut Frame, body: Rect, view: &View) {
+    fn draw_loaded_body(&mut self, frame: &mut Frame, body: Rect, view: &View, theme: &Theme) {
         let file_count = self.files().len();
         if body.width >= 90 && !self.files_hidden {
             let width = (body.width / 3).min(44);
             let [list, rest] =
                 Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(body);
-            files::draw_files(frame, list, self.files(), self.file, self.on_files, false);
-            self.draw_lines(frame, rest, view, false, file_count);
+            files::draw_files(
+                frame,
+                list,
+                self.files(),
+                self.file,
+                self.on_files,
+                false,
+                theme,
+            );
+            self.draw_lines(frame, rest, view, false, file_count, theme);
         } else if self.on_files {
-            files::draw_files(frame, body, self.files(), self.file, true, true);
+            files::draw_files(frame, body, self.files(), self.file, true, true, theme);
         } else {
-            self.draw_lines(frame, body, view, true, file_count);
+            self.draw_lines(frame, body, view, true, file_count, theme);
         }
     }
 
@@ -52,6 +65,7 @@ impl DiffView {
         view: &View,
         compact: bool,
         file_count: usize,
+        theme: &Theme,
     ) {
         let Some(file) = self.files().get(self.file) else {
             return;
@@ -69,6 +83,7 @@ impl DiffView {
             selected_line: self.line,
             on_files: self.on_files,
             width,
+            theme,
         });
         let height = usize::from(area.height);
         self.scroll = lines::scroll_to_cursor(self.scroll, cursor_row, rows.len(), height);
@@ -81,14 +96,15 @@ fn draw_placeholder(
     frame: &mut Frame,
     body: Rect,
     state: &Option<Result<Vec<FileDiff>, String>>,
+    theme: &Theme,
 ) -> bool {
     match state {
         None => {
-            render_body_message(frame, body, "Loading task diff from daemon…", dim());
+            render_body_message(frame, body, "Loading task diff from daemon…", theme.dim());
             false
         }
         Some(Err(error)) => {
-            render_diff_error(frame, body, error);
+            render_diff_error(frame, body, error, theme);
             false
         }
         Some(Ok(files)) if files.is_empty() => {
@@ -96,7 +112,7 @@ fn draw_placeholder(
                 frame,
                 body,
                 "No changes in this task. The task did not modify any files.",
-                dim(),
+                theme.dim(),
             );
             false
         }
@@ -104,12 +120,12 @@ fn draw_placeholder(
     }
 }
 
-fn render_diff_error(frame: &mut Frame, body: Rect, error: &str) {
+fn render_diff_error(frame: &mut Frame, body: Rect, error: &str, theme: &Theme) {
     render_body_message(
         frame,
         body,
-        &format!("✗ Error loading changes: {error}"),
-        Style::default().fg(super::super::theme::ayu::RED),
+        &format!("{} Error loading changes: {error}", theme.glyphs().failed),
+        theme.error(),
     );
 }
 
@@ -120,13 +136,19 @@ fn render_body_message(frame: &mut Frame, area: Rect, message: &str, style: Styl
     );
 }
 
-fn draw_header_footer(frame: &mut Frame, view: &DiffView, header: Rect, footer: Rect) {
+fn draw_header_footer(
+    frame: &mut Frame,
+    view: &DiffView,
+    header: Rect,
+    footer: Rect,
+    theme: &Theme,
+) {
     let (added, removed) = view
         .files()
         .iter()
         .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed));
     frame.render_widget(
-        Paragraph::new(diff_header_with_reviewer(
+        Paragraph::new(theme.line(diff_header_themed(
             &view.task,
             &view.range,
             view.files().len(),
@@ -135,13 +157,14 @@ fn draw_header_footer(frame: &mut Frame, view: &DiffView, header: Rect, footer: 
             view.truncated,
             view.reviewer.as_ref(),
             usize::from(header.width),
-        )),
+            theme,
+        ))),
         header,
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
-            diff_footer_hint(usize::from(footer.width)),
-            dim(),
+            theme.chrome(diff_footer_hint(usize::from(footer.width))),
+            theme.dim(),
         )),
         footer,
     );

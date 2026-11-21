@@ -184,13 +184,37 @@ impl Canvas {
 
     /// Draws the window at (`left`, `top`) of the canvas into `area`.
     pub fn show(&self, buffer: &mut Buffer, area: Rect, left: u16, top: u16) {
+        self.show_with_theme(buffer, area, left, top, &Theme::from_env());
+    }
+
+    pub fn show_with_theme(
+        &self,
+        buffer: &mut Buffer,
+        area: Rect,
+        left: u16,
+        top: u16,
+        theme: &Theme,
+    ) {
         for row in 0..area.height {
             for column in 0..area.width {
                 let (x, y) = (left + column, top + row);
                 if let Some(cell) = self.get_cell(x, y)
                     && let Some(target) = buffer.cell_mut((area.x + column, area.y + row))
                 {
-                    target.set_symbol(Self::glyph(cell)).set_style(cell.style);
+                    let glyph = if cell.ch.is_none() && theme.ascii {
+                        if cell.lines == 0 {
+                            " "
+                        } else if cell.lines & (UP | DOWN) == 0 {
+                            "-"
+                        } else if cell.lines & (LEFT | RIGHT) == 0 {
+                            "|"
+                        } else {
+                            "+"
+                        }
+                    } else {
+                        Self::glyph(cell)
+                    };
+                    target.set_symbol(glyph).set_style(theme.style(cell.style));
                 }
             }
         }

@@ -1,7 +1,6 @@
 //! Color and text operations for the shared TUI theme.
 
 use super::super::sanitize::sanitize;
-use super::ascii::ascii_grapheme;
 use super::tokens::{ASCII, Glyphs, UNICODE};
 use super::tokens::{Theme, Tone, ayu, tone};
 use ratatui::style::{Color, Modifier, Style};
@@ -21,6 +20,9 @@ impl Theme {
         Self { color, ascii }
     }
 
+    /// Any nonempty NO_COLOR disables application colors; any nonempty
+    /// ANTISLOP_ASCII selects ASCII chrome. Otherwise the first nonempty
+    /// LC_ALL/LC_CTYPE/LANG selects Unicode only for a UTF-8 locale.
     pub fn from_env() -> Self {
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         let ascii = if std::env::var_os("ANTISLOP_ASCII").is_some_and(|v| !v.is_empty()) {
@@ -111,7 +113,7 @@ impl Theme {
     }
 
     pub fn accent(&self) -> Style {
-        self.pick(fg(ayu::BLUE), Style::default())
+        self.pick(fg(ayu::CYAN), Style::default())
             .add_modifier(Modifier::BOLD)
     }
 
@@ -285,13 +287,57 @@ impl Theme {
         self.pick(fg(ayu::RED), Style::default().add_modifier(Modifier::BOLD))
     }
 
-    /// Removes control sequences and, in ASCII mode, replaces non-ASCII graphemes.
+    /// Sanitizes document/user text without changing its Unicode graphemes.
     pub fn clean(&self, text: &str) -> String {
-        let text = sanitize(text);
+        sanitize(text)
+    }
+
+    /// Selects glyphs for application-owned chrome, never document or CLI text.
+    pub fn chrome(&self, text: &str) -> String {
         if self.ascii {
-            text.graphemes(true).map(ascii_grapheme).collect()
+            text.graphemes(true)
+                .map(super::ascii::chrome_grapheme)
+                .collect()
         } else {
-            text
+            text.to_owned()
+        }
+    }
+
+    /// Applies the color policy to application styles, including named/indexed colors.
+    pub fn style(&self, mut style: Style) -> Style {
+        if !self.color {
+            if style.fg == Some(ayu::DIM) || style.fg == Some(ayu::FAINT) {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            style.fg = None;
+            style.bg = None;
+            style.underline_color = None;
+        }
+        style
+    }
+
+    pub fn line(&self, mut line: ratatui::text::Line<'static>) -> ratatui::text::Line<'static> {
+        line.style = self.style(line.style);
+        for span in &mut line.spans {
+            span.style = self.style(span.style);
+        }
+        line
+    }
+
+    pub fn borders(&self) -> ratatui::symbols::border::Set<'static> {
+        if self.ascii {
+            ratatui::symbols::border::Set {
+                top_left: "+",
+                top_right: "+",
+                bottom_left: "+",
+                bottom_right: "+",
+                vertical_left: "|",
+                vertical_right: "|",
+                horizontal_top: "-",
+                horizontal_bottom: "-",
+            }
+        } else {
+            ratatui::symbols::border::PLAIN
         }
     }
 

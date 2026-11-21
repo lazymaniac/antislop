@@ -199,16 +199,16 @@ pub fn providers(view: &View) -> Vec<String> {
     found
 }
 
-pub(super) fn describe(view: &View, key: &str) -> String {
+pub(super) fn describe(view: &View, key: &str, theme: &Theme) -> String {
     match task_card(view, key) {
         Some((task, Role::Worker | Role::Pair)) => taskinfo::worker_status(task),
         Some((task, Role::Reviewer)) => taskinfo::reviewer_status(task),
         None if key.contains(':') => "?".into(),
-        None => describe_agent(view, key),
+        None => describe_agent(view, key, theme),
     }
 }
 
-fn describe_agent(view: &View, key: &str) -> String {
+fn describe_agent(view: &View, key: &str, theme: &Theme) -> String {
     let members = card_members(view, key);
     let round = current_round(view, &members);
     let agent = round.or(Some(key)).and_then(|round| view.agents.get(round));
@@ -216,7 +216,7 @@ fn describe_agent(view: &View, key: &str) -> String {
     let doing = taskinfo::doing(view, round.unwrap_or(key));
     let text = activity_label(agent, working);
     match doing {
-        Some(doing) => format!("{text} · {doing}"),
+        Some(doing) => format!("{text} {} {doing}", theme.chrome("·")),
         None => text,
     }
 }

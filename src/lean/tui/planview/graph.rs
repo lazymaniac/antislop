@@ -52,7 +52,7 @@ impl PlanView {
         let (left, top) = self.graph_offset;
         let mut canvas = Canvas::new_window(left, top, viewport.width, viewport.height);
         graph.render(&view.tasks, &mut canvas, self.graph_selected, theme);
-        canvas.show(frame.buffer_mut(), viewport, left, top);
+        canvas.show_with_theme(frame.buffer_mut(), viewport, left, top, theme);
         self.task_rects = graph
             .nodes
             .iter()
@@ -88,10 +88,11 @@ impl PlanView {
         read_only: bool,
     ) {
         let mut text = format!(
-            "{}: {}\n{} · {}",
+            "{}: {}\n{} {} {}",
             task.id,
             task.title,
             task.kind,
+            theme.glyphs().dot,
             if task.change_kind.has_delivery() {
                 "file changes"
             } else {
@@ -116,13 +117,14 @@ impl PlanView {
             }
         }
         text.push_str(&format!(
-            "\n{}\nDepends on: {} · Parallel with: {}",
+            "\n{}\nDepends on: {} {} Parallel with: {}",
             task.goal,
             if task.depends_on.is_empty() {
                 "none".into()
             } else {
                 task.depends_on.join(", ")
             },
+            theme.glyphs().dot,
             if task.parallel_with.is_empty() {
                 "none".into()
             } else {
@@ -131,10 +133,11 @@ impl PlanView {
         ));
         let block = Block::default()
             .borders(Borders::TOP)
+            .border_set(theme.borders())
             .border_style(theme.dim())
             .title(format!(
                 " {} ",
-                fit_hint(
+                theme.chrome(&fit_hint(
                     if read_only {
                         &["Selected task", "report in document"]
                     } else {
@@ -142,7 +145,7 @@ impl PlanView {
                     },
                     usize::from(area.width.saturating_sub(4)),
                     false,
-                )
+                ))
             ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -236,23 +239,14 @@ fn reveal(offset: &mut u16, start: u16, size: u16, viewport: u16) {
 }
 
 pub(super) fn panel(title: &str, focused: bool, theme: &Theme) -> Block<'static> {
-    let borders = if theme.ascii {
-        ratatui::symbols::border::Set {
-            top_left: "+",
-            top_right: "+",
-            bottom_left: "+",
-            bottom_right: "+",
-            vertical_left: "|",
-            vertical_right: "|",
-            horizontal_top: "-",
-            horizontal_bottom: "-",
-        }
-    } else {
-        ratatui::symbols::border::ROUNDED
-    };
     Block::default()
         .borders(Borders::ALL)
-        .border_set(borders)
-        .border_style(if focused { theme.accent() } else { theme.dim() })
-        .title(title.to_owned())
+        .border_set(theme.borders())
+        .style(if focused {
+            theme.card()
+        } else {
+            theme.overlay()
+        })
+        .border_style(theme.separator(focused))
+        .title(theme.chrome(title))
 }

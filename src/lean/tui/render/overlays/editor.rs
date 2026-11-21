@@ -1,6 +1,6 @@
 use super::super::super::*;
 
-pub(super) fn draw_editor(app: &mut App, frame: &mut Frame) -> bool {
+pub(super) fn draw_editor(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     let Some(editor) = &app.editor else {
         return false;
     };
@@ -31,7 +31,10 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame) -> bool {
     let end = (shown + visible).min(lines.len());
     let box_area = Rect::new(area.x, area.bottom() - 1 - height, area.width, height);
     frame.render_widget(Clear, box_area);
-    frame.render_widget(editor_box(editor, &comments, &lines[shown..end]), box_area);
+    frame.render_widget(
+        editor_box(editor, &comments, &lines[shown..end], theme),
+        box_area,
+    );
     draw_editor_cursor(
         app,
         frame,
@@ -43,7 +46,12 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame) -> bool {
     false
 }
 
-fn editor_box(editor: &Editor, comments: &[String], lines: &[String]) -> Paragraph<'static> {
+fn editor_box(
+    editor: &Editor,
+    comments: &[String],
+    lines: &[String],
+    theme: &Theme,
+) -> Paragraph<'static> {
     let rows = comments
         .iter()
         .cloned()
@@ -54,28 +62,30 @@ fn editor_box(editor: &Editor, comments: &[String], lines: &[String]) -> Paragra
     Paragraph::new(rows).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::ayu::BLUE))
-            .title(editor_title(&editor.target)),
+            .border_style(theme.separator(true))
+            .border_set(theme.borders())
+            .title(editor_title(&editor.target, theme)),
     )
 }
 
-fn editor_title(target: &str) -> String {
+fn editor_title(target: &str, theme: &Theme) -> String {
+    let separator = theme.chrome("·");
     if let Some(rest) = target.strip_prefix("unblock:") {
         let mut parts = rest.splitn(3, ':');
         let action = parts.next().unwrap_or_default();
         let plan = parts.next().unwrap_or_default();
         let task = parts.next().unwrap_or_default();
         format!(
-            " {} · plan {plan} · task {task} · optional scoped text · Enter send · Alt+Enter newline · Esc cancel ",
+            " {} {separator} plan {plan} {separator} task {task} {separator} optional scoped text {separator} Enter send {separator} Alt+Enter newline {separator} Esc cancel ",
             action.replace('_', " "),
         )
     } else if let Some(plan) = target.strip_prefix("reject:") {
         format!(
-            " reject plan {plan} · optional reason · Enter reject · Alt+Enter newline · Esc cancel "
+            " reject plan {plan} {separator} optional reason {separator} Enter reject {separator} Alt+Enter newline {separator} Esc cancel "
         )
     } else {
         format!(
-            " comment on {} · Enter send · Alt+Enter newline · Esc cancel ",
+            " comment on {} {separator} Enter send {separator} Alt+Enter newline {separator} Esc cancel ",
             target_name(target)
         )
     }
@@ -128,9 +138,11 @@ mod tests {
     #[test]
     fn recovery_rejection_and_comment_prompts_name_their_target_and_purpose() {
         let target = "unblock:retry_with_guidance:plan-7:task-9";
-        assert!(editor_title(target).contains("plan plan-7 · task task-9"));
+        assert!(
+            editor_title(target, &Theme::new(true, false)).contains("plan plan-7 · task task-9")
+        );
         assert_eq!(editor_prompt(target), "Hint for this worker (optional):");
-        assert!(editor_title("reject:plan-7").contains("reject plan plan-7"));
+        assert!(editor_title("reject:plan-7", &Theme::from_env()).contains("reject plan plan-7"));
         assert_eq!(
             editor_prompt("reject:plan-7"),
             "Reason for rejecting plan plan-7 (optional):"

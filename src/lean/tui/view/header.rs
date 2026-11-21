@@ -85,10 +85,29 @@ pub fn render_header_with(
     width: u16,
     controls: Controls,
 ) -> Line<'static> {
-    let theme = crate::lean::tui::theme::Theme::from_env();
+    render_header_themed(
+        project,
+        conversation,
+        status,
+        focus,
+        width,
+        controls,
+        &crate::lean::tui::theme::Theme::from_env(),
+    )
+}
+
+pub(in crate::lean::tui) fn render_header_themed(
+    project: &str,
+    conversation: &str,
+    status: &str,
+    focus: PanelFocus,
+    width: u16,
+    controls: Controls,
+    theme: &crate::lean::tui::theme::Theme,
+) -> Line<'static> {
     let label_style = theme.text().add_modifier(Modifier::BOLD);
     let secondary = theme.text();
-    let active = active_style(&theme);
+    let active = active_style(theme);
     if width < 25 {
         return compact_header(project, label_style);
     }
@@ -115,12 +134,12 @@ pub fn render_header_with(
         ));
     }
     let mut panels = Vec::new();
-    append_panels(&mut panels, width, focus, &theme, secondary);
+    append_panels(&mut panels, width, focus, theme, secondary);
     parts.push((0, panels));
     if (65..SIDE_BY_SIDE_BREAKPOINT).contains(&width) {
         parts.push((4, vec![Span::styled("(Tab: switch) ", secondary)]));
     }
-    let (identity, plan) = identity_parts(short, width, secondary, active);
+    let (identity, plan) = identity_parts(short, width, secondary, active, theme);
     parts.push((5, identity));
     parts.push((2, plan));
     let mut status_part = Vec::new();
@@ -131,7 +150,7 @@ pub fn render_header_with(
         status,
         controls,
         width,
-        &theme,
+        theme,
         secondary,
     );
     parts.push((3, status_part));
@@ -213,11 +232,15 @@ fn identity_parts(
     width: u16,
     secondary: Style,
     active: Style,
+    theme: &crate::lean::tui::theme::Theme,
 ) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
     if width < 50 {
         return (Vec::new(), Vec::new());
     }
-    let identity = vec![Span::styled(format!(" · {short} "), secondary)];
+    let identity = vec![Span::styled(
+        format!(" {} {short} ", theme.glyphs().dot),
+        secondary,
+    )];
     let plan = if width < 95 {
         vec![Span::styled(format!("{PLAN} "), active)]
     } else {
@@ -237,7 +260,7 @@ fn button(
     } else {
         theme.panel().patch(secondary)
     };
-    Span::styled(label.to_owned(), style)
+    Span::styled(theme.chrome(label), style)
 }
 
 fn append_status_and_actions(
@@ -251,8 +274,8 @@ fn append_status_and_actions(
 ) {
     if width >= 40 && !status.trim().is_empty() {
         status_spans.push(Span::styled(
-            format!(" · {} ", clean_line(status)),
-            Style::default().fg(crate::lean::tui::theme::ayu::YELLOW),
+            format!(" {} {} ", theme.glyphs().dot, clean_line(status)),
+            theme.warning(),
         ));
     }
     if width >= 95 {
@@ -270,7 +293,7 @@ fn append_full_actions(
     secondary: Style,
 ) {
     let big = width >= BIG_BUTTONS;
-    spans.push(Span::styled(" · ", secondary));
+    spans.push(Span::styled(theme.chrome(" · "), secondary));
     // Pause and Continue share one slot: only the action the state allows is shown.
     let toggle = match (controls.resume_paused, big) {
         (true, true) => (CONTINUE, true),

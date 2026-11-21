@@ -303,24 +303,37 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
         },
     ];
     app.selected = "worker:t1".into();
-
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Enter));
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
-    // The arrows act inside the expanded card: the selection stays on it.
-    app.key(key_press(KeyCode::Down));
-    app.key(key_press(KeyCode::Right));
-    assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.graph_tab, 1);
-    app.key(key_press(KeyCode::Left));
-    app.key(key_press(KeyCode::Left));
-    assert_eq!(app.graph_tab, 2, "tabs wrap around");
-    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t1".into())
+    );
+    assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
     assert!(app.graph_expanded.is_none());
     app.key(key_press(KeyCode::Down));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    assert_eq!(app.selected, "worker:t1");
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    app.key(key_press(KeyCode::Esc));
+    app.key(key_press(KeyCode::Esc));
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.native_views.is_empty());
+    assert!(app.graph_card_area.is_none());
+    app.key(key_press(KeyCode::Down));
     assert_ne!(app.selected, "worker:t1");
+    let second = app.selected.clone();
     app.key(key_press(KeyCode::Enter));
-    assert_eq!(app.graph_expanded.as_deref(), Some(app.selected.as_str()));
-    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent(second.clone())
+    );
+    assert_eq!(app.details.as_ref().unwrap().key, second);
     assert!(app.graph_expanded.is_none());
 }
 
@@ -330,15 +343,18 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
     let mut app = test_app();
     app.focus = Focus::Graph;
     app.graph_viewport = Some((100, 28));
-    app.graph_expanded = Some("worker:t1".into());
     app.selected = "worker:t1".into();
     app.view.plan = Some("plan".into());
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
         title: "current round two".into(),
+        change_kind: crate::lean::tasks::ChangeKind::Code,
         round: 2,
         ..Default::default()
     }];
+    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.workbench_terminal_owner(), "worker:t1");
     let mut details = Details::new("worker:t1".into());
     details.available_rounds = vec![1, 2];
     details.task = Some(serde_json::json!({
@@ -349,7 +365,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
     }));
     app.details = Some(details);
 
-    // The actual graph key path selects a retained round and fetches its snapshot.
+    // The Workbench key path selects a retained round and fetches its snapshot.
     app.key(key_press(KeyCode::Char(',')));
     assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
     let details = app.details.as_mut().unwrap();
@@ -363,18 +379,43 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         .documents
         .insert("result".into(), result_for_test(state.path()));
 
+    app.view.tasks[0].title = "updated live title".into();
+    app.view.tasks[0].status = "failed".into();
+    app.view.tasks[0].round = 3;
+    for (color, ascii) in [(true, false), (true, true), (false, false), (false, true)] {
+        let theme = Theme::new(color, ascii);
+        let hero = app.details.as_ref().unwrap().hero(&app.view, &theme);
+        let identity = hero[0].to_string();
+        assert!(identity.contains("Round 1"));
+        assert!(identity.contains("retained round one details"));
+        assert!(!identity.contains("updated live title"));
+        assert!(!identity.contains("failed"));
+        assert!(identity.contains(theme.glyphs().dot));
+        assert_eq!(
+            hero[0].spans.last().unwrap().style,
+            theme.status("complete")
+        );
+        if ascii {
+            assert!(!identity.contains('·'));
+        }
+    }
+
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     for (tab, expected) in [
-        (0, "retained round one details"),
-        (1, "Historical PTY is read-only"),
-        (2, "result for retained round one"),
-        (3, "No historical diff is retained"),
+        (WorkbenchTab::Summary, "retained round one details"),
+        (WorkbenchTab::Conversation, "Historical PTY is read-only"),
+        (WorkbenchTab::Results, "result for retained round one"),
+        (WorkbenchTab::Diff, "No historical diff is retained"),
     ] {
-        if tab > 0 {
-            app.key(key_press(KeyCode::Char(char::from(b'1' + tab as u8))));
+        for _ in 0..workbench::tabs_for("worker:t1", true).len() {
+            if app.navigation.presentation().tab == tab {
+                break;
+            }
+            app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
         }
+        assert_eq!(app.navigation.presentation().tab, tab);
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        if tab == 2 {
+        if tab == WorkbenchTab::Results {
             // The disk-backed document builds its line index asynchronously.
             for _ in 0..20 {
                 terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -388,12 +429,20 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
         assert!(
             terminal_text(&terminal).contains(expected),
-            "tab {tab}: {}",
+            "tab {tab:?}: {}",
             terminal_text(&terminal)
         );
-        assert!(terminal_text(&terminal).contains("Round 1"));
-        assert!(terminal_text(&terminal).contains(". next"));
-        if tab == 1 {
+        assert_eq!(app.navigation.presentation().round, Some(1));
+        assert_eq!(app.workbench_terminal_owner(), "worker:t1");
+        assert!(terminal_text(&terminal).contains("CLI worker:t1 · r1"));
+        assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
+        if tab != WorkbenchTab::Diff {
+            assert!(terminal_text(&terminal).contains("Round 1"));
+            assert_eq!(app.details.as_ref().unwrap().available_rounds, vec![1, 2]);
+        }
+        {
+            app.key(key_press(KeyCode::Tab));
+            app.key(key_press(KeyCode::Char('i')));
             assert!(!app.native_focused());
             app.native_send(crate::lean::terminal::Input::Key {
                 event: key_press(KeyCode::Char('x')),
@@ -403,7 +452,8 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
                 "historical PTY must not attach a process"
             );
         }
-        if tab == 3 {
+        app.key(key_press(KeyCode::Tab));
+        if tab == WorkbenchTab::Diff {
             app.key(key_press(KeyCode::Char('c')));
             assert!(
                 app.editor.is_none(),
@@ -423,7 +473,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
     app.view.tasks[0].round = 3;
     app.key(key_press(KeyCode::Char('.')));
     assert_eq!(app.details.as_ref().unwrap().selected_round, Some(2));
-    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(2));
+    assert_eq!(app.navigation.presentation().round, Some(2));
     app.key(key_press(KeyCode::Char('.')));
     assert_eq!(app.details.as_ref().unwrap().selected_round, None);
 }
@@ -766,57 +816,49 @@ fn pointer_graph_filter_change_clears_now_visibility_exception() {
 fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     let mut app = test_app();
     app.focus = Focus::Graph;
-    app.graph_viewport = Some((120, 48));
-    app.view.tasks = vec![
-        view::TaskRow {
-            id: "t1".into(),
-            ..Default::default()
-        },
-        view::TaskRow {
-            id: "t2".into(),
-            depends_on: vec!["t1".into()],
-            ..Default::default()
-        },
-    ];
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        change_kind: crate::lean::tasks::ChangeKind::Code,
+        ..Default::default()
+    }];
     app.selected = "worker:t1".into();
     app.key(key_press(KeyCode::Enter));
-    app.key(key_press(KeyCode::Char('d')));
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Diff);
     assert!(app.diff.is_some());
-    assert_eq!(app.graph_tab, 3);
-
-    app.key(key_press(KeyCode::Char('1')));
-    assert_eq!(
-        app.graph_tab, 0,
-        "Details tab remains reachable inside Diff"
-    );
-    app.key(key_press(KeyCode::Char('2')));
-    assert_eq!(app.graph_tab, 1, "PTY tab remains reachable inside Diff");
-    assert!(
-        app.diff.is_none(),
-        "the DiffView closes with its tab so it stops taking keys"
-    );
-    app.key(key_press(KeyCode::Char('3')));
-    assert_eq!(
-        app.graph_tab, 2,
-        "Results tab remains reachable inside Diff"
-    );
-    app.key(key_press(KeyCode::Char('4')));
-    assert_eq!(app.graph_tab, 3, "Diff tab remains selectable");
-    assert!(app.diff.is_some(), "the Diff tab reopens the DiffView");
-
-    // Inside the diff, ←/→ still switch tabs and the selection stays put.
     app.key(key_press(KeyCode::Up));
     app.key(key_press(KeyCode::Down));
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.graph_tab, 3);
-    app.key(key_press(KeyCode::Right));
-    assert_eq!(app.graph_tab, 0, "→ wraps from Diff to Details");
-    app.key(key_press(KeyCode::Left));
-    assert_eq!(
-        app.graph_tab, 2,
-        "without a branch the card has no Diff tab"
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    for expected in [
+        WorkbenchTab::Summary,
+        WorkbenchTab::Conversation,
+        WorkbenchTab::Results,
+        WorkbenchTab::Comments,
+        WorkbenchTab::Diff,
+    ] {
+        app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(app.navigation.presentation().tab, expected);
+        assert_eq!(app.diff.is_some(), expected == WorkbenchTab::Diff);
+        assert_eq!(
+            app.navigation.target,
+            WorkbenchTarget::Agent("worker:t1".into())
+        );
+        assert_eq!(app.selected, "worker:t1");
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    app.view.tasks[0].change_kind = crate::lean::tasks::ChangeKind::None;
+    app.key(event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Comments);
+    assert!(
+        app.diff.is_none(),
+        "a task without delivery has no Diff tab"
     );
-    assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
+    app.key(key_press(KeyCode::Esc));
+    app.key(key_press(KeyCode::Esc));
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    assert_eq!(app.selected, "worker:t1");
+    assert!(app.graph_expanded.is_none());
 }
 
 #[test]
@@ -831,9 +873,9 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     }];
     app.selected = "worker:t1".into();
     app.key(key_press(KeyCode::Enter));
-    app.key(key_press(KeyCode::Left));
     assert_eq!(
-        app.graph_tab, 3,
+        app.navigation.presentation().tab,
+        WorkbenchTab::Diff,
         "a code task shows Diff even before a branch is reported"
     );
     let file = |path: &str| {
@@ -855,7 +897,18 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     assert_eq!(target(&app).as_deref(), Some("diff:t1:b.rs:1"));
     app.key(key_press(KeyCode::Char('[')));
     assert_eq!(target(&app).as_deref(), Some("diff:t1:a.rs:1"));
-    assert_eq!(app.graph_tab, 3, "file keys keep the Diff tab open");
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Diff,
+        "file keys keep the Diff tab open"
+    );
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t1".into())
+    );
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(terminal_text(&terminal).contains("a.rs"));
 }
 
 #[test]
@@ -877,28 +930,72 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
     app.selected = "worker:t2".into();
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
+    let graph_area = app.graph_area.unwrap();
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: graph_area.x + graph_area.width / 2,
+        row: graph_area.y + graph_area.height / 2,
+        modifiers: KeyModifiers::NONE,
+    });
+    let panned = app.offset;
     app.key(key_press(KeyCode::Enter));
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let before = app
-        .graph_card_area
-        .expect("the expanded card has a content area");
-    // Scroll the graph so the card's top leaves the viewport.
+    assert_eq!(app.offset, panned);
+    let before = app.workbench_areas;
+    assert!(before.split && before.list_visible);
     app.offset.1 += 6;
-    let scrolled = app.offset.1;
+    let offset = app.offset;
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.offset.1, scrolled, "the draw kept the scroll");
-    let after = app
-        .graph_card_area
-        .expect("the card's lower part is still visible");
     assert_eq!(
-        after.bottom(),
-        before.bottom() - 6,
-        "the panel's bottom follows the card frame up, not the viewport top"
+        app.workbench_areas, before,
+        "graph panning cannot move Workbench panels"
     );
-    assert!(
-        after.height < before.height,
-        "the panel is clipped with the card"
-    );
+    for (width, height) in [(100, 24), (99, 23), (80, 30), (120, 40)] {
+        terminal.backend_mut().resize(width, height);
+        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let areas = app.workbench_areas;
+        let viewport = Rect::new(0, 0, width, height);
+        for area in [
+            areas.list,
+            areas.header,
+            areas.content,
+            areas.separator,
+            areas.terminal,
+            areas.footer,
+        ] {
+            if !area.is_empty() {
+                assert_eq!(area.intersection(viewport), area);
+            }
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(
+            details.text_area.intersection(areas.content),
+            details.text_area
+        );
+        for native in details.native_areas {
+            if !native.is_empty() {
+                assert_eq!(native.intersection(areas.terminal), native);
+            }
+        }
+        if areas.split {
+            assert_eq!(areas.content.bottom(), areas.separator.y);
+            assert_eq!(areas.separator.bottom(), areas.terminal.y);
+        }
+        assert_eq!(app.offset, offset);
+        assert_eq!(app.selected, "worker:t2");
+    }
+    app.key(key_press(KeyCode::Char('z')));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.workbench_areas.terminal.is_empty());
+    app.key(key_press(KeyCode::Esc));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.workbench_areas.split);
+    app.key(key_press(KeyCode::Esc));
+    app.key(key_press(KeyCode::Esc));
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    assert_eq!(app.offset, offset);
+    assert_eq!(app.selected, "worker:t2");
 }
 
 #[test]
@@ -1133,7 +1230,7 @@ fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
                     "the incoming arrow remains visible at {width}x{height}"
                 );
                 let (_, _, expected_style) = graph
-                    .expanded_entry_arrows()
+                    .expanded_entry_arrows(&theme)
                     .into_iter()
                     .find(|(x, y, _)| *x == route_x && *y == route_y)
                     .expect("entry arrow style");
@@ -1248,9 +1345,20 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Enter));
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let area = app
-        .graph_card_area
-        .expect("the expanded card has a content area");
+    app.details.as_mut().unwrap().task = Some(serde_json::json!({"round": 1}));
+    app.view.messages = (0..100)
+        .map(|n| view::MessageEntry {
+            id: format!("message-{n}"),
+            sent_at: None,
+            text: format!("message {n}"),
+            sender: "worker:t2".into(),
+            target: "worker:t2".into(),
+            state: "sent".into(),
+            kind: "message".into(),
+        })
+        .collect();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let area = app.workbench_areas.content;
     let offset = app.offset;
     let wheel = |kind| event::MouseEvent {
         kind,
@@ -1258,15 +1366,43 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
         row: area.y + area.height / 2,
         modifiers: KeyModifiers::NONE,
     };
+    let before = terminal_text(&terminal);
     app.mouse(wheel(event::MouseEventKind::ScrollDown));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
     app.mouse(wheel(event::MouseEventKind::ScrollDown));
     assert_eq!(
         app.offset, offset,
         "the wheel moved the graph under the card"
     );
-    assert_eq!(app.details.as_ref().unwrap().dash_scroll, 6);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(app.details.as_ref().unwrap().scroll, 6);
+    assert_ne!(terminal_text(&terminal), before);
     app.mouse(wheel(event::MouseEventKind::ScrollUp));
-    assert_eq!(app.details.as_ref().unwrap().dash_scroll, 3);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(app.details.as_ref().unwrap().scroll, 3);
+    let received = app.bind_native_input_for_test();
+    app.key(key_press(KeyCode::Tab));
+    app.key(key_press(KeyCode::Char('i')));
+    assert!(app.native_focused());
+    let native = app.details.as_ref().unwrap().native_areas[0];
+    let mouse = event::MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: native.x + native.width / 2,
+        row: native.y + native.height / 2,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(mouse);
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Mouse { event }))
+        if event.column == mouse.column - native.x && event.row == mouse.row - native.y && event.kind == mouse.kind)
+    );
+    assert_eq!(app.details.as_ref().unwrap().scroll, 3);
+    assert_eq!(app.offset, offset);
+    assert_eq!(app.selected, "worker:t2");
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t2".into())
+    );
 }
 
 #[test]
@@ -1526,21 +1662,42 @@ fn escape_restores_zoom_split_before_leaving_workbench() {
 #[test]
 fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
     let mut app = test_app();
-    app.navigation.screen = Screen::Workbench;
-    app.navigation.focus = NavigationFocus::WorkbenchTerminal;
-    app.navigation
-        .update_presentation(|presentation| presentation.split = true);
-    app.navigation.zoom(true);
-    let mut details = Details::new("worker:t1".into());
-    details.native_focus = true;
-    app.details = Some(details);
-    assert!(app.native_focused());
-
-    assert!(app.key_inner(key_press(KeyCode::Esc)));
-
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        ..Default::default()
+    }];
+    app.key(key_press(KeyCode::Enter));
+    app.key(key_press(KeyCode::Tab));
+    app.key(key_press(KeyCode::Char('z')));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert!(!app.native_focused(), "terminal starts in preview");
+    app.key(key_press(KeyCode::Esc));
     assert!(!app.navigation.presentation().zoomed);
     assert!(app.navigation.presentation().split);
     assert_eq!(app.navigation.screen, Screen::Workbench);
+
+    app.key(key_press(KeyCode::Char('z')));
+    let received = app.bind_native_input_for_test();
+    app.key(key_press(KeyCode::Char('i')));
+    assert!(app.native_focused());
+    let escape = key_press(KeyCode::Esc);
+    app.key(escape);
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Key { event })) if event == escape)
+    );
+    assert!(app.navigation.presentation().zoomed);
+    app.key(key_ctrl(']'));
+    assert!(!app.native_focused());
+    assert!(received.try_recv().is_err());
+    app.key(escape);
+    assert!(!app.navigation.presentation().zoomed);
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    app.key(escape);
+    app.key(escape);
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    assert_eq!(app.selected, "worker:t1");
 }
 
 #[test]
@@ -1971,20 +2128,29 @@ fn new_session_header_and_palette_entries_are_available() {
 
 #[test]
 fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
-    for ch in [']', '5'] {
-        let mut app = test_app();
-        app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
-        let mut details = Details::new("worker:t1".into());
-        details.native_focus = true;
-        app.details = Some(details);
-        assert!(app.native_focused());
-
-        app.key(key_ctrl(ch));
-
-        assert!(!app.native_focused());
-        assert!(app.details.is_some());
-        assert_eq!(app.input.text, "Unsent draft 👩‍💻");
-    }
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
+    app.open_details("worker:t1".into());
+    app.key(key_press(KeyCode::Tab));
+    let received = app.bind_native_input_for_test();
+    app.key(key_press(KeyCode::Char('i')));
+    assert!(app.native_focused());
+    let ctrl_five = key_ctrl('5');
+    app.key(ctrl_five);
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Key { event })) if event == ctrl_five)
+    );
+    assert!(app.native_focused());
+    app.key(key_ctrl(']'));
+    assert!(!app.native_focused());
+    assert!(received.try_recv().is_err());
+    assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
+    assert_eq!(
+        app.navigation.target,
+        WorkbenchTarget::Agent("worker:t1".into())
+    );
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.input.text, "Unsent draft 👩‍💻");
 }
 
 #[test]
@@ -2487,79 +2653,126 @@ fn app_draw_transcript_empty_state() {
     assert!(text.contains("No messages in this conversation"));
 }
 
+fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+    let title = if comment { "comment on" } else { "To ·" };
+    let top = (buffer.area.top()..buffer.area.bottom())
+        .find(|&y| {
+            let row: String = (buffer.area.left()..buffer.area.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            row.contains(title)
+        })
+        .expect("rendered editor title");
+    let left = (buffer.area.left()..buffer.area.right())
+        .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
+        .expect("left frame corner");
+    let right = (left + 1..buffer.area.right())
+        .rev()
+        .find(|&x| matches!(buffer[(x, top)].symbol(), "╮" | "┐" | "+"))
+        .expect("right frame corner");
+    let bottom = (top + 1..buffer.area.bottom())
+        .find(|&y| matches!(buffer[(left, y)].symbol(), "╰" | "└" | "+"))
+        .expect("bottom frame corner");
+    let text_top = top + 1 + u16::from(comment); // Skip the comment prompt.
+    Rect::new(left + 1, text_top, right - left - 1, bottom - text_top)
+}
+
 #[test]
 fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
+    use ratatui::{Terminal, backend::TestBackend};
+    use unicode_segmentation::UnicodeSegmentation;
 
-    // 1. Chat input with text exactly matching inner width (60 cols wide -> inner width is 58)
-    let mut app = test_app();
-    app.input = InputBuffer::with_text("a".repeat(58));
-    app.input.move_end();
-
-    let backend = TestBackend::new(60, 12);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|frame| {
-            app.draw(frame);
-        })
-        .unwrap();
-
-    let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
-    // Inner x is 1..=58. Border is at 0 (left) and 59 (right).
-    // Cursor must be strictly inside the inner viewport: x <= 58, x >= 1.
-    assert!(
-        (1..=58).contains(&cursor_x),
-        "Chat cursor x ({}) must be inside inner viewport [1, 58] and not land on right border 59",
-        cursor_x
-    );
-    assert!(
-        (1..=10).contains(&cursor_y),
-        "Chat cursor y ({}) must be inside inner viewport",
-        cursor_y
-    );
-
-    // 2. Comment editor with exact inner width text
-    let mut app = test_app();
-    app.editor = Some(Editor {
-        target: "worker:t1".into(),
-        input: InputBuffer::with_text("b".repeat(58)),
-    });
-    app.editor.as_mut().unwrap().input.move_end();
-
-    terminal
-        .draw(|frame| {
-            app.draw(frame);
-        })
-        .unwrap();
-
-    let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
-    assert!(
-        (1..=58).contains(&cursor_x),
-        "Comment editor cursor x ({}) must be inside inner viewport and not on border",
-        cursor_x
-    );
-    assert!(
-        (1..=10).contains(&cursor_y),
-        "Comment editor cursor y ({}) must be inside inner viewport",
-        cursor_y
-    );
-
-    // 3. Resizing from wider to narrower terminal viewports
-    let mut app = test_app();
-    app.input = InputBuffer::with_text("first line of text\nsecond line of text");
-    app.input.move_end();
-
-    // Draw at 100x30 first
-    let backend100 = TestBackend::new(100, 30);
-    let mut term100 = Terminal::new(backend100).unwrap();
-    term100.draw(|frame| app.draw(frame)).unwrap();
-
-    // Resize down to 60x12
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let (rx, ry) = terminal.get_cursor_position().unwrap().into();
-    assert!((1..=58).contains(&rx));
-    assert!((1..=10).contains(&ry));
+    for comment in [false, true] {
+        let mut app = test_app();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        for (width, height) in [(60, 12), (100, 30), (60, 12), (12, 5), (60, 12)] {
+            terminal.backend_mut().resize(width, height);
+            terminal.autoresize().unwrap();
+            // The comment overlay deliberately does not open below its minimum height.
+            if comment && height < 6 {
+                continue;
+            }
+            if !comment || app.editor.is_some() {
+                let draft = if comment {
+                    app.editor.as_ref().unwrap().input.text.clone()
+                } else {
+                    app.input.text.clone()
+                };
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                assert!(viewport.contains(terminal.get_cursor_position().unwrap()));
+                assert_eq!(
+                    if comment {
+                        &app.editor.as_ref().unwrap().input.text
+                    } else {
+                        &app.input.text
+                    },
+                    &draft
+                );
+            }
+            app.input = InputBuffer::default();
+            app.editor = comment.then(|| Editor {
+                target: "worker:t1".into(),
+                input: InputBuffer::default(),
+            });
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+            for text in [
+                "a".repeat(usize::from(viewport.width - 1)),
+                "b".repeat(usize::from(viewport.width)),
+                "c".repeat(58),
+                format!(
+                    "{}👩‍💻e\u{301}漢🙂",
+                    "d".repeat(usize::from(viewport.width - 1))
+                ),
+            ] {
+                if comment {
+                    app.editor.as_mut().unwrap().input = InputBuffer::with_text(&text);
+                } else {
+                    app.input = InputBuffer::with_text(&text);
+                }
+                for key in [
+                    None,
+                    Some(KeyCode::Left),
+                    Some(KeyCode::Right),
+                    Some(KeyCode::Up),
+                    Some(KeyCode::Down),
+                ] {
+                    if let Some(key) = key {
+                        app.key(event::KeyEvent::new(key, KeyModifiers::NONE));
+                    }
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    assert!(
+                        viewport.contains(cursor),
+                        "cursor {cursor:?} outside actual editor {viewport:?}"
+                    );
+                    let input = if comment {
+                        &app.editor.as_ref().unwrap().input
+                    } else {
+                        &app.input
+                    };
+                    assert_eq!(input.text, text);
+                    assert!(
+                        input
+                            .text
+                            .grapheme_indices(true)
+                            .any(|(i, _)| i == input.cursor)
+                            || input.cursor == input.text.len()
+                    );
+                    assert!(
+                        matches!(
+                            terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol(),
+                            "│" | "|"
+                        ),
+                        "right border {:?}, comment={comment}, viewport={viewport:?}, cursor={cursor:?}",
+                        terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol()
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

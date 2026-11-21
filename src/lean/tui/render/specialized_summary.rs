@@ -1,17 +1,23 @@
 use super::super::workbench_summary::{Completion, Recovery, Summary};
 use super::super::*;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, summary: Summary, scroll: &mut usize) -> bool {
+pub(super) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    summary: Summary,
+    scroll: &mut usize,
+    theme: &Theme,
+) -> bool {
     let title = match &summary {
         Summary::Recovery(_) => " Task status · recovery actions ",
         Summary::Completion(_) => " Session completion ",
         Summary::Empty => return false,
     };
-    let theme = Theme::from_env();
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(theme.borders())
         .border_style(theme.faint())
-        .title(title);
+        .title(theme.chrome(title));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.is_empty() {
@@ -19,8 +25,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, summary: Summary, scroll: &mut
     }
     let width = usize::from(inner.width.saturating_sub(1)).max(1);
     let lines = match &summary {
-        Summary::Recovery(recovery) => recovery_lines(recovery, width, &theme),
-        Summary::Completion(completion) => completion_lines(completion, width, &theme),
+        Summary::Recovery(recovery) => recovery_lines(recovery, width, theme),
+        Summary::Completion(completion) => completion_lines(completion, width, theme),
         Summary::Empty => return false,
     };
     let max_scroll = lines.len().saturating_sub(usize::from(inner.height));
@@ -34,15 +40,16 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, summary: Summary, scroll: &mut
         inner,
         lines.len(),
         *scroll,
-        &theme,
+        theme,
     );
     true
 }
 
 fn recovery_lines(recovery: &Recovery, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let dot = theme.glyphs().dot;
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "{} · {} · {} · F5 / u for actions",
+            "{} {dot} {} {dot} {} {dot} F5 / u for actions",
             recovery.task,
             recovery.title,
             recovery.status.replace('_', " ")
@@ -61,9 +68,9 @@ fn recovery_lines(recovery: &Recovery, width: usize, theme: &Theme) -> Vec<Line<
                     index + 1,
                     choice.label,
                     if choice.asks_text {
-                        " · opens a scoped draft"
+                        theme.chrome(" · opens a scoped draft")
                     } else {
-                        ""
+                        String::new()
                     }
                 );
                 crate::lean::tui::view::wrap(&text, width)
@@ -100,7 +107,7 @@ fn completion_lines(completion: &Completion, width: usize, theme: &Theme) -> Vec
         let state = match &action.result {
             None => "available".to_owned(),
             Some(crate::lean::daemon::SessionActionResult::Queued { .. }) => {
-                "queued · awaiting result".into()
+                theme.chrome("queued · awaiting result")
             }
             Some(crate::lean::daemon::SessionActionResult::Succeeded { summary }) => {
                 format!("succeeded: {summary}")
@@ -113,13 +120,13 @@ fn completion_lines(completion: &Completion, width: usize, theme: &Theme) -> Vec
             }
         };
         let marker = if index == completion.selected {
-            "▸"
+            theme.glyphs().pointer
         } else {
             " "
         };
         append_wrapped(
             &mut lines,
-            &format!("{}. {label} · {state}", index + 1),
+            &format!("{}. {label} {} {state}", index + 1, theme.glyphs().dot),
             width,
             marker,
             None,
@@ -143,7 +150,7 @@ fn completion_lines(completion: &Completion, width: usize, theme: &Theme) -> Vec
         );
     }
     lines.push(Line::raw(
-        "Keys 1–3 run the matching action for this session.",
+        theme.chrome("Keys 1–3 run the matching action for this session."),
     ));
     lines
 }

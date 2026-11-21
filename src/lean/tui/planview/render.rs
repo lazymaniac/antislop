@@ -75,13 +75,6 @@ impl PlanView {
         } else {
             self.draw_buttons(frame, chunks[2], view, theme);
         }
-        // Apply the same terminal fallbacks when this viewer is drawn directly.
-        if !theme.color {
-            crate::lean::tui::without_color(frame.buffer_mut());
-        }
-        if theme.ascii {
-            crate::lean::tui::in_ascii(frame.buffer_mut());
-        }
     }
 
     fn frame_layout(
@@ -186,7 +179,7 @@ impl PlanView {
             Line::styled(
                 format!(
                     " {}",
-                    fit_hint(
+                    theme.chrome(&fit_hint(
                         &[
                             "↑/↓ move",
                             "c comment line",
@@ -196,7 +189,7 @@ impl PlanView {
                         ],
                         usize::from(width.saturating_sub(1)),
                         true,
-                    )
+                    ))
                 ),
                 theme.dim(),
             ),
@@ -207,21 +200,23 @@ impl PlanView {
         let mut notes = Vec::new();
         if drafts > 0 {
             notes.push(Span::styled(
-                format!(" ✎ {drafts} draft comment(s) "),
-                Style::default()
-                    .fg(crate::lean::tui::theme::ayu::BLUE)
-                    .add_modifier(Modifier::BOLD),
+                theme.chrome(&format!(" ✎ {drafts} draft comment(s) ")),
+                theme.accent(),
             ));
-            notes.push(Span::styled("— R sends them for review · ", theme.dim()));
+            notes.push(Span::styled(
+                theme.chrome("— R sends them for review · "),
+                theme.dim(),
+            ));
         }
         if sent > 0 {
             notes.push(Span::styled(
-                format!(" ⚠ {sent} unresolved comment(s) on this plan "),
-                Style::default()
-                    .fg(crate::lean::tui::theme::ayu::YELLOW)
-                    .add_modifier(Modifier::BOLD),
+                theme.chrome(&format!(" ⚠ {sent} unresolved comment(s) on this plan ")),
+                theme.warning(),
             ));
-            notes.push(Span::styled("— r resolve · o retry/reopen", theme.dim()));
+            notes.push(Span::styled(
+                theme.chrome("— r resolve · o retry/reopen"),
+                theme.dim(),
+            ));
         }
         notes
     }
@@ -251,20 +246,16 @@ impl PlanView {
             ][..]
         };
         Line::from(vec![
-            Span::styled(
-                tasks.clone(),
-                Style::default()
-                    .fg(crate::lean::tui::theme::ayu::BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(tasks.clone(), theme.accent()),
             Span::styled(
                 format!(
-                    "· {}",
-                    fit_hint(
+                    "{} {}",
+                    theme.glyphs().dot,
+                    theme.chrome(&fit_hint(
                         hints,
                         usize::from(width).saturating_sub(tasks.len() + 2),
                         true
-                    )
+                    ))
                 ),
                 theme.dim(),
             ),

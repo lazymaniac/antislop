@@ -1,6 +1,7 @@
 use super::catalog::COMMANDS;
 use super::picker_layout::PickerLayout;
 use super::*;
+use crate::lean::tui::theme::Theme;
 
 const SMALL_CHANGE_OPTIONS_SUMMARY: &str = "options when enabled; static analysis + tests";
 
@@ -250,7 +251,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
     ]
 }
 
-fn agent_items(view: &View) -> Vec<(String, Action)> {
+fn agent_items(view: &View, dot: &str) -> Vec<(String, Action)> {
     Graph::new(view)
         .nodes
         .iter()
@@ -269,7 +270,7 @@ fn agent_items(view: &View) -> Vec<(String, Action)> {
                     } else {
                         role
                     };
-                    format!("{} task · {} · {role}", task.id, task.title)
+                    format!("{} task {dot} {} {dot} {role}", task.id, task.title)
                 })
                 .unwrap_or_else(|| agent_name(&node.key));
             (label, Action::Select(node.key.clone()))
@@ -309,43 +310,47 @@ fn project_items(items: &[ProjectItem]) -> Vec<(String, Action)> {
         .collect()
 }
 
-fn recipient_items(view: &View) -> Vec<(String, Action)> {
+fn recipient_items(view: &View, dot: &str) -> Vec<(String, Action)> {
     let mut items = vec![
         (
-            "orchestrator · default recipient".into(),
+            format!("orchestrator {dot} default recipient"),
             Action::Address("orchestrator".into()),
         ),
         (
-            "all · broadcast to all active tasks".into(),
+            format!("all {dot} broadcast to all active tasks"),
             Action::Address("all".into()),
         ),
         (
-            "plan-reviewer · plan reviewer".into(),
+            format!("plan-reviewer {dot} plan reviewer"),
             Action::Address("plan-reviewer".into()),
         ),
         (
-            "auditor · final auditor".into(),
+            format!("auditor {dot} final auditor"),
             Action::Address("auditor".into()),
         ),
     ];
     for task in &view.tasks {
-        append_task_recipients(&mut items, task);
+        append_task_recipients(&mut items, task, dot);
     }
     items
 }
 
-fn append_task_recipients(items: &mut Vec<(String, Action)>, task: &super::super::view::TaskRow) {
+fn append_task_recipients(
+    items: &mut Vec<(String, Action)>,
+    task: &super::super::view::TaskRow,
+    dot: &str,
+) {
     let access = if task.change_kind.has_delivery() {
         "modifies files"
     } else {
         "report"
     };
     items.push((
-        format!("worker:{} · {} ({access})", task.id, task.title),
+        format!("worker:{} {dot} {} ({access})", task.id, task.title),
         Action::Address(format!("worker:{}", task.id)),
     ));
     items.push((
-        format!("reviewer:{} · task reviewer {}", task.id, task.title),
+        format!("reviewer:{} {dot} task reviewer {}", task.id, task.title),
         Action::Address(format!("reviewer:{}", task.id)),
     ));
 }
@@ -381,11 +386,11 @@ impl Picker {
 
     /// The entries matching what was typed, each word anywhere in the label.
     pub fn items(&self, view: &View) -> Vec<(String, Action)> {
-        let all = self.unfiltered_items(view);
+        let all = self.unfiltered_items(view, "·");
         self.matching_items(all)
     }
 
-    fn unfiltered_items(&self, view: &View) -> Vec<(String, Action)> {
+    fn unfiltered_items(&self, view: &View, dot: &str) -> Vec<(String, Action)> {
         match self.kind {
             Kind::Commands => {
                 if self.query.trim().is_empty() {
@@ -394,11 +399,11 @@ impl Picker {
                     extended_command_items(view)
                 }
             }
-            Kind::Agents => agent_items(view),
+            Kind::Agents => agent_items(view, dot),
             Kind::History => history_items(view),
             Kind::Conversations => conversation_items(&self.conversations),
             Kind::Projects => project_items(&self.projects),
-            Kind::Recipients => recipient_items(view),
+            Kind::Recipients => recipient_items(view, dot),
             Kind::SlashCommands => slash_command_items(view),
             Kind::Rigor => rigor_items(view),
         }
@@ -434,7 +439,28 @@ impl Picker {
     }
 
     pub fn draw_with_cursor(&mut self, frame: &mut Frame, view: &View, show_cursor: bool) {
-        let items = self.items(view);
+        self.draw_themed(frame, view, show_cursor, &Theme::from_env());
+    }
+
+    pub(in crate::lean::tui) fn draw_themed(
+        &mut self,
+        frame: &mut Frame,
+        view: &View,
+        show_cursor: bool,
+        theme: &Theme,
+    ) {
+        let items = if matches!(self.kind, Kind::Agents | Kind::Recipients) {
+            let canonical = self.unfiltered_items(view, "·");
+            let themed = self.unfiltered_items(view, theme.glyphs().dot);
+            let matching = self.items(view);
+            canonical
+                .into_iter()
+                .zip(themed)
+                .filter_map(|(original, themed)| matching.contains(&original).then_some(themed))
+                .collect()
+        } else {
+            self.items(view)
+        };
         self.selected = self.selected.min(items.len().saturating_sub(1));
         let header_rows = if self.recommendation.is_some() {
             1 + usize::from(frame.area().height.saturating_sub(5).min(2))
@@ -445,24 +471,35 @@ impl Picker {
         else {
             return;
         };
-        let lines = self.draw_lines(&items, layout);
+        let lines = self.draw_lines(&items, layout, theme);
         let title = if self.kind == Kind::Conversations && self.confirm_delete {
             self.delete_target.as_ref().map_or_else(
-                || " delete session? y confirm · n/Esc cancel ".to_owned(),
-                |target| format!(" delete {}? y confirm · n/Esc cancel ", target.title),
+                || theme.chrome(" delete session? y confirm · n/Esc cancel "),
+                |target| {
+                    format!(
+                        " delete {}? {}",
+                        target.title,
+                        theme.chrome("y confirm · n/Esc cancel ")
+                    )
+                },
             )
         } else if self.recommendation.is_some() {
-            " Recommended rigor · Enter confirm · Esc close ".to_owned()
+            theme.chrome(" Recommended rigor · Enter confirm · Esc close ")
         } else {
-            picker_title(self.kind, layout.width).to_owned()
+            theme.chrome(picker_title(self.kind, layout.width))
         };
-        draw_picker(frame, layout.box_area, lines, &title);
+        draw_picker(frame, layout.box_area, lines, &title, theme);
         if show_cursor {
             self.place_cursor(frame, layout);
         }
     }
 
-    fn draw_lines(&self, items: &[(String, Action)], layout: PickerLayout) -> Vec<Line<'static>> {
+    fn draw_lines(
+        &self,
+        items: &[(String, Action)],
+        layout: PickerLayout,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         if let Some((team, reason)) = &self.recommendation
             && layout.header_rows >= 2
@@ -480,7 +517,7 @@ impl Picker {
                 let reason = truncate(reason, layout.inner);
                 lines.push(Line::styled(
                     truncate(&format!("Reason: {reason}"), layout.inner),
-                    dim(),
+                    theme.dim(),
                 ));
             }
         }
@@ -494,13 +531,26 @@ impl Picker {
                     empty_message(self.kind, self.query.is_empty()),
                     layout.inner,
                 ),
-                dim(),
+                theme.dim(),
             ));
         }
-        append_visible_items(&mut lines, items, self.selected, layout);
+        append_visible_items(
+            &mut lines,
+            items,
+            self.selected,
+            layout,
+            theme,
+            matches!(
+                self.kind,
+                Kind::Commands | Kind::Rigor | Kind::SlashCommands
+            ),
+        );
         lines.push(Line::styled(
-            truncate("↑/↓ move · Enter select · Esc close", layout.inner),
-            dim(),
+            truncate(
+                &theme.chrome("↑/↓ move · Enter select · Esc close"),
+                layout.inner,
+            ),
+            theme.dim(),
         ));
         lines
     }
@@ -540,6 +590,8 @@ fn append_visible_items(
     items: &[(String, Action)],
     selected: usize,
     layout: PickerLayout,
+    theme: &Theme,
+    chrome: bool,
 ) {
     for (index, (label, _)) in items
         .iter()
@@ -547,7 +599,12 @@ fn append_visible_items(
         .skip(layout.start)
         .take(layout.visible_rows)
     {
-        let label = truncate(label, layout.inner);
+        let label = if chrome {
+            theme.chrome(label)
+        } else {
+            label.clone()
+        };
+        let label = theme.fit(&label, layout.inner);
         let padding = layout.inner.saturating_sub(label.width());
         let line = format!("{label}{}", " ".repeat(padding));
         let style = if index == selected {
@@ -590,13 +647,20 @@ fn picker_title(kind: Kind, width: u16) -> &'static str {
     }
 }
 
-fn draw_picker(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, title: &str) {
+fn draw_picker(
+    frame: &mut Frame,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    title: &str,
+    theme: &Theme,
+) {
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(theme.panel()).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default())
+                .border_set(theme.borders())
+                .border_style(theme.separator(false))
                 .title(title),
         ),
         area,

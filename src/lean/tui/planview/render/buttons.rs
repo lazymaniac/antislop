@@ -69,11 +69,8 @@ impl PlanView {
         let style = self.button_style(theme, tone, active);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(if active {
-                Style::default().fg(crate::lean::tui::theme::ayu::BLUE)
-            } else {
-                theme.dim()
-            });
+            .border_set(theme.borders())
+            .border_style(theme.separator(active));
         let inner = block.inner(rect);
         frame.render_widget(block, rect);
         if inner.height > 0 && inner.width > 0 {

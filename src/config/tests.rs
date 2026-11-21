@@ -1,7 +1,7 @@
 use super::*;
 use crate::Error;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[test]
 fn configuration_errors_explain_location_and_repair_without_values() {
@@ -381,7 +381,11 @@ fn local_options_have_a_default_and_can_be_disabled() {
 
 #[test]
 fn load_and_resolve_preserve_file_error_context_and_role_selection() {
-    let path = PathBuf::from("examples/antislop.toml");
+    let root = crate::lean::paths::state_root().unwrap().join("tests");
+    std::fs::create_dir_all(&root).unwrap();
+    let fixture = tempfile::tempdir_in(root).unwrap();
+    let path = fixture.path().join("antislop.toml");
+    std::fs::write(&path, include_str!("../../examples/antislop.toml")).unwrap();
     let loaded = Config::load(&path).unwrap();
     assert_eq!(
         loaded
@@ -398,7 +402,14 @@ fn load_and_resolve_preserve_file_error_context_and_role_selection() {
         "execution"
     );
 
-    let error = Config::load(Path::new("examples/missing-config-test.toml"));
+    let invalid = fixture.path().join("invalid.toml");
+    std::fs::write(&invalid, "schema_version = [").unwrap();
+    let error = Config::load(&invalid).unwrap_err().to_string();
+    assert!(error.contains(invalid.to_str().unwrap()), "{error}");
+    assert!(error.contains("line 1, column"), "{error}");
+    assert!(error.contains("to fix:"), "{error}");
+
+    let error = Config::load(&fixture.path().join("missing-config-test.toml"));
     assert!(matches!(error, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound));
 }
 

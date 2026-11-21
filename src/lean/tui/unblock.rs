@@ -198,14 +198,17 @@ impl Unblock {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        let theme = super::theme::Theme::from_env();
+        let separator = theme.chrome("·");
         let area = frame.area();
         let boxed = centered_box(area, self.choices.len());
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(super::theme::ayu::YELLOW))
+            .border_set(theme.borders())
+            .border_style(theme.separator(false))
             .title(format!(
-                " Task actions {} · {} ",
+                " Task actions {} {separator} {} ",
                 clean(&self.task),
                 self.status.replace('_', " ")
             ));
@@ -249,7 +252,7 @@ fn title_lines(title: &str, reason: &str, width: usize) -> Vec<Line<'static>> {
         )),
         Line::from(Span::styled(
             truncate(&clean(reason).replace('\n', " "), width),
-            Style::default().fg(super::theme::ayu::RED),
+            super::theme::Theme::from_env().error(),
         )),
         Line::raw(""),
     ]
@@ -302,8 +305,12 @@ fn append_footer(lines: &mut Vec<Line<'static>>, height: u16, width: usize) {
         let gap = height - 1 - lines.len() as u16;
         lines.extend((0..gap).map(|_| Line::raw("")));
         lines.push(Line::from(Span::styled(
-            truncate("↑/↓ choose · Enter or 1-9 do it · Esc back", width),
-            Style::default().fg(super::theme::ayu::DIM),
+            truncate(
+                &super::theme::Theme::from_env()
+                    .chrome("↑/↓ choose · Enter or 1-9 do it · Esc back"),
+                width,
+            ),
+            super::theme::Theme::from_env().dim(),
         )));
     }
 }

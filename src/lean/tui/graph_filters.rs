@@ -3,7 +3,7 @@
 //! off by itself; an empty state or provider set keeps every card.
 
 use super::graph::{Health, RELATIONS, Relations, Scope};
-use super::theme::ayu;
+use super::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -143,6 +143,7 @@ impl FilterMenu {
         relations: Relations,
         scope: &Scope,
     ) {
+        let theme = Theme::from_env();
         let rows = rows(providers);
         self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         let area = frame.area();
@@ -153,7 +154,8 @@ impl FilterMenu {
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(ayu::BLUE))
+            .border_set(theme.borders())
+            .border_style(theme.separator(true))
             .title(" Graph filters ");
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
@@ -186,8 +188,8 @@ impl FilterMenu {
         }
         lines.push(Line::default());
         lines.push(Line::styled(
-            "space toggle · 1-4 relations · r reset · esc close",
-            Style::default().fg(ayu::DIM),
+            Theme::from_env().chrome("space toggle · 1-4 relations · r reset · esc close"),
+            Theme::from_env().dim(),
         ));
         lines
     }
@@ -208,7 +210,7 @@ fn append_heading(lines: &mut Vec<Line<'static>>, heading: &'static str) {
     if !lines.is_empty() {
         lines.push(Line::default());
     }
-    lines.push(Line::styled(heading, Style::default().fg(ayu::DIM)));
+    lines.push(Line::styled(heading, Theme::from_env().dim()));
 }
 
 fn heading(row: &Row, index: usize, rows: &[Row]) -> Option<&'static str> {

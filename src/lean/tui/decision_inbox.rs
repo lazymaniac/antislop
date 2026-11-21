@@ -125,6 +125,8 @@ impl Inbox {
         frame.render_widget(Clear, area);
         let outer = Block::default()
             .borders(Borders::ALL)
+            .border_set(theme.borders())
+            .border_style(theme.separator(false))
             .title(" Decisions ")
             .style(theme.card());
         let body = outer.inner(area);
@@ -140,7 +142,11 @@ impl Inbox {
             .selected
             .as_ref()
             .and_then(|target| items.iter().position(|item| &item.0 == target));
-        let list_block = Block::default().borders(Borders::RIGHT).title(" Inbox ");
+        let list_block = Block::default()
+            .borders(Borders::RIGHT)
+            .border_set(theme.borders())
+            .border_style(theme.separator(false))
+            .title(" Inbox ");
         let list_inner = list_block.inner(columns[0]);
         frame.render_widget(list_block, columns[0]);
         let list_height = usize::from(list_inner.height);
@@ -220,11 +226,15 @@ impl Inbox {
     ) {
         let inner = Block::default()
             .borders(Borders::ALL)
+            .border_set(theme.borders())
+            .border_style(theme.separator(false))
             .title(" CLI approval ")
             .inner(area);
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
+                .border_set(theme.borders())
+                .border_style(theme.separator(false))
                 .title(" CLI approval ")
                 .style(theme.card()),
             area,
@@ -235,7 +245,7 @@ impl Inbox {
         let width = usize::from(inner.width).saturating_sub(1).max(1);
         let mut lines = vec![
             Line::from(Span::styled(
-                format!("{} · {}", approval.role, approval.provider),
+                format!("{}: {}", approval.role, approval.provider),
                 theme.title(),
             )),
             Line::raw(String::new()),
@@ -251,7 +261,14 @@ impl Inbox {
             .min(approval.options.len().saturating_sub(1));
         for (index, (id, label, decision)) in approval.options.iter().enumerate() {
             let marker = if index == chosen { ">" } else { " " };
-            let line = format!("{marker} {}. {} [{}] · {}", index + 1, label, id, decision);
+            let line = format!(
+                "{marker} {}. {} [{}] {} {}",
+                index + 1,
+                label,
+                id,
+                theme.glyphs().dot,
+                decision
+            );
             let style = if index == chosen {
                 theme.selected()
             } else {
@@ -268,11 +285,12 @@ impl Inbox {
             Some(ApprovalStatus::Sending { .. }) => {
                 Line::from(Span::styled("Sending…", theme.dim()))
             }
-            Some(ApprovalStatus::Accepted { .. }) => {
-                Line::from(Span::styled("Sent · waiting for resolution", theme.dim()))
-            }
+            Some(ApprovalStatus::Accepted { .. }) => Line::from(Span::styled(
+                theme.chrome("Sent · waiting for resolution"),
+                theme.dim(),
+            )),
             Some(ApprovalStatus::Failed { error, .. }) => Line::from(Span::styled(
-                format!("Error: {error} · retry with Enter"),
+                format!("Error: {error} {} retry with Enter", theme.glyphs().dot),
                 theme.warning(),
             )),
             None if approval.orchestrator => Line::from(Span::styled(
@@ -280,7 +298,7 @@ impl Inbox {
                 theme.dim(),
             )),
             None => Line::from(Span::styled(
-                "Enter: send · 0: decide later · Tab: inbox",
+                theme.chrome("Enter: send · 0: decide later · Tab: inbox"),
                 theme.dim(),
             )),
         });
@@ -571,7 +589,7 @@ impl ApprovalStatus {
 }
 
 impl super::App {
-    pub(super) fn draw_decision_inbox(&mut self, frame: &mut Frame) {
+    pub(super) fn draw_decision_inbox(&mut self, frame: &mut Frame, theme: &Theme) {
         if self.help.is_some()
             || self.picker.is_some()
             || self.editor.is_some()
@@ -587,7 +605,6 @@ impl super::App {
             .filter(|((conversation, _), _)| conversation == &self.conversation)
             .map(|((_, request), status)| (request.clone(), (*status).clone()))
             .collect::<std::collections::HashMap<_, _>>();
-        let theme = Theme::from_env();
         let Some(inbox) = self.decision_inbox.as_mut() else {
             return;
         };
@@ -602,7 +619,7 @@ impl super::App {
                 form,
                 statuses: &statuses,
             },
-            &theme,
+            theme,
         );
     }
 
@@ -617,7 +634,7 @@ impl super::App {
                     .get(&(self.conversation.clone(), approval.request.clone()));
                 let label = if status.is_some_and(ApprovalStatus::pending) {
                     if matches!(status, Some(ApprovalStatus::Accepted { .. })) {
-                        "Sent · waiting"
+                        "Sent - waiting"
                     } else {
                         "Sending"
                     }
@@ -630,7 +647,7 @@ impl super::App {
                 };
                 (
                     Target::Approval(approval.request.clone()),
-                    format!("{} · {}", approval.role, approval.provider),
+                    format!("{}: {}", approval.role, approval.provider),
                     label.to_owned(),
                 )
             })

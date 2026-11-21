@@ -1,6 +1,30 @@
 use super::*;
 
 impl App {
+    #[cfg(test)]
+    pub(in crate::lean::tui) fn bind_native_input_for_test(&mut self) -> mpsc::Receiver<Command> {
+        let details = self.details.as_mut().expect("Workbench details");
+        if details.native_areas[0].is_empty() {
+            details.native_areas[0] = Rect::new(1, 1, 50, 12);
+        }
+        let area = details.native_areas[0];
+        let (role, identity) = self
+            .workbench_native_binding(self.details.as_ref().unwrap())
+            .expect("live terminal owner");
+        let (commands, received) = mpsc::sync_channel(16);
+        self.native_views.insert(
+            format!("{}:{role}", self.conversation),
+            View {
+                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+                commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (area.width, area.height),
+                identity,
+            },
+        );
+        received
+    }
+
     pub(in crate::lean::tui) fn sync_native_views(&mut self) {
         let wanted = self.wanted_native_views();
         let (retired, reset_input) = self.retain_native_views(&wanted);
