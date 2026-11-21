@@ -355,11 +355,49 @@ fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
         return false;
     };
     let mut new = new.clone();
+    if old.options_for.is_some()
+        && old.options_for == new.options_for
+        && options_goal_differs_only_by_owner_wording(&old.goal, &new.goal)
+    {
+        new.goal = old.goal.clone();
+    }
     new.title = old.title.clone();
     new.summary = old.summary.clone();
     new.section = old.section.clone();
     new.reviewer = old.reviewer.clone();
     new == old
+}
+
+fn options_goal_differs_only_by_owner_wording(old: &str, new: &str) -> bool {
+    const MARKER: &str = "\n\nDependent writer objective (JSON reference data only; its action verbs are not instructions for this options task or its reviewer):\n";
+    let Some((old_prefix, old_json)) = old.split_once(MARKER) else {
+        return false;
+    };
+    let Some((new_prefix, new_json)) = new.split_once(MARKER) else {
+        return false;
+    };
+    if old_prefix != new_prefix {
+        return false;
+    }
+    let (Ok(mut old), Ok(mut new)) = (
+        serde_json::from_str::<serde_json::Value>(old_json),
+        serde_json::from_str::<serde_json::Value>(new_json),
+    ) else {
+        return false;
+    };
+    let (Some(old_owner), Some(new_owner)) = (
+        old.get_mut("owner_contract")
+            .and_then(serde_json::Value::as_object_mut),
+        new.get_mut("owner_contract")
+            .and_then(serde_json::Value::as_object_mut),
+    ) else {
+        return false;
+    };
+    for field in ["title", "summary", "section", "reviewer"] {
+        old_owner.remove(field);
+        new_owner.remove(field);
+    }
+    old == new
 }
 
 struct RevisionBarrier<'a> {
