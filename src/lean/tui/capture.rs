@@ -10,7 +10,127 @@ use ratatui::{Terminal, backend::TestBackend};
 use serde_json::{Value, json};
 use std::{io::Write, path::Path};
 
-const GEOMETRIES: [(u16, u16); 6] = [(12, 5), (40, 12), (80, 24), (100, 30), (120, 40), (160, 50)];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Geometry {
+    id: &'static str,
+    width: u16,
+    height: u16,
+}
+
+const GEOMETRIES: &[Geometry] = &[
+    Geometry {
+        id: "minimum-12x5",
+        width: 12,
+        height: 5,
+    },
+    Geometry {
+        id: "compact-40x12",
+        width: 40,
+        height: 12,
+    },
+    Geometry {
+        id: "standard-80x24",
+        width: 80,
+        height: 24,
+    },
+    Geometry {
+        id: "wide-100x30",
+        width: 100,
+        height: 30,
+    },
+    Geometry {
+        id: "large-120x40",
+        width: 120,
+        height: 40,
+    },
+    Geometry {
+        id: "large-160x50",
+        width: 160,
+        height: 50,
+    },
+    Geometry {
+        id: "inspector-below-width",
+        width: 164,
+        height: 19,
+    },
+    Geometry {
+        id: "inspector-at-width",
+        width: 166,
+        height: 19,
+    },
+    Geometry {
+        id: "inspector-above-width",
+        width: 168,
+        height: 19,
+    },
+    Geometry {
+        id: "inspector-below-height",
+        width: 166,
+        height: 18,
+    },
+    Geometry {
+        id: "inspector-above-height",
+        width: 166,
+        height: 20,
+    },
+    Geometry {
+        id: "list-below-width",
+        width: 99,
+        height: 24,
+    },
+    Geometry {
+        id: "list-at-width",
+        width: 100,
+        height: 24,
+    },
+    Geometry {
+        id: "list-above-width",
+        width: 101,
+        height: 24,
+    },
+    Geometry {
+        id: "list-below-height",
+        width: 100,
+        height: 23,
+    },
+    Geometry {
+        id: "list-above-height",
+        width: 100,
+        height: 25,
+    },
+    Geometry {
+        id: "split-below-height",
+        width: 80,
+        height: 23,
+    },
+    Geometry {
+        id: "split-at-height",
+        width: 80,
+        height: 24,
+    },
+    Geometry {
+        id: "split-above-height",
+        width: 80,
+        height: 25,
+    },
+    Geometry {
+        id: "diff-below-width",
+        width: 89,
+        height: 24,
+    },
+    Geometry {
+        id: "diff-at-width",
+        width: 90,
+        height: 24,
+    },
+    Geometry {
+        id: "diff-above-width",
+        width: 91,
+        height: 24,
+    },
+];
+
+const BASE_GEOMETRY_COUNT: usize = 6;
 
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -420,6 +540,7 @@ fn apply_fixture(app: &mut App, id: &str) {
                 {"id":"t2","title":"Verify rendering","goal":"Check captured output","kind":"testing","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Capture is complete"}],"depends_on":["t1"]}
             ]}}));
             app.navigation.screen = Screen::Graph;
+            app.graph_inspector_visible = true;
             if id == "workbench-summary" {
                 app.navigation.screen = Screen::Workbench;
                 app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
@@ -518,6 +639,18 @@ fn apply_fixture(app: &mut App, id: &str) {
                 json!({"id":"t1","title":"Prepare implementation","goal":"Implement the requested change","status":"working","round":1,"change_kind":"code"}),
             );
             app.details = Some(details);
+            if id == "workbench-tab-diff" {
+                let mut diff = DiffView::new("t1".into());
+                diff.load(Ok(json!({
+                    "base":"0123456789abcdef",
+                    "head":"fedcba9876543210",
+                    "files":[{"path":"capture.rs","old_path":null,"status":"modified","added":1,"removed":1,"binary":false,
+                        "lines":[{"kind":"hunk","old":1,"new":1,"text":"@@ -1 +1 @@"},
+                            {"kind":"del","old":1,"new":null,"text":"old capture state"},
+                            {"kind":"add","old":null,"new":1,"text":"verified capture state"}]}]
+                })));
+                app.diff = Some(diff);
+            }
         }
         "recovery-summary" => {
             app.view.apply(&json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p-fixture","tasks":[
@@ -681,6 +814,8 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.screen = Screen::Workbench;
             app.navigation.target = WorkbenchTarget::Session;
             app.navigation.focus = NavigationFocus::WorkbenchContent;
+            app.navigation
+                .update_presentation(|presentation| presentation.split = true);
             let mut details = Details::new("orchestrator".into());
             details.native_areas[0] = Rect::new(25, 2, 50, 10);
             details.editing = false;
@@ -848,7 +983,12 @@ fn color(color: ratatui::style::Color) -> String {
     format!("{color:?}")
 }
 
-fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
+fn capture(fixture: Fixture, geometry: Geometry) -> Value {
+    let Geometry {
+        id: geometry_id,
+        width,
+        height,
+    } = geometry;
     let mut app = App::test_app();
     apply_fixture(&mut app, fixture.id);
     let native_fixture_state = app
@@ -893,11 +1033,11 @@ fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
         "native-pty" | "native-pty-empty-history" | "native-pty-error" if height < 24 => {
             Some("Workbench compact layout has no native terminal panel below 24 rows")
         }
+        "graph-compact" if width != 40 || height != 12 => {
+            Some("The compact graph sample is defined only at its 40x12 responsive geometry")
+        }
         "new-session-composer" if height < 24 => {
             Some("Workbench compact layout replaces the session composer below 24 rows")
-        }
-        "graph-compact" if width != 40 || height != 12 => {
-            Some("Compact responsive state applies only to the 40x12 fixture geometry")
         }
         _ if width == 12 && height == 5 => Some(
             "12x5 is the minimum terminal guard viewport; full surface content and semantic styling are intentionally not applicable",
@@ -908,6 +1048,15 @@ fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
         && height >= 24
         && app.details.as_ref().is_some_and(|details| {
             details.native.contains_key("orchestrator") && !details.native_areas[0].is_empty()
+        });
+    let graph_inspector = fixture.view == "graph" && text_has_inspector(&cells);
+    let diff_file_list_rendered = fixture.id == "workbench-tab-diff"
+        && cells.chunks(usize::from(width)).any(|row| {
+            let line = row
+                .iter()
+                .filter_map(|cell| cell["text"].as_str())
+                .collect::<String>();
+            line.contains("capture.rs") && line.contains("+1") && line.contains("−1")
         });
     let workbench_renderer_reached = app.navigation.screen == Screen::Workbench
         && app.details.is_some()
@@ -997,7 +1146,7 @@ fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
     };
     let reached_state = match fixture.id {
         "graph-empty" => app.view.tasks.is_empty(),
-        "graph-compact" => app.notice.as_deref() == Some("Compact viewport · 40×12"),
+        "graph-compact" => width == 40 && height == 12 && !graph_inspector,
         "workbench-chat-empty" => app.input.text.is_empty() && app.navigation.focus == NavigationFocus::Composer,
         "decision-inbox" => app.decision_inbox.is_some(),
         "interview-question" => app.view.interview_question.as_ref().is_some_and(|(_, question)| question.id == "scope-confirmation") && !app.view.user_decision,
@@ -1061,10 +1210,16 @@ fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
         "graph-ordinary" => !app.view.tasks.is_empty(),
         _ => false,
     };
-    json!({"schema":1,"fixture":fixture.id,"view":fixture.view,"state":fixture.state,
-        "name":format!("{}.{}.{}x{}",fixture.view,fixture.state,width,height),
+    json!({"schema":1,"fixture":fixture.id,"target":fixture.view,"view":fixture.view,"state":fixture.state,
+        "geometry":geometry_id,
+        "name":format!("{}.{}.{}.{}x{}",fixture.view,fixture.state,geometry_id,width,height),
         "width":width,"height":height,"cell_count":cells.len(),"cells":cells,
         "na_reason":na_reason,"native_panel":native_panel,
+        "panels":{"workbench_list_visible":app.workbench_areas.list_visible,
+            "workbench_split":app.workbench_areas.split,
+            "workbench_content":{"x":app.workbench_areas.content.x,"y":app.workbench_areas.content.y,"width":app.workbench_areas.content.width,"height":app.workbench_areas.content.height},
+            "graph_inspector_rendered":graph_inspector,
+            "diff_file_list_rendered":diff_file_list_rendered},
         "active_tab":format!("{:?}",app.navigation.presentation().tab),
         "workbench_header":workbench_header,
         "reached_view":reached_view,"reached_state":reached_state,
@@ -1073,14 +1228,25 @@ fn capture(fixture: Fixture, width: u16, height: u16) -> Value {
         "task_integration":app.view.tasks.first().and_then(|task| task.integration.clone())})
 }
 
+fn text_has_inspector(cells: &[Value]) -> bool {
+    cells
+        .iter()
+        .filter_map(|cell| cell["text"].as_str())
+        .collect::<String>()
+        .contains("INSPECTOR")
+}
+
 fn agent_selected(app: &App, key: &str) -> bool {
     matches!(&app.navigation.target, WorkbenchTarget::Agent(selected) if selected == key)
 }
 
-fn assert_capture_contract(record: &Value, fixture: Fixture, width: u16, height: u16) {
+fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry) {
+    let Geometry { id, width, height } = geometry;
     assert_eq!(record["fixture"], fixture.id);
+    assert_eq!(record["target"], fixture.view);
     assert_eq!(record["view"], fixture.view);
     assert_eq!(record["state"], fixture.state);
+    assert_eq!(record["geometry"], id);
     assert!(!record["name"].as_str().unwrap().is_empty());
     assert!(record["na_reason"].is_null() || !record["na_reason"].as_str().unwrap().is_empty());
     assert_eq!(record["width"], width);
@@ -1116,6 +1282,51 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, width: u16, height:
         record["cells"].as_array().unwrap().len(),
         usize::from(width) * usize::from(height)
     );
+    let geometry_id = geometry.id;
+    let panels = &record["panels"];
+    match geometry_id {
+        "inspector-below-width"
+        | "inspector-at-width"
+        | "inspector-above-width"
+        | "inspector-below-height"
+        | "inspector-above-height" => {
+            let expected = !matches!(
+                geometry_id,
+                "inspector-below-width" | "inspector-below-height"
+            );
+            assert_eq!(
+                panels["graph_inspector_rendered"], expected,
+                "inspector boundary must be checked against the rendered inspector panel"
+            );
+        }
+        "list-below-width" | "list-at-width" | "list-above-width" | "list-below-height"
+        | "list-above-height" => {
+            let expected = width >= 100 && height >= 24;
+            assert_eq!(
+                panels["workbench_list_visible"], expected,
+                "Workbench list boundary must use the actual post-draw layout"
+            );
+        }
+        "split-below-height" | "split-at-height" | "split-above-height" => {
+            let expected = height >= 24;
+            assert_eq!(
+                panels["workbench_split"], expected,
+                "Workbench split boundary must use the actual post-draw layout"
+            );
+        }
+        "diff-below-width" | "diff-at-width" | "diff-above-width" => {
+            assert_eq!(
+                panels["workbench_content"]["width"], width,
+                "diff threshold sample records the real content panel width"
+            );
+            assert_eq!(
+                panels["diff_file_list_rendered"],
+                width >= 90,
+                "diff file-list threshold must be reached by the loaded real diff panel"
+            );
+        }
+        _ => {}
+    }
     let text = record["cells"]
         .as_array()
         .unwrap()
@@ -1319,6 +1530,74 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
     }
 }
 
+fn geometries_for(fixture: Fixture) -> Vec<Geometry> {
+    let mut geometries = GEOMETRIES[..BASE_GEOMETRY_COUNT].to_vec();
+    let boundary_prefix = match fixture.id {
+        "graph-ordinary" => Some("inspector-"),
+        "workbench-summary" => Some("list-"),
+        "native-pty" => Some("split-"),
+        "workbench-tab-diff" => Some("diff-"),
+        _ => None,
+    };
+    if let Some(prefix) = boundary_prefix {
+        geometries.extend(
+            GEOMETRIES
+                .iter()
+                .copied()
+                .filter(|geometry| geometry.id.starts_with(prefix)),
+        );
+    }
+    geometries
+}
+
+fn selected_samples() -> Vec<(Fixture, Geometry)> {
+    let requested = std::env::var("ANTISLOP_CAPTURE_SELECT").ok();
+    let all = FIXTURES
+        .iter()
+        .flat_map(|fixture| {
+            geometries_for(*fixture)
+                .into_iter()
+                .map(|geometry| (*fixture, geometry))
+        })
+        .collect::<Vec<_>>();
+    let Some(requested) = requested else {
+        return all;
+    };
+    let mut selected = Vec::new();
+    for key in requested
+        .split(',')
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        let (fixture_id, geometry_id) = key
+            .split_once('@')
+            .unwrap_or_else(|| panic!("capture selection must be fixture@geometry: {key}"));
+        let fixture = FIXTURES
+            .iter()
+            .find(|fixture| fixture.id == fixture_id)
+            .unwrap_or_else(|| panic!("unknown capture fixture in selection: {fixture_id}"));
+        let geometry = geometries_for(*fixture)
+            .into_iter()
+            .find(|geometry| geometry.id == geometry_id)
+            .unwrap_or_else(|| {
+                panic!("geometry {geometry_id} is not applicable to fixture {fixture_id}")
+            });
+        assert!(
+            !selected.iter().any(
+                |(old_fixture, old_geometry): &(Fixture, Geometry)| old_fixture.id == fixture.id
+                    && old_geometry.id == geometry.id
+            ),
+            "duplicate capture selection: {key}"
+        );
+        selected.push((*fixture, geometry));
+    }
+    assert!(
+        !selected.is_empty(),
+        "ANTISLOP_CAPTURE_SELECT selected no samples"
+    );
+    selected
+}
+
 #[test]
 fn fixture_contracts_reach_the_requested_views_and_export_full_buffers() {
     assert_eq!(SECTION_2_CATALOG.len(), 22);
@@ -1342,11 +1621,9 @@ fn fixture_contracts_reach_the_requested_views_and_export_full_buffers() {
             .all(|id| catalog_fixture_ids.contains(id)),
         "fixture is omitted from the section 2 map"
     );
-    for fixture in FIXTURES {
-        for (width, height) in GEOMETRIES {
-            let record = capture(*fixture, width, height);
-            assert_capture_contract(&record, *fixture, width, height);
-        }
+    for (fixture, geometry) in selected_samples() {
+        let record = capture(fixture, geometry);
+        assert_capture_contract(&record, fixture, geometry);
     }
 }
 
@@ -1357,13 +1634,12 @@ fn export_catalog() {
         .expect("set ANTISLOP_CAPTURE_DIR to a new run directory");
     let path = Path::new(&directory);
     std::fs::create_dir(path).expect("capture output directory must not already exist");
-    let mut renders = Vec::with_capacity(FIXTURES.len() * GEOMETRIES.len());
-    for fixture in FIXTURES {
-        for (width, height) in GEOMETRIES {
-            let record = capture(*fixture, width, height);
-            assert_capture_contract(&record, *fixture, width, height);
-            renders.push(record);
-        }
+    let samples = selected_samples();
+    let mut renders = Vec::with_capacity(samples.len());
+    for (fixture, geometry) in samples {
+        let record = capture(fixture, geometry);
+        assert_capture_contract(&record, fixture, geometry);
+        renders.push(record);
     }
     let mut file = std::fs::File::create(path.join("final-renders.json"))
         .expect("create final render catalog");
@@ -1382,9 +1658,15 @@ fn export_catalog() {
             "format":"antislop-ratatui-testbackend-cells-v1",
             "source":"App::draw on ratatui::Terminal<TestBackend>",
             "schema":1,
-            "geometries":GEOMETRIES,
+            "geometries":GEOMETRIES.iter().map(|g| json!({"id":g.id,"width":g.width,"height":g.height})).collect::<Vec<_>>(),
             "fixtures":FIXTURES.iter().map(|f| json!({"fixture":f.id,"view":f.view,"state":f.state})).collect::<Vec<_>>(),
             "section_2_catalog":SECTION_2_CATALOG.iter().map(|(view,fixtures)| json!({"view":view,"fixtures":fixtures})).collect::<Vec<_>>(),
+            "geometry_applicability":[
+                {"geometries":["inspector-below-width","inspector-at-width","inspector-above-width","inspector-below-height","inspector-above-height"],"fixtures":["graph-ordinary"],"not_applicable_reason":"The inspector threshold belongs to the Graph renderer; other targets have no graph inspector panel."},
+                {"geometries":["list-below-width","list-at-width","list-above-width","list-below-height","list-above-height"],"fixtures":["workbench-summary"],"not_applicable_reason":"The 100x24 target is the Workbench agent list; other surfaces do not render that list."},
+                {"geometries":["split-below-height","split-at-height","split-above-height"],"fixtures":["native-pty"],"not_applicable_reason":"The split threshold is exercised by a session with a real native terminal panel; other surfaces do not own that panel."},
+                {"geometries":["diff-below-width","diff-at-width","diff-above-width"],"fixtures":["workbench-tab-diff"],"not_applicable_reason":"The 90-column threshold applies to the loaded Workbench Diff content panel; other tabs have no changed-file list."}
+            ],
             "not_applicable":[
                 {"item":"native OS clipboard integration","reason":"App::draw capture does not read or write the host clipboard; the clipboard is an external interaction surface, not a rendered view."},
                 {"item":"external CLI broadcast/steer/interrupt execution","reason":"No CLI provider or daemon is started by a deterministic renderer capture. Rendered recipient and approval states are captured; transport behavior remains covered by existing tests."}
