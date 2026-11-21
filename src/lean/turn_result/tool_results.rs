@@ -9,7 +9,11 @@ use serde::Deserialize;
 /// a reviewer handed only the prose cannot judge it and rejects the task for
 /// payload it never saw.
 pub fn report_with_deliverables(report: &str, selection: Option<&Selection>) -> String {
-    let mut text = report.to_owned();
+    let mut text = if selection.is_some_and(|selection| report == selection.rationale) {
+        String::new()
+    } else {
+        report.to_owned()
+    };
     if let Some(selection) = selection
         && let Ok(json) = serde_json::to_string_pretty(selection)
     {

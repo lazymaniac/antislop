@@ -1,6 +1,23 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+#[test]
+fn turn_text_keeps_the_current_turn_and_gateway_completion_scope() {
+    let gateway = mcp::Gateway::start().unwrap();
+    gateway.set_role("worker:task").unwrap();
+    let contract = serde_json::from_value(serde_json::json!({"id":"task","title":"Task","kind":"analysis","change_kind":"none","goal":"Report","acceptance_criteria":[{"id":"C1","text":"Verified"}]})).unwrap();
+    gateway.set_task_contract(contract).unwrap();
+    let body = "Preserve this body, including an old turn = \"previous\".";
+    let text = turn_text("current", body, &gateway.completion_footer().unwrap());
+    assert!(text.starts_with(body));
+    let (_, footer) = text
+        .rsplit_once("\n\n---\nWhen this turn is complete")
+        .unwrap();
+    assert!(footer.contains("turn = \"current\""));
+    assert!(footer.contains("`complete`") && footer.contains("recorded=true"));
+    assert!(!footer.contains("`finish_turn`") && !footer.contains("`select`"));
+}
+
 fn test_tempdir() -> tempfile::TempDir {
     let root = std::env::current_dir().unwrap().join(".antislop/tmp");
     std::fs::create_dir_all(&root).unwrap();

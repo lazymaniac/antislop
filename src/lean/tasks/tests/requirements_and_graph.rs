@@ -49,7 +49,7 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
         "plan JSON is not pretty-printed"
     );
     // Review independence does not restrict CLI access.
-    assert!(prompt.contains("imposes no access limits on agents"));
+    assert!(!prompt.contains(FILESYSTEM_GUIDANCE));
     assert!(!prompt.contains("never by execution or edits"));
     assert!(prompt.contains(PLAN_DECOMPOSITION));
     assert!(prompt.contains("A single task is valid for an inseparable, cohesive change"));
@@ -308,18 +308,39 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
         );
         assert!(prompt.contains("separate path grant"));
         assert!(prompt.contains("ASDF_RUST_VERSION"));
-        assert!(prompt.contains("Writers deliver changes from isolated worktrees"));
+        assert!(prompt.contains("Writers stay within their worktrees"));
     }
     assert!(
         crate::lean::feasibility::check(std::slice::from_ref(&report))
             .iter()
             .all(|finding| finding.rule != "writer-scope-outside-project")
     );
-    assert!(worker_prompt("/project", &report).contains("imposes no access limits on agents"));
+    assert!(!worker_prompt("/project", &report).contains(FILESYSTEM_GUIDANCE));
     for prompt in [planner_instructions(), orchestrator_instructions()] {
-        assert!(prompt.contains("no path grant"));
-        assert!(prompt.contains(
-            "Agents run in their own CLI with the permission policy the user set for it"
-        ));
+        assert!(!prompt.contains(FILESYSTEM_GUIDANCE));
+    }
+}
+
+#[test]
+fn worker_continuations_keep_current_findings_first_and_the_full_goal_once() {
+    let task: TaskContract = serde_json::from_value(json!({"id":"writer","title":"Writer","goal":"UNIQUE GOAL: preserve e\u{301} and 👩‍💻","kind":"implementation","change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Preserve user changes"}]})).unwrap();
+    let goal = &task.goal;
+    for continuation in [
+        None,
+        Some("CURRENT FINDING: preserve the reviewed decision"),
+    ] {
+        let prompt = worker_turn_prompt("project", &task, continuation, "DEPENDENCY HISTORY");
+        assert_eq!(prompt.matches(goal.as_str()).count(), 1, "{prompt}");
+        assert!(prompt.contains("- goal: Meet the Goal stated above."));
+        for criterion in &task.acceptance_criteria {
+            assert!(prompt.contains(&format!("- {}: {}", criterion.id, criterion.text)));
+        }
+        let goal_pos = prompt.find("Goal:").unwrap();
+        assert!(goal_pos < prompt.find("DEPENDENCY HISTORY").unwrap());
+        if let Some(finding) = continuation {
+            assert!(prompt.find(finding).unwrap() < goal_pos);
+        }
+        assert!(prompt.find("DEPENDENCY HISTORY").unwrap() < prompt.find("For complete,").unwrap());
+        assert_eq!(obligations(&task)[0].1, format!("The goal is met: {goal}"));
     }
 }

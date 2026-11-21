@@ -23,6 +23,10 @@ mod tests {
         assert!(shown.starts_with("prose"));
         assert!(shown.contains("\"selected\": \"A\"") && shown.contains("cheapest"));
         assert_eq!(report_with_deliverables("prose", None), "prose");
+        let compact = report_with_deliverables(&selection.rationale, Some(&selection));
+        assert_eq!(compact.matches(&selection.rationale).count(), 1);
+        let recorded: serde_json::Value = serde_json::from_str(compact.split("```json\n").nth(1).unwrap().split("\n```").next().unwrap()).unwrap();
+        assert_eq!(recorded, serde_json::to_value(&selection).unwrap());
     }
 
     #[test]

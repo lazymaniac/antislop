@@ -42,63 +42,63 @@ effort = "high"
 # Every task kind has a dedicated reviewer assignment. Runtime creates separate
 # reviewer agents/sessions; a shared profile never means a shared reviewer agent.
 [routing.context]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.requirements]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.options]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.planning]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.architecture]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.dependencies]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.implementation]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.refactoring]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.static_analysis]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.test_design]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.testing]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.security]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.performance]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.integration]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.research]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.writing]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.analysis]
-executor = "reasoning"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 [routing.delivery]
-executor = "execution"
-reviewer = "review"
+executor = "orchestrator"
+reviewer = "orchestrator"
 
 [orchestrator]
 profile = "orchestrator"
 
 [routing.orchestration]
 executor = "orchestrator"
-reviewer = "review"
+reviewer = "orchestrator"

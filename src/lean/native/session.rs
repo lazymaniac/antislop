@@ -301,7 +301,8 @@ impl Session {
             }
         })?;
         self.gateway.begin(turn)?;
-        terminal::Session::submit(&self.screen, &turn_text(turn, prompt))?;
+        let result_instructions = self.gateway.completion_footer()?;
+        terminal::Session::submit(&self.screen, &turn_text(turn, prompt, &result_instructions))?;
         self.primed.store(true, Ordering::SeqCst);
         Ok(())
     }

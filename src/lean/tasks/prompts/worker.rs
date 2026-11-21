@@ -83,23 +83,13 @@ fn dependency_header(marker: &str) -> String {
 }
 
 pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
-    let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
-    let commit_instruction = if task.change_kind.has_delivery() {
-        "For complete, include commit_message as one specific Conventional Commits subject on one line (type: summary or type(scope): summary). Choose the type that matches your actual changes and describe the concrete result. Do not reuse generic wording across tasks. Keep summary as the user-facing effect; commit_message is separate.\n\n"
-    } else {
-        "For non-delivery work, commit_message may be empty.\n\n"
-    };
-    format!(
-        "{}{}{}",
-        worker_prompt_opening(project, task, &checks, binding, change_rules),
-        commit_instruction,
-        worker_prompt_closing(blocker, team_note),
-    )
+    worker_turn_prompt(project, task, None, "")
 }
 
 fn worker_prompt_opening(
     project: &str,
     task: &TaskContract,
+    continuation: &str,
     checks: &str,
     binding: &str,
     change_rules: &str,
@@ -111,13 +101,12 @@ fn worker_prompt_opening(
          the project's files is always allowed, also through shell commands that only \
          read; no wording of the task (such as \"no commands\" or \"use only received \
          sources\") takes that away.\n\n\
-         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\n{}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nKind: {}\n\n{continuation}\nGoal: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          ",
         task.title,
         task.id,
         work_kind_name(task.kind),
         task.goal,
-        super::instructions::FILESYSTEM_GUIDANCE,
         change_rules
     )
 }
@@ -125,11 +114,9 @@ fn worker_prompt_opening(
 fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
     format!(
         "{blocker}\n\n{team_note}\n\n\
-         Finish the whole goal before you report, however much work it is: your turn has \
-         no short limit, and a result that leaves part of the goal undone is rejected and \
-         costs a round. Do not stop after one part to hand in progress. When something \
-         outside your control blocks the rest, ask the orchestrator instead of handing in \
-         partial work.\n\n\
+         Complete the whole assigned goal before reporting success. Preserve checkpoints \
+         and evidence across interruptions. Do not expand your delivery scope to repair \
+         an external prerequisite; report its reproduction to the orchestrator.\n\n\
          End with a complete report of your result: what you did or found and the evidence, \
          and a short summary of what you delivered; tasks that depend on this one see only \
          that summary and can read your full report through read_dependency_result. For amendments, \
@@ -153,9 +140,13 @@ fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
 
 /// What the independent reviewer will check, so the worker meets it up front.
 fn worker_checks(task: &TaskContract) -> String {
+    let mut checks = obligations(task);
+    if let Some((_, goal)) = checks.iter_mut().find(|(id, _)| id == GOAL_CHECK) {
+        *goal = "Meet the Goal stated above.".into();
+    }
     format!(
         "Your reviewer will check:\n{}\n{}\n",
-        obligations_text(&obligations(task)),
+        obligations_text(&checks),
         risks_note(task)
     )
 }
@@ -182,10 +173,15 @@ pub fn worker_turn_prompt(
     continuation: Option<&str>,
     upstream: &str,
 ) -> String {
-    let prompt = match continuation {
-        Some(text) => format!("{}\n\n{text}", worker_prompt(project, task)),
-        None => worker_prompt(project, task),
-    };
+    let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
+    let prompt = worker_prompt_opening(
+        project,
+        task,
+        continuation.unwrap_or_default(),
+        &checks,
+        binding,
+        change_rules,
+    );
     let artifact = if task.change_kind() == ChangeKind::Artifact {
         format!(
             "\nDeliver only these artifact files: {}. Do not modify code, tests or configuration. Failing checks in the inspected project are evidence to report, not an instruction to repair it.\n",
@@ -194,7 +190,17 @@ pub fn worker_turn_prompt(
     } else {
         String::new()
     };
-    prompt + &artifact + upstream
+    let commit_instruction = if task.change_kind.has_delivery() {
+        "For complete, include commit_message as one specific Conventional Commits subject on one line (type: summary or type(scope): summary). Choose the type that matches your actual changes and describe the concrete result. Keep summary as the user-facing effect; commit_message is separate.\n\n"
+    } else {
+        "For non-delivery work, commit_message may be empty.\n\n"
+    };
+    prompt
+        + &artifact
+        + upstream
+        + "\n\n"
+        + commit_instruction
+        + &worker_prompt_closing(blocker, team_note)
 }
 
 /// The reason for resuming a task, alongside its explicit round handoff.
@@ -266,7 +272,7 @@ fn worker_prompt_parts(
     &'static str,
     String,
 ) {
-    let team = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
+    let team = "Ask the orchestrator through MCP when an input or decision is missing. Do not inspect runtime session state or contact agents other than the orchestrator.\n";
     let blocker = "If a concrete missing input or prerequisite prevents all further permitted work, end with report_blocker and its resume condition, preserving completed work. Your assigned implementation, tests, fixtures and other outputs are work to perform, not missing prerequisites: do not block until someone supplies the deliverable you were assigned to create. Break a large implementation into concrete changes and preserve progress in your worktree. Before report_blocker, explicitly assess unblocked_work_remaining. If a later control lacks input but permitted independent implementation or analysis remains, finish that work in this turn and keep only the dependent control held; do not stop the whole task. If a source contradiction or external dependency actually prevents further work, name that evidence and an actionable condition another actor can resolve; task size or unfinished implementation alone is not such a condition. This is available to every worker, including options workers with no viable choice. Do not claim success, invent a choice or finish only in terminal prose. Ask when the orchestrator can resolve an unknown decision; if the answer has not come, end with wait_for_answer. If the answer confirms the input is unavailable and no permitted independent work remains, use report_blocker instead of repeating the question or waiting for an answer already received. Do not invent requirements or implement outside this contract.";
     let binding = if task.changes_code() && has_options_prerequisite(task) {
         OPTIONS_BINDING

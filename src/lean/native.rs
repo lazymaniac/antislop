@@ -73,14 +73,12 @@ pub struct Session {
 
 /// What is typed into the CLI: the prompt and how to hand the answer back. The
 /// shape of the result for the agent's role is the tool's own schema.
-fn turn_text(turn: &str, prompt: &str) -> String {
+fn turn_text(turn: &str, prompt: &str, result_instructions: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
-         result tool of the MCP server `{}` that this prompt names (`{}` when it names none), \
-         with turn = \"{turn}\"; stop only after receiving recorded=true. If rejected, correct \
-         the reported error and call it again. Task workers/reviewers can call current_turn with an empty object after a turn-id rejection and must copy its active id exactly. Never finish only in terminal prose. A worker blocked by unavailable input must first finish any permitted independent work; only when none remains, call report_blocker with unblocked_work_remaining=false and the resume condition instead of claiming completion, repeating answered questions or waiting for a timeout.",
+         result tool of the MCP server `{}`, with turn = \"{turn}\". \
+         {result_instructions} Never finish only in terminal prose.",
         mcp::SERVER,
-        mcp::TOOL
     )
 }
 

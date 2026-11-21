@@ -235,6 +235,8 @@ pub(super) struct DependencyScope {
 fn dependency_report_text(output: &Value) -> Result<String> {
     let report = output["report"].as_str();
     if output["selection"].is_object() {
+        let report =
+            report.filter(|report| Some(*report) != output["selection"]["rationale"].as_str());
         return Ok(format!(
             "{}\n\nSelected approach:\n{}",
             report.unwrap_or_default(),

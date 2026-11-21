@@ -399,12 +399,14 @@ fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
 }
 
 #[test]
-fn a_worker_is_told_to_finish_the_whole_goal_before_it_reports() {
+fn worker_completion_distinguishes_success_interruptions_and_external_prerequisites() {
     let tasks = with_options(vec![options_test_task("writer", true)]);
     let worker = worker_prompt("project", &tasks[1]);
-    assert!(worker.contains("Finish the whole goal before you report"));
-    assert!(worker.contains("Do not stop after one part to hand in progress."));
-    assert!(worker.contains("ask the orchestrator instead of handing in partial work"));
+    assert!(worker.contains("Complete the whole assigned goal before reporting success"));
+    assert!(worker.contains("Preserve checkpoints"));
+    assert!(worker.contains("report its reproduction to the orchestrator"));
+    assert!(worker.contains("unblocked_work_remaining"));
+    assert!(!worker.contains("costs a round") && !worker.contains("no short limit"));
 }
 
 #[test]

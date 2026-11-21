@@ -8,16 +8,18 @@ pub(super) fn prepare_prompt(
 ) -> Result<String> {
     let mut text = execution_policy(&state.role);
     text.push_str(&inbox_text(state));
-    append_task_context(core, state, spec, &mut text)?;
-    append_allocation_context(core, state, spec, &mut text)?;
     let introduce = role_introduction(core, state)?;
     text.push_str(&prompt(introduce, state.resume.is_none()));
+    if task_role(&state.role).is_some() {
+        text.push_str("\n\n");
+        append_allocation_context(core, state, spec, &mut text)?;
+        append_task_context(core, state, spec, &mut text)?;
+    }
     append_round_handoff(core, state, spec, &mut text)?;
     Ok(text)
 }
 
 fn execution_policy(role: &str) -> String {
-    let authority = "The runtime adds no access or execution budgets; the CLI's permission policy applies. Work in the allocated checkout within your assigned role and contract, preserving user changes and durable evidence. Report raw failures and missing inputs. Manual pause and cancellation remain authoritative.";
     let role_rules = if task_role(role).is_some_and(|(_, reviewer)| reviewer)
         || matches!(role, PLAN_REVIEWER | AUDITOR)
         || role.starts_with("code-review:")
@@ -28,7 +30,7 @@ fn execution_policy(role: &str) -> String {
     } else {
         "Perform the work and checks your task requires. Repairs must follow its delivery rules and scope; report-only and options roles preserve the inspected source."
     };
-    format!("\n{authority}\n{role_rules}\n")
+    format!("\n{}\n{role_rules}\n", tasks::FILESYSTEM_GUIDANCE)
 }
 
 fn inbox_text(state: &TurnState<'_>) -> String {

@@ -160,6 +160,26 @@ impl Gateway {
         &self.shared.token
     }
 
+    /// Use the actual tools/list scope for the native transport footer.
+    pub(crate) fn completion_footer(&self) -> Result<String> {
+        let state = self.shared.state.lock().map_err(invalid)?;
+        let names = super::tools::scoped_tools(&state.role, state.contract.as_ref());
+        let results = names
+            .iter()
+            .filter(|name| is_terminal(name))
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let recover = if names.contains(&"current_turn") {
+            " After a stale-turn rejection, call current_turn with an empty object and copy its active id exactly."
+        } else {
+            ""
+        };
+        Ok(format!(
+            "Available result tools: {results}. Choose according to your task and the tool schemas. Stop only after recorded=true; if rejected, correct the reported error and call again.{recover}"
+        ))
+    }
+
     /// Opens `turn`; an answer to an earlier turn can no longer be accepted.
     pub(crate) fn begin(&self, turn: &str) -> Result<()> {
         let mut state = self.shared.state.lock().map_err(invalid)?;

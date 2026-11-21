@@ -388,6 +388,7 @@ fn compliance_roles_read_full_text_deliverables_only_in_their_bound_run() {
 #[test]
 fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_access() {
     let (_directory, core, conversation) = core();
+    let rationale = format!("All details retained: {}", "e\u{301} 👩‍💻 ".repeat(3000));
     let specs = [
         json!({"id":"consumer-options","title":"Options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Choose","change_kind": "none", "kind":"options","options_for":"consumer"}),
         json!({"id":"unrelated-options","title":"Other options","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Choose","change_kind": "none", "kind":"options","options_for":"other"}),
@@ -410,13 +411,30 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
             )
             .unwrap();
         core.store.save_turn_result(&turn.id, &TurnResult::Completed {
-            summary:"Chose A".into(), report:"Full rationale".into(), commit_message:String::new(),
-            selection:Some(serde_json::from_value(json!({"selected":"A","rationale":"All details retained","alternatives":[{"id":"A","approach":"Use A","tradeoffs":"Cost A"},{"id":"B","approach":"Use B","tradeoffs":"Cost B"}]})).unwrap())
+            summary:"Chose A".into(), report:rationale.clone(), commit_message:String::new(),
+            selection:Some(serde_json::from_value(json!({"selected":"A","rationale":rationale,"alternatives":[{"id":"A","approach":"Use A","tradeoffs":"Cost A"},{"id":"B","approach":"Use B","tradeoffs":"Cost B"}]})).unwrap())
         }).unwrap();
         core.store
             .finish_turn(&turn.id, store::TurnStatus::Done, None)
             .unwrap();
     }
+    let spec = serde_json::from_value(tasks[2].spec.clone()).unwrap();
+    let inputs = core
+        .store
+        .dependency_inputs(&tasks[2].plan_id, &spec)
+        .unwrap();
+    assert_eq!(inputs.len(), 1);
+    let selected: Value = serde_json::from_str(&inputs[0].report).unwrap();
+    assert_eq!(
+        selected["variant"],
+        json!({"id":"A","approach":"Use A","tradeoffs":"Cost A"})
+    );
+    assert!(selected["rationale"].is_null());
+    assert_eq!(
+        selected["details"],
+        "read_dependency_result(dependency=\"selected_approach\")"
+    );
+    assert!(!inputs[0].report.contains("All details retained"));
     for role in [
         format!("worker:{}", tasks[2].id),
         format!("reviewer:{}", tasks[2].id),
@@ -447,6 +465,26 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
                     .contains("All details retained")
             );
             assert!(page["report"].as_str().unwrap().contains("Cost B"));
+            let mut full = page["report"].as_str().unwrap().to_owned();
+            let mut page = page;
+            assert_eq!(page["complete"], false, "Large rationale must be paged");
+            while page["complete"] == false {
+                page = core
+                    .agent_tool(
+                        &conversation,
+                        &role,
+                        &turn.id,
+                        "read_dependency_result",
+                        &json!({"dependency":alias,"cursor":page["cursor"]}),
+                    )
+                    .unwrap();
+                full.push_str(page["report"].as_str().unwrap());
+            }
+            assert_eq!(full.matches("All details retained").count(), 1);
+            let selection: Value =
+                serde_json::from_str(full.split_once("Selected approach:\n").unwrap().1).unwrap();
+            assert_eq!(selection["rationale"], rationale);
+            assert_eq!(selection["alternatives"].as_array().unwrap().len(), 2);
         }
         let error = core
             .agent_tool(

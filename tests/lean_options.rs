@@ -975,6 +975,18 @@ fn assert_core_delivery(scenario: &str) {
     let second = continued[1];
     let prompt = second["prompt"].as_str().unwrap();
     assert_selected_input(prompt);
+    assert!(prompt.find("Task:").unwrap() < prompt.find("Current runtime allocation").unwrap());
+    assert_eq!(
+        prompt
+            .matches("the runtime adds no access or execution budgets")
+            .count(),
+        1
+    );
+    if scenario == "reject-once" {
+        assert!(
+            prompt.find("Your reviewer found problems:").unwrap() < prompt.find("Goal:").unwrap()
+        );
+    }
     let args = second["args"].as_array().unwrap();
     assert_eq!(
         args.iter().any(|v| v == "--conversation"),
@@ -1045,9 +1057,23 @@ fn assert_selected_input(prompt: &str) {
         "expected one local selection, not dependency reports"
     );
     assert!(inputs[0]["variant"]["id"].is_string());
+    assert!(
+        inputs[0]["rationale"].is_null(),
+        "Full rationale belongs in the dependency reader"
+    );
     assert_eq!(
-        inputs[0]["rationale"],
-        "The focused approach satisfies this local contract"
+        inputs[0]["details"],
+        "read_dependency_result(dependency=\"selected_approach\")"
+    );
+    assert!(
+        inputs[0]["variant"]["approach"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+    );
+    assert!(
+        inputs[0]["variant"]["tradeoffs"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
     );
 }
 

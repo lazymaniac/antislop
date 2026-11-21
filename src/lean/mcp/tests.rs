@@ -466,6 +466,34 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
 }
 
 #[test]
+fn result_footer_matches_the_gateway_tool_scope() {
+    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","goal":"Report","kind":"analysis","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Verified"}]})).unwrap();
+    let gateway = Gateway::start().unwrap();
+    for (role, kind, expected) in [
+        ("worker:t", crate::config::WorkKind::Analysis, vec!["complete", "report_blocker", "wait_for_answer"]),
+        ("worker:t", crate::config::WorkKind::Options, vec!["select", "report_blocker", "wait_for_answer"]),
+        ("reviewer:t", crate::config::WorkKind::Analysis, vec!["review", "wait_for_answer"]),
+        ("planner", crate::config::WorkKind::Analysis, vec!["submit_plan", "finish_turn"]),
+        ("orchestrator", crate::config::WorkKind::Analysis, vec!["finish_turn", "ask_user", "submit_requirements", "submit_plan"]),
+        ("auditor", crate::config::WorkKind::Analysis, vec!["review"]),
+        ("plan-reviewer", crate::config::WorkKind::Analysis, vec!["review"]),
+        ("unknown", crate::config::WorkKind::Analysis, vec!["finish_turn"]),
+    ] {
+        task.kind = kind;
+        gateway.set_role(role).unwrap();
+        gateway.set_task_contract(task.clone()).unwrap();
+        let footer = gateway.completion_footer().unwrap();
+        let tools = footer.split('`').skip(1).step_by(2).collect::<Vec<_>>();
+        assert_eq!(tools, expected, "{role}: {footer}");
+        for tool in tools {
+            assert!(gateway.tool_names().contains(&tool));
+        }
+        assert_eq!(footer.contains("call current_turn"), gateway.tool_names().contains(&"current_turn"));
+        assert!(footer.contains("recorded=true") && footer.contains("if rejected"));
+    }
+}
+
+#[test]
 fn the_planner_chooses_a_team_with_submit_plan() {
     use crate::lean::mcp::tools::tool_list;
     let list = tool_list("planner");

@@ -212,7 +212,10 @@ fn selected_report(result: &Value) -> Result<crate::lean::tasks::DependencyRepor
     Ok(crate::lean::tasks::DependencyReport {
         id: "selected_approach".into(),
         title: "Selected approach for this task".into(),
-        report: serde_json::json!({"variant":variant,"rationale":selection["rationale"]})
-            .to_string(),
+        report: serde_json::json!({
+            "variant": variant,
+            "details": "read_dependency_result(dependency=\"selected_approach\")",
+        })
+        .to_string(),
     })
 }
