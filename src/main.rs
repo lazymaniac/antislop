@@ -13,6 +13,7 @@ usage:
                               show the durable activation result
   antislop activate --cancel --request-id ID [--state DIR]
                               cancel validation or a queued activation
+  antislop bootstrap ACTION --journal DIR [options] (see docs/bootstrap.md)
   antislop init [--force]     write antislop.toml for the agent CLIs found on PATH
   antislop doctor [--config FILE] [--state DIR]
                               check the configuration and that every profile's CLI launches
@@ -89,6 +90,7 @@ fn run() -> Result<()> {
         Some("init") => antislop::lean::cli::init(&args[1..]),
         Some("doctor") => antislop::lean::cli::doctor(&args[1..]),
         Some("stop") => antislop::lean::cli::stop(&args[1..]),
+        Some("bootstrap") => antislop::lean::cli::bootstrap(&args[1..]),
         Some("activate") => antislop::lean::cli::activate(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),
         Some(command) if command.starts_with("__") => Err(antislop::Error::Invalid(format!(

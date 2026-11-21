@@ -11,6 +11,8 @@ use crate::Result;
 use std::path::{Path, PathBuf};
 
 mod activation;
+mod bootstrap;
+pub use bootstrap::bootstrap;
 mod chat;
 mod presentation;
 pub use activation::activate;

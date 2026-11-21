@@ -281,7 +281,7 @@ fn checkpoint_and_reply_are_safe_in_either_order() {
 
 #[test]
 fn awaiting_user_preserves_checkpoint_until_an_answer_arrives() {
-    let (_dir, store, conversation, mut task, turn) = fixture();
+    let (dir, store, conversation, mut task, turn) = fixture();
     let request = store
         .ask_agent_question(&conversation, &turn.id, "scope", "May scope expand?")
         .unwrap();
@@ -299,6 +299,23 @@ fn awaiting_user_preserves_checkpoint_until_an_answer_arrives() {
             .agent_question(&conversation, &request, Some(&turn.id))
             .unwrap()["state"],
         "awaiting_user"
+    );
+    drop(store);
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    assert_eq!(
+        store
+            .agent_question(&conversation, &request, Some(&turn.id))
+            .unwrap()["state"],
+        "awaiting_user"
+    );
+    assert_eq!(
+        store
+            .task_by_id(&task.id)
+            .unwrap()
+            .unwrap()
+            .feedback
+            .unwrap()["waiting_request"],
+        request
     );
     store
         .answer_agent_question(&conversation, &request, "Keep the accepted scope")
