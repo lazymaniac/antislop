@@ -61,10 +61,15 @@ impl App {
             return false;
         };
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        if !details.editing || (control && key.code == KeyCode::Char('w')) {
+        if !details.editing {
             return false;
         }
+        if control && key.code == KeyCode::Char('r') {
+            self.picker = Some(Picker::new(Kind::Recipients));
+            return true;
+        }
         if key.code == KeyCode::Esc {
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
             details.editing = false;
             return true;
         }

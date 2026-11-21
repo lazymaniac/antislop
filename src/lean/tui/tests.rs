@@ -109,7 +109,7 @@ fn ctrl_k_opens_the_shared_composer_without_changing_its_session_draft() {
     app.key(key_ctrl('k'));
 
     assert_eq!(app.input.text, "keep this draft 👩‍💻");
-    assert_eq!(app.navigation.screen, Screen::Workbench);
+    assert_eq!(app.navigation.screen, Screen::Graph);
     assert_eq!(app.navigation.focus, NavigationFocus::Composer);
     assert_eq!(app.navigation.target, WorkbenchTarget::Session);
 }
@@ -181,6 +181,7 @@ fn image_file_drop_is_an_attachment_and_removal_preserves_the_text_draft() {
     let image = directory.path().join("wireframe.png");
     std::fs::write(&image, crate::lean::content::valid_png_fixture()).unwrap();
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("please inspect");
     app.paste(&image.to_string_lossy());
     assert_eq!(app.input.text, "please inspect");
@@ -197,6 +198,7 @@ fn image_file_drop_is_an_attachment_and_removal_preserves_the_text_draft() {
 #[test]
 fn pasted_prose_ending_in_an_image_filename_remains_chat_text() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     let pasted = "the mockup is in screenshot.png";
 
     app.paste(pasted);
@@ -216,6 +218,7 @@ fn multiline_prose_with_an_image_path_remains_chat_text() {
     std::fs::write(&image, crate::lean::content::valid_png_fixture()).unwrap();
     let pasted = format!("Please review this draft:\n{}", image.display());
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
 
     app.paste(&pasted);
 
@@ -233,6 +236,7 @@ fn invalid_image_drop_reports_error_without_replacing_unsent_text() {
     let image = directory.path().join("broken.png");
     std::fs::write(&image, b"plain text").unwrap();
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("keep this draft");
     app.paste(&image.to_string_lossy());
     assert_eq!(app.input.text, "keep this draft");
@@ -252,6 +256,7 @@ fn invalid_image_drop_reports_error_without_replacing_unsent_text() {
 #[test]
 fn missing_image_file_uri_reports_error_without_replacing_unsent_text() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("preserve this draft");
 
     app.paste("file:///definitely/missing/attachment.png");
@@ -280,6 +285,7 @@ fn multiple_dropped_file_uris_attach_as_a_batch() {
     let first_uri = first.to_string_lossy().replace(' ', "%20");
     let pasted = format!("file://{first_uri}\n{}", second.display());
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("keep my text");
     app.paste(&pasted);
     assert_eq!(app.input.text, "keep my text");
@@ -316,7 +322,10 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     app.key(key_press(KeyCode::Down));
     app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
     terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Esc));
     app.key(key_press(KeyCode::Esc));
@@ -417,7 +426,8 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         terminal.draw(|frame| app.draw(frame)).unwrap();
         if tab == WorkbenchTab::Results {
             // The disk-backed document builds its line index asynchronously.
-            for _ in 0..20 {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
                 terminal.draw(|frame| app.draw(frame)).unwrap();
                 let text = terminal_text(&terminal);
                 if text.contains(expected) {
@@ -442,7 +452,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         }
         {
             app.key(key_press(KeyCode::Tab));
-            app.key(key_press(KeyCode::Char('i')));
+            app.key(key_press(KeyCode::Char('t')));
             assert!(!app.native_focused());
             app.native_send(crate::lean::terminal::Input::Key {
                 event: key_press(KeyCode::Char('x')),
@@ -833,6 +843,7 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
         WorkbenchTab::Summary,
         WorkbenchTab::Conversation,
         WorkbenchTab::Results,
+        WorkbenchTab::Checks,
         WorkbenchTab::Comments,
         WorkbenchTab::Diff,
     ] {
@@ -1128,145 +1139,49 @@ fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
 }
 
 #[test]
-fn expanded_task_long_title_keeps_incoming_arrow_after_resize() {
+fn grouped_task_long_title_keeps_incoming_routes_visible_after_resize() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
-    app.view.tasks = (0..5)
-        .map(|index| view::TaskRow {
-            id: format!("parent-{index}"),
-            title: format!("Parent {index}"),
+    app.view.tasks = vec![
+        view::TaskRow {
+            id: "parent".into(),
             ..Default::default()
-        })
-        .chain([view::TaskRow {
-            id: "expanded".into(),
-            title: "A long task title whose status and round reach the arrow".into(),
-            status: "running".into(),
-            depends_on: (0..5).map(|index| format!("parent-{index}")).collect(),
+        },
+        view::TaskRow {
+            id: "child".into(),
+            title: "A long task title 👩‍💻 é whose text reaches the edge".into(),
+            depends_on: vec!["parent".into()],
             ..Default::default()
-        }])
-        .collect();
-    app.selected = "worker:expanded".into();
-    app.graph_expanded = Some(app.selected.clone());
-    app.graph_revealed = None;
-
-    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    for (width, height) in [(120, 40), (80, 24)] {
-        for (theme, expected_arrow) in [
-            (theme::Theme::new(true, false), "▼"),
-            (theme::Theme::new(true, true), "v"),
-        ] {
+        },
+    ];
+    app.selected = "worker:child".into();
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    for (width, height) in [(160, 50), (120, 40), (80, 24)] {
+        for ascii in [false, true] {
+            let theme = Theme::new(true, ascii);
             terminal.backend_mut().resize(width, height);
             terminal.resize(Rect::new(0, 0, width, height)).unwrap();
             terminal
                 .draw(|frame| app.draw_with_theme(frame, &theme))
                 .unwrap();
-
-            let viewport = app.graph_area.expect("graph rendered after resize");
-            let graph = graph::Graph::new_with_expanded(
-                &app.view,
-                &app.graph_scope_with_exception(),
-                &app.graph_collapsed,
-                app.graph_grouping,
-                app.graph_viewport,
-                app.graph_expanded.clone(),
-                app.graph_tab,
-            );
-            let node = graph.node("worker:expanded").expect("expanded task node");
-            let left = i32::from(viewport.x) + i32::from(node.x) - i32::from(app.offset.0);
-            let top = i32::from(viewport.y) + i32::from(node.y) - i32::from(app.offset.1);
-            let title_rect =
-                graph::expanded_card_areas(viewport, (left, top), (node.width, node.height))[1];
+            let graph = app.graph_for_key();
+            let node = graph.node("worker:child").unwrap();
+            let viewport = app.graph_area.unwrap();
             let routes = graph.edge_routes(app.relations);
-            let target_group = node.group.as_deref().unwrap();
-            let entry_cells = routes
+            let (_, _, route) = routes
                 .iter()
-                .filter(|(_, to, path)| {
-                    *to == target_group
-                        && path
-                            .last()
-                            .is_some_and(|(_, y)| y.saturating_add(1) == node.y)
-                })
-                .filter_map(|(_, _, path)| path.last().map(|(x, _)| (*x, node.y)))
-                .collect::<std::collections::BTreeSet<_>>();
-            let mut overlaps_title = false;
-            assert!(
-                !entry_cells.is_empty(),
-                "an incoming route reaches the frame"
-            );
-            for (route_x, route_y) in entry_cells {
-                let screen_x = i32::from(viewport.x) + i32::from(route_x) - i32::from(app.offset.0);
-                let screen_y = i32::from(viewport.y) + i32::from(route_y) - i32::from(app.offset.1);
-                assert!(
-                    screen_x >= i32::from(viewport.x) && screen_x < i32::from(viewport.right())
-                );
-                assert!(
-                    screen_y >= i32::from(viewport.y) && screen_y < i32::from(viewport.bottom())
-                );
-                let overlaps = screen_y == i32::from(title_rect.y)
-                    && screen_x >= i32::from(title_rect.x)
-                    && screen_x < i32::from(title_rect.right());
-                overlaps_title |= overlaps;
-                assert!(
-                    overlaps,
-                    "fixture route endpoint lies in title at {width}x{height}"
-                );
-                let full_heading = format!(
-                    "{} · running · round unavailable",
-                    app.view.tasks.last().unwrap().title
-                );
-                assert!(
-                    unicode_width::UnicodeWidthStr::width(full_heading.as_str())
-                        > (screen_x - i32::from(title_rect.x)) as usize,
-                    "heading text reaches the route endpoint at {width}x{height}"
-                );
-                let cell = terminal
-                    .backend()
-                    .buffer()
-                    .cell((screen_x as u16, screen_y as u16))
-                    .unwrap();
-                assert_eq!(
-                    cell.symbol(),
-                    expected_arrow,
-                    "the incoming arrow remains visible at {width}x{height}"
-                );
-                let (_, _, expected_style) = graph
-                    .expanded_entry_arrows(&theme)
-                    .into_iter()
-                    .find(|(x, y, _)| *x == route_x && *y == route_y)
-                    .expect("entry arrow style");
-                assert_eq!(cell.fg, expected_style.fg.unwrap_or(Color::Reset));
-                assert_eq!(
-                    cell.bg,
-                    expected_style
-                        .bg
-                        .or(theme.panel().bg)
-                        .unwrap_or(Color::Reset)
-                );
-                assert_eq!(cell.modifier, expected_style.add_modifier);
-                if theme.ascii {
-                    assert_ne!(cell.symbol(), "▼", "ASCII arrow must not be Unicode");
-                }
-            }
-            let rendered = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>();
-            assert!(overlaps_title, "long task heading overlaps route endpoint");
-            assert!(
-                rendered.contains("round unavailable"),
-                "round label remains visible"
+                .find(|(_, to, _)| *to == "worker:child")
+                .unwrap();
+            let &(x, y) = route.last().unwrap();
+            assert_eq!(y + 1, node.y);
+            let screen_x = viewport.x + x - app.offset.0;
+            let screen_y = viewport.y + y - app.offset.1;
+            assert!(viewport.contains((screen_x, screen_y).into()));
+            assert_eq!(
+                terminal.backend().buffer()[(screen_x, screen_y)].symbol(),
+                if ascii { "v" } else { "▼" }
             );
         }
     }
-
-    terminal.backend_mut().resize(12, 5);
-    terminal.resize(Rect::new(0, 0, 12, 5)).unwrap();
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert!(app.graph_area.is_some(), "minimum canvas still renders");
-    assert_eq!(terminal.backend().buffer().area, Rect::new(0, 0, 12, 5));
 }
 
 #[test]
@@ -1382,7 +1297,7 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     assert_eq!(app.details.as_ref().unwrap().scroll, 3);
     let received = app.bind_native_input_for_test();
     app.key(key_press(KeyCode::Tab));
-    app.key(key_press(KeyCode::Char('i')));
+    app.key(key_press(KeyCode::Char('t')));
     assert!(app.native_focused());
     let native = app.details.as_ref().unwrap().native_areas[0];
     let mouse = event::MouseEvent {
@@ -1468,10 +1383,7 @@ fn global_navigation_shortcuts_route_before_screens_and_keep_editor_ctrl_k() {
     assert!(app.key_inner(key_ctrl('t')));
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(app.navigation.target, WorkbenchTarget::Session);
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
     assert_eq!(
         app.navigation.presentation().focus,
         NavigationFocus::WorkbenchContent
@@ -1562,6 +1474,7 @@ fn interview_owns_global_navigation_shortcuts_except_its_command_palette() {
     app.view.workflow_phase = Some("interview".into());
     app.view.interview_question = Some((42, question));
     app.sync_interview();
+    app.run_workflow(Command::InterviewQuestion);
     app.interview_forms
         .get_mut(&app.conversation)
         .unwrap()
@@ -1600,6 +1513,7 @@ fn interview_escape_closes_the_form_before_restoring_zoomed_split() {
     app.view.workflow_phase = Some("interview".into());
     app.view.interview_question = Some((42, question));
     app.sync_interview();
+    app.run_workflow(Command::InterviewQuestion);
 
     assert!(app.key_inner(key_press(KeyCode::Esc)));
     assert!(!app.interview_forms[&app.conversation].visible);
@@ -1680,7 +1594,7 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
 
     app.key(key_press(KeyCode::Char('z')));
     let received = app.bind_native_input_for_test();
-    app.key(key_press(KeyCode::Char('i')));
+    app.key(key_press(KeyCode::Char('t')));
     assert!(app.native_focused());
     let escape = key_press(KeyCode::Esc);
     app.key(escape);
@@ -1703,6 +1617,13 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
 #[test]
 fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_target() {
     let mut app = test_app();
+    app.terminal_area = Rect::new(0, 0, 160, 50);
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        round: 2,
+        reviewer_summary: Some("Review".into()),
+        ..Default::default()
+    }];
     app.navigation.screen = Screen::Workbench;
     app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
     app.navigation.focus = NavigationFocus::WorkbenchContent;
@@ -1765,7 +1686,7 @@ fn workbench_alt_resize_and_mouse_drag_share_the_saved_split_ratio() {
     );
     let alt_down = event::KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
     assert!(app.key_inner(alt_down));
-    assert_eq!(app.navigation.presentation().terminal_percent, 45);
+    assert_eq!(app.navigation.presentation().terminal_percent, 55);
 
     let separator = app.workbench_areas.separator;
     assert!(app.mouse(event::MouseEvent {
@@ -1780,7 +1701,7 @@ fn workbench_alt_resize_and_mouse_drag_share_the_saved_split_ratio() {
         row: separator.y.saturating_sub(5),
         modifiers: KeyModifiers::NONE,
     }));
-    assert!(app.navigation.presentation().terminal_percent > 45);
+    assert!(app.navigation.presentation().terminal_percent > 55);
 
     let remembered = app.navigation.presentation().terminal_percent;
     app.terminal_area = Rect::new(0, 0, 80, 23);
@@ -2133,7 +2054,7 @@ fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
     app.open_details("worker:t1".into());
     app.key(key_press(KeyCode::Tab));
     let received = app.bind_native_input_for_test();
-    app.key(key_press(KeyCode::Char('i')));
+    app.key(key_press(KeyCode::Char('t')));
     assert!(app.native_focused());
     let ctrl_five = key_ctrl('5');
     app.key(ctrl_five);
@@ -2156,6 +2077,7 @@ fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
 #[test]
 fn ac_key_01_unconditional_pageup_transcript_scroll() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("multiline\ndraft\nmessage");
     app.input.cursor = 5;
     app.key(key_press(KeyCode::PageUp));
@@ -2169,6 +2091,7 @@ fn ac_key_01_unconditional_pageup_transcript_scroll() {
 #[test]
 fn ac_key_02_empty_input_history_scroll() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     assert!(app.input.is_empty());
     app.key(key_press(KeyCode::Up));
     assert_eq!(app.scroll, 1);
@@ -2179,6 +2102,7 @@ fn ac_key_02_empty_input_history_scroll() {
 #[test]
 fn chat_history_escape_restores_grapheme_safe_draft_cursor() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     let draft = "e\u{301}👩‍💻 draft";
     let cursor = "e\u{301}👩‍💻".len();
     app.input = InputBuffer::with_text(draft);
@@ -2224,9 +2148,10 @@ fn ac_modal_02_comment_editor_dismissal_preserves_graph_selection() {
 fn ac_modal_03_detach_protection_on_non_empty_chat() {
     let mut app = test_app();
     app.input = InputBuffer::with_text("test");
+    app.key(key_ctrl('k'));
     let open = app.key(key_press(KeyCode::Esc));
     assert!(open);
-    assert!(app.input.is_empty());
+    assert_eq!(app.input.text, "test");
 }
 
 #[test]
@@ -2276,7 +2201,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
     assert!(app.editor.is_none());
     assert_eq!(app.input.text, "@t2 please investigate");
 
-    app.key(key_press(KeyCode::Tab));
+    app.key(key_ctrl('k'));
     assert_eq!(app.focus, Focus::Chat);
     assert_eq!(app.input.text, "@t2 please investigate");
 }
@@ -2304,6 +2229,8 @@ fn execution_decision_opens_the_question_form_without_discarding_chat() {
     let question = serde_json::from_value(serde_json::json!({"id":"metadata","context":"Scope decision","question":"Allow metadata?","options":[{"label":"Allow"},{"label":"Reject"}]})).unwrap();
     app.view.interview_question = Some((42, question));
     app.sync_interview();
+    assert!(!app.interview_visible());
+    app.run_workflow(Command::InterviewQuestion);
     assert!(app.interview_visible());
     assert_eq!(app.input.text, "Unsent chat draft 👩‍💻");
     app.view.user_decision = false;
@@ -2362,6 +2289,7 @@ fn interview_draft_survives_background_failure_and_conversation_switches() {
 #[test]
 fn interview_home_preserves_unsent_answers_without_requesting_approval() {
     let mut app = test_app();
+    app.key(key_ctrl('k'));
     app.view.workflow_phase = Some("interview".into());
     app.view.requirements_summary = "Goal and criteria".into();
     app.input = InputBuffer::with_text("Correction 👩‍💻");
@@ -2375,6 +2303,7 @@ fn interview_home_preserves_unsent_answers_without_requesting_approval() {
 #[test]
 fn chat_ctrl_a_plan_accept_vs_readline_home() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.view.apply(&serde_json::json!({
         "seq": 1,
         "kind": "plan_proposed",
@@ -2392,6 +2321,7 @@ fn chat_ctrl_a_plan_accept_vs_readline_home() {
 #[test]
 fn paste_routing_respects_help_modal_and_active_overlays() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("draft");
 
     // When Help is open, paste does NOT touch chat draft
@@ -2506,34 +2436,29 @@ fn render_coordination_guards_below_minimum_and_draws_at_minimum() {
 }
 
 #[test]
-fn interview_form_is_drawn_inside_the_chat_panel_beside_the_canvas() {
-    use ratatui::{Terminal, backend::TestBackend};
-
+fn interview_questions_open_explicitly_and_leave_the_canvas_and_draft_intact() {
     let mut app = test_app();
-    app.conversation = "interview-a".into();
-    let question = serde_json::from_value(serde_json::json!({"id":"scope","context":"Scope affects timing.","question":"Which scope?","options":[{"label":"Small"},{"label":"Full"}]})).unwrap();
+    app.input = InputBuffer::with_text("Retain this draft 👩‍💻");
     app.view.workflow_phase = Some("interview".into());
-    app.view.interview_question = Some((42, question));
-    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    app.view.interview_question = Some((42, serde_json::from_value(serde_json::json!({"id":"scope","context":"Scope affects timing.","question":"Which scope?","options":[{"label":"Small"},{"label":"Full"}]})).unwrap()));
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-
-    let chat = app.chat_area;
-    let graph = app.graph_area.expect("canvas stays visible");
-    assert!(chat.width > 0 && chat.right() <= graph.x);
-    let buffer = terminal.backend().buffer();
-    let row = |y: u16, x0: u16, x1: u16| -> String {
-        (x0..x1).map(|x| buffer[(x, y)].symbol()).collect()
-    };
-    let title_row = (0..24)
-        .find(|&y| row(y, 0, 120).contains("Question · choose an answer"))
-        .expect("form is drawn");
-    let line = row(title_row, 0, 120);
-    let col = line[..line.find("Question").unwrap()].chars().count() as u16;
-    assert!(col < chat.right(), "form title must sit in the chat panel");
-    assert!(
-        (0..24).any(|y| row(y, graph.x, graph.right()).contains("orchestrator")),
-        "canvas must keep rendering next to the form"
-    );
+    assert!(!app.interview_visible());
+    assert!(app.graph_area.is_some());
+    app.key(key_press(KeyCode::Char('d')));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.decision_inbox.is_some());
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("Which scope?"));
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.decision_inbox.is_none());
+    assert_eq!(app.input.text, "Retain this draft 👩‍💻");
 }
 
 #[test]
@@ -2549,7 +2474,7 @@ fn agent_canvas_remains_available_in_every_workflow_phase() {
             terminal.draw(|frame| app.draw(frame)).unwrap();
             if width >= SIDE_BY_SIDE_BREAKPOINT {
                 assert!(app.graph_area.is_some(), "{phase}");
-                assert!(app.text_area.is_some(), "{phase}");
+                assert!(!app.interview_visible(), "{phase}");
             }
             app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
             terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -2576,9 +2501,9 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("[Chat]"));
-    assert!(text.contains("Team"));
-    assert!(text.contains("(Tab: switch)"));
+    assert!(text.contains("[Session]"));
+    assert!(text.contains("Canvas"));
+    assert!(text.contains("Ctrl+K"));
 
     // Switch to Focus::Graph
     app.focus = Focus::Graph;
@@ -2589,9 +2514,9 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("Chat"));
-    assert!(text.contains("[Team]"));
-    assert!(text.contains("(Tab: switch)"));
+    assert!(text.contains("Session"));
+    assert!(text.contains("[Canvas]"));
+    assert!(text.contains("Ctrl+K"));
 }
 
 #[test]
@@ -2610,10 +2535,10 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(!text.contains("[Chat]"));
-    assert!(!text.contains("(Tab: switch)"));
+    assert!(!text.contains("[Session]"));
+    assert!(!text.contains("(Ctrl+T session)"));
     assert!(text.contains("test"));
-    assert!(!text.contains("antislop"));
+    assert!(text.contains("antislop"));
     let strip = view::Stage::Fresh.strip(crate::lean::tui::theme::Theme::from_env().glyphs());
     assert!(text.contains(&strip), "{text}");
 }
@@ -2640,6 +2565,10 @@ fn app_draw_transcript_empty_state() {
     use ratatui::backend::TestBackend;
 
     let mut app = test_app();
+    app.open_details("conversation".into());
+    app.navigation
+        .update_presentation(|presentation| presentation.tab = WorkbenchTab::Conversation);
+    app.set_focus(Focus::Chat);
     assert!(app.view.transcript.is_empty());
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -2654,7 +2583,7 @@ fn app_draw_transcript_empty_state() {
 }
 
 fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
-    let title = if comment { "comment on" } else { "To ·" };
+    let title = if comment { "comment on" } else { "Give" };
     let top = (buffer.area.top()..buffer.area.bottom())
         .find(|&y| {
             let row: String = (buffer.area.left()..buffer.area.right())
@@ -2662,7 +2591,17 @@ fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> 
                 .collect();
             row.contains(title)
         })
-        .expect("rendered editor title");
+        .unwrap_or_else(|| {
+            panic!(
+                "missing editor title {title:?} in {:?}: {}",
+                buffer.area,
+                buffer
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+            )
+        });
     let left = (buffer.area.left()..buffer.area.right())
         .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
         .expect("left frame corner");
@@ -2684,6 +2623,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
 
     for comment in [false, true] {
         let mut app = test_app();
+        app.key(key_ctrl('k'));
         let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
         for (width, height) in [(60, 12), (100, 30), (60, 12), (12, 5), (60, 12)] {
             terminal.backend_mut().resize(width, height);
@@ -2844,7 +2784,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
     let text1: String = buffer1.content.iter().map(|c| c.symbol()).collect();
 
     // Check shortcuts and their full descriptions
-    assert!(text1.contains("send message to orchestrator"));
+    assert!(text1.contains("send to the displayed recipient"));
     assert!(text1.contains("newline in draft"));
     assert!(text1.contains("line in draft"));
     assert!(text1.contains("scroll conversation"));
@@ -2886,16 +2826,16 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
         );
     }
 
-    assert!(text2.contains("line start / resume"));
+    assert!(text2.contains("line start / end"));
     assert!(text2.contains("delete to start / end of line"));
     assert!(text2.contains("attach an image from the system clipboard"));
     assert!(text2.contains("remove the latest pending image"));
     assert!(text2.contains("cancel running work"));
-    assert!(text2.contains("pause new steps / continue"));
+    assert!(text2.contains("pause / continue outside editors"));
     assert!(text2.contains("always sent as chat"));
     assert!(text2.contains("search conversation"));
     assert!(text2.contains("command palette"));
-    assert!(text2.contains("back/clear draft"));
+    assert!(text2.contains("close composer and retain draft"));
 
     // 4. Review End followed by Down, PageDown, Up (clamping and no overflow panic)
     let max_scroll = app.help_max_scroll();
@@ -2940,16 +2880,19 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
 
     // 6. Graph help at 60x12: review long filter relation description is fully accessible without clipping
     app.show_help(Help::Graph);
-    for _ in 0..2 {
-        app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let mut text_graph = String::new();
+    for scroll in 0..=app.help_max_scroll() {
+        app.help_scroll = scroll;
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        text_graph.extend(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol()),
+        );
     }
-    terminal
-        .draw(|frame| {
-            app.draw(frame);
-        })
-        .unwrap();
-    let buffer_graph = terminal.backend().buffer();
-    let text_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
     assert!(text_graph.contains("show / hide"));
     assert!(text_graph.contains("dependencies"));
     assert!(text_graph.contains("review"));
@@ -3025,7 +2968,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
     let tiny_buf = term_tiny.backend().buffer();
     let tiny_text: String = tiny_buf.content.iter().map(|c| c.symbol()).collect();
     // Even at 60x12 in graph focus, orchestrator node remains visible
-    assert!(tiny_text.contains("orchestrator") || tiny_text.contains(ORCHESTRATOR));
+    assert!(tiny_text.contains("Orchestration"));
 }
 
 #[test]
@@ -3338,6 +3281,7 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         "Planning must use this scope."
     );
 
+    app.run_workflow(Command::InterviewQuestion);
     let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let screen: String = terminal
@@ -3365,6 +3309,7 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
         app.view.after += 1;
         app.sync_interview();
+        app.run_workflow(Command::InterviewQuestion);
         app.interview_forms
             .get_mut(&app.conversation)
             .unwrap()
@@ -3476,6 +3421,10 @@ fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     let mut app = test_app();
+    app.open_details("conversation".into());
+    app.navigation
+        .update_presentation(|presentation| presentation.tab = WorkbenchTab::Conversation);
+    app.set_focus(Focus::Chat);
     app.view
         .cards
         .push(view::TranscriptCard::Message(view::MessageEntry {
@@ -3506,7 +3455,7 @@ fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
     app.view.activity = Some("orchestrator: exec ls".into());
     let thinking = screen(&mut app, &mut term);
     // Agent updates show in the graph's "now" box only, not above the input.
-    assert!(thinking.contains(" now "));
+    assert!(!thinking.contains(" now "));
     assert_eq!(thinking.matches("orchestrator: exec ls").count(), 1);
 
     // Between the daemon taking the message and the turn starting.
@@ -3829,6 +3778,7 @@ fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
 #[test]
 fn footer_has_one_status_row_and_help_preserves_the_draft() {
     let mut app = test_app();
+    app.set_focus(Focus::Chat);
     app.paste("draft");
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 50)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -3874,7 +3824,7 @@ fn footer_clicks_follow_graphemes_and_the_rendered_row() {
             });
         }
         if width < SIDE_BY_SIDE_BREAKPOINT {
-            let at = text.find("[Team]").unwrap();
+            let at = text.find("[Canvas]").unwrap();
             app.mouse(event::MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 column: unicode_width::UnicodeWidthStr::width(&text[..at]) as u16 + 1,
@@ -3912,9 +3862,9 @@ fn panels_and_buttons_in_the_header_can_be_clicked() {
         ..view::TaskRow::default()
     }];
     // Every panel is a button, not only the focused one.
-    click_header(&mut app, 80, "[Team]");
+    click_header(&mut app, 80, "[Canvas]");
     assert_eq!(app.focus, Focus::Graph);
-    click_header(&mut app, 80, "[Chat]");
+    click_header(&mut app, 80, "[Session]");
     assert_eq!(app.focus, Focus::Chat);
     // With a dialog open the header ignores clicks.
     app.focus = Focus::Chat;
@@ -3922,7 +3872,7 @@ fn panels_and_buttons_in_the_header_can_be_clicked() {
         target: "plan:p1".into(),
         input: InputBuffer::new(),
     });
-    click_header(&mut app, 80, "[Team]");
+    click_header(&mut app, 80, "[Canvas]");
     assert_eq!(app.focus, Focus::Chat);
 }
 #[test]
@@ -3975,7 +3925,7 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app.graph_area.expect("graph drawn beside the chat");
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.focus, Focus::Graph);
     for _ in 0..3 {
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -3991,7 +3941,7 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
         app.offset.1, scrolled,
         "the selection does not pull it back"
     );
-    assert_eq!(app.focus, Focus::Chat, "scrolling moves no focus");
+    assert_eq!(app.focus, Focus::Graph, "scrolling moves no focus");
 }
 
 #[test]
@@ -4013,7 +3963,7 @@ fn the_bar_drops_whole_parts_to_fit_rather_than_cutting_a_button() {
     // A phone-wide bar keeps the panel switch and the plan's actions.
     let phone = header_text(&app, 68);
     assert!(
-        phone.contains("[Chat]") && phone.contains("[Team]"),
+        phone.contains("[Session]") && phone.contains("[Canvas]"),
         "{phone:?}"
     );
 }
@@ -4163,4 +4113,173 @@ fn late_document_fetches_cannot_replace_selection_or_discard_a_draft() {
     );
     assert_eq!(details.query, "café");
     assert_eq!(app.input.text, "Keep my draft 👩‍💻");
+}
+
+#[test]
+fn grouped_selection_restores_a_stage_and_keeps_each_workbench_document_and_query() {
+    use crate::lean::tui::work_units::{StageId, WorkUnitId};
+    let mut app = test_app();
+    let state = tempfile::tempdir().unwrap();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        round: 2,
+        reviewer_summary: Some("Review".into()),
+        ..Default::default()
+    }];
+    app.view.agents.insert(
+        "reviewer:t1".into(),
+        view::Agent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    app.select_node("worker:t1".into());
+    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t1");
+    app.navigation.update_presentation(|presentation| {
+        presentation.tab = WorkbenchTab::Results;
+        presentation.terminal_percent = 65;
+    });
+    let reviewer = app.details.as_mut().unwrap();
+    reviewer.prepare_workbench_details(None, WorkbenchTab::Results);
+    reviewer.query = "review query é".into();
+    reviewer.scroll = 17;
+    reviewer.selected_result_document = Some("result".into());
+    reviewer
+        .documents
+        .insert("result".into(), result_for_test(state.path()));
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().query = "worker query 👩‍💻".into();
+    app.details.as_mut().unwrap().scroll = 5;
+    app.open_details("reviewer:t1".into());
+    let reviewer = app.details.as_ref().unwrap();
+    assert_eq!(reviewer.query, "review query é");
+    assert_eq!(reviewer.scroll, 17);
+    assert_eq!(reviewer.selected_result_document.as_deref(), Some("result"));
+    assert!(reviewer.documents.contains_key("result"));
+    assert_eq!(app.navigation.presentation().terminal_percent, 65);
+    app.key(key_press(KeyCode::Esc));
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    app.select_node("worker:t1".into());
+    assert_eq!(
+        app.navigation.remembered_stages[&WorkUnitId::Task("t1".into())],
+        StageId("reviewer:t1".into())
+    );
+    app.key(key_press(KeyCode::Enter));
+    assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t1");
+    app.open_details("worker:t1".into());
+    assert_eq!(app.details.as_ref().unwrap().query, "worker query 👩‍💻");
+    assert_eq!(app.details.as_ref().unwrap().scroll, 5);
+}
+
+#[test]
+fn session_send_opens_conversation_only_if_navigation_has_not_moved() {
+    use std::os::unix::net::UnixListener;
+    for navigation in ["none", "keyboard", "mouse"] {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let request: serde_json::Value = crate::transport::read(&mut reader).unwrap().unwrap();
+            assert_eq!(request["request"]["op"], "send");
+            accepted_tx.send(()).unwrap();
+            reply_rx.recv().unwrap();
+            crate::transport::write(
+                reader.get_mut(),
+                &serde_json::json!({"data":{},"error":null}),
+            )
+            .unwrap();
+        });
+        let (mut app, updates) = App::test_app_with_client(Client::at(state.path()));
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Selected task".into(),
+            ..Default::default()
+        });
+        app.key(key_ctrl('k'));
+        app.paste("Keep the branch 👩‍💻 é");
+        app.key(key_press(KeyCode::Enter));
+        accepted_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        if navigation != "none" {
+            app.key(key_press(KeyCode::Esc));
+            if navigation == "keyboard" {
+                app.key(key_ctrl('t'));
+                assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+            } else {
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 50)).unwrap();
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let graph = app.graph_for_key();
+                let node = graph.node("worker:t1").unwrap();
+                let area = app.graph_area.unwrap();
+                app.mouse(event::MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: area.x + node.x + 2 - app.offset.0,
+                    row: area.y + node.y + 2 - app.offset.1,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert_eq!(app.selected, "worker:t1");
+            }
+        }
+        reply_tx.send(()).unwrap();
+        app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert_eq!(
+            app.navigation.presentation().tab,
+            if navigation != "none" {
+                WorkbenchTab::Summary
+            } else {
+                WorkbenchTab::Conversation
+            }
+        );
+        if navigation == "mouse" {
+            assert_eq!(app.navigation.screen, Screen::Graph);
+            assert!(app.details.is_none());
+        }
+        assert!(!app.sending);
+        assert!(app.input.is_empty());
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn canvas_and_stage_composers_own_their_keys_and_preserve_independent_drafts() {
+    let mut app = test_app();
+    app.view.tasks = vec![view::TaskRow {
+        id: "t1".into(),
+        uuid: Some("uuid-1".into()),
+        reviewer_summary: Some("Review".into()),
+        ..Default::default()
+    }];
+    app.key(key_ctrl('k'));
+    app.paste("Session 👩‍💻 é");
+    app.key(key_ctrl('j'));
+    app.key(key_press(KeyCode::Char('d')));
+    assert_eq!(app.input.text, "Session 👩‍💻 é\nd");
+    assert!(app.decision_inbox.is_none());
+    app.key(key_press(KeyCode::Esc));
+    app.open_details("reviewer:t1".into());
+    app.key(key_ctrl('k'));
+    app.paste("Review draft");
+    app.key(key_ctrl('j'));
+    app.key(key_press(KeyCode::Char('h')));
+    assert!(app.plan_history.is_none());
+    let key = app.details.as_ref().unwrap().composer_key();
+    assert_eq!(
+        app.agent_drafts.borrow()[&key].input.text,
+        "Review draft\nh"
+    );
+    app.key(key_press(KeyCode::Esc));
+    app.open_details("worker:t1".into());
+    app.key(key_ctrl('k'));
+    app.paste("Worker draft");
+    app.key(key_press(KeyCode::Esc));
+    app.open_details("reviewer:t1".into());
+    assert_eq!(
+        app.agent_drafts.borrow()[&key].input.text,
+        "Review draft\nh"
+    );
+    assert_eq!(app.input.text, "Session 👩‍💻 é\nd");
 }

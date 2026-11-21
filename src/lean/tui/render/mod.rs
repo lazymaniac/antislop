@@ -1,6 +1,7 @@
 mod chat;
 mod composer;
 mod coordinator;
+mod direction;
 mod overlays;
 mod plan_history;
 mod specialized_dashboard;

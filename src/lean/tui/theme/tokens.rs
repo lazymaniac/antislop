@@ -113,7 +113,9 @@ pub fn tone(status: &str) -> Tone {
         "running" | "reviewing" | "working" | "starting" | "sent" | "delivered" | "replied" => {
             Tone::Active
         }
-        "reviewed" | "completed" | "approved" | "accepted" | "merged" | "applied" => Tone::Done,
+        "done" | "reviewed" | "completed" | "approved" | "accepted" | "merged" | "applied" => {
+            Tone::Done
+        }
         "failed" | "blocked" | "rejected" | "cancelled" | "changes_requested" | "error" => {
             Tone::Failed
         }

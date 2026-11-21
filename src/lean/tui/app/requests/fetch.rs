@@ -406,21 +406,33 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
+        if key != "conversation" {
+            let work = crate::lean::tui::work_units::WorkUnits::new(&self.view);
+            if let Some(unit) = work.for_stage(&key) {
+                self.navigation.remembered_stages.insert(
+                    unit.id.clone(),
+                    crate::lean::tui::work_units::StageId(key.clone()),
+                );
+            }
+        }
         let target = if key == "conversation" {
             WorkbenchTarget::Session
         } else {
             WorkbenchTarget::Agent(key.clone())
         };
         let target_initialized = self.navigation.presentations.contains_key(&target);
+        self.remember_workbench();
         let previous_focus = self.navigation.focus;
         let previous_round = self
             .details
             .as_ref()
             .and_then(|details| details.selected_round);
-        self.navigation.update_presentation(|presentation| {
-            presentation.focus = previous_focus;
-            presentation.round = previous_round;
-        });
+        if self.details.is_some() && self.navigation.screen == Screen::Workbench {
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = previous_focus;
+                presentation.round = previous_round;
+            });
+        }
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = target;
         if !target_initialized {
@@ -428,7 +440,7 @@ impl App {
                 .view
                 .tasks
                 .iter()
-                .find(|task| key.ends_with(&task.id))
+                .find(|task| key.split_once(':').is_some_and(|(_, id)| id == task.id))
                 .is_some_and(|task| task.change_kind.has_delivery());
             let tab = super::super::super::workbench::default_tab(&key, delivery);
             self.navigation.update_presentation(|presentation| {
@@ -489,6 +501,21 @@ impl App {
     }
 
     fn restore_details(&mut self, key: &str) {
+        self.remember_workbench();
+        if let Some(saved) = self
+            .detail_states
+            .remove(&(self.conversation.clone(), key.to_owned()))
+        {
+            self.details = Some(saved);
+            if let Some(details) = &mut self.details {
+                details.fetch_in_flight = false;
+                details.editing = false;
+                details.native_focus = false;
+                details.result_loading = None;
+                details.prepare_workbench_details(None, self.navigation.presentation().tab);
+            }
+            return;
+        }
         let presentation = self.navigation.presentation();
         if let Some(details) = &mut self.details {
             details.switch_key(key.to_owned());
@@ -617,4 +644,31 @@ fn run_run_fetch(fetch: RunFetch) {
         },
     };
     let _ = fetch.updates.send(update);
+}
+
+impl App {
+    pub(in crate::lean::tui) fn remember_workbench(&mut self) {
+        if let Some(details) = &self.details {
+            let mut saved = details.clone();
+            let target = if details.key == "conversation" {
+                WorkbenchTarget::Session
+            } else {
+                WorkbenchTarget::Agent(details.key.clone())
+            };
+            if let Some(presentation) = self.navigation.presentations.get(&target) {
+                saved.workbench_memory.insert(
+                    (details.key.clone(), presentation.tab),
+                    (details.scroll, details.query.clone()),
+                );
+            }
+            self.detail_states
+                .insert((details.conversation.clone(), details.key.clone()), saved);
+            if let Some(diff) = &self.diff {
+                self.diff_states.insert(
+                    (details.conversation.clone(), details.key.clone()),
+                    diff.clone(),
+                );
+            }
+        }
+    }
 }

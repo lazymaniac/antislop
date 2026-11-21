@@ -1,47 +1,38 @@
 use super::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 pub(super) fn units(builder: &Builder<'_>) -> Vec<Unit> {
-    let tasks = &builder.view.tasks;
-    let options_of = options_of(tasks);
-    let (mut units, unit_of) = unit_skeleton(tasks, &options_of);
+    let (mut units, unit_of) = unit_skeleton(builder);
     populate_units(builder, &mut units, &unit_of);
     units
 }
 
-fn options_of(tasks: &[TaskRow]) -> HashMap<usize, usize> {
-    let mut options_of = HashMap::new();
-    for (index, task) in tasks.iter().enumerate().filter(|(_, task)| is_pair(task)) {
-        let owner = |own: bool| {
-            tasks.iter().position(|other| {
-                !is_pair(other)
-                    && other.depends_on.contains(&task.id)
-                    && (!own || format!("{}-options", other.id) == task.id)
-            })
-        };
-        if let Some(owner) = owner(true).or_else(|| owner(false)) {
-            options_of.entry(owner).or_insert(index);
-        }
-    }
-    options_of
-}
-
-fn unit_skeleton(
-    tasks: &[TaskRow],
-    options_of: &HashMap<usize, usize>,
-) -> (Vec<Unit>, HashMap<usize, usize>) {
-    let riders: HashSet<usize> = options_of.values().copied().collect();
+fn unit_skeleton(builder: &Builder<'_>) -> (Vec<Unit>, HashMap<usize, usize>) {
     let mut unit_of = HashMap::new();
-    let mut units: Vec<Unit> = Vec::new();
-    for index in (0..tasks.len()).filter(|index| !riders.contains(index)) {
-        let options = options_of.get(&index).copied();
-        unit_of.insert(index, units.len());
-        if let Some(options) = options {
-            unit_of.insert(options, units.len());
+    let mut units = Vec::new();
+    for work in &builder.graph.work.units {
+        let Some(task) = work
+            .task
+            .as_deref()
+            .and_then(|id| builder.index.get(id).copied())
+        else {
+            continue;
+        };
+        let members: Vec<_> = work.stages.iter().map(|stage| stage.id.0.clone()).collect();
+        let mut tasks: Vec<_> = members
+            .iter()
+            .filter_map(|key| key.split_once(':'))
+            .filter_map(|(_, id)| builder.index.get(id).copied())
+            .collect();
+        tasks.sort_unstable();
+        tasks.dedup();
+        for member in &tasks {
+            unit_of.insert(*member, units.len());
         }
         units.push(Unit {
-            task: index,
-            options,
+            task,
+            tasks,
+            members,
             parents: Vec::new(),
             visible: false,
             folded: Vec::new(),
@@ -53,7 +44,7 @@ fn unit_skeleton(
 fn populate_units(builder: &Builder<'_>, units: &mut [Unit], unit_of: &HashMap<usize, usize>) {
     let tasks = &builder.view.tasks;
     for (number, unit) in units.iter_mut().enumerate() {
-        let members = unit.options.into_iter().chain([unit.task]);
+        let members = unit.tasks.iter().copied();
         let mut parents: Vec<usize> = members
             .flat_map(|member| &tasks[member].depends_on)
             .filter_map(|id| builder.index.get(id.as_str()))
@@ -66,36 +57,17 @@ fn populate_units(builder: &Builder<'_>, units: &mut [Unit], unit_of: &HashMap<u
         unit.visible = member_keys(builder.view, unit)
             .iter()
             .any(|key| builder.matches_query(key));
-        unit.folded = member_tasks(builder.view, unit)
-            .into_iter()
-            .map(|task| folded(builder, task))
+        unit.folded = unit
+            .members
+            .iter()
+            .map(|_| folded(builder, unit.task))
             .collect();
     }
 }
 
-/// The task behind each of the unit's cards, in the order of `member_keys`.
-fn member_tasks(view: &View, unit: &Unit) -> Vec<usize> {
-    let mut tasks: Vec<usize> = unit.options.into_iter().collect();
-    tasks.push(unit.task);
-    if !is_pair(&view.tasks[unit.task]) {
-        tasks.push(unit.task);
-    }
-    tasks
-}
-
-/// The unit's cards from left to right: options, worker, reviewer.
-pub(super) fn member_keys(view: &View, unit: &Unit) -> Vec<String> {
-    let task = &view.tasks[unit.task];
-    let mut keys: Vec<String> = unit
-        .options
-        .map(|options| format!("worker:{}", view.tasks[options].id))
-        .into_iter()
-        .collect();
-    keys.push(format!("worker:{}", task.id));
-    if !is_pair(task) {
-        keys.push(format!("reviewer:{}", task.id));
-    }
-    keys
+/// Exact runtime role addresses retained beneath this grouped card.
+pub(super) fn member_keys(_view: &View, unit: &Unit) -> Vec<String> {
+    unit.members.clone()
 }
 
 /// A finished task's cards are folded to their identity rows; toggling a
@@ -287,17 +259,8 @@ fn push_wrapped_unit(
 /// The unit's cards the layout places, each with whether it is folded: all
 /// of them, or only the expanded one, which then takes the unit's width.
 pub(super) fn shown_members(builder: &Builder<'_>, unit: &Unit) -> Vec<(String, bool)> {
-    let members: Vec<(String, bool)> = member_keys(builder.view, unit)
-        .into_iter()
-        .zip(unit.folded.iter().copied())
-        .collect();
-    match builder.size.expanded_key.as_deref() {
-        Some(expanded) if members.iter().any(|(key, _)| key == expanded) => members
-            .into_iter()
-            .filter(|(key, _)| key == expanded)
-            .collect(),
-        _ => members,
-    }
+    let key = format!("worker:{}", builder.view.tasks[unit.task].id);
+    vec![(key, folded(builder, unit.task))]
 }
 
 pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
@@ -312,17 +275,19 @@ pub(super) fn unit_width(builder: &Builder<'_>, unit: &Unit) -> u16 {
 }
 
 pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {
-    let content = card_content::height(
-        builder.view,
-        key,
-        builder.size.width(key, false),
-        builder.size.layout_height(key, false),
-        folded,
-    );
     if builder.size.expanded_key.as_deref() == Some(key) {
-        content.max(builder.size.layout_height(key, false))
+        card_content::height(
+            builder.view,
+            key,
+            builder.size.width(key, false),
+            builder.size.layout_height(key, false),
+            false,
+        )
+        .max(builder.size.layout_height(key, false))
+    } else if folded {
+        4
     } else {
-        content
+        8
     }
 }
 

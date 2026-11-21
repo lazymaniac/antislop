@@ -129,7 +129,7 @@ impl App {
         }
         if saw_manual_plan && self.view.plan_proposed() && !self.view.tasks.is_empty() {
             let plan = self.view.plan.clone().unwrap_or_else(|| "plan".into());
-            self.plan_view = Some(PlanView::new(plan));
+            self.notice = Some(format!("Plan {plan} is ready · Ctrl+L review"));
         }
     }
 }

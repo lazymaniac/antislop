@@ -176,9 +176,6 @@ impl View {
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).
     pub(in crate::lean::tui) fn agent_key(&self, role: &str) -> String {
-        if role == crate::lean::COMMENT_ORCHESTRATOR {
-            return ORCHESTRATOR.into();
-        }
         match role.split_once(':') {
             Some((who, uuid)) => match self.task_rows.get(uuid) {
                 Some(&row) => format!("{who}:{}", self.tasks[row].id),
@@ -193,7 +190,7 @@ impl View {
         match name {
             ORCHESTRATOR | PLAN_REVIEWER | AUDITOR | "user" | "runtime" => name.to_owned(),
             crate::lean::PLANNER => crate::lean::PLANNER.to_owned(),
-            crate::lean::COMMENT_ORCHESTRATOR => ORCHESTRATOR.to_owned(),
+            crate::lean::COMMENT_ORCHESTRATOR => crate::lean::COMMENT_ORCHESTRATOR.to_owned(),
             name => match name.split_once('/') {
                 Some((task, _)) => format!("reviewer:{task}"),
                 None => format!("worker:{name}"),

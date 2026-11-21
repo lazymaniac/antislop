@@ -115,7 +115,10 @@ impl App {
                     .extend(details.scroll_memory.clone());
                 self.details_query_memory
                     .extend(details.query_memory.clone());
+                self.remember_workbench();
                 self.details = None;
+                self.navigation.screen = Screen::Graph;
+                self.set_focus(Focus::Graph);
                 true
             }
             KeyCode::Char('/') if !details.overview() || details.dashboard_visible() => {

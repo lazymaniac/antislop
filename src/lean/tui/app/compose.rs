@@ -14,6 +14,15 @@ impl App {
         {
             return;
         }
+        if self.navigation.session_delivery != crate::lean::store::Delivery::Queue
+            && self
+                .image_drafts
+                .get(&self.conversation)
+                .is_some_and(|images| !images.is_empty())
+        {
+            self.notice = Some("Images use queue delivery. Choose queue with Ctrl+T; draft and attachments retained.".into());
+            return;
+        }
         self.begin_chat_send();
     }
 
@@ -34,6 +43,10 @@ impl App {
     fn begin_chat_send(&mut self) {
         self.send_request_id += 1;
         let request_id = self.send_request_id;
+        self.send_navigation.insert(
+            (self.conversation.clone(), request_id),
+            (self.generation, self.navigation_revision),
+        );
         let text = self.input.text.clone();
         self.record_history(&text);
         let sent_text = std::mem::take(&mut self.input.text);
@@ -82,22 +95,36 @@ impl App {
         let updates = self.updates.clone();
         let conversation = self.conversation.clone();
         let generation = self.generation;
+        let delivery = self.navigation.session_delivery;
+        let directed = send::addressed_deliveries(
+            &self.view,
+            &conversation,
+            &operation_id,
+            &sent_text,
+            delivery,
+        );
         std::thread::spawn(move || {
-            let result = client
-                .call(&Request::Conversation(
-                    crate::lean::daemon::ConversationRequest::Send {
-                        conversation: conversation.clone(),
-                        operation_id: Some(operation_id.clone()),
-                        text: sent_text.clone(),
-                        to: None,
-                        images: images
-                            .iter()
-                            .map(|path| path.to_string_lossy().into_owned())
-                            .collect(),
-                    },
-                ))
-                .map(|_| ())
-                .map_err(|error| error.to_string());
+            let result = if delivery != crate::lean::store::Delivery::Queue {
+                directed
+                    .and_then(|messages| send::send_addressed_deliveries(&client, messages))
+                    .map(|_| ())
+            } else {
+                client
+                    .call(&Request::Conversation(
+                        crate::lean::daemon::ConversationRequest::Send {
+                            conversation: conversation.clone(),
+                            operation_id: Some(operation_id),
+                            text: sent_text.clone(),
+                            to: None,
+                            images: images
+                                .iter()
+                                .map(|path| path.to_string_lossy().into_owned())
+                                .collect(),
+                        },
+                    ))
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            };
             let _ = updates.send(Update::SendResult {
                 conversation,
                 generation,
@@ -152,6 +179,35 @@ impl App {
     }
 
     fn prepare_agent_message(&mut self, target: AgentMessageTarget) -> Option<AgentMessageSend> {
+        let broadcast = if target.recipient == "all"
+            && target.delivery != crate::lean::store::Delivery::Queue
+        {
+            let drafts = self.agent_drafts.borrow();
+            let text = drafts
+                .get(&(target.conversation.clone(), target.recipient.clone()))
+                .map(|composer| composer.input.text.clone())
+                .unwrap_or_default();
+            drop(drafts);
+            match send::addressed_deliveries(
+                &self.view,
+                &target.conversation,
+                "broadcast",
+                &format!("@all {text}"),
+                target.delivery,
+            ) {
+                Ok(messages) => Some(messages),
+                Err(error) => {
+                    self.agent_drafts
+                        .borrow_mut()
+                        .entry((target.conversation.clone(), target.recipient.clone()))
+                        .or_default()
+                        .error = Some(error);
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
         let mut drafts = self.agent_drafts.borrow_mut();
         let composer = drafts
             .entry((target.conversation.clone(), target.recipient.clone()))
@@ -172,7 +228,17 @@ impl App {
         composer.delivery_receipts.clear();
         composer.error = None;
         composer.address = Some(target.addressed.clone());
+        let broadcast = broadcast.map(|messages| {
+            messages
+                .into_iter()
+                .map(|mut message| {
+                    message.operation_id = format!("{}:{}", operation, message.recipient);
+                    message
+                })
+                .collect()
+        });
         Some(AgentMessageSend {
+            broadcast,
             client: self.client.clone(),
             updates: self.updates.clone(),
             target,

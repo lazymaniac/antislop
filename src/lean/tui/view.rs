@@ -1139,7 +1139,10 @@ mod tests {
         assert_eq!(View::mail_key("plan-reviewer"), "plan-reviewer");
         assert_eq!(View::mail_key("auditor"), "auditor");
         assert_eq!(View::mail_key("runtime"), "runtime");
-        assert_eq!(View::mail_key("comment-orchestrator"), "orchestrator");
+        assert_eq!(
+            View::mail_key("comment-orchestrator"),
+            "comment-orchestrator"
+        );
         assert_eq!(View::mail_key("t1"), "worker:t1");
         assert_eq!(View::mail_key("t1/reviewer"), "reviewer:t1");
     }
@@ -1658,9 +1661,9 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(chat_text.contains("[Chat]"));
-        assert!(chat_text.contains("Team"));
-        assert!(chat_text.contains("(Tab: switch)"));
+        assert!(chat_text.contains("[Session]"));
+        assert!(chat_text.contains("Canvas"));
+        assert!(chat_text.contains("(Ctrl+T session)"));
 
         let header_graph = render_header("proj", "conv-12345", "ready", PanelFocus::Graph, 84);
         let graph_text: String = header_graph
@@ -1668,9 +1671,9 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(graph_text.contains("Chat"));
-        assert!(graph_text.contains("[Team]"));
-        assert!(graph_text.contains("(Tab: switch)"));
+        assert!(graph_text.contains("Session"));
+        assert!(graph_text.contains("[Canvas]"));
+        assert!(graph_text.contains("(Ctrl+T session)"));
     }
 
     #[test]
@@ -1682,8 +1685,8 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(!wide_text.contains("[Chat]"));
-        assert!(!wide_text.contains("(Tab: switch)"));
+        assert!(!wide_text.contains("[Session]"));
+        assert!(!wide_text.contains("(Ctrl+T session)"));
         assert!(wide_text.contains("proj"));
         assert!(wide_text.contains("conv-123"));
         assert!(wide_text.contains("ready"));

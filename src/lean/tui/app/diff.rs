@@ -31,7 +31,12 @@ impl App {
 
     pub(in crate::lean::tui) fn load_diff(&mut self, key: &str) {
         if let Some((_, task)) = key.split_once(':') {
-            self.diff = Some(DiffView::new(task.to_owned()));
+            self.diff = Some(
+                self.diff_states
+                    .get(&(self.conversation.clone(), key.to_owned()))
+                    .cloned()
+                    .unwrap_or_else(|| DiffView::new(task.to_owned())),
+            );
             self.fetch_diff();
         }
     }
@@ -95,6 +100,7 @@ impl App {
         };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                self.remember_workbench();
                 self.diff = None;
                 if self.navigation.screen == Screen::Workbench && self.graph_expanded.is_none() {
                     self.navigation.update_presentation(|presentation| {

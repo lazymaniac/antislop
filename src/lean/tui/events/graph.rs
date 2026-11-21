@@ -196,23 +196,47 @@ impl App {
 
     fn graph_action_key(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
-            self.graph_inspector_visible = !self.graph_inspector_visible;
+            if self.terminal_area.width < 120 {
+                self.navigation.compact_secondary = !self.navigation.compact_secondary;
+            } else {
+                self.graph_inspector_visible = !self.graph_inspector_visible;
+            }
             return true;
         }
         match key.code {
             KeyCode::Esc => {
                 if self.graph_link_source.take().is_some() {
-                    self.notice = Some("Anulowano tryb łączenia krawędzi".into());
+                    self.notice = Some("Dependency linking cancelled".into());
                 } else {
-                    self.set_focus(Focus::Chat);
+                    self.navigation.work_selection = None;
+                    self.navigation.compact_secondary = false;
                 }
             }
             KeyCode::Char('q') => return false,
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
             KeyCode::Char('p') => self.run_workflow(Command::Plan),
-            KeyCode::Char('u') => self.open_unblock(None),
-            KeyCode::Char('z' | ' ') => self.toggle_selected_collapse(),
+            KeyCode::Char('u') => self.open_unblock(
+                if self.selected == ORCHESTRATOR && self.view.audit_retryable() {
+                    None
+                } else {
+                    self.selected_work_stage()
+                },
+            ),
+            KeyCode::Char('o') => {
+                if let Some(key) = self.selected_work_stage() {
+                    self.activate_inspector(
+                        crate::lean::tui::work_units::InspectorAction::Results(key),
+                    );
+                }
+            }
+            KeyCode::Char('v') => {
+                if let Some(key) = self.selected_work_stage() {
+                    self.open_diff(&key);
+                }
+            }
+            KeyCode::Char('z') => self.toggle_selected_collapse(),
+            KeyCode::Char(' ') => self.run_workflow(Command::PauseOrContinue),
             KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
             KeyCode::Char('f') => self.open_graph_filters(),
             KeyCode::Char(digit @ '1'..='3') if self.graph_expanded.is_some() => {
@@ -221,12 +245,12 @@ impl App {
             KeyCode::Char(digit @ '1'..='4') => {
                 self.relations.toggle(usize::from(digit as u8 - b'1'));
             }
-            KeyCode::Char('d') => self.set_graph_tab(2),
+            KeyCode::Char('d') => self.open_decision_inbox(),
             KeyCode::Char('c') => self.open_graph_comment(),
             KeyCode::Char('e') => self.open_flow_edit(),
             KeyCode::Char('a') => self.open_flow_add_dependent(),
             KeyCode::Char('S') => self.open_flow_split(),
-            KeyCode::Char('h') => self.toggle_flow_hold(),
+            KeyCode::Char('h') => self.run_workflow(Command::Plans),
             KeyCode::Char('D') | KeyCode::Delete | KeyCode::Backspace => self.open_flow_retire(),
             KeyCode::Char('l') => self.toggle_flow_link(),
             KeyCode::Char('s') => self.open_live_steer(),
@@ -235,7 +259,9 @@ impl App {
                 if self.graph_link_source.is_some() {
                     self.toggle_flow_link();
                 } else {
-                    let target = graph::card_terminal_role(&self.view, &self.selected);
+                    let target = self
+                        .selected_work_stage()
+                        .unwrap_or_else(|| self.selected.clone());
                     self.open_details(target);
                 }
             }
@@ -245,7 +271,9 @@ impl App {
     }
 
     fn open_graph_comment(&mut self) {
-        let target = self.selected.clone();
+        let target = self
+            .selected_work_stage()
+            .unwrap_or_else(|| self.selected.clone());
         let input = self.get_comment_draft(&target);
         self.editor = Some(Editor { target, input });
     }

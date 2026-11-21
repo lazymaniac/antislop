@@ -2,7 +2,6 @@
 //! grouped together, orthogonal edges for what relates them. The layout
 //! follows the visible content of each card and reroutes links as it changes.
 
-use super::super::tasks::status;
 use super::taskinfo;
 use super::theme::Theme;
 use super::view::{
@@ -141,7 +140,7 @@ const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
 const MARGIN: u16 = 3;
 /// Columns between a task's title and its cards.
-const FRAME_X: u16 = 2;
+const FRAME_X: u16 = 0;
 /// How long a message keeps its edge highlighted.
 const RECENT: Duration = Duration::from_secs(10);
 
@@ -220,6 +219,7 @@ pub struct Frame {
 
 #[derive(Debug, Default)]
 pub struct Graph {
+    pub work: super::work_units::WorkUnits,
     pub nodes: Vec<Node>,
     pub frames: Vec<Frame>,
     edges: Vec<Edge>,
@@ -270,25 +270,7 @@ fn task_card<'a>(view: &'a View, key: &str) -> Option<(&'a TaskRow, Role)> {
 /// rounds share one card and so do the two agents of an options task.
 /// Role addresses in events and storage stay intact.
 pub fn card_key(view: &View, key: &str) -> String {
-    match task_card(view, key) {
-        Some((task, Role::Pair)) => format!("worker:{}", task.id),
-        _ => key.to_owned(),
-    }
-}
-
-/// An options Workbench follows the worker or reviewer owning the current phase.
-pub(in crate::lean::tui) fn card_terminal_role(view: &View, key: &str) -> String {
-    match task_card(view, key) {
-        Some((task, Role::Pair)) => {
-            let role = if task.status == status::REVIEWING {
-                "reviewer"
-            } else {
-                "worker"
-            };
-            format!("{role}:{}", task.id)
-        }
-        _ => key.to_owned(),
-    }
+    super::work_units::WorkUnits::new(view).card_key(key)
 }
 
 /// Agents of the session itself, not of a task; their cards are compact.
@@ -299,6 +281,7 @@ fn is_admin(key: &str) -> bool {
 pub type EdgeRoute<'a> = (&'a str, &'a str, Vec<(u16, u16)>);
 
 mod canvas;
+mod grouped;
 mod plan;
 pub(super) use plan::PlanGraph;
 mod health;

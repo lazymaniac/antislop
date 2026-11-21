@@ -209,7 +209,7 @@ impl App {
         }
     }
 
-    fn chat_escape(&mut self) {
+    pub(in crate::lean::tui) fn chat_escape(&mut self) {
         if self.history_index.is_some() {
             self.history_index = None;
             let text = std::mem::take(&mut self.history_draft);

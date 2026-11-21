@@ -39,7 +39,14 @@ impl App {
     }
 
     pub fn select_node(&mut self, key: String) {
-        self.selected = graph::card_key(&self.view, &key);
+        let work = super::super::work_units::WorkUnits::new(&self.view);
+        self.navigation.work_selection =
+            work.for_stage(&key)
+                .map(|unit| super::super::work_units::WorkSelection {
+                    unit: unit.id.clone(),
+                    stage: None,
+                });
+        self.selected = work.card_key(&key);
         self.graph_visibility_exception = None;
     }
 
@@ -92,5 +99,107 @@ impl App {
             .find(|node| node.visible && node.key == ORCHESTRATOR)
             .or_else(|| graph.nodes.iter().find(|node| node.visible))
             .map_or_else(|| ORCHESTRATOR.into(), |node| node.key.clone())
+    }
+}
+
+impl App {
+    pub(in crate::lean::tui) fn selected_work_stage(&self) -> Option<String> {
+        let work = super::super::work_units::WorkUnits::new(&self.view);
+        let unit = work.for_stage(&self.selected)?;
+        let selected = self
+            .navigation
+            .work_selection
+            .as_ref()
+            .filter(|selection| selection.unit == unit.id)
+            .and_then(|selection| selection.stage.as_ref())
+            .or_else(|| self.navigation.remembered_stages.get(&unit.id));
+        Some(
+            selected
+                .filter(|id| unit.stages.iter().any(|stage| stage.id == **id))
+                .map_or_else(
+                    || unit.active_stage(&self.view).id.0.clone(),
+                    |id| id.0.clone(),
+                ),
+        )
+    }
+
+    pub(in crate::lean::tui) fn cycle_work_stage(&mut self, backwards: bool) {
+        let work = super::super::work_units::WorkUnits::new(&self.view);
+        let Some(unit) = work.for_stage(&self.selected) else {
+            return;
+        };
+        let current = self
+            .navigation
+            .work_selection
+            .as_ref()
+            .filter(|selection| selection.unit == unit.id)
+            .and_then(|selection| selection.stage.as_ref());
+        let next = current
+            .and_then(|id| unit.stages.iter().position(|stage| stage.id == *id))
+            .map_or(if backwards { unit.stages.len() - 1 } else { 0 }, |index| {
+                if backwards {
+                    (index + unit.stages.len() - 1) % unit.stages.len()
+                } else {
+                    (index + 1) % unit.stages.len()
+                }
+            });
+        self.select_work_stage(unit.stages[next].id.0.clone());
+    }
+
+    pub(in crate::lean::tui) fn select_work_stage(&mut self, key: String) {
+        use super::super::work_units::{StageId, WorkSelection, WorkUnits};
+        let work = WorkUnits::new(&self.view);
+        if let Some(unit) = work.for_stage(&key) {
+            self.selected = unit.card.clone();
+            let stage = StageId(key);
+            self.navigation
+                .remembered_stages
+                .insert(unit.id.clone(), stage.clone());
+            self.navigation.work_selection = Some(WorkSelection {
+                unit: unit.id.clone(),
+                stage: Some(stage),
+            });
+        }
+    }
+}
+
+impl App {
+    pub(in crate::lean::tui) fn open_work_card_or_stage(
+        &mut self,
+        row: &super::super::workbench::SidebarRow,
+    ) {
+        let target = if row.stage || row.key == "conversation" {
+            row.key.clone()
+        } else {
+            self.select_node(row.key.clone());
+            self.selected_work_stage()
+                .unwrap_or_else(|| row.key.clone())
+        };
+        self.open_details(target);
+    }
+}
+
+impl App {
+    pub(in crate::lean::tui) fn activate_inspector(
+        &mut self,
+        action: super::super::work_units::InspectorAction,
+    ) {
+        use super::super::work_units::InspectorAction;
+        match action {
+            InspectorAction::Stage(key) => self.select_work_stage(key),
+            InspectorAction::Decisions => self.open_decision_inbox(),
+            InspectorAction::Results(key) => {
+                self.open_details(key);
+                let previous = self.navigation.presentation().tab;
+                self.navigation
+                    .update_presentation(|presentation| presentation.tab = WorkbenchTab::Results);
+                if let Some(details) = &mut self.details {
+                    details.prepare_workbench_details(Some(previous), WorkbenchTab::Results);
+                }
+                self.schedule_output_document_fetch();
+            }
+            InspectorAction::Diff(key) => self.open_diff(&key),
+            InspectorAction::Recovery(key) => self.open_unblock(Some(key)),
+        }
     }
 }

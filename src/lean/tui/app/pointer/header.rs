@@ -36,8 +36,11 @@ impl App {
             }
             PLAN => self.run_workflow(Command::Plan),
             NEW | NEW_SHORT | NEW_ICON => self.run_workflow(Command::NewConversation),
-            "[Chat]" => self.set_focus(Focus::Chat),
-            "[Team]" => self.set_focus(Focus::Graph),
+            "[Session]" => {
+                self.open_details("conversation".into());
+                self.focus = Focus::Chat;
+            }
+            "[Canvas]" => self.set_focus(Focus::Graph),
             _ => {}
         }
     }

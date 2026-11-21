@@ -327,7 +327,18 @@ fn open_reviewer_workbench(
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let graph_agent = format!("reviewer:{task_id}");
-    assert_eq!(app.selected, graph_agent);
+    assert_eq!(app.selected, format!("worker:{task_id}"));
+    assert_eq!(
+        app.navigation
+            .work_selection
+            .as_ref()
+            .unwrap()
+            .stage
+            .as_ref()
+            .unwrap()
+            .0,
+        graph_agent
+    );
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(
@@ -346,6 +357,9 @@ fn open_reviewer_workbench(
         },
         "same reviewer task round in fresh Workbench",
     );
+    while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    }
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
     assert_eq!(
@@ -358,7 +372,7 @@ fn open_reviewer_workbench(
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().native_input);
     let until = Instant::now() + Duration::from_secs(30);
     loop {
@@ -413,6 +427,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     let conversation_a = app.conversation.clone();
     assert!(!conversation_a.is_empty());
 
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input.insert_str("first conversation draft");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     pump_until(
@@ -457,6 +472,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     assert_eq!(app.details.as_ref().unwrap().key, "orchestrator");
     assert_eq!(app.input.text, "");
 
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
     // The conversation tab is fed by the real daemon event/history response.
     assert_eq!(
         app.navigation.presentation().tab,
@@ -486,7 +502,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
-    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     draw(&mut app);
     let until = Instant::now() + Duration::from_secs(40);
     loop {
@@ -567,6 +583,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     let conversation_b = app.conversation.clone();
     assert_ne!(conversation_a, conversation_b);
     app.input.insert_str("beta draft");
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
     wait_for("conversation picker", || app.picker.is_some());
     let limit = app.picker.as_ref().unwrap().conversations.len();
@@ -785,7 +802,7 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
-        app.selected, "reviewer:t1",
+        app.selected, "worker:t1",
         "key-filtered graph picker must select the delivered task"
     );
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -794,6 +811,9 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         app.navigation.target,
         WorkbenchTarget::Agent("reviewer:t1".into())
     );
+    while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    }
     assert_eq!(
         app.navigation.presentation().tab,
         antislop::lean::tui::WorkbenchTab::Diff
@@ -833,7 +853,7 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     let until = Instant::now() + Duration::from_secs(40);
     loop {
         if app

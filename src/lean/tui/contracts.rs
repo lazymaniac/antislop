@@ -220,6 +220,7 @@ pub struct WorkbenchPresentation {
     pub zoomed: bool,
     pub split_before_zoom: bool,
     pub list_visible: bool,
+    pub list_requested: bool,
     pub pinned: bool,
     /// Agent CLI shown in the Workbench terminal, independent of content tab.
     pub terminal_owner: Option<String>,
@@ -234,10 +235,11 @@ impl Default for WorkbenchPresentation {
             round: None,
             focus: NavigationFocus::WorkbenchContent,
             split: true,
-            terminal_percent: 40,
+            terminal_percent: 50,
             zoomed: false,
             split_before_zoom: true,
             list_visible: true,
+            list_requested: false,
             pinned: false,
             terminal_owner: None,
             native_input: false,
@@ -252,6 +254,11 @@ pub struct NavigationState {
     pub target: WorkbenchTarget,
     pub focus: NavigationFocus,
     pub presentations: std::collections::HashMap<WorkbenchTarget, WorkbenchPresentation>,
+    pub session_delivery: crate::lean::store::Delivery,
+    pub compact_secondary: bool,
+    pub work_selection: Option<super::work_units::WorkSelection>,
+    pub remembered_stages:
+        std::collections::HashMap<super::work_units::WorkUnitId, super::work_units::StageId>,
 }
 
 impl NavigationState {

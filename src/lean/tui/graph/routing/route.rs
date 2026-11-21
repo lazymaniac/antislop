@@ -3,6 +3,10 @@ use super::*;
 impl Graph {
     /// The card of `key`; a reviewer sharing its worker's card finds that.
     pub fn node(&self, key: &str) -> Option<&Node> {
+        let key = self
+            .work
+            .for_stage(key)
+            .map_or(key, |unit| unit.card.as_str());
         self.nodes.iter().find(|node| node.key == key).or_else(|| {
             let (id, reviewer) = crate::lean::task_role(key)?;
             self.nodes
@@ -66,7 +70,7 @@ impl Graph {
             // so it turns down out of the card even when the row bottom is
             // right under it.
             return Some(vec![
-                (fx, from.y + from.height - 1),
+                (fx, from.y + from.height),
                 (fx, row_bottom(from.y)),
                 (left, row_bottom(from.y)),
                 (left, row_bottom(to.y)),

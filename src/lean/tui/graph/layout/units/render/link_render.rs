@@ -1,9 +1,7 @@
 use super::super::super::*;
 use super::super::links::{is_short, spots};
-use super::super::shares_expanded_frame;
 use super::*;
 use std::collections::HashMap;
-use unicode_width::UnicodeWidthStr;
 
 /// The column where a unit's bus enters its frame: the middle of the top
 /// border between the title and the right corner, so the arrow never lands
@@ -20,24 +18,11 @@ pub(in crate::lean::tui::graph::layout::units) fn entry_columns(
         .iter()
         .map(|bus| {
             let frame = spot[&bus.to];
-            let skip = title_end(builder, units, bus.to, frame);
-            let room = frame.width.saturating_sub(skip + 1);
-            let x = if room > 0 {
-                frame.x + skip + room / 2
-            } else {
-                frame.x + frame.width / 2
-            };
+            let _ = (builder, units);
+            let x = frame.x + frame.width / 2;
             (bus.to, x)
         })
         .collect()
-}
-
-/// The first border column after the frame's title, which is drawn from
-/// column 2 as ` mark title ` truncated to the width less 4.
-fn title_end(builder: &Builder<'_>, units: &[Unit], unit: usize, frame: &Placed) -> u16 {
-    let task = &builder.view.tasks[units[unit].task];
-    let title = UnicodeWidthStr::width(clean(&task.title).as_str()) as u16 + 4;
-    title.min(frame.width.saturating_sub(4)) + 2
 }
 
 /// The routed dependencies of one layout: the links, their buses, the
@@ -76,10 +61,9 @@ pub(in crate::lean::tui::graph::layout::units) fn push_links(
     for (number, link) in links.iter().enumerate() {
         let (from, to) = (spot[&link.from], spot[&link.to]);
         let (px, cx) = (exits[&number], entries[&link.to]);
-        let bottom = tops.units[from.row] + from.height
-            - u16::from(!shares_expanded_frame(builder, &units[link.from]));
+        let bottom = tops.units[from.row] + from.height;
         let top = tops.units[to.row];
-        let target = top.saturating_sub(u16::from(shares_expanded_frame(builder, &units[link.to])));
+        let target = top.saturating_sub(1);
         let entry = gap_line(gaps, tops, to.row, link.to);
         let mut path = vec![(px, bottom)];
         if is_short(link, &spot) {

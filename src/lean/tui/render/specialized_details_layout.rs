@@ -65,7 +65,7 @@ pub(super) fn round_label(details: &Details, selected: u64) -> String {
     } else {
         "history · return to current to send"
     };
-    format!("Round {selected} · {availability}{mode} · Left/Right choose · [] tabs")
+    format!("Round {selected} · {availability}{mode} · ,/. choose · Ctrl+←/→ tabs")
 }
 
 pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Block<'static> {
@@ -237,12 +237,12 @@ pub(super) fn overview_split_hint(
         &[
             "↑/↓ card",
             "Enter fold",
-            "i terminal",
-            "a message",
+            "t terminal",
+            "Ctrl+K message",
             "e all",
-            "[] tabs",
-            "←/→ rounds",
-            "Ctrl+W worker/reviewer",
+            "Ctrl+←/→ tabs",
+            ",/. rounds",
+            "Ctrl+W stage",
             "Esc back",
         ],
         usize::from(width),
@@ -256,8 +256,8 @@ pub(super) fn overview_hint(searching: bool, query: &str, width: u16, theme: &Th
     }
     theme.chrome(&fit_hint(
         &[
-            "i terminal",
-            "a message",
+            "t terminal",
+            "Ctrl+K message",
             "m task info",
             "o resume earlier round",
             "Ctrl+] release",
@@ -280,7 +280,7 @@ pub(super) fn dashboard_hint(searching: bool, query: &str, width: u16, theme: &T
             "e all",
             "c comment",
             "/ search",
-            "←/→ rounds",
+            ",/. rounds",
             "PgUp/PgDn scroll",
             "Esc back",
         ],

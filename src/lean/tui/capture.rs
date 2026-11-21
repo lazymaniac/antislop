@@ -38,7 +38,7 @@ const GEOMETRIES: &[Geometry] = &[
     },
     Geometry {
         id: "wide-100x30",
-        width: 100,
+        width: 120,
         height: 30,
     },
     Geometry {
@@ -53,83 +53,83 @@ const GEOMETRIES: &[Geometry] = &[
     },
     Geometry {
         id: "inspector-below-width",
-        width: 164,
-        height: 19,
+        width: 119,
+        height: 16,
     },
     Geometry {
         id: "inspector-at-width",
-        width: 166,
-        height: 19,
+        width: 120,
+        height: 16,
     },
     Geometry {
         id: "inspector-above-width",
-        width: 168,
-        height: 19,
+        width: 121,
+        height: 16,
     },
     Geometry {
         id: "inspector-below-height",
-        width: 166,
-        height: 18,
+        width: 120,
+        height: 15,
     },
     Geometry {
         id: "inspector-above-height",
-        width: 166,
-        height: 20,
+        width: 120,
+        height: 17,
     },
     Geometry {
         id: "list-below-width",
-        width: 99,
-        height: 24,
+        width: 119,
+        height: 30,
     },
     Geometry {
         id: "list-at-width",
-        width: 100,
-        height: 24,
+        width: 120,
+        height: 30,
     },
     Geometry {
         id: "list-above-width",
-        width: 101,
-        height: 24,
+        width: 121,
+        height: 30,
     },
     Geometry {
         id: "list-below-height",
-        width: 100,
-        height: 23,
+        width: 120,
+        height: 29,
     },
     Geometry {
         id: "list-above-height",
-        width: 100,
-        height: 25,
+        width: 120,
+        height: 31,
     },
     Geometry {
         id: "split-below-height",
         width: 80,
-        height: 23,
+        height: 29,
     },
     Geometry {
         id: "split-at-height",
         width: 80,
-        height: 24,
+        height: 30,
     },
     Geometry {
         id: "split-above-height",
         width: 80,
-        height: 25,
+        height: 31,
     },
     Geometry {
         id: "diff-below-width",
         width: 89,
-        height: 24,
+        height: 30,
     },
     Geometry {
         id: "diff-at-width",
         width: 90,
-        height: 24,
+        height: 30,
     },
     Geometry {
         id: "diff-above-width",
         width: 91,
-        height: 24,
+        height: 30,
     },
 ];
 
@@ -891,6 +891,53 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.screen = Screen::Graph;
             app.focus = Focus::Graph;
             app.graph_inspector_visible = true;
+            if id == "graph-ordinary" {
+                app.view.tasks.insert(
+                    0,
+                    view::TaskRow {
+                        id: "options-t1".into(),
+                        title: "Choose implementation approach".into(),
+                        kind: "options".into(),
+                        status: "approved".into(),
+                        ..Default::default()
+                    },
+                );
+                app.view
+                    .task_meta
+                    .entry("options-t1".into())
+                    .or_default()
+                    .options_for = Some("t1".into());
+                app.view.tasks[1].depends_on.push("options-t1".into());
+                app.view.tasks[1].reviewer_summary = Some("Review implementation".into());
+                app.view.tasks[1].status = "working".into();
+                app.view.tasks[1].round = 2;
+                for role in [
+                    ORCHESTRATOR,
+                    crate::lean::PLANNER,
+                    view::PLAN_REVIEWER,
+                    "worker:options-t1",
+                ] {
+                    app.view.agents.insert(
+                        role.into(),
+                        view::Agent {
+                            turns: 1,
+                            busy_ms: 14_000,
+                            activity: "Completed".into(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                app.view.agents.insert(
+                    "worker:t1".into(),
+                    view::Agent {
+                        running: true,
+                        busy_ms: 82_000,
+                        activity: "Checking the implementation".into(),
+                        ..Default::default()
+                    },
+                );
+                app.select_node("worker:t1".into());
+            }
             if id == "workbench-summary" {
                 app.navigation.screen = Screen::Workbench;
                 app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
@@ -1065,12 +1112,7 @@ fn apply_fixture(app: &mut App, id: &str) {
                     ],
                     orchestrator: false,
                 });
-            app.approval = app
-                .view
-                .approvals
-                .first()
-                .cloned()
-                .map(approval::ApprovalCard::new);
+            app.open_decision_inbox();
         }
         "flow-editor" => {
             app.view.apply(&json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p-fixture","tasks":[
@@ -1197,7 +1239,7 @@ fn apply_fixture(app: &mut App, id: &str) {
         "native-pty" | "native-pty-error" => {
             app.navigation.screen = Screen::Workbench;
             app.navigation.target = WorkbenchTarget::Session;
-            app.navigation.focus = NavigationFocus::WorkbenchContent;
+            app.navigation.focus = NavigationFocus::WorkbenchTerminal;
             app.navigation
                 .update_presentation(|presentation| presentation.split = true);
             let mut details = Details::new("orchestrator".into());
@@ -1760,8 +1802,8 @@ fn state_marker(id: &str, geometry: Geometry) -> Option<&'static str> {
         "graph-waiting" => "waiting",
         "graph-error" => "failed",
         "session-completion" => "Capture session completed",
-        "flow-editor-waiting" if geometry.width == 12 => "Zapis...",
-        "flow-editor-waiting" => "Zapisywanie zmian",
+        "flow-editor-waiting" if geometry.width == 12 => "Saving...",
+        "flow-editor-waiting" => "Saving graph changes",
         "flow-editor-empty" => "add task after",
         "interview-error" => "Fixture answer delivery failed",
         "decision-inbox-error" => "Error: Fixture approval",
@@ -1951,7 +1993,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         && app.details.is_some()
         && !app.workbench_areas.header.is_empty()
         && !app.workbench_areas.content.is_empty()
-        && workbench_header.contains("Podsumowanie");
+        && workbench_header.contains("Summary");
     let reached_view = match fixture.id {
         "graph-ordinary" | "graph-empty" | "graph-compact" => {
             app.navigation.screen == Screen::Graph
@@ -1974,7 +2016,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         | "workbench-tab-diff" => workbench_identity(&app, fixture),
         "decision-inbox" => app.decision_inbox.is_some(),
         "interview-question" | "interview-scope" => app.view.interview_question.is_some(),
-        "cli-approval" => app.approval.is_some(),
+        "cli-approval" => app.decision_inbox.is_some(),
         "flow-editor" => app.flow_editor.is_some(),
         "graph-filters" => app.graph_filters.is_some(),
         "delete-confirmation" => app
@@ -2073,7 +2115,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         "decision-inbox" => app.decision_inbox.is_some(),
         "interview-question" => app.view.interview_question.as_ref().is_some_and(|(_, question)| question.id == "scope-confirmation") && !app.view.user_decision,
         "interview-scope" => app.view.user_decision && app.view.scope_confirmation_summary.is_some(),
-        "cli-approval" => app.approval.as_ref().is_some_and(|card| card.approval.request == "approval-fixture-42" && card.approval.options.len() == 2),
+        "cli-approval" => app.decision_inbox.is_some() && app.view.approvals.iter().any(|approval| approval.request == "approval-fixture-42" && approval.options.len() == 2),
         "flow-editor" => app.flow_editor.as_ref().is_some_and(|editor| matches!(&editor.mode, flow_editor::FlowEditMode::Edit { original_id } if original_id == "t1")),
         "graph-filters" => app.graph_filters.is_some(),
         "delete-confirmation" => app.picker.as_ref().is_some_and(|picker| picker.confirm_delete && picker.delete_target.as_ref().is_some_and(|item| item.id == "old-session")),
@@ -2297,7 +2339,7 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         assert!(
             record["workbench_header"]
                 .as_str()
-                .is_some_and(|header| header.contains("Podsumowanie")),
+                .is_some_and(|header| header.contains("Summary")),
             "{} did not render the Workbench D3 header",
             fixture.id
         );
@@ -2389,14 +2431,14 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         }
         "list-below-width" | "list-at-width" | "list-above-width" | "list-below-height"
         | "list-above-height" => {
-            let expected = width >= 100 && height >= 24;
+            let expected = width >= 120;
             assert_eq!(
                 panels["workbench_list_visible"], expected,
                 "Workbench list boundary must use the actual post-draw layout"
             );
         }
         "split-below-height" | "split-at-height" | "split-above-height" => {
-            let expected = height >= 24;
+            let expected = height >= 30;
             assert_eq!(
                 panels["workbench_split"], expected,
                 "Workbench split boundary must use the actual post-draw layout"
@@ -2478,7 +2520,7 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         "workbench-tab-comments" => assert_eq!(record["active_tab"], "Comments"),
         "workbench-tab-diff" => assert_eq!(record["active_tab"], "Diff"),
         "cli-approval" => assert!(
-            text.contains("asks permission") || record["na_reason"].is_string(),
+            text.contains("Decisions") || record["na_reason"].is_string(),
             "CLI approval card not reached"
         ),
         "graph-filters" => assert!(
@@ -2648,7 +2690,10 @@ fn semantic_surface_cells(record: &Value, fixture: Fixture) -> Option<Vec<&Value
 }
 
 fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::Style {
-    if matches!(fixture.id, "palette-empty" | "new-session") {
+    if matches!(
+        fixture.id,
+        "palette-empty" | "new-session" | "workbench-chat-empty" | "send-pending" | "send-empty"
+    ) {
         return theme.dim();
     }
     if matches!(
@@ -2664,9 +2709,8 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
     match fixture.view {
         "decision-inbox" => theme.card(),
         "questions-scope" => theme.title(),
-        "cli-consent" => ratatui::style::Style::default()
-            .bg(theme.raised().bg.unwrap_or(ratatui::style::Color::Reset)),
-        "composer" => theme.card(),
+        "cli-consent" => theme.card(),
+        "composer" => theme.dim(),
         "flow-editor" => ratatui::style::Style::default()
             .add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::REVERSED),
         "filters" => theme.separator(true),
@@ -3113,7 +3157,7 @@ fn export_catalog() {
             "section_2_catalog":SECTION_2_CATALOG.iter().map(|(view,fixtures)| json!({"view":view,"fixtures":fixtures})).collect::<Vec<_>>(),
             "geometry_applicability":[
                 {"geometries":["inspector-below-width","inspector-at-width","inspector-above-width","inspector-below-height","inspector-above-height"],"fixtures":["graph-ordinary"],"not_applicable_reason":"The inspector threshold belongs to the Graph renderer; other targets have no graph inspector panel."},
-                {"geometries":["list-below-width","list-at-width","list-above-width","list-below-height","list-above-height"],"fixtures":["workbench-summary"],"not_applicable_reason":"The 100x24 target is the Workbench agent list; other surfaces do not render that list."},
+                {"geometries":["list-below-width","list-at-width","list-above-width","list-below-height","list-above-height"],"fixtures":["workbench-summary"],"not_applicable_reason":"The 120-column target is the Workbench agent list; other surfaces do not render that list."},
                 {"geometries":["split-below-height","split-at-height","split-above-height"],"fixtures":["native-pty"],"not_applicable_reason":"The split threshold is exercised by a session with a real native terminal panel; other surfaces do not own that panel."},
                 {"geometries":["diff-below-width","diff-at-width","diff-above-width"],"fixtures":["workbench-tab-diff"],"not_applicable_reason":"The 90-column threshold applies to the loaded Workbench Diff content panel; other tabs have no changed-file list."}
             ],

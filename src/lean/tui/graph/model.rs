@@ -86,12 +86,12 @@ impl Size {
             };
         };
         // Three cards of a unit side by side, in their frame.
-        let unit = MARGIN + 2 * CARD_GAP + 2 * FRAME_X;
+        let unit = MARGIN + 2 * FRAME_X;
         // Leave one cell for the outer edge; unit fitting subtracts its frame.
         let full_w = vp_w.saturating_sub(2).max(MIN_WIDTH);
         let full_h = vp_h.saturating_sub(2).max(MIN_HEIGHT);
         Self {
-            w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),
+            w: (vp_w.saturating_sub(unit)).clamp(MIN_WIDTH, 40),
             admin_w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
             h: (vp_h.saturating_sub(GAP_Y) / 2).clamp(MIN_HEIGHT, HEIGHT),
             expanded_w: full_w,

@@ -465,7 +465,7 @@ fn separator_owner_states(theme: &Theme) {
     graph.graph_inspector_visible = true;
     let buffer = draw(&mut graph, (166, 19));
     application_cells(&buffer, theme, "graph inspector 166x19");
-    assert!(text(&buffer).contains(&format!("c comment {separator} e edit {separator} l")));
+    assert!(text(&buffer).contains("Enter Workbench"));
     graph.graph_expanded = Some("worker:t1".into());
     graph.view.tasks[0].round = 3;
     let mut details = Details::new("worker:t1".into());
@@ -594,7 +594,7 @@ fn compact_statuses() {
         app.flow_editor.as_mut().unwrap().sending = true;
         let buffer = draw(&mut app, size);
         assert!(
-            text(&buffer).contains("Zapis"),
+            text(&buffer).contains("Saving"),
             "{size:?}: {}",
             text(&buffer)
         );
@@ -645,7 +645,7 @@ fn compact_statuses() {
         assert_eq!(editor.title_input.text, title);
         assert_eq!(editor.field, 0);
         let buffer = draw(&mut app, size);
-        assert!(text(&buffer).contains("Tyt:") || text(&buffer).contains("Tytuł:"));
+        assert!(text(&buffer).contains("Title:") || text(&buffer).contains("Title:"));
         for _ in 0..8 {
             app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         }
@@ -665,7 +665,7 @@ fn compact_statuses() {
             KeyModifiers::CONTROL,
         ));
         assert!(app.flow_editor.as_ref().unwrap().sending);
-        assert!(text(&draw(&mut app, size)).contains("Zapis"));
+        assert!(text(&draw(&mut app, size)).contains("Saving"));
         app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.flow_editor.is_none());
         app.plan_history = Some(planhistory::Browser::new());

@@ -145,30 +145,7 @@ impl Details {
                 .task_id()
                 .and_then(|id| view.tasks.iter().find(|task| task.id == id))
                 .is_some_and(|task| task.change_kind.has_delivery());
-            let labels = |tab| match tab {
-                WorkbenchTab::Summary => "Podsumowanie",
-                WorkbenchTab::Conversation => "Rozmowa",
-                WorkbenchTab::Results => "Wyniki",
-                WorkbenchTab::Checks => "Sprawdzenia",
-                WorkbenchTab::Comments => "Komentarze",
-                WorkbenchTab::Diff => "Diff",
-            };
-            let mut spans = Vec::new();
-            for (index, tab) in super::super::workbench::tabs_for(&self.key, delivers)
-                .into_iter()
-                .enumerate()
-            {
-                if index > 0 {
-                    spans.push(Span::styled(theme.chrome(" · "), theme.faint()));
-                }
-                let style = if tab == active {
-                    theme.title().add_modifier(Modifier::REVERSED)
-                } else {
-                    theme.text()
-                };
-                spans.push(Span::styled(labels(tab), style));
-            }
-            Line::from(spans)
+            super::super::workbench::tab_line(&self.key, delivers, active, theme)
         } else {
             format_tabs(&self.key, self.tab, usize::from(areas.header.width))
         };
@@ -392,7 +369,7 @@ impl Details {
     fn draw_result_document_footer(&self, frame: &mut Frame, footer: Rect, theme: &Theme) {
         let mut hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
         if self.visible_result_keys().len() > 1 {
-            hint.push_str(" · ,/. documents");
+            hint.push_str(" · Alt+←/→ documents");
         }
         self.draw_footer_hint(frame, footer, theme.chrome(&hint), theme);
     }

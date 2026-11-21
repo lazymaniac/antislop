@@ -84,14 +84,7 @@ fn admin_row_tops(builder: &Builder<'_>, admin: &[Vec<&str>], mut y: u16) -> (Ve
         let height = row
             .iter()
             .map(|key| {
-                card_content::height(
-                    builder.view,
-                    key,
-                    builder.size.width(key, true),
-                    builder.size.layout_height(key, true),
-                    false,
-                )
-                .max(if builder.size.expanded_key.as_deref() == Some(key) {
+                8_u16.max(if builder.size.expanded_key.as_deref() == Some(key) {
                     builder.size.layout_height(key, true)
                 } else {
                     0

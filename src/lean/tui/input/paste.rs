@@ -116,7 +116,13 @@ impl App {
         if self.picker.is_some()
             || self.editor.is_some()
             || self.plan_view.is_some()
-            || self.diff.is_some()
+            || (self.diff.is_some()
+                && !self.details.as_ref().is_some_and(|details| details.editing))
+        {
+            return false;
+        }
+        if self.navigation.focus == NavigationFocus::Composer
+            && !self.details.as_ref().is_some_and(|details| details.editing)
         {
             return false;
         }
@@ -151,7 +157,9 @@ impl App {
         self.focus == Focus::Chat
             && self.plan_view.is_none()
             && self.diff.is_none()
-            && self.details.is_none()
+            && (self.details.is_none()
+                || (self.navigation.focus == NavigationFocus::Composer
+                    && !self.details.as_ref().is_some_and(|details| details.editing)))
     }
 }
 

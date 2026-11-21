@@ -79,6 +79,12 @@ impl App {
         else {
             unreachable!("update routed to wrong handler");
         };
+        let sent_navigation = self
+            .send_navigation
+            .remove(&(conversation.clone(), request_id));
+        let navigate = result.is_ok()
+            && conversation == self.conversation
+            && sent_navigation == Some((self.generation, self.navigation_revision));
         let operation_key = self
             .send_operation_keys
             .remove(&(conversation.clone(), request_id))
@@ -113,6 +119,16 @@ impl App {
             self.finish_active_send(sent_text, result);
         } else {
             self.finish_background_send(&conversation, request_id, sent_text, result);
+        }
+        if navigate {
+            self.open_details("conversation".into());
+            let previous = self.navigation.presentation().tab;
+            self.navigation
+                .update_presentation(|presentation| presentation.tab = WorkbenchTab::Conversation);
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
+            if let Some(details) = &mut self.details {
+                details.prepare_workbench_details(Some(previous), WorkbenchTab::Conversation);
+            }
         }
     }
 

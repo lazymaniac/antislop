@@ -12,6 +12,7 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame, theme: &Theme) {
         flow_editor.draw(frame, theme);
         return;
     }
+    super::direction::draw(app, frame, theme);
     draw_interview(app, frame, theme);
     draw_picker(app, frame, theme);
     draw_help(app, frame);

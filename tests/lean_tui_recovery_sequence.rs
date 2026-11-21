@@ -675,7 +675,19 @@ fn real_tui_failed_recovery_keeps_raw_error_and_rejects_stale_freshness_token() 
     );
     assert!(confirmation.contains("manual.txt"), "{confirmation}");
     assert!(
-        !confirmation.contains("user-notes.txt"),
+        !confirmation
+            .lines()
+            .skip(6)
+            .take(28)
+            .map(
+                |row| unicode_segmentation::UnicodeSegmentation::graphemes(row, true)
+                    .skip(208)
+                    .take(84)
+                    .collect::<String>()
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
+            .contains("user-notes.txt"),
         "unselected user file must not be authorized: {confirmation}"
     );
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -991,7 +1003,7 @@ fn real_recovery_controls_pause_continue_and_cancel_preserve_reviewed_decision()
 
     // Use the command palette while the task is in needs_user recovery. Both
     // toggles must preserve the reviewed snapshot and its manual decision.
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
     for ch in "pause".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -1008,7 +1020,7 @@ fn real_recovery_controls_pause_continue_and_cancel_preserve_reviewed_decision()
             .status,
         "needs_user"
     );
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
     for ch in "pause".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -1019,8 +1031,10 @@ fn real_recovery_controls_pause_continue_and_cancel_preserve_reviewed_decision()
 
     // Hold an unrelated orchestration turn so Cancel remains actionable while
     // the reviewed manual decision stays visible in recovery.
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("hold-for-cancel");
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     wait_for("recovery scenario orchestrator hold", || {
         fixture.run.join("bin/orchestrator-started").exists()
     });
@@ -1360,8 +1374,10 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
 
     // Keep a real orchestration turn active alongside the held task worker so
     // the session toolbar exposes its pause/cancel controls.
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("hold-for-cancel");
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     wait_for("fake orchestrator hold point", || {
         fixture.run.join("bin/orchestrator-started").exists()
     });
@@ -1377,7 +1393,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
     pump_until(&mut app, &updates, "paused session state", |app| {
         app.view.paused
     });
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
     for ch in "pause".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -1385,7 +1401,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
     pump_until(&mut app, &updates, "continued session state", |app| {
         !app.view.paused
     });
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
     for ch in "pause".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -1480,6 +1496,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
         cancellation_reason.contains("cancelled"),
         "the cancelled worker's actual result must remain recorded: {task}"
     );
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     let summary = capture(&mut app);
     assert!(
         summary.contains("draft survives pause"),

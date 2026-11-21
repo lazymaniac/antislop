@@ -6,6 +6,13 @@ use super::super::*;
 pub(super) fn add_edges(view: &View, graph: &mut Graph, extra_agents: &[&str]) {
     add_role_edges(graph, extra_agents);
     add_mail_edges(view, graph);
+    // Internal endpoints stay in the view's links for stage inspection. External
+    // edges attach to the containing work cards, preserving the existing routing.
+    for edge in &mut graph.edges {
+        edge.from = graph.work.card_key(&edge.from);
+        edge.to = graph.work.card_key(&edge.to);
+    }
+    graph.edges.retain(|edge| edge.from != edge.to);
     // Resolve long report routes once per layout, rather than checking
     // every card again on each animation frame.
     let nodes = graph
@@ -50,7 +57,7 @@ fn add_role_edges(graph: &mut Graph, extra_agents: &[&str]) {
 }
 
 fn add_mail_edges(view: &View, graph: &mut Graph) {
-    for ((from, to), (count, recent)) in aggregate_mail(view) {
+    for ((from, to), (count, recent)) in aggregate_mail(view, &graph.work) {
         push_edge(
             graph,
             from,
@@ -61,10 +68,13 @@ fn add_mail_edges(view: &View, graph: &mut Graph) {
     }
 }
 
-fn aggregate_mail(view: &View) -> std::collections::BTreeMap<(String, String), (u32, bool)> {
+fn aggregate_mail(
+    view: &View,
+    work: &crate::lean::tui::work_units::WorkUnits,
+) -> std::collections::BTreeMap<(String, String), (u32, bool)> {
     let mut links = std::collections::BTreeMap::new();
     for ((from, to), link) in &view.links {
-        let pair = (card_key(view, from), card_key(view, to));
+        let pair = (work.card_key(from), work.card_key(to));
         if pair.0 == pair.1 {
             continue;
         }

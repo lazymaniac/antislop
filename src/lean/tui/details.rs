@@ -58,7 +58,7 @@ pub fn is_overview(tab: usize) -> bool {
 /// Each role exposes only its own tabs.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" => vec![0, RESULT, COMMENTS],
+        "worker" => vec![0, RESULT, CHECKS, COMMENTS],
         "reviewer" => vec![REVIEWER, RESULT, CHECKS, COMMENTS],
         "planner" => vec![0, RESULT, COMMENTS],
         "plan-reviewer" | "auditor" => vec![0, RESULT, COMMENTS],

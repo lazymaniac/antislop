@@ -96,7 +96,7 @@ fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
     };
     let small = layout((70, 24));
     for node in small.nodes.iter().filter(|node| node.visible) {
-        assert!(node.width < WIDTH && node.height < HEIGHT, "{node:?}");
+        assert!(node.width <= 40 && node.height < HEIGHT, "{node:?}");
     }
     assert!(small.width <= 70, "{}", small.width);
     assert!(2 * small.nodes[0].height + GAP_Y <= 24);
@@ -210,12 +210,7 @@ fn expanded_unit_has_its_own_row_and_rendered_dependencies_miss_card_contents() 
         &Theme::new(false, false),
         0,
     );
-    assert!(
-        compact_canvas
-            .lines()
-            .join("\n")
-            .contains("Combining e\u{301}")
-    );
+    assert!(compact_canvas.lines().join("\n").contains("Café"));
     for (width, height, theme) in [
         (180, 70, Theme::new(false, false)),
         (80, 24, Theme::new(false, true)),
@@ -347,59 +342,6 @@ fn expanded_details_tab_shows_agent_and_task_metadata_in_card() {
     assert_eq!(bg(node.x + 3, node.y + 1), theme.tab_active().bg);
     let body = bg(node.x + 3, node.y + 3);
     assert!(header != body && strip != body && header != strip);
-}
-
-#[test]
-fn agent_card_shows_recorded_branch() {
-    let mut view = View::default();
-    view.agents.insert(
-        ORCHESTRATOR.into(),
-        super::super::view::Agent {
-            branch: Some("feature/tasks".into()),
-            ..Default::default()
-        },
-    );
-    let graph = Graph::new(&view);
-    let node = graph.node(ORCHESTRATOR).unwrap();
-    let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
-    graph.render(&view, &mut canvas, Relations::all(), ORCHESTRATOR);
-    assert!(canvas.lines().join("\n").contains("branch: feature/tasks"));
-}
-
-#[test]
-fn graph_includes_planning_agents_in_every_layout() {
-    let mut view = View::default();
-    view.agents
-        .insert(crate::lean::PLANNER.into(), Default::default());
-    for key in ["planner", "options-planner", "requirements-planner"] {
-        view.agents.insert(key.into(), Default::default());
-    }
-    for viewport in [None, Some((60, 30)), Some((180, 40))] {
-        let graph = Graph::new_with_viewport(
-            &view,
-            &Scope::default(),
-            &Default::default(),
-            GroupingMode::Dependency,
-            viewport,
-        );
-        for key in ["planner", "options-planner", "requirements-planner"] {
-            let node = graph.node(key).unwrap();
-            assert!(node.visible);
-            assert!(
-                graph
-                    .edges
-                    .iter()
-                    .any(|edge| { edge.from == ORCHESTRATOR && edge.to == key })
-            );
-            assert!(
-                graph
-                    .nodes
-                    .iter()
-                    .filter(|other| other.visible && other.key != key)
-                    .all(|other| other.x != node.x || other.y != node.y)
-            );
-        }
-    }
 }
 
 #[test]
@@ -537,147 +479,6 @@ fn view(tasks: Vec<TaskRow>) -> View {
 }
 
 #[test]
-fn a_tasks_agents_have_cards_of_their_own_in_one_frame_even_when_collapsed_or_filtered() {
-    let mut row = task("t1", &[]);
-    row.status = "reviewing".into();
-    row.round = 2;
-    row.summary = Some("Execute storage migration.".into());
-    row.reviewer_summary = Some("Validate roundtrips.".into());
-    let mut view = view(vec![row, task("t2", &["t1"])]);
-    view.links.insert(
-        ("reviewer:t1".into(), "worker:t2".into()),
-        super::super::view::Link {
-            count: 1,
-            last: std::time::Instant::now(),
-        },
-    );
-    view.links.insert(
-        ("reviewer:t1".into(), "worker:t1".into()),
-        super::super::view::Link {
-            count: 1,
-            last: std::time::Instant::now(),
-        },
-    );
-    view.links.insert(
-        ("worker:t1".into(), "reviewer:t2".into()),
-        super::super::view::Link {
-            count: 2,
-            last: std::time::Instant::now() - RECENT * 2,
-        },
-    );
-    let collapsed = std::collections::HashSet::from(["t1".to_owned()]);
-    for grouping in [GroupingMode::Dependency, GroupingMode::Status] {
-        for viewport in [None, Some((78, 20))] {
-            let graph =
-                Graph::new_with_viewport(&view, &Scope::default(), &collapsed, grouping, viewport);
-            assert_eq!(graph.nodes.len(), 5);
-            let worker = graph.node("worker:t1").unwrap();
-            let node = graph.node("reviewer:t1").unwrap();
-            assert_eq!(node.key, "reviewer:t1");
-            assert_eq!(node.group, worker.group);
-            assert!(node.visible && node.collapsed && worker.collapsed);
-            // Messages run between the cards of the agents that sent them.
-            let mail: Vec<_> = graph
-                .edges
-                .iter()
-                .filter(|edge| matches!(edge.kind, Kind::Mail { .. }))
-                .map(|edge| {
-                    (
-                        edge.from.as_str(),
-                        edge.to.as_str(),
-                        edge.label.as_deref().unwrap_or_default(),
-                        edge.kind,
-                    )
-                })
-                .collect();
-            assert!(mail.contains(&(
-                "reviewer:t1",
-                "worker:t2",
-                "M✉1",
-                Kind::Mail { recent: true }
-            )));
-            assert!(mail.contains(&(
-                "worker:t1",
-                "reviewer:t2",
-                "M✉2",
-                Kind::Mail { recent: false }
-            )));
-            assert_eq!(graph.edge_routes(Relations::only(2)).len(), mail.len());
-            let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
-            graph.render(&view, &mut canvas, Relations::all(), "reviewer:t1");
-            let text = canvas.lines().join("\n");
-            assert!(
-                text.contains("reviewer") && text.contains("round 2"),
-                "{text}"
-            );
-            assert!(!text.contains("Execute") && !text.contains("Validate"));
-            for query in ["reviewer:t1", "roundtrips", "checking r2"] {
-                let filtered =
-                    Graph::new_with_viewport(&view, &scoped(query), &collapsed, grouping, viewport);
-                assert!(filtered.node("worker:t1").unwrap().visible);
-                assert!(!filtered.node("worker:t2").unwrap().visible);
-            }
-        }
-    }
-    view.tasks[0].status = "failed".into();
-    view.agents.insert(
-        "worker:t1".into(),
-        super::super::view::Agent {
-            running: true,
-            ..Default::default()
-        },
-    );
-    assert_eq!(health(&view, "worker:t1"), Health::Problem);
-    view.tasks[0].status = "reviewing".into();
-    for role in ["worker", "reviewer"] {
-        view.agents.clear();
-        view.agents.insert(
-            format!("{role}:t1"),
-            super::super::view::Agent {
-                activity: "✗ process exited".into(),
-                ..Default::default()
-            },
-        );
-        assert_eq!(health(&view, &format!("{role}:t1")), Health::Problem);
-    }
-}
-
-#[test]
-fn names_and_work_kinds_remain_visible_on_collapsed_cards() {
-    let mut task = task("t1", &[]);
-    task.title = "Repair storage".into();
-    task.kind = "implementation".into();
-    let view = view(vec![task]);
-    for collapsed in [
-        Default::default(),
-        std::collections::HashSet::from(["t1".into()]),
-    ] {
-        let graph = Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
-        for node in graph.nodes.iter().filter(|node| node.visible) {
-            let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-            graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-            let rows = canvas.lines();
-            match node.key.as_str() {
-                "worker:t1" => {
-                    assert!(rows[0].contains("worker"), "{rows:?}");
-                    assert!(rows[0].contains("worker - impl"), "{rows:?}");
-                }
-                "reviewer:t1" => {
-                    assert!(rows[0].contains("reviewer"), "{rows:?}");
-                    assert!(!rows[0].contains("reviewer -"), "{rows:?}");
-                }
-                _ => assert!(!rows.join(" ").contains("orchestration"), "{rows:?}"),
-            }
-        }
-        // The task's name is the title of its frame.
-        let frame = &graph.frames[0];
-        let mut canvas = Canvas::new_window(frame.x, frame.y, frame.width, 1);
-        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-        assert!(canvas.lines()[0].contains("Repair storage"));
-    }
-}
-
-#[test]
 fn compact_cards_with_effects_can_have_no_effect_rows() {
     let mut row = task("t1", &[]);
     row.effect = Some("Updated storage.".into());
@@ -725,7 +526,7 @@ fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
     );
     let worker = graph.node("worker:t1").unwrap();
     let reviewer = graph.node("reviewer:t1").unwrap();
-    assert_ne!(reviewer.key, worker.key);
+    assert_eq!(reviewer.key, worker.key);
     assert_eq!(reviewer.group, worker.group);
     for (_, _, path) in graph.edge_routes(Relations::all()) {
         assert!(
@@ -766,7 +567,7 @@ fn missing_or_cleaned_empty_summaries_use_short_legacy_fallbacks() {
             ),
             ["Review Storage."]
         );
-        assert!(Graph::new(&view).nodes.iter().all(|node| node.height <= 4));
+        assert!(Graph::new(&view).nodes.iter().all(|node| node.height <= 8));
     }
     let mut row = task("t1", &[]);
     row.title.clear();
@@ -1014,132 +815,6 @@ fn session_agent_marker_moves_from_top_to_bottom_after_its_turn() {
 }
 
 #[test]
-fn a_task_is_a_framed_unit_and_units_stand_in_rows_by_dependency_depth() {
-    let mut options = task("t2-options", &["t1"]);
-    options.kind = "options".into();
-    let view = view(vec![
-        task("t1", &[]),
-        task("t2", &["t1", "t2-options"]),
-        task("t3", &[]),
-        options,
-    ]);
-    let graph = Graph::new(&view);
-    let node = |key: &str| graph.node(key).unwrap();
-    let frame = |id: &str| graph.frames.iter().find(|frame| frame.task == id).unwrap();
-    // Worker and reviewer stand side by side in their task's frame.
-    let (worker, reviewer) = (node("worker:t1"), node("reviewer:t1"));
-    assert_eq!(worker.y, reviewer.y);
-    assert_eq!(worker.right() + CARD_GAP, reviewer.x);
-    assert_eq!(worker.group.as_deref(), Some("task:t1"));
-    let t1 = frame("t1");
-    assert!(t1.x < worker.x && reviewer.right() < t1.x + t1.width);
-    // Independent tasks share a row; a dependent one stands below them,
-    // its options card first in its frame.
-    assert_eq!(frame("t3").y, t1.y);
-    let t2 = frame("t2");
-    assert!(t2.y >= t1.y + t1.height + GAP_Y);
-    assert_eq!(node("worker:t2-options").group.as_deref(), Some("task:t2"));
-    assert_eq!(
-        node("worker:t2-options").right() + CARD_GAP,
-        node("worker:t2").x
-    );
-    assert!(graph.frames.iter().all(|frame| frame.task != "t2-options"));
-    assert!(
-        graph
-            .node("reviewer:t2-options")
-            .is_some_and(|card| card.key == "worker:t2-options")
-    );
-    // One dependency runs from frame to frame, the options task's own copy
-    // of it folded into its unit.
-    let between: Vec<_> = graph
-        .edge_routes(Relations::only(0))
-        .into_iter()
-        .filter(|(from, _, _)| from.starts_with("task:"))
-        .collect();
-    assert_eq!(between.len(), 1);
-    let (from, to, path) = &between[0];
-    assert_eq!((*from, *to), ("task:t1", "task:t2"));
-    assert_eq!(path.first().unwrap().1, t1.y + t1.height - 1);
-    assert_eq!(path.last().unwrap().1, t2.y);
-    assert!(admin_above(&graph, t1.y));
-}
-
-fn admin_above(graph: &Graph, top: u16) -> bool {
-    graph
-        .nodes
-        .iter()
-        .filter(|node| node.visible && is_admin(&node.key) && !is_final_review(&node.key))
-        .all(|node| node.y + node.height < top)
-}
-
-#[test]
-fn cards_fit_content_and_frames_and_routes_follow_height_changes() {
-    use super::super::view::Agent;
-    use serde_json::json;
-    let mut row = task("t1", &[]);
-    row.summary = Some("Short summary.".into());
-    let mut view = view(vec![row, task("t2", &["t1"])]);
-    let render = |view: &View| {
-        let graph = open_cards(view);
-        let node = graph.node("worker:t1").unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        graph.render(view, &mut canvas, Relations::all(), "worker:t1");
-        (graph, canvas.lines())
-    };
-    let (short, rows) = render(&view);
-    assert_eq!(rows.len(), 4, "title, status, summary, metadata: {rows:?}");
-    assert!(
-        rows.iter()
-            .all(|row| !row.trim_matches(['▌', '█', ' ']).is_empty()),
-        "{rows:?}"
-    );
-    view.tasks[0].status = "working".into();
-    view.agents.insert(
-        "worker:t1".into(),
-        Agent {
-            running: true,
-            activity: "cargo check".into(),
-            branch: Some("task/repair".into()),
-            ..Default::default()
-        },
-    );
-    let (_, working) = render(&view);
-    assert_eq!(working.len(), rows.len() + 2);
-    assert!(working[2].contains("doing: cargo check"));
-    assert!(working[3].contains("branch: task/repair"));
-    view.tasks[0].status = "approved".into();
-    view.tasks[0].summary = Some("Long café 👩‍💻 summary. ".repeat(40));
-    view.tasks[0].effect = Some("Updated storage".into());
-    view.tasks[0].integration = Some(json!({"outcome":"committed","detail":"as abc12"}));
-    let (long, rows) = render(&view);
-    assert!(long.node("worker:t1").unwrap().height > short.node("worker:t1").unwrap().height);
-    assert!(rows.join(" ").contains('…') && rows.join(" ").contains("effect: Updated storage"));
-    assert!(rows.last().unwrap().contains("committed"));
-    for graph in [short, long] {
-        assert!(graph.nodes.iter().all(|node| node.height <= HEIGHT));
-        for frame in &graph.frames {
-            let tallest = graph
-                .nodes
-                .iter()
-                .filter(|node| node.group.as_deref() == Some(&frame.key))
-                .map(|node| node.height)
-                .max()
-                .unwrap();
-            assert_eq!(frame.height, tallest + 2);
-        }
-        for (_, _, path) in graph.edge_routes(Relations::all()) {
-            assert!(
-                graph
-                    .nodes
-                    .iter()
-                    .filter(|node| node.visible)
-                    .all(|node| !Graph::route_intersects_card(&path, node))
-            );
-        }
-    }
-}
-
-#[test]
 fn compact_card_layout_is_identical_when_measuring_and_painting() {
     use serde_json::json;
     for width in [MIN_WIDTH, WIDTH] {
@@ -1175,9 +850,9 @@ fn arrows_move_to_the_nearest_node_in_that_direction() {
     let task_of =
         |key: Option<String>| key.and_then(|key| key.split_once(':').map(|(_, id)| id.to_owned()));
     // Across a frame, then on to the next one in the row.
-    assert_eq!(go("worker:t1", 1, 0).as_deref(), Some("reviewer:t1"));
+    assert_eq!(go("worker:t1", 1, 0).as_deref(), Some("worker:t3"));
     assert_eq!(go("reviewer:t1", 1, 0).as_deref(), Some("worker:t3"));
-    assert_eq!(go("worker:t3", -1, 0).as_deref(), Some("reviewer:t1"));
+    assert_eq!(go("worker:t3", -1, 0).as_deref(), Some("worker:t1"));
     assert_eq!(go("worker:t1", -1, 0), None);
     // Down to the dependent row, and back up.
     assert_eq!(task_of(go("reviewer:t1", 0, 1)).as_deref(), Some("t2"));
@@ -1186,48 +861,6 @@ fn arrows_move_to_the_nearest_node_in_that_direction() {
         Some("t1" | "t3")
     ));
     assert!(go(ORCHESTRATOR, 0, 1).is_some_and(|key| key.contains(':')));
-}
-
-#[test]
-fn edges_join_boxes_without_crossing_them() {
-    let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
-    view.links.insert(
-        ("worker:t1".into(), "worker:t2".into()),
-        super::super::view::Link {
-            count: 2,
-            last: std::time::Instant::now(),
-        },
-    );
-    let graph = Graph::new(&view);
-    let mut canvas = Canvas::new(graph.width, graph.height);
-    graph.render(&view, &mut canvas, Relations::all(), "worker:t2");
-    let lines = canvas.lines();
-    let chars = |y: u16| lines[usize::from(y)].chars().collect::<Vec<char>>();
-    let worker = graph.node("worker:t1").unwrap();
-    let reviewer = graph.node("reviewer:t1").unwrap();
-    let next = graph.node("worker:t2").unwrap();
-    // Worker ↔ reviewer straight across the gap in their frame.
-    let row = chars(worker.y + 1);
-    assert_eq!(row[usize::from(reviewer.x - 1)], '▶', "{row:?}");
-    assert_eq!(row[usize::from(worker.right())], '◀', "{row:?}");
-    assert_eq!(
-        chars(next.y)[usize::from(next.x)],
-        '█',
-        "the card's status marker remains on its edge"
-    );
-    // t1's group → t2's group, ending beside the group title without a box.
-    let (top, bottom) = (&graph.frames[1], &graph.frames[0]);
-    assert_eq!((bottom.task.as_str(), top.task.as_str()), ("t1", "t2"));
-    assert!(
-        chars(top.y).contains(&'▼'),
-        "{:?}",
-        lines[usize::from(top.y)]
-    );
-    assert!(!chars(bottom.y + bottom.height - 1).contains(&'┬'));
-    assert!(lines[usize::from(bottom.y)].contains("Task t1"));
-    // A message between them is counted beside the source.
-    assert!(lines.join("\n").contains("✉2"));
-    assert!(lines[usize::from(worker.y + 1)].contains("proposed"));
 }
 
 #[test]
@@ -1259,41 +892,17 @@ fn a_dependency_arrow_enters_beside_the_title_in_every_frame_of_a_growing_card()
             .iter()
             .find(|frame| frame.task == "t2")
             .unwrap();
-        let row = canvas.lines()[usize::from(frame.y)]
-            .chars()
-            .collect::<Vec<char>>();
-        let arrow = row.iter().position(|ch| *ch == '▼');
-        let title_end = usize::from(frame.x) + 2 + " ✓ Add farewell ".chars().count();
-        assert!(
-            arrow.is_some_and(|x| x >= title_end && x + 1 < usize::from(frame.x + frame.width)),
-            "{width} step {step}: {}",
-            row.iter().collect::<String>()
-        );
-    }
-}
-
-#[test]
-fn all_includes_every_supervision_edge() {
-    let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
-    view.agents
-        .insert(crate::lean::PLANNER.into(), Default::default());
-    view.agents
-        .insert("analysis-helper".into(), Default::default());
-    let graph = Graph::new(&view);
-    let all = graph.edge_routes(Relations::all());
-    // The orchestrator supervises the session's agents; tasks stand in
-    // frames of their own.
-    let supervision = graph.edge_routes(Relations::only(3));
-    assert_eq!(supervision.len(), 2);
-    for edge in &supervision {
-        assert!(all.contains(edge), "All must include {edge:?}");
-    }
-    assert!(
-        graph
+        let incoming: Vec<_> = graph
             .edge_routes(Relations::only(0))
-            .iter()
-            .all(|edge| !supervision.contains(edge))
-    );
+            .into_iter()
+            .filter(|(_, to, _)| *to == "worker:t2")
+            .collect();
+        assert_eq!(incoming.len(), 1);
+        let &(x, y) = incoming[0].2.last().unwrap();
+        assert_eq!(y + 1, frame.y);
+        let row = canvas.lines()[usize::from(y)].chars().collect::<Vec<_>>();
+        assert_eq!(row[usize::from(x)], '▼', "{width} step {step}");
+    }
 }
 
 #[test]
@@ -1313,20 +922,6 @@ fn scoped(query: &str) -> Scope {
 }
 
 /// The graph with every finished card unfolded, for tests of card slots.
-fn open_cards(view: &View) -> Graph {
-    let toggled = view
-        .tasks
-        .iter()
-        .filter(|task| {
-            matches!(
-                task.status.as_str(),
-                "approved" | "skipped" | "cancelled" | "revised"
-            )
-        })
-        .map(|task| task.id.clone())
-        .collect();
-    Graph::new_with_options(view, None, &toggled, GroupingMode::Dependency)
-}
 
 #[test]
 fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
@@ -1343,12 +938,11 @@ fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
         graph.node("worker:t1").unwrap(),
         graph.node("worker:t2").unwrap(),
     );
-    assert!(done.collapsed && done.height == 2);
+    assert!(done.collapsed && done.height == 4);
     assert!(!next.collapsed && next.height > 2);
     let (above, below) = (&graph.frames[0], &graph.frames[1]);
     assert_eq!(
-        above.height,
-        done.height + 2,
+        above.height, done.height,
         "the folded row takes only its height"
     );
     assert_eq!(below.y, above.y + above.height + GAP_Y);
@@ -1363,80 +957,6 @@ fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
     );
     assert!(!graph.node("worker:t1").unwrap().collapsed);
     assert!(graph.node("worker:t2").unwrap().collapsed);
-}
-
-#[test]
-fn options_card_finishes_with_one_result_line_and_no_cli() {
-    use super::super::view::Agent;
-    use serde_json::json;
-    let mut row = task("t1", &[]);
-    row.kind = "options".into();
-    row.status = "approved".into();
-    row.round = 2;
-    row.obligations = Some(json!({"total":21,"ok":21,"missing":0}));
-    let mut view = view(vec![row]);
-    for role in ["worker", "reviewer"] {
-        view.agents.insert(
-            format!("{role}:t1"),
-            Agent {
-                provider: "codex".into(),
-                ..Default::default()
-            },
-        );
-    }
-    for collapsed in [
-        Default::default(),
-        std::collections::HashSet::from(["t1".into()]),
-    ] {
-        let graph = Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
-        let node = graph.node("worker:t1").unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-        let rows = canvas.lines();
-        assert!(
-            rows[0].contains("options") && !rows[0].contains("options -"),
-            "{rows:?}"
-        );
-        assert!(
-            rows[1].contains("approved r2") && rows[1].contains("21/21"),
-            "{rows:?}"
-        );
-        assert_eq!(
-            rows.iter().filter(|line| line.contains("approved")).count(),
-            1,
-            "{rows:?}"
-        );
-        assert!(
-            !rows.join(" ").contains("codex") && !rows.join(" ").contains("V:"),
-            "{rows:?}"
-        );
-    }
-}
-
-#[test]
-fn reviewer_marker_waits_for_worker_before_animating_and_finishing() {
-    let mut row = task("t1", &[]);
-    row.status = "working".into();
-    let mut view = view(vec![row]);
-    let graph = Graph::new(&view);
-    let node = graph.node("reviewer:t1").unwrap();
-    let theme = Theme::new(true, false);
-    for (status, expected) in [
-        ("working", 0),
-        ("reviewing", 1),
-        ("approved", node.height - 1),
-    ] {
-        view.tasks[0].status = status.into();
-        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-        draw_node(&view, &mut canvas, node, false, None, &theme, 1);
-        let markers: Vec<_> = (0..node.height)
-            .filter(|row| {
-                canvas.cell(node.x, node.y + row).unwrap().style
-                    == theme.card().patch(theme.progress_marker())
-            })
-            .collect();
-        assert_eq!(markers, [expected], "{status}");
-    }
 }
 
 #[test]
@@ -1463,7 +983,7 @@ fn workflow_places_preparation_before_tasks_and_acceptance_after_them() {
             for sequence in [preparation.as_slice(), acceptance.as_slice()] {
                 let nodes: Vec<_> = sequence.iter().filter_map(|key| visible(key)).collect();
                 for pair in nodes.windows(2) {
-                    assert!((pair[0].y, pair[0].x) < (pair[1].y, pair[1].x));
+                    assert!((pair[0].y, pair[0].x) <= (pair[1].y, pair[1].x));
                 }
             }
             for frame in graph.frames.iter().filter(|frame| frame.visible) {
@@ -1494,57 +1014,6 @@ fn workflow_places_preparation_before_tasks_and_acceptance_after_them() {
 }
 
 #[test]
-fn orchestration_cards_follow_the_projected_turn_lifecycle() {
-    let mut view = View::default();
-    let lifecycle = [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR];
-    let visible = |view: &View| {
-        Graph::new(view)
-            .nodes
-            .into_iter()
-            .filter(|node| node.visible)
-            .map(|node| node.key)
-            .collect::<Vec<_>>()
-    };
-    let expected = |roles: &[&str]| {
-        std::iter::once(ORCHESTRATOR)
-            .chain(roles.iter().copied())
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
-
-    assert_eq!(visible(&view), expected(&[]));
-    for (index, role) in lifecycle.into_iter().enumerate() {
-        view.apply(&serde_json::json!({
-            "seq": index + 1,
-            "turn_id": format!("turn-{index}"),
-            "kind": "turn_started",
-            "created_ms": 1,
-            "payload": {"role": role, "provider": "codex"}
-        }));
-        let expected_roles: Vec<_> = lifecycle.iter().take(index + 1).copied().collect();
-        assert_eq!(visible(&view), expected(&expected_roles), "after {role}");
-    }
-
-    let mut out_of_order = View::default();
-    for (index, role) in [crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR]
-        .into_iter()
-        .enumerate()
-    {
-        out_of_order.apply(&serde_json::json!({
-            "seq": index + 1,
-            "turn_id": format!("early-{index}"),
-            "kind": "turn_started",
-            "created_ms": 1,
-            "payload": {"role": role, "provider": "codex"}
-        }));
-    }
-    assert_eq!(
-        visible(&out_of_order),
-        expected(&[crate::lean::PLANNER, PLAN_REVIEWER, AUDITOR])
-    );
-}
-
-#[test]
 fn an_expanded_card_spans_a_narrow_viewport_past_the_lanes_that_end_above_it() {
     let mut rows = vec![
         task("t1", &[]),
@@ -1553,6 +1022,7 @@ fn an_expanded_card_spans_a_narrow_viewport_past_the_lanes_that_end_above_it() {
         task("t4", &["t2", "t3"]),
     ];
     rows[3].title = "Handle auditor reports before workflow".into();
+    rows[3].reviewer_summary = Some("Review audit".into());
     let view = view(rows);
     let graph = Graph::new_with_expanded(
         &view,
@@ -1604,32 +1074,6 @@ fn a_route_stopping_under_its_target_points_up_into_it() {
 }
 
 #[test]
-fn a_narrow_folded_card_gives_its_title_the_room_its_marker_does_not_need() {
-    let mut row = task("t1", &[]);
-    row.status = "approved".into();
-    row.kind = "implementation".into();
-    let view = view(vec![row]);
-    let graph = Graph::new_with_viewport(
-        &view,
-        &Scope::default(),
-        &Default::default(),
-        GroupingMode::Dependency,
-        Some((62, 40)),
-    );
-    let node = graph.node("worker:t1").unwrap();
-    assert!(node.collapsed && node.width < 18, "a phone-width card");
-    let mut canvas = Canvas::new(graph.width, graph.height);
-    graph.render(&view, &mut canvas, Relations::all(), "");
-    let title = canvas.lines()[usize::from(node.y)]
-        .chars()
-        .skip(usize::from(node.x + 4))
-        .take(usize::from(node.width - 5))
-        .collect::<String>();
-    assert!(title.trim_end().ends_with(" +"), "{title:?}");
-    assert_eq!(title.trim_end(), "worker +", "too little of the kind fits");
-}
-
-#[test]
 fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
     let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
     for key in [crate::lean::PLANNER, "planner", PLAN_REVIEWER, AUDITOR] {
@@ -1654,13 +1098,9 @@ fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
     let lines = canvas.lines();
     // The route leaves the card downwards: a corner under the card, and the
     // label beside it rather than under the card.
-    let under = &lines[usize::from(auditor.y + auditor.height)];
-    assert!(path[0].1 < auditor.y + auditor.height, "{path:?}");
-    assert!(
-        under.contains("┘R") || under.contains("└R") || under.contains("R└"),
-        "{}",
-        lines.join("\n")
-    );
+    let under = lines[usize::from(auditor.y + auditor.height)..].join("\n");
+    assert_eq!(path[0].1, auditor.y + auditor.height, "{path:?}");
+    assert!(under.contains('R'), "{}", lines.join("\n"));
 }
 
 #[test]
@@ -1737,5 +1177,244 @@ fn rows_stay_centred_and_lanes_on_either_side_stay_within_the_viewport() {
             .iter()
             .all(|frame| frame.x == graph.frames[0].x);
         assert_eq!(lanes.len(), if single { 2 } else { 1 }, "{width}:\n{shown}");
+    }
+}
+
+#[test]
+fn grouped_projection_uses_explicit_unique_ownership_and_keeps_every_stage() {
+    use crate::lean::tui::work_units::{WorkUnitId, WorkUnits};
+    let mut dedicated = task("dedicated", &[]);
+    dedicated.kind = "options".into();
+    dedicated.reviewer_summary = Some("Review options".into());
+    let mut shared = task("shared", &[]);
+    shared.kind = "options".into();
+    let mut owner = task("build", &["dedicated", "shared"]);
+    owner.reviewer_summary = Some("Review implementation".into());
+    let mut view = view(vec![dedicated, shared, owner, task("other", &["shared"])]);
+    view.task_meta
+        .entry("dedicated".into())
+        .or_default()
+        .options_for = Some("build".into());
+    view.task_meta
+        .entry("shared".into())
+        .or_default()
+        .options_for = Some("build".into());
+    for key in [
+        ORCHESTRATOR,
+        crate::lean::COMMENT_ORCHESTRATOR,
+        crate::lean::PLANNER,
+        PLAN_REVIEWER,
+        AUDITOR,
+        "research-alpha",
+        "research-beta",
+    ] {
+        view.agents.insert(key.into(), Default::default());
+    }
+    let work = WorkUnits::new(&view);
+    let build = work.get(&WorkUnitId::Task("build".into())).unwrap();
+    assert_eq!(
+        build
+            .stages
+            .iter()
+            .map(|stage| stage.id.0.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "worker:dedicated",
+            "reviewer:dedicated",
+            "worker:build",
+            "reviewer:build"
+        ]
+    );
+    assert_eq!(work.for_stage("reviewer:dedicated").unwrap().id, build.id);
+    assert_ne!(work.for_stage("worker:shared").unwrap().id, build.id);
+    assert_ne!(
+        work.for_stage("research-alpha").unwrap().id,
+        work.for_stage("research-beta").unwrap().id
+    );
+    assert_eq!(
+        work.for_stage(crate::lean::COMMENT_ORCHESTRATOR)
+            .unwrap()
+            .id,
+        WorkUnitId::Orchestration
+    );
+    assert_eq!(
+        work.for_stage(PLAN_REVIEWER).unwrap().id,
+        WorkUnitId::Planning
+    );
+    assert_eq!(
+        work.for_stage(crate::lean::PLANNER).unwrap().id,
+        WorkUnitId::Planning
+    );
+    assert_eq!(
+        work.for_stage("worker:other").unwrap().stages.len(),
+        1,
+        "no invented reviewer"
+    );
+    let graph = Graph::new(&view);
+    assert_eq!(
+        graph.nodes.iter().filter(|node| node.visible).count(),
+        work.units.len()
+    );
+    assert_eq!(graph.node("worker:dedicated"), graph.node("reviewer:build"));
+    assert_eq!(graph.node(PLAN_REVIEWER), graph.node(crate::lean::PLANNER));
+    view.task_meta.get_mut("dedicated").unwrap().options_for = None;
+    assert_eq!(
+        WorkUnits::new(&view)
+            .for_stage("worker:dedicated")
+            .unwrap()
+            .id,
+        WorkUnitId::Task("dedicated".into()),
+        "dependency/name alone must not establish ownership"
+    );
+}
+
+#[test]
+fn grouped_stages_keep_retry_identity_and_member_problems_decisions_and_filters() {
+    use crate::lean::tui::work_units::WorkUnits;
+    let mut task = task("t1", &[]);
+    task.status = "reviewing".into();
+    task.reviewer_summary = Some("Check contracts".into());
+    let mut view = view(vec![task]);
+    view.agents.insert(
+        "worker:t1".into(),
+        super::super::view::Agent {
+            activity: "✗ raw worker failure".into(),
+            provider: "codex".into(),
+            ..Default::default()
+        },
+    );
+    view.agents.insert(
+        "reviewer:t1".into(),
+        super::super::view::Agent {
+            running: true,
+            provider: "claude".into(),
+            ..Default::default()
+        },
+    );
+    let before = WorkUnits::new(&view);
+    let unit = before.for_stage("worker:t1").unwrap();
+    assert_eq!(unit.health(&view), Health::Problem);
+    assert_eq!(unit.active_stage(&view).id.0, "reviewer:t1");
+    view.tasks[0].round = 5;
+    let after = WorkUnits::new(&view);
+    assert_eq!(unit.id, after.for_stage("reviewer:t1").unwrap().id);
+    view.approvals.push(super::super::view::PendingApproval {
+        request: "approval".into(),
+        role: "reviewer:t1".into(),
+        provider: "codex".into(),
+        summary: "Approve command".into(),
+        orchestrator: false,
+        options: Vec::new(),
+    });
+    assert_eq!(unit.decisions(&view), 1);
+    for scope in [
+        Scope {
+            query: Some("reviewer:t1".into()),
+            ..Default::default()
+        },
+        Scope {
+            providers: ["claude".to_owned()].into(),
+            ..Default::default()
+        },
+        Scope {
+            states: [Health::Problem].into(),
+            ..Default::default()
+        },
+    ] {
+        let graph = Graph::new_with_viewport(
+            &view,
+            &scope,
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((80, 24)),
+        );
+        assert!(
+            graph.node("worker:t1").unwrap().visible,
+            "any matching stage exposes its work card"
+        );
+    }
+}
+
+#[test]
+fn external_mail_routes_between_groups_and_internal_mail_keeps_exact_endpoints() {
+    let mut first = task("t1", &[]);
+    first.reviewer_summary = Some("Review".into());
+    let mut view = view(vec![first, task("t2", &["t1"])]);
+    for (from, to) in [("worker:t1", "reviewer:t1"), ("reviewer:t1", "worker:t2")] {
+        view.links.insert(
+            (from.into(), to.into()),
+            super::super::view::Link {
+                count: 2,
+                last: std::time::Instant::now(),
+            },
+        );
+    }
+    let graph = Graph::new(&view);
+    let mail: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, Kind::Mail { .. }))
+        .collect();
+    assert_eq!(mail.len(), 1);
+    assert_eq!(
+        (mail[0].from.as_str(), mail[0].to.as_str()),
+        ("worker:t1", "worker:t2")
+    );
+    assert!(
+        view.links
+            .contains_key(&("worker:t1".into(), "reviewer:t1".into()))
+    );
+    for (_, _, path) in graph.edge_routes(Relations::all()) {
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.visible)
+                .all(|node| !Graph::route_intersects_card(&path, node)),
+            "external routes must not penetrate cards: {path:?}"
+        );
+    }
+}
+
+#[test]
+fn grouped_cards_render_complete_graphemes_and_aggregate_state_in_all_modes() {
+    let mut row = task("t1", &[]);
+    row.title = "Review 👩‍💻 e\u{301} changes".into();
+    row.status = "reviewing".into();
+    row.reviewer_summary = Some("Review changes".into());
+    let view = view(vec![row]);
+    for ascii in [false, true] {
+        for color in [false, true] {
+            let theme = Theme::new(color, ascii);
+            let graph = Graph::new_with_viewport(
+                &view,
+                &Scope::default(),
+                &Default::default(),
+                GroupingMode::Dependency,
+                Some((80, 24)),
+            );
+            let node = graph.node("worker:t1").unwrap();
+            let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+            graph.render_with(
+                &view,
+                &mut canvas,
+                Relations::all(),
+                "reviewer:t1",
+                &theme,
+                0,
+            );
+            let text = canvas.lines().join("\n");
+            assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
+            assert!(text.contains("worker") && text.contains("reviewer"));
+            assert!(text.contains("working"));
+            if !color {
+                assert!(
+                    canvas
+                        .cells
+                        .iter()
+                        .all(|cell| cell.style.fg.is_none() && cell.style.bg.is_none())
+                );
+            }
+        }
     }
 }

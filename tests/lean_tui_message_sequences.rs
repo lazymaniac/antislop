@@ -455,6 +455,7 @@ fn composer_broadcast_retries_by_operation_and_keeps_the_session_draft() {
     let proxy = Proxy::start(&proxy_state, &state);
     let (mut app, updates) = App::test_app_with_client(proxy.client());
     app.open(conversation.clone());
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("sequence fixture request");
     proxy.drop_next_reply();
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -599,6 +600,7 @@ fn composer_broadcast_retries_by_operation_and_keeps_the_session_draft() {
         "late reply must target another session"
     );
     app.open(other_conversation.clone());
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("late reply draft");
     proxy.hold_next_send_reply();
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -626,6 +628,7 @@ fn composer_broadcast_retries_by_operation_and_keeps_the_session_draft() {
     assert_eq!(app.conversation, conversation);
     assert_eq!(app.input.text, "draft in the active session");
     app.input.clear();
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
     assert!(app.picker.is_some(), "@ opens the real recipient picker");
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));

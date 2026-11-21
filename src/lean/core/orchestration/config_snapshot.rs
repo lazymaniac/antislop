@@ -176,7 +176,10 @@ impl Core {
         if matches!(message.recipient.as_str(), PLAN_REVIEWER | AUDITOR) {
             self.resume_agent_reviews(&message.conversation)?;
         }
-        if message.recipient == ORCHESTRATOR {
+        if matches!(
+            message.recipient.as_str(),
+            ORCHESTRATOR | PLANNER | COMMENT_ORCHESTRATOR
+        ) {
             self.wake(&message.conversation);
         }
         Ok(())

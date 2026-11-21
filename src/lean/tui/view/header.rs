@@ -137,7 +137,7 @@ pub(in crate::lean::tui) fn render_header_themed(
     append_panels(&mut panels, width, focus, theme, secondary);
     parts.push((0, panels));
     if (65..SIDE_BY_SIDE_BREAKPOINT).contains(&width) {
-        parts.push((4, vec![Span::styled("(Tab: switch) ", secondary)]));
+        parts.push((4, vec![Span::styled("(Ctrl+T session) ", secondary)]));
     }
     let (identity, plan) = identity_parts(short, width, secondary, active, theme);
     parts.push((5, identity));
@@ -198,7 +198,7 @@ fn compact_header(project: &str, style: Style) -> Line<'static> {
 
 fn active_style(theme: &crate::lean::tui::theme::Theme) -> Style {
     let raised = if theme.color {
-        theme.raised().fg(crate::lean::tui::theme::ayu::ORANGE)
+        theme.raised().fg(crate::lean::tui::theme::ayu::CYAN)
     } else {
         theme.raised()
     };
@@ -222,8 +222,8 @@ fn append_panels(
     } else {
         (inactive, active)
     };
-    spans.push(Span::styled(" [Chat] ", chat));
-    spans.push(Span::styled("[Team] ", graph));
+    spans.push(Span::styled(" [Session] ", chat));
+    spans.push(Span::styled("[Canvas] ", graph));
 }
 
 /// The conversation's id and, below the full action row, its `[Plan]`.

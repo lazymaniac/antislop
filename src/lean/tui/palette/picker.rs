@@ -18,6 +18,14 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
     let current = view.rigor_label();
     items.extend([
         (
+            "Pause / continue execution · Space".into(),
+            Action::Run(Command::PauseOrContinue),
+        ),
+        (
+            "Cancel current work · Ctrl+X".into(),
+            Action::Run(Command::Cancel),
+        ),
+        (
             "Direct execution: zero-ceremony 1-task run (bypass orchestrator) · /direct".into(),
             Action::Run(Command::DirectExecute),
         ),
@@ -70,7 +78,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SplitTask),
         ),
         (
-            "Flow editor: hold / release selected task (fast-path) · h".into(),
+            "Flow editor: hold / release selected task (fast-path)".into(),
             Action::Run(Command::HoldTask),
         ),
         (
@@ -209,7 +217,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SplitTask),
         ),
         (
-            "/hold · hold or release selected task via fast-path (h)".into(),
+            "/hold · hold or release selected task".into(),
             Action::Run(Command::HoldTask),
         ),
         (
@@ -252,28 +260,23 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
 }
 
 fn agent_items(view: &View, dot: &str) -> Vec<(String, Action)> {
-    Graph::new(view)
-        .nodes
-        .iter()
-        .filter(|node| node.visible)
-        .map(|node| {
-            let task = node
-                .key
-                .split_once(':')
-                .and_then(|(role, id)| Some((role, view.tasks.iter().find(|task| task.id == id)?)));
-            // A task's agents have cards of their own, an options task's
-            // two share one.
-            let label = task
-                .map(|(role, task)| {
-                    let role = if task.kind == "options" {
-                        "worker reviewer"
-                    } else {
-                        role
-                    };
-                    format!("{} task {dot} {} {dot} {role}", task.id, task.title)
-                })
-                .unwrap_or_else(|| agent_name(&node.key));
-            (label, Action::Select(node.key.clone()))
+    crate::lean::tui::work_units::WorkUnits::new(view)
+        .units
+        .into_iter()
+        .flat_map(|unit| {
+            unit.stages.into_iter().map(move |stage| {
+                let label = if let Some((role, id)) = stage.id.0.split_once(':') {
+                    let title = view
+                        .tasks
+                        .iter()
+                        .find(|task| task.id == id)
+                        .map_or(unit.title.as_str(), |task| task.title.as_str());
+                    format!("{id} task {dot} {title} {dot} {role}")
+                } else {
+                    agent_name(&stage.id.0)
+                };
+                (label, Action::Select(stage.id.0))
+            })
         })
         .collect()
 }
@@ -329,6 +332,14 @@ fn recipient_items(view: &View, dot: &str) -> Vec<(String, Action)> {
             Action::Address("auditor".into()),
         ),
     ];
+    for role in [crate::lean::PLANNER, crate::lean::COMMENT_ORCHESTRATOR] {
+        if view.agents.contains_key(role) {
+            items.push((
+                format!("{} {dot} session stage", agent_name(role)),
+                Action::Address(role.into()),
+            ));
+        }
+    }
     for task in &view.tasks {
         append_task_recipients(&mut items, task, dot);
     }

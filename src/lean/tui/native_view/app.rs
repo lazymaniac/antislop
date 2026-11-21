@@ -138,7 +138,8 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn native_input_blocked(&self) -> bool {
-        self.help.is_some()
+        self.navigation.focus == NavigationFocus::Composer
+            || self.help.is_some()
             || self
                 .config_editor
                 .as_ref()
@@ -249,7 +250,7 @@ impl App {
         match &self.navigation.target {
             WorkbenchTarget::Session => "orchestrator".into(),
             WorkbenchTarget::Agent(role) => {
-                let actual = graph::card_terminal_role(&self.view, role);
+                let actual = role.clone();
                 self.details.as_ref().map_or(actual.clone(), |details| {
                     details.composer_recipient(&actual)
                 })
