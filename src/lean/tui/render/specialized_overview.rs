@@ -119,19 +119,15 @@ impl Details {
             composer_mode_label(composer.map_or_else(Default::default, |composer| composer.mode))
         );
         let editor = super::composer::panel_editor_area(area);
-        self.input_width[panel] = usize::from(editor.width).max(1);
+        let wrap_width = super::composer::panel_wrap_width(area);
+        self.input_width[panel] = wrap_width;
         let status = composer_status(self, key, composer, active);
         let lines = composer
-            .map(|composer| {
-                wrap(
-                    &theme.clean(&composer.input.text),
-                    usize::from(editor.width),
-                )
-            })
+            .map(|composer| wrap(&theme.clean(&composer.input.text), wrap_width))
             .unwrap_or_default();
         let cursor = composer.and_then(|composer| {
             (active && self.editing && editor.width > 0 && editor.height > 0).then(|| {
-                let (column, row) = composer.input.visual_cursor(usize::from(editor.width));
+                let (column, row) = composer.input.visual_cursor(wrap_width);
                 let first_line = row.saturating_sub(usize::from(editor.height.saturating_sub(1)));
                 (column, row, first_line)
             })

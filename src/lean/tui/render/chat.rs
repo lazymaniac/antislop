@@ -39,7 +39,7 @@ impl App {
 
     fn chat_layout(&mut self, area: Rect) -> (Vec<String>, (u16, usize), [Rect; 5]) {
         let panel = super::composer::centered_area(area);
-        let input_width = usize::from(panel.width.saturating_sub(2)).max(1);
+        let input_width = super::composer::panel_wrap_width(panel);
         self.input_width = input_width;
         let layout = compute_visual_lines(&self.input.text, input_width);
         let cursor = self.input.visual_cursor_from_lines(&layout);

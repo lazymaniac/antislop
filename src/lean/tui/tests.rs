@@ -2487,79 +2487,126 @@ fn app_draw_transcript_empty_state() {
     assert!(text.contains("No messages in this conversation"));
 }
 
+fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+    let title = if comment { "comment on" } else { "To ·" };
+    let top = (buffer.area.top()..buffer.area.bottom())
+        .find(|&y| {
+            let row: String = (buffer.area.left()..buffer.area.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            row.contains(title)
+        })
+        .expect("rendered editor title");
+    let left = (buffer.area.left()..buffer.area.right())
+        .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
+        .expect("left frame corner");
+    let right = (left + 1..buffer.area.right())
+        .rev()
+        .find(|&x| matches!(buffer[(x, top)].symbol(), "╮" | "┐" | "+"))
+        .expect("right frame corner");
+    let bottom = (top + 1..buffer.area.bottom())
+        .find(|&y| matches!(buffer[(left, y)].symbol(), "╰" | "└" | "+"))
+        .expect("bottom frame corner");
+    let text_top = top + 1 + u16::from(comment); // Skip the comment prompt.
+    Rect::new(left + 1, text_top, right - left - 1, bottom - text_top)
+}
+
 #[test]
 fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
+    use ratatui::{Terminal, backend::TestBackend};
+    use unicode_segmentation::UnicodeSegmentation;
 
-    // 1. Chat input with text exactly matching inner width (60 cols wide -> inner width is 58)
-    let mut app = test_app();
-    app.input = InputBuffer::with_text("a".repeat(58));
-    app.input.move_end();
-
-    let backend = TestBackend::new(60, 12);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|frame| {
-            app.draw(frame);
-        })
-        .unwrap();
-
-    let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
-    // Inner x is 1..=58. Border is at 0 (left) and 59 (right).
-    // Cursor must be strictly inside the inner viewport: x <= 58, x >= 1.
-    assert!(
-        (1..=58).contains(&cursor_x),
-        "Chat cursor x ({}) must be inside inner viewport [1, 58] and not land on right border 59",
-        cursor_x
-    );
-    assert!(
-        (1..=10).contains(&cursor_y),
-        "Chat cursor y ({}) must be inside inner viewport",
-        cursor_y
-    );
-
-    // 2. Comment editor with exact inner width text
-    let mut app = test_app();
-    app.editor = Some(Editor {
-        target: "worker:t1".into(),
-        input: InputBuffer::with_text("b".repeat(58)),
-    });
-    app.editor.as_mut().unwrap().input.move_end();
-
-    terminal
-        .draw(|frame| {
-            app.draw(frame);
-        })
-        .unwrap();
-
-    let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
-    assert!(
-        (1..=58).contains(&cursor_x),
-        "Comment editor cursor x ({}) must be inside inner viewport and not on border",
-        cursor_x
-    );
-    assert!(
-        (1..=10).contains(&cursor_y),
-        "Comment editor cursor y ({}) must be inside inner viewport",
-        cursor_y
-    );
-
-    // 3. Resizing from wider to narrower terminal viewports
-    let mut app = test_app();
-    app.input = InputBuffer::with_text("first line of text\nsecond line of text");
-    app.input.move_end();
-
-    // Draw at 100x30 first
-    let backend100 = TestBackend::new(100, 30);
-    let mut term100 = Terminal::new(backend100).unwrap();
-    term100.draw(|frame| app.draw(frame)).unwrap();
-
-    // Resize down to 60x12
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let (rx, ry) = terminal.get_cursor_position().unwrap().into();
-    assert!((1..=58).contains(&rx));
-    assert!((1..=10).contains(&ry));
+    for comment in [false, true] {
+        let mut app = test_app();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        for (width, height) in [(60, 12), (100, 30), (60, 12), (12, 5), (60, 12)] {
+            terminal.backend_mut().resize(width, height);
+            terminal.autoresize().unwrap();
+            // The comment overlay deliberately does not open below its minimum height.
+            if comment && height < 6 {
+                continue;
+            }
+            if !comment || app.editor.is_some() {
+                let draft = if comment {
+                    app.editor.as_ref().unwrap().input.text.clone()
+                } else {
+                    app.input.text.clone()
+                };
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                assert!(viewport.contains(terminal.get_cursor_position().unwrap()));
+                assert_eq!(
+                    if comment {
+                        &app.editor.as_ref().unwrap().input.text
+                    } else {
+                        &app.input.text
+                    },
+                    &draft
+                );
+            }
+            app.input = InputBuffer::default();
+            app.editor = comment.then(|| Editor {
+                target: "worker:t1".into(),
+                input: InputBuffer::default(),
+            });
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+            for text in [
+                "a".repeat(usize::from(viewport.width - 1)),
+                "b".repeat(usize::from(viewport.width)),
+                "c".repeat(58),
+                format!(
+                    "{}👩‍💻e\u{301}漢🙂",
+                    "d".repeat(usize::from(viewport.width - 1))
+                ),
+            ] {
+                if comment {
+                    app.editor.as_mut().unwrap().input = InputBuffer::with_text(&text);
+                } else {
+                    app.input = InputBuffer::with_text(&text);
+                }
+                for key in [
+                    None,
+                    Some(KeyCode::Left),
+                    Some(KeyCode::Right),
+                    Some(KeyCode::Up),
+                    Some(KeyCode::Down),
+                ] {
+                    if let Some(key) = key {
+                        app.key(event::KeyEvent::new(key, KeyModifiers::NONE));
+                    }
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    assert!(
+                        viewport.contains(cursor),
+                        "cursor {cursor:?} outside actual editor {viewport:?}"
+                    );
+                    let input = if comment {
+                        &app.editor.as_ref().unwrap().input
+                    } else {
+                        &app.input
+                    };
+                    assert_eq!(input.text, text);
+                    assert!(
+                        input
+                            .text
+                            .grapheme_indices(true)
+                            .any(|(i, _)| i == input.cursor)
+                            || input.cursor == input.text.len()
+                    );
+                    assert!(
+                        matches!(
+                            terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol(),
+                            "│" | "|"
+                        ),
+                        "right border {:?}, comment={comment}, viewport={viewport:?}, cursor={cursor:?}",
+                        terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol()
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
