@@ -18,7 +18,11 @@ impl Details {
             return;
         }
         let theme = Theme::from_env();
+        let content_area = self.text_area;
+        let content_scroll = self.scroll;
         self.draw_session_panel(frame, view, key, 0, area, &theme);
+        self.text_area = content_area;
+        self.scroll = content_scroll;
         self.native_areas[1] = Rect::default();
     }
 

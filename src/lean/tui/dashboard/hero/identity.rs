@@ -9,6 +9,26 @@ impl Details {
     }
 
     pub(super) fn identity_line(&self, view: &View, theme: &Theme, key: &str) -> Line<'static> {
+        if let Some(round) = self.selected_round {
+            let title = self
+                .task
+                .as_ref()
+                .and_then(|task| task["title"].as_str())
+                .unwrap_or("Selected round details are unavailable");
+            let status = self
+                .task
+                .as_ref()
+                .and_then(|task| task["status"].as_str())
+                .unwrap_or_default();
+            return Line::from(vec![
+                Span::styled(format!(" Round {round} · "), theme.dim()),
+                Span::styled(theme.clean(title), theme.title()),
+                Span::styled(
+                    format!(" · {}", theme.clean(status_label(status))),
+                    theme.status(status),
+                ),
+            ]);
+        }
         let Some(row) = self.row(view) else {
             return Line::from(vec![
                 Span::raw(" "),
