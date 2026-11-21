@@ -41,10 +41,11 @@ pub(in crate::lean) fn writer_worktree(
     } else {
         Default::default()
     };
-    let continuation = task
-        .feedback
-        .as_ref()
-        .is_some_and(|f| f["continuation_review"] == true);
+    let continuation = (spec.change_kind() == tasks::ChangeKind::Artifact && task.base.is_some())
+        || task
+            .feedback
+            .as_ref()
+            .is_some_and(|f| f["continuation_review"] == true);
     let base = if continuation || task.base.is_none() {
         core.writer_base(&task.plan_id, spec, project)?
     } else {
@@ -53,6 +54,13 @@ pub(in crate::lean) fn writer_worktree(
     let base = git::base_with_artifacts(project, &base, &artifacts)?;
     let path = worktree_path(&core.state, task)?;
     if continuation {
+        // A retired checkout leaves its branch intact. Reattach it before
+        // reconciling, since add_worktree deliberately preserves that tip.
+        let previous = task.result.as_deref().or(task.base.as_deref());
+        if let Some(previous) = previous {
+            let branch = worktree_branch(&core.state, task)?;
+            git::add_worktree(project, &path, &branch, previous)?;
+        }
         let combined = match (&task.base, &task.result) {
             (Some(checkpoint_base), Some(result)) => {
                 combine_saved_checkpoint(core, task, spec, project, &base, checkpoint_base, result)?
@@ -61,13 +69,21 @@ pub(in crate::lean) fn writer_worktree(
         };
         match combined {
             git::CombineResult::Applied(combined) => {
-                if let Some(result) = task.result.as_deref()
+                if let Some(result) = previous
                     && path.exists()
                     && let Err(detail) = apply_checkpoint_delta(project, &path, result, &combined)?
                 {
-                    task.feedback.as_mut().expect("continuation feedback")["checkpoint_merge"] =
+                    task.feedback.get_or_insert_with(|| json!({}))["checkpoint_merge"] =
                         json!({"onto":base,"detail":detail});
+                    core.store.update_task(task)?;
                     return Ok(Some(path));
+                }
+                if let Some(fields) = task
+                    .feedback
+                    .as_mut()
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    fields.remove("checkpoint_merge");
                 }
                 task.base = Some(base.clone());
                 task.result = Some(combined);
@@ -80,7 +96,7 @@ pub(in crate::lean) fn writer_worktree(
             git::CombineResult::Conflicted(detail) => {
                 // Keep the original delta so the existing integration repair
                 // can reconcile it after the worker and reviewer assess it.
-                task.feedback.as_mut().expect("continuation feedback")["checkpoint_merge"] =
+                task.feedback.get_or_insert_with(|| json!({}))["checkpoint_merge"] =
                     json!({"onto":base,"detail":detail});
                 core.store.update_task(task)?;
                 return Ok(Some(path));
@@ -147,7 +163,13 @@ fn combine_saved_checkpoint(
     base: &str,
     result: &str,
 ) -> Result<git::CombineResult> {
-    let checkpoint_base = git::common_base(project, base, result)?;
+    // Artifact pairs delimit the author's delta even when composition made
+    // base and result siblings. An ancestry boundary would replay old inputs.
+    let checkpoint_base = if spec.change_kind() == tasks::ChangeKind::Artifact {
+        artifact_checkpoint_base(core, task, spec, project, base, result)?
+    } else {
+        git::common_base(project, base, result)?
+    };
     let combined = git::combine_checkpoint_or_conflict(
         project,
         &core.state.join("worktrees").join(format!(
@@ -167,6 +189,84 @@ fn combine_saved_checkpoint(
         ));
     }
     Ok(combined)
+}
+
+fn artifact_checkpoint_base(
+    core: &Core,
+    task: &Task,
+    spec: &TaskContract,
+    project: &Path,
+    base: &str,
+    result: &str,
+) -> Result<String> {
+    let invalid = match spec.validate_change_paths(&git::changed_files(project, base, result)?) {
+        Ok(()) => return Ok(base.to_owned()),
+        Err(error) => error,
+    };
+    let mut recovered: Option<(String, String)> = None;
+    // Older runtimes could advance only base. Recover from this task's saved
+    // round pairs, never from a convenient Git parent or an outputs filter.
+    for summary in core.store.task_rounds(&task.id)? {
+        let round: u32 = serde_json::from_value(summary["round"].clone())?;
+        if round >= task.round || summary["history_unavailable"] == true {
+            continue;
+        }
+        let record = core
+            .store
+            .task_round_with_references(&task.id, round, true)?;
+        if record["id"].as_str() != Some(task.id.as_str())
+            || !record["input_generation"]
+                .as_i64()
+                .is_some_and(|generation| generation <= task.input_generation)
+        {
+            continue;
+        }
+        let (Some(saved_base), Some(saved_result)) =
+            (record["base"].as_str(), record["result"].as_str())
+        else {
+            continue;
+        };
+        if git::common_base(project, saved_base, saved_result)? != saved_base
+            || git::common_base(project, saved_result, result)? != saved_result
+            || spec
+                .validate_change_paths(&git::changed_files(project, saved_base, saved_result)?)
+                .is_err()
+            || spec
+                .validate_change_paths(&git::changed_files(project, saved_base, result)?)
+                .is_err()
+        {
+            continue;
+        }
+        let tree = git::tree_identity(project, saved_base)?;
+        if let Some((_, previous_tree)) = &recovered {
+            require(
+                previous_tree == &tree,
+                &format!(
+                    "{invalid}; ambiguous saved artifact checkpoint bases for task {}",
+                    task.id
+                ),
+            )?;
+        }
+        recovered = Some((saved_base.to_owned(), tree));
+    }
+    let (recovered, _) = recovered.ok_or_else(|| {
+        Error::Invalid(format!(
+            "{invalid}; no proven saved artifact checkpoint base for task {}",
+            task.id
+        ))
+    })?;
+    // Preserve the inconsistent pair and its proven boundary before any
+    // checkout or task-row update can replace them. This records evidence,
+    // not a claim that preparation or delivery has finished.
+    core.store.append_event(
+        &core.store.plan_conversation(&task.plan_id)?,
+        None,
+        Some(&task.plan_id),
+        "artifact_checkpoint_recovery",
+        &json!({"task":task.id,"input_generation":task.input_generation,
+            "base":base,"result":result,"recovered_base":recovered}),
+    )?;
+    Ok(recovered)
 }
 
 fn apply_checkpoint_delta(
@@ -200,6 +300,11 @@ fn apply_checkpoint_delta(
     if head_tree == combined_tree {
         git::ok(worktree, &["reset", "--mixed", combined])?;
         return Ok(Ok(()));
+    }
+    if head_tree != old_tree {
+        return Ok(Err(
+            "preserved writer branch differs from the saved checkpoint".into(),
+        ));
     }
     if !patch.trim().is_empty() {
         let file = worktree.with_extension("checkpoint.patch");
