@@ -2,7 +2,7 @@ use super::RoundState;
 use crate::lean::core::worktree::paths::{task_path_component, worktree_branch, worktree_path};
 use crate::lean::*;
 mod completion;
-pub(super) use completion::commit_round;
+pub(in crate::lean) use completion::commit_round;
 pub(in crate::lean) use completion::complete_report;
 
 pub(in crate::lean) fn writer_worktree(
@@ -41,37 +41,52 @@ pub(in crate::lean) fn writer_worktree(
     } else {
         Default::default()
     };
-    if task
+    let continuation = task
         .feedback
         .as_ref()
-        .is_some_and(|f| f["continuation_review"] == true)
-    {
-        let onto = core.writer_base(&task.plan_id, spec, project)?;
+        .is_some_and(|f| f["continuation_review"] == true);
+    let base = if continuation || task.base.is_none() {
+        core.writer_base(&task.plan_id, spec, project)?
+    } else {
+        task.base.clone().expect("checked task base")
+    };
+    let base = git::base_with_artifacts(project, &base, &artifacts)?;
+    let path = worktree_path(&core.state, task)?;
+    if continuation {
         let combined = match (&task.base, &task.result) {
-            (Some(base), Some(result)) => {
-                combine_saved_checkpoint(core, task, project, &onto, base, result)?
+            (Some(checkpoint_base), Some(result)) => {
+                combine_saved_checkpoint(core, task, spec, project, &base, checkpoint_base, result)?
             }
-            _ => git::CombineResult::Applied(onto.clone()),
+            _ => git::CombineResult::Applied(base.clone()),
         };
         match combined {
             git::CombineResult::Applied(combined) => {
-                task.base = Some(onto);
+                if let Some(result) = task.result.as_deref()
+                    && path.exists()
+                    && let Err(detail) = apply_checkpoint_delta(project, &path, result, &combined)?
+                {
+                    task.feedback.as_mut().expect("continuation feedback")["checkpoint_merge"] =
+                        json!({"onto":base,"detail":detail});
+                    return Ok(Some(path));
+                }
+                task.base = Some(base.clone());
                 task.result = Some(combined);
+                // Make the checkpoint pair durable before preparation is
+                // reported complete. If this write fails, the old DB pair
+                // remains authoritative and the next attempt recognizes the
+                // already moved clean checkout by tree identity above.
+                core.store.update_task(task)?;
             }
             git::CombineResult::Conflicted(detail) => {
                 // Keep the original delta so the existing integration repair
                 // can reconcile it after the worker and reviewer assess it.
                 task.feedback.as_mut().expect("continuation feedback")["checkpoint_merge"] =
-                    json!({"onto":onto,"detail":detail});
+                    json!({"onto":base,"detail":detail});
+                core.store.update_task(task)?;
+                return Ok(Some(path));
             }
         }
     }
-    let base = match &task.base {
-        Some(base) => base.clone(),
-        None => core.writer_base(&task.plan_id, spec, project)?,
-    };
-    let base = git::base_with_artifacts(project, &base, &artifacts)?;
-    let path = worktree_path(&core.state, task)?;
     let mut start = task.result.clone().unwrap_or_else(|| base.clone());
     let branch = worktree_branch(&core.state, task)?;
     // A preserved branch tip may be a different commit with the same content
@@ -126,12 +141,14 @@ pub(super) fn task_directories(
 fn combine_saved_checkpoint(
     core: &Core,
     task: &Task,
+    spec: &TaskContract,
     project: &Path,
     onto: &str,
     base: &str,
     result: &str,
 ) -> Result<git::CombineResult> {
-    let combined = git::combine_or_conflict(
+    let checkpoint_base = git::common_base(project, base, result)?;
+    let combined = git::combine_checkpoint_or_conflict(
         project,
         &core.state.join("worktrees").join(format!(
             "resume-{}-g{}",
@@ -139,7 +156,9 @@ fn combine_saved_checkpoint(
             task.input_generation
         )),
         onto,
-        &[(base.to_owned(), result.to_owned())],
+        &checkpoint_base,
+        result,
+        &spec.outputs,
     )?;
     if let git::CombineResult::Conflicted(detail) = &combined {
         let conversation = core.store.plan_conversation(&task.plan_id)?;
@@ -148,6 +167,121 @@ fn combine_saved_checkpoint(
         ));
     }
     Ok(combined)
+}
+
+fn apply_checkpoint_delta(
+    project: &Path,
+    worktree: &Path,
+    old_result: &str,
+    combined: &str,
+) -> Result<std::result::Result<(), String>> {
+    let head = git::head(worktree)?;
+    let old_tree = git::tree_identity(project, old_result)?;
+    let head_tree = git::tree_identity(project, &head)?;
+    let combined_tree = git::tree_identity(project, combined)?;
+    let patch = git::patch(project, old_result, Some(combined))?;
+    // `git apply` updates the worktree before `reset --mixed` moves HEAD and
+    // the index. After a crash in that interval, recover only if the checkout
+    // still starts at the saved result and its complete patch is exactly the
+    // expected checkpoint delta. A distinct local edit therefore remains a
+    // conflict instead of being absorbed into the new result.
+    if head_tree == old_tree
+        && checkpoint_delta_is_applied(worktree, project, old_result, combined, &patch)?
+    {
+        git::ok(worktree, &["reset", "--mixed", combined])?;
+        return Ok(Ok(()));
+    }
+    if !git::is_clean(worktree) {
+        return Ok(Err("preserved writer checkout has local changes".into()));
+    }
+    // Preparation can also be interrupted after reset but before the caller
+    // persists the new task.base/result pair. Recognize that completed tree
+    // without applying the checkpoint delta twice.
+    if head_tree == combined_tree {
+        git::ok(worktree, &["reset", "--mixed", combined])?;
+        return Ok(Ok(()));
+    }
+    if !patch.trim().is_empty() {
+        let file = worktree.with_extension("checkpoint.patch");
+        std::fs::write(&file, format!("{patch}\n"))?;
+        let path = file.to_string_lossy();
+        let checked = git::git(worktree, &["apply", "--check", &path])?;
+        if !checked.status.success() {
+            let _ = std::fs::remove_file(&file);
+            return Ok(Err(String::from_utf8_lossy(&checked.stderr)
+                .trim()
+                .to_owned()));
+        }
+        let applied = git::git(worktree, &["apply", &path]);
+        let _ = std::fs::remove_file(&file);
+        let applied = applied?;
+        if !applied.status.success() {
+            return Ok(Err(String::from_utf8_lossy(&applied.stderr)
+                .trim()
+                .to_owned()));
+        }
+    }
+    // Move the branch and index without rewriting files, so edits racing
+    // preparation remain visible as local changes for the next pass.
+    git::ok(worktree, &["reset", "--mixed", combined])?;
+    Ok(Ok(()))
+}
+
+fn checkpoint_delta_is_applied(
+    worktree: &Path,
+    project: &Path,
+    old_result: &str,
+    combined: &str,
+    patch: &str,
+) -> Result<bool> {
+    if patch.trim().is_empty() {
+        return Ok(false);
+    }
+    let expected: std::collections::BTreeSet<_> =
+        git::changed_files(project, old_result, combined)?
+            .into_iter()
+            .collect();
+    let status = git::git(
+        worktree,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    if !status.status.success() {
+        return Err(Error::Invalid(format!(
+            "git status: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        )));
+    }
+    let mut actual = std::collections::BTreeSet::new();
+    for entry in status
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        if entry.len() < 4 || !((entry[0] == b' ' && entry[1] != b' ') || entry[..2] == *b"??") {
+            return Ok(false);
+        }
+        let Ok(path) = std::str::from_utf8(&entry[3..]) else {
+            return Ok(false);
+        };
+        actual.insert(path.to_owned());
+    }
+    if actual != expected {
+        return Ok(false);
+    }
+    let file = worktree.with_extension("checkpoint-recovery.patch");
+    std::fs::write(&file, patch)?;
+    let check = git::git(
+        worktree,
+        &[
+            "apply",
+            "--reverse",
+            "--check",
+            file.to_str()
+                .ok_or_else(|| Error::Invalid("checkpoint patch path is not valid UTF-8".into()))?,
+        ],
+    )?;
+    std::fs::remove_file(file)?;
+    Ok(check.status.success())
 }
 
 pub(super) fn is_recheck(
@@ -282,6 +416,156 @@ fn continuation(round: u32, state: &RoundState) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_after_checkpoint_branch_move_recovers_the_durable_task_pair() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(project.join("report.txt"), "original\n").unwrap();
+        let base = git::commit_all(&project, git::CommitPurpose::TestFixture).unwrap();
+        let producer_tree = directory.path().join("producer");
+        git::add_worktree(&project, &producer_tree, "antislop/test-producer", &base).unwrap();
+        std::fs::write(producer_tree.join("producer.txt"), "approved dependency\n").unwrap();
+        let producer_result =
+            git::commit_all(&producer_tree, git::CommitPurpose::TestFixture).unwrap();
+        let checkpoint_tree = directory.path().join("checkpoint");
+        git::add_worktree(
+            &project,
+            &checkpoint_tree,
+            "antislop/test-checkpoint",
+            &base,
+        )
+        .unwrap();
+        std::fs::write(checkpoint_tree.join("report.txt"), "saved report\n").unwrap();
+        let checkpoint =
+            git::commit_all(&checkpoint_tree, git::CommitPurpose::TestFixture).unwrap();
+
+        let state = directory.path().join("state");
+        let config =
+            Config::from_toml(include_str!("../../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&state, config.clone()).unwrap();
+        let conversation = core.start(&project).unwrap();
+        let producer_spec: TaskContract = serde_json::from_value(json!({
+            "id":"producer", "title":"Producer", "acceptance_criteria":[{"id":"C1","text":"The dependency is approved"}],"goal":"Produce dependency",
+            "change_kind":"code", "kind":"implementation"
+        })).unwrap();
+        let report_spec: TaskContract = serde_json::from_value(json!({
+            "id":"report", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The report is preserved"}],"goal":"Continue report",
+            "change_kind":"code", "kind":"implementation", "depends_on":["producer"]
+        })).unwrap();
+        let mut tasks = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[
+                    serde_json::to_value(&producer_spec).unwrap(),
+                    serde_json::to_value(&report_spec).unwrap(),
+                ],
+            )
+            .unwrap();
+        tasks[0].base = Some(base.clone());
+        tasks[0].result = Some(producer_result);
+        tasks[0].status = status::APPROVED.into();
+        core.store.update_task(&tasks[0]).unwrap();
+        tasks[1].base = Some(base.clone());
+        tasks[1].result = Some(checkpoint.clone());
+        tasks[1].feedback = Some(json!({"continuation_review":true}));
+        tasks[1].status = status::QUEUED.into();
+        core.store.update_task(&tasks[1]).unwrap();
+        let writer = worktree_path(&core.state, &tasks[1]).unwrap();
+        let branch = worktree_branch(&core.state, &tasks[1]).unwrap();
+        git::add_worktree(&project, &writer, &branch, &checkpoint).unwrap();
+
+        // Model termination after git apply but before reset --mixed and
+        // update_task: the files are changed, while HEAD and the index remain
+        // at the old checkpoint.
+        let onto = core
+            .writer_base(&tasks[1].plan_id, &report_spec, &project)
+            .unwrap();
+        let combined = match combine_saved_checkpoint(
+            &core,
+            &tasks[1],
+            &report_spec,
+            &project,
+            &onto,
+            &base,
+            &checkpoint,
+        )
+        .unwrap()
+        {
+            git::CombineResult::Applied(commit) => commit,
+            git::CombineResult::Conflicted(detail) => panic!("unexpected conflict: {detail}"),
+        };
+        let patch = git::patch(&project, &checkpoint, Some(&combined)).unwrap();
+        let patch_file = writer.with_extension("interrupted-checkpoint.patch");
+        std::fs::write(&patch_file, patch).unwrap();
+        let applied = git::git(&writer, &["apply", patch_file.to_str().unwrap()]).unwrap();
+        assert!(applied.status.success());
+        std::fs::remove_file(patch_file).unwrap();
+        assert!(!git::is_clean(&writer));
+        assert_eq!(git::head(&writer).unwrap(), checkpoint);
+        let saved = core
+            .store
+            .task_in_plan_by_id(&tasks[1].plan_id, "report")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.base.as_deref(), Some(base.as_str()));
+        assert_eq!(saved.result.as_deref(), Some(checkpoint.as_str()));
+        drop(core);
+
+        let core = Core::open(&state, config).unwrap();
+        let mut resumed = core
+            .store
+            .task_in_plan_by_id(&tasks[1].plan_id, "report")
+            .unwrap()
+            .unwrap();
+        let resumed_path = writer_worktree(&core, &mut resumed, &report_spec, &project)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed_path, writer);
+        assert_eq!(
+            git::tree_identity(&project, resumed.base.as_deref().unwrap()).unwrap(),
+            git::tree_identity(&project, &onto).unwrap()
+        );
+        let persisted = core
+            .store
+            .task_in_plan_by_id(&resumed.plan_id, "report")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            git::tree_identity(&project, persisted.base.as_deref().unwrap()).unwrap(),
+            git::tree_identity(&project, &onto).unwrap()
+        );
+        assert_eq!(
+            git::tree_identity(&project, persisted.result.as_deref().unwrap()).unwrap(),
+            git::tree_identity(&project, &combined).unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(writer.join("report.txt")).unwrap(),
+            "saved report\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(writer.join("producer.txt")).unwrap(),
+            "approved dependency\n"
+        );
+        assert!(
+            resumed
+                .feedback
+                .as_ref()
+                .unwrap()
+                .get("checkpoint_merge")
+                .is_none()
+        );
+    }
 
     #[test]
     fn read_only_work_before_integration_uses_project_and_options_share_owner_checkout() {

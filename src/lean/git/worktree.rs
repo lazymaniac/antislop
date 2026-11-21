@@ -257,6 +257,33 @@ pub fn combine_or_conflict(
     onto: &str,
     changes: &[(String, String)],
 ) -> Result<CombineResult> {
+    combine_or_conflict_with_outputs(project, scratch, onto, changes, &[])
+}
+
+pub(crate) fn combine_checkpoint_or_conflict(
+    project: &Path,
+    scratch: &Path,
+    onto: &str,
+    base: &str,
+    result: &str,
+    outputs: &[String],
+) -> Result<CombineResult> {
+    combine_or_conflict_with_outputs(
+        project,
+        scratch,
+        onto,
+        &[(base.to_owned(), result.to_owned())],
+        outputs,
+    )
+}
+
+fn combine_or_conflict_with_outputs(
+    project: &Path,
+    scratch: &Path,
+    onto: &str,
+    changes: &[(String, String)],
+    outputs: &[String],
+) -> Result<CombineResult> {
     let branch = format!(
         "antislop/combine-{}",
         scratch
@@ -268,7 +295,7 @@ pub fn combine_or_conflict(
     }
     add_worktree(project, scratch, &branch, onto)?;
     let file = scratch.with_extension("patch");
-    let result = apply_changes(project, scratch, onto, changes, &file);
+    let result = apply_changes(project, scratch, onto, changes, outputs, &file);
     let conflicted = result.is_err()
         && ok(scratch, &["diff", "--name-only", "--diff-filter=U"])
             .is_ok_and(|files| !files.trim().is_empty());
@@ -291,12 +318,19 @@ fn apply_changes(
     scratch: &Path,
     onto: &str,
     changes: &[(String, String)],
+    outputs: &[String],
     file: &Path,
 ) -> Result<String> {
     for (base, change) in changes {
-        apply_change(project, scratch, onto, base, change, file)?;
+        apply_change(project, scratch, onto, base, change, outputs, file)?;
     }
-    commit_all(scratch, CommitPurpose::DependencySnapshot)
+    super::snapshots::stage_source(scratch, None)?;
+    let mut stage_outputs = vec!["--literal-pathspecs", "add", "--all", "--force", "--"];
+    stage_outputs.extend(outputs.iter().map(String::as_str));
+    if !outputs.is_empty() {
+        ok(scratch, &stage_outputs)?;
+    }
+    commit_staged(scratch, commit_subject(CommitPurpose::DependencySnapshot))
 }
 
 fn apply_change(
@@ -305,6 +339,7 @@ fn apply_change(
     onto: &str,
     base: &str,
     change: &str,
+    outputs: &[String],
     file: &Path,
 ) -> Result<()> {
     if git(scratch, &["merge-base", "--is-ancestor", change, "HEAD"])?
@@ -313,13 +348,60 @@ fn apply_change(
     {
         return Ok(());
     }
-    let patch = super::changes::source_patch(project, base, change)?;
+    let patch = source_and_artifact_patch(project, base, change, outputs)?;
     if patch.trim().is_empty() {
         return Ok(());
     }
     std::fs::write(file, format!("{patch}\n"))?;
     let path = file.to_string_lossy();
     apply_patch(scratch, onto, base, change, &path)
+}
+
+// Explicit artifact inputs are overlaid separately; composing source views
+// must not replay runtime files accidentally captured by older workers.
+fn source_and_artifact_patch(
+    dir: &Path,
+    base: &str,
+    rev: &str,
+    outputs: &[String],
+) -> Result<String> {
+    let mut patch = super::changes::source_patch(dir, base, rev)?;
+    let ignored_outputs = outputs
+        .iter()
+        .filter(|path| path.starts_with(".antislop/"))
+        .collect::<Vec<_>>();
+    if ignored_outputs.is_empty() {
+        return Ok(patch);
+    }
+    let mut args = vec![
+        "--literal-pathspecs",
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--binary",
+        "--full-index",
+        "-M",
+        base,
+        rev,
+        "--",
+    ];
+    args.extend(ignored_outputs.into_iter().map(String::as_str));
+    let output = git(dir, &args)?;
+    crate::require(
+        output.status.success(),
+        &format!(
+            "git diff: {}",
+            crate::lean::agent::clip_tail(&String::from_utf8_lossy(&output.stderr), 8000)
+        ),
+    )?;
+    let artifact_patch = String::from_utf8_lossy(&output.stdout);
+    if !patch.is_empty() && !artifact_patch.is_empty() && !patch.ends_with('\n') {
+        patch.push('\n');
+    }
+    patch.push_str(&artifact_patch);
+    Ok(patch)
 }
 
 fn apply_patch(scratch: &Path, onto: &str, base: &str, change: &str, path: &str) -> Result<()> {
