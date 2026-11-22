@@ -162,6 +162,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
     assert_eq!(app.input.text, "", "beta starts with an empty draft");
 
     // Messages go to the daemon of the project on screen.
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = antislop::lean::tui::InputBuffer::with_text("hello beta");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     pump(&mut app, &rx, |app| {

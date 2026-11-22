@@ -64,7 +64,7 @@ impl Core {
         &self,
         setup: TurnSetup<'_>,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(bool, bool) -> String,
+        prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
     ) -> Result<Option<String>> {
         let lock = self.turn_lock(setup.conversation, &setup.role);
         let Some(_guard) = mail::lock_cancellable(&lock, cancel) else {

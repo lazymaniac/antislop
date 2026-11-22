@@ -107,8 +107,9 @@ def review_args(text, verdict, prompt):
     """`review` arguments from a fixture's verdict. The runtime derives the
     approval, so a rejection without a blocking finding gets one, and an
     approval keeps only findings that do not block."""
-    checks = re.search(r"Local check ids: (.*)", prompt)
-    allowed = json.loads(checks.group(1)) if checks else []
+    tools = rpc("tools/list", {}, 20)["result"]["tools"]
+    review = next(tool for tool in tools if tool["name"] == "review")
+    allowed = review["inputSchema"]["properties"]["checks"]["required"]
     # A fixture that names no coverage settles every check; one that gives
     # an empty coverage means to skip them.
     coverage = verdict.get("coverage")
@@ -273,7 +274,7 @@ def task_result(text, prompt):
                         "commit_message": COMMIT_MESSAGE}
 
 
-PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary", "acceptance_criteria")
+PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary", "acceptance_criteria", "result_inputs")
 
 
 def planned_task(task):

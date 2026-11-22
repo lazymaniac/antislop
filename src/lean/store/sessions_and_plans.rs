@@ -216,6 +216,25 @@ impl Store {
     }
 
     pub fn add_plan(&self, conversation: &str, specs: &[Value]) -> Result<Vec<Task>> {
+        let contracts = specs
+            .iter()
+            .filter(|spec| {
+                spec["result_inputs"]
+                    .as_array()
+                    .is_some_and(|inputs| !inputs.is_empty())
+            })
+            .cloned()
+            .map(serde_json::from_value::<crate::lean::tasks::TaskContract>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for contract in &contracts {
+            for input in &contract.result_inputs {
+                crate::require(
+                    !specs.iter().any(|spec| spec["id"] == input.alias),
+                    "result_inputs alias collides with a task name",
+                )?;
+            }
+        }
+        self.validate_result_inputs(conversation, &contracts)?;
         let plan_id = crate::id();
         let mut db = self.db();
         let tx = db.transaction()?;

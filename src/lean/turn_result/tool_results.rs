@@ -9,17 +9,22 @@ use serde::Deserialize;
 /// a reviewer handed only the prose cannot judge it and rejects the task for
 /// payload it never saw.
 pub fn report_with_deliverables(report: &str, selection: Option<&Selection>) -> String {
-    let mut text = if selection.is_some_and(|selection| report == selection.rationale) {
-        String::new()
+    let mut text = if let Some(selection) = selection {
+        if report == selection.rationale {
+            String::new()
+        } else if let Some(evidence) = report.strip_prefix(&selection.rationale).filter(|tail| {
+            tail.starts_with("\n\nMCP execution evidence (read_evidence; immutable records):")
+        }) {
+            evidence.to_owned()
+        } else {
+            report.to_owned()
+        }
     } else {
         report.to_owned()
     };
-    if let Some(selection) = selection
-        && let Ok(json) = serde_json::to_string_pretty(selection)
-    {
-        text.push_str(&format!(
-            "\n\nRecorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n{json}\n```"
-        ));
+    if let Some(selection) = selection {
+        text.push_str("\n\nRecorded selection:\n");
+        text.push_str(&crate::lean::prompt_context::markdown(selection));
     }
     text
 }

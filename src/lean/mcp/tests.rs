@@ -185,9 +185,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "get_images", "record_evidence", "read_evidence", "current_turn"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "get_images", "record_evidence", "read_evidence", "current_turn", "read_task_contract"],
             ),
-            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "get_images", "read_evidence", "current_turn"]),
+            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "get_images", "read_evidence", "current_turn", "read_task_contract"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -214,6 +214,9 @@ mod role_tests {
                 "submit_requirements",
                 "submit_plan",
                 "read_dependency_result",
+                "read_plan_context",
+                "read_task_contract",
+                "read_audit",
                 "read_evidence",
                 "answer_agent",
                 "defer_to_user",
@@ -234,12 +237,12 @@ mod role_tests {
         assert!(merge["description"].as_str().unwrap().contains("session_action_result"));
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "finish_turn", "get_images", "read_evidence", "current_turn"]
+            vec!["submit_plan", "read_dependency_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_dependency_result","get_images","read_evidence","current_turn"]} else {vec!["review", "get_images", "read_evidence", "current_turn"]},
+                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result","get_images","read_evidence","current_turn","read_task_contract"]} else {vec!["review", "get_images", "read_dependency_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];
@@ -462,6 +465,9 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
     assert_eq!(schema["additionalProperties"],false);
     assert!(schema["properties"]["goal"].is_object());
     assert!(schema["properties"]["C1"].is_object());
+    assert!(schema["properties"]["C1"].get("description").is_none());
+    let ids = crate::lean::tasks::obligations(&task).into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    assert_eq!(review["inputSchema"]["properties"]["findings"]["items"]["properties"]["check"]["enum"], json!(ids));
     assert_eq!(schema["required"].as_array().unwrap().len(),crate::lean::tasks::obligations(&task).len());
 }
 

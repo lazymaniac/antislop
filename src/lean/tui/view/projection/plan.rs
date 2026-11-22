@@ -56,6 +56,7 @@ pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
         outputs: strings(&task["outputs"]),
         acceptance_criteria: serde_json::from_value(task["acceptance_criteria"].clone())
             .unwrap_or_default(),
+        result_inputs: serde_json::from_value(task["result_inputs"].clone()).unwrap_or_default(),
         quality_gate: task["quality_gate"].as_bool().unwrap_or(false),
         options_for: task["options_for"].as_str().map(clean_line),
     }

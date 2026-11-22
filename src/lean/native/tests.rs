@@ -937,7 +937,7 @@ fn a_provider_limit_is_reported_without_blocking_later_launches_or_restart() {
             upto_message: 0,
         };
         assert!(
-            core.turn(setup, &AtomicBool::new(false), |_, _| {
+            core.turn(setup, &AtomicBool::new(false), |_| {
                 "Synthetic limit probe".into()
             })
             .unwrap()

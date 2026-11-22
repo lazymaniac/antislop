@@ -32,7 +32,7 @@ impl Store {
         Ok(plan)
     }
 
-    /// Compliance roles can read approved text results of the exact run bound at launch.
+    /// Compliance roles can inspect text results of the exact run bound at launch.
     /// They cannot inherit access from a newer draft or a different conversation.
     pub(in crate::lean) fn audit_dependency_scope(
         &self,
@@ -41,13 +41,7 @@ impl Store {
         turn: &str,
     ) -> Result<(Vec<Task>, i64)> {
         let plan = self.dependency_plan(conversation, role, turn)?;
-        Ok((
-            self.plan(&plan)?
-                .into_iter()
-                .filter(|task| task.status == "approved")
-                .collect(),
-            self.plan_revision(&plan)?,
-        ))
+        Ok((self.plan(&plan)?, self.plan_revision(&plan)?))
     }
 
     /// Immutable worker reports of this scoped producer, including older inputs.
@@ -168,4 +162,50 @@ pub(in crate::lean) struct DependencyReports {
     pub producer: Task,
     pub current: Option<Value>,
     pub reports: Vec<ReportReference>,
+}
+
+impl Store {
+    /// An explicit report input is immutable and conversation-scoped. It never
+    /// grants approval and is deliberately independent of scheduler dependencies.
+    pub(in crate::lean) fn historical_result(
+        &self,
+        conversation: &str,
+        reference: &str,
+    ) -> Result<ReportReference> {
+        let db = self.db();
+        db.query_row("SELECT s.task_id,s.round,x.generation,json_extract(r.result,'$.type'),length(cast(json_extract(r.result,'$.report') as blob)) FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE t.id=?1 AND t.conversation_id=?2 AND t.status='done' AND t.role='worker:'||s.task_id AND json_extract(r.result,'$.type') IN ('completed','blocked')",
+            params![reference,conversation], |row| Ok(ReportReference {result_ref:reference.into(),producer_task:row.get(0)?,round:row.get(1)?,input_generation:row.get(2)?,result_type:row.get(3)?,bytes:row.get::<_,i64>(4)? as u64,current_inputs:false}))
+            .optional()?.ok_or_else(|| Error::Invalid(format!("result_ref {reference:?}: no completed worker report in this conversation")))
+    }
+
+    pub(in crate::lean) fn validate_result_inputs(
+        &self,
+        conversation: &str,
+        specs: &[crate::lean::tasks::TaskContract],
+    ) -> Result<()> {
+        for spec in specs {
+            let mut names = std::collections::HashSet::new();
+            for input in &spec.result_inputs {
+                crate::lean::tasks::validate_task_id(&input.alias)?;
+                crate::require(
+                    !matches!(input.alias.as_str(), "self" | "selected_approach")
+                        && input.alias != spec.id
+                        && !spec.depends_on.contains(&input.alias)
+                        && !specs.iter().any(|task| task.id == input.alias)
+                        && !self.db().query_row(
+                            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1)",
+                            [&input.alias],
+                            |row| row.get::<_, bool>(0),
+                        )?
+                        && names.insert(input.alias.clone()),
+                    &format!(
+                        "task {}: result_inputs alias {:?} collides with another input or task name",
+                        spec.id, input.alias
+                    ),
+                )?;
+                self.historical_result(conversation, &input.result_ref)?;
+            }
+        }
+        Ok(())
+    }
 }

@@ -105,6 +105,7 @@ impl Core {
             change_kind: tasks::ChangeKind::Code,
             outputs: Vec::new(),
             delivery: None,
+            result_inputs: Vec::new(),
             depends_on: Vec::new(),
             kind: WorkKind::Implementation,
 

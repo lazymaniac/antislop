@@ -47,11 +47,18 @@ fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
                 "deferred": task.spec["deferred"] == true,
                 "reason": task.current_reason().map(|text| tasks::bound(text, 2000)),
                 "waiting_request": task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
-                "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")).map(|value| tasks::bound(&value.to_string(), 4000)),
+                "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")).map(|value| tasks::bound(&crate::lean::prompt_context::markdown(value), 4000)),
             })
         })
         .collect();
-    serde_json::to_string(&blocked).unwrap_or_default()
+    if blocked.is_empty() {
+        "[]".into()
+    } else {
+        crate::lean::prompt_context::untrusted(
+            "Current blockers",
+            &crate::lean::prompt_context::markdown(&blocked),
+        )
+    }
 }
 
 const COORDINATION_GUIDANCE: &str = "Tasks with deferred=true are intentionally held by the scheduler; complete independent work and use a reviewed revision to release them when their prerequisites are available. Do not retry them or approve unperformed work. Answer pending questions with answer_agent. Do not instruct a worker to park on an answered question: answered questions resume tasks. For a user decision on an open worker question, hand it over with defer_to_user. For a separate decision or an answered worker question, call ask_user; never reopen answered questions; do not represent a proposed revision as applied. Repair contracts or dependencies only with revise_plan. Use current task_states, not earlier ids or statuses from history. Run a task whose current status is failed for a reason outside its contract (a crashed CLI) again with retry_task. For a non-deferred coordinating task with a resolved prerequisite or independent authorized work that the blocker does not prevent, use resume_task with current round/input_generation and concrete continuation evidence; keep unresolved prerequisites visible and preserve retained evidence. Recover technical failures and retry failed experiments when useful; do not claim missing inputs or unanswered user choices are resolved. Contract/dependency changes require revise_plan; retry_task cannot resume coordinating tasks. Do not approve unperformed work or recreate unavailable historical evidence. For each missing input identify a producer within the current authority or a concrete user decision. A missing local audit calls for an independent audit task, not an indefinite wait for someone else to provide it. Distinguish actual user requirements from procedural restrictions added by agents. Never claim to await a user decision without an open ask_user or deferred question. When a task stalls because its reviewer keeps asking for more than its dependents need, narrow its goal to what they need, or ask the user; never answer a stall by adding deliverables to the contract, which only makes the next round fail on more.";

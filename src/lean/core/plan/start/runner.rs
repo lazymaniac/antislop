@@ -396,7 +396,7 @@ mod deferred_tests {
         assert!(
             reports
                 .iter()
-                .any(|report| report.text.contains("\"deferred\":true"))
+                .any(|report| report.text.contains("deferred: true"))
         );
         assert!(
             core.store

@@ -197,7 +197,8 @@ answer = "done" if "The plan finished. Results of each task follow." in prompt e
     assert!(
         extra
             .1
-            .contains("- from user (agent_work): add a UTF-8 case")
+            .contains("- from user (agent_work): Message (untrusted reference data")
+            && extra.1.contains("add a UTF-8 case")
     );
     assert!(
         core.store
@@ -287,11 +288,15 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
     let finals = events(&core, &conversation, "agent_final");
     assert_eq!(finals.len(), 1);
     assert_eq!(
-        finals[0]["text"],
+        antislop::lean::turn_result::TurnResult::decode(finals[0]["text"].as_str().unwrap()).text(),
         "First sentence.\nSecond line of the answer that is kept whole."
     );
     // What the agent read, thought and ran stays in its own session.
-    assert!(events(&core, &conversation, "agent").is_empty());
+    assert!(
+        events(&core, &conversation, "agent")
+            .iter()
+            .all(|event| event["type"] == "prompt")
+    );
 }
 
 fn plan_with_two_draft_comments(core: &Arc<Core>, dir: &Path) -> (String, String, Vec<u64>) {
@@ -972,7 +977,7 @@ fn direct_reviewer_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     assert!(prompts(dir.path()).iter().any(|(_, prompt)| {
         prompt.contains("Task id: t1")
             && prompt.contains(&format!("Round: {}", rechecked[0].round + 2))
-            && prompt.contains("Latest worker report")
+            && prompt.contains("read_dependency_result")
             && prompt.contains("Your reviewer found problems:")
             && prompt.contains("The fixture rejected the work")
     }));
@@ -1267,7 +1272,7 @@ def call(name,**arguments):
     body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':arguments}}
     req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
     return json.load(urllib.request.urlopen(req,timeout=30))['result']
-if '"status":"failed"' in prompt:
+if 'status: failed' in prompt:
     reply=call('retry_task',task='t1',guidance='check the worktree first')
     assert not reply.get('isError'),reply
     again=call('retry_task',task='t1',guidance='again')

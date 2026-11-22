@@ -96,11 +96,7 @@ fn worker_prompt_opening(
 ) -> String {
     format!(
         "You are a worker on a team of agents. The project is your current \
-         working directory: {project}. Nothing is pasted for you: read the files \
-         you need yourself with your tools. Listing, reading, searching and counting \
-         the project's files is always allowed, also through shell commands that only \
-         read; no wording of the task (such as \"no commands\" or \"use only received \
-         sources\") takes that away.\n\n\
+         working directory: {project}. Read the files you need yourself within your role and the CLI permission policy.\n\n\
          Task: {}\nTask id: {}\nKind: {}\n\n{continuation}\nGoal: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          ",
         task.title,
@@ -173,6 +169,9 @@ pub fn worker_turn_prompt(
     continuation: Option<&str>,
     upstream: &str,
 ) -> String {
+    let mut presented = task.clone();
+    normalize_options_presentation(&mut presented);
+    let task = &presented;
     let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
     let prompt = worker_prompt_opening(
         project,
@@ -214,7 +213,7 @@ pub fn worker_resume(findings: &[Value]) -> String {
             "The task was resumed. Your reviewer's open findings:\n{}\n\nCheck the \
              current state of the files, address them and give your complete \
              updated report.",
-            findings_text(findings)
+            "See unresolved findings in the current round handoff."
         )
     }
 }
@@ -245,12 +244,12 @@ pub fn needs_user_action(error: &str) -> bool {
     .any(|marker| error.contains(marker))
 }
 
-pub fn worker_followup(findings: &[Value]) -> String {
+pub fn worker_followup(_findings: &[Value]) -> String {
     format!(
         "Your reviewer found problems:\n{}\n\nAddress them and give your complete \
          updated report: for each finding what you changed and the evidence, without \
          restating the task or pasting file contents. {}",
-        findings_text(findings),
+        "See unresolved findings in the current round handoff.",
         "End with complete (select for viable options), or report_blocker when a concrete prerequisite prevents completion.",
     )
 }

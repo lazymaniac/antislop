@@ -72,11 +72,18 @@ impl Core {
         let reason = format!(
             "{}\nRuntime checkpoint bindings (metadata, not acceptance criteria): {}. An empty new_transfers list does not remove existing_checkpoints. Ordinary contract edits preserve existing reports/base/result and request reassessment; do not demand a duplicate transfer or new recovery stage for code already attached to a task. Successors must assess retained code against their own goals before approval and integration. No source approval is inherited.",
             context.revision.reason,
-            checkpoint_review_context(context.revision, context.baseline, data.checkpoints),
+            crate::lean::prompt_context::markdown(&checkpoint_review_context(
+                context.revision,
+                context.baseline,
+                data.checkpoints
+            )),
         );
         let reason = format!(
             "{reason}\nPreserved coordinating tasks (authoritative runtime metadata, not acceptance criteria): {}. The scheduler only launches queued or skipped tasks; coordinating is a persisted scheduler-enforced hold even when deferred=false. An unaffected task keeps its status and input generation when this revision adds independent work. Approved options are already complete, not automatically runnable. Adding permitted read-only analysis does not release a preserved coordinating writer. Do not require deferred/release edits solely to restate this existing hold: those edits change the scoped contract and inputs. A trusted user/operator may recover the same task only after its concrete resume condition is fulfilled; the orchestrator retry_task tool cannot recover coordinating tasks. This metadata grants no permission and approves no work.",
-            serde_json::to_string(&held)?
+            crate::lean::prompt_context::untrusted(
+                "Preserved coordination metadata",
+                &crate::lean::prompt_context::markdown(&held)
+            )
         );
         let scope_context =
             self.plan_scope_context(context.conversation, &context.revision.plan)?;
@@ -311,7 +318,17 @@ pub(super) fn affected_tasks(
     specs: &[TaskContract],
     redo: &[String],
 ) -> BTreeSet<String> {
-    let changed = changed_tasks(baseline, specs, redo);
+    let mut changed = changed_tasks(baseline, specs, redo);
+    // Options no longer embed owner contracts. Semantic owner changes still
+    // invalidate their selection before any consumer may use it again.
+    for task in baseline {
+        if let Some(owner) = task.spec["options_for"].as_str()
+            && changed.contains(owner)
+            && let Some(id) = task.spec["id"].as_str()
+        {
+            changed.insert(id.to_owned());
+        }
+    }
     baseline
         .iter()
         .filter(|task| {
@@ -342,11 +359,9 @@ fn contract_changed(old: &Task, specs: &[TaskContract], redo: &[String]) -> bool
     if redo.iter().any(|requested| requested == id) {
         return true;
     }
-    serde_json::from_value::<TaskContract>(old.spec.clone())
-        .ok()
-        .as_ref()
-        != Some(new)
-        && !(old.status == status::APPROVED && reworded_only(&old.spec, new))
+    !serde_json::from_value::<TaskContract>(old.spec.clone())
+        .is_ok_and(|old| tasks::same_contract(&old, new))
+        && !reworded_only(&old.spec, new)
 }
 
 /// Approved work survives wording changes, but not changes to its contract.
@@ -365,7 +380,7 @@ fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
     new.summary = old.summary.clone();
     new.section = old.section.clone();
     new.reviewer = old.reviewer.clone();
-    new == old
+    tasks::same_contract(&new, &old)
 }
 
 fn options_goal_differs_only_by_owner_wording(old: &str, new: &str) -> bool {

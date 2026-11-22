@@ -120,7 +120,8 @@ fn run_reviewer(
     let (setup, project) = reviewer_setup(core, work, snapshot)?;
     let upstream = core.upstream(&work.task.plan_id, &work.spec)?;
     let cancel = work.cancel.clone();
-    let answer = core.turn(setup, &cancel, |fresh, _| {
+    let answer = core.turn(setup, &cancel, |session| {
+        let fresh = session.introduce();
         reviewer_prompt(
             &project,
             &work.spec,

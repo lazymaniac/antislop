@@ -8,9 +8,11 @@ pub const GOAL_CHECK: &str = "goal";
 /// task-local id) and its kind's share of the risk catalog (`R001`…). Nothing
 /// else: no generated risks and no checks the runtime adds on its own.
 pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
+    let mut presented = task.clone();
+    normalize_options_presentation(&mut presented);
     std::iter::once((
         GOAL_CHECK.to_owned(),
-        format!("The goal is met: {}", task.goal),
+        format!("The goal is met: {}", presented.goal),
     ))
     .chain(
         task.acceptance_criteria

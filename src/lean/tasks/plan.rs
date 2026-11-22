@@ -19,6 +19,8 @@ pub struct PlannedTask {
     pub kind: WorkKind,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_inputs: Vec<ResultInput>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred: bool,
     pub change_kind: ChangeKind,
@@ -63,6 +65,7 @@ impl PlannedTask {
             outputs: self.outputs,
             delivery: self.delivery,
             depends_on: self.depends_on,
+            result_inputs: self.result_inputs,
             kind: self.kind,
         }
     }

@@ -197,6 +197,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         role: &str,
+        turn: &str,
         tool: &str,
         args: &Value,
     ) -> Result<Value> {
@@ -204,10 +205,24 @@ impl Core {
             matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),
             "only the orchestrator may revise the plan",
         )?;
-        if tool == "request_replan" {
-            return self.request_replan(conversation, &required_text(args, "reason")?);
+        let receipt = if tool == "request_replan" {
+            self.request_replan(conversation, &required_text(args, "reason")?)?
+        } else {
+            self.revise_plan_tool(conversation, args)?
+        };
+        if matches!(
+            receipt["state"].as_str().or(receipt["status"].as_str()),
+            Some("requested" | "reviewing" | "awaiting_acceptance" | "applied")
+        ) {
+            self.store.append_event(
+                conversation,
+                Some(turn),
+                None,
+                "plan_remediation_requested",
+                &json!({"operation":tool,"receipt":receipt}),
+            )?;
         }
-        self.revise_plan_tool(conversation, args)
+        Ok(receipt)
     }
 
     pub(super) fn revise_plan_tool(

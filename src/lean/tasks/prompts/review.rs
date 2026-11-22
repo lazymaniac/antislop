@@ -6,6 +6,7 @@ pub fn reviewer_prompt(
     report: &str,
     changes: Option<&str>,
 ) -> String {
+    let report = crate::lean::prompt_context::untrusted("Worker report", report);
     let task_context = reviewer_task_context(task);
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let obligations = obligations_text(&obligations(task));
@@ -71,9 +72,9 @@ fn change_note(changes: Option<&str>) -> String {
 
 fn reviewer_task_context(task: &TaskContract) -> String {
     format!(
-        "Task: {}\nGoal: {}\nArtifact outputs: {}",
+        "Task: {}\nTask id: {}\nArtifact outputs: {}",
         task.title,
-        task.goal,
+        task.id,
         if task.change_kind() == ChangeKind::Artifact {
             task.outputs.join(", ")
         } else {
@@ -106,7 +107,7 @@ pub fn reviewer_turn_prompt(
 /// the ones the updated work fixes: their ids are the runtime's, not its own.
 /// A broad finding the round narrowed counts as fixed and comes back as a
 /// narrower one, or a large task that shrinks every round looks stalled.
-fn earlier_findings(earlier: &[Value]) -> String {
+pub(crate) fn earlier_findings(earlier: &[Value]) -> String {
     let lines: Vec<String> = earlier
         .iter()
         .filter(|f| crate::lean::progress::blocks(f))
@@ -122,17 +123,12 @@ fn earlier_findings(earlier: &[Value]) -> String {
          instead of repeating the earlier wording. An id whose defect is unchanged stays out \
          of resolved and in findings; a new defect is a new finding, whichever check it falls \
          under.",
-        lines.join("\n")
+        crate::lean::prompt_context::untrusted("Earlier findings", &lines.join("\n"))
     )
 }
 
 fn format_earlier_finding(finding: &Value) -> String {
-    let issue: String = finding["issue"]
-        .as_str()
-        .unwrap_or("")
-        .chars()
-        .take(300)
-        .collect();
+    let issue: String = finding["issue"].as_str().unwrap_or("").to_owned();
     format!(
         "- {} [{}, {}] {issue}",
         finding["id"].as_str().unwrap_or(""),
@@ -142,6 +138,7 @@ fn format_earlier_finding(finding: &Value) -> String {
 }
 
 pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
+    let report = crate::lean::prompt_context::untrusted("Updated worker report", report);
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let binding = reviewer_binding(task);
     let code_review_rules = code_review_rules(task);

@@ -21,12 +21,15 @@ mod tests {
         };
         let shown = report_with_deliverables("prose", Some(&selection));
         assert!(shown.starts_with("prose"));
-        assert!(shown.contains("\"selected\": \"A\"") && shown.contains("cheapest"));
+        assert!(shown.contains("selected: A") && shown.contains("cheapest"));
         assert_eq!(report_with_deliverables("prose", None), "prose");
         let compact = report_with_deliverables(&selection.rationale, Some(&selection));
         assert_eq!(compact.matches(&selection.rationale).count(), 1);
-        let recorded: serde_json::Value = serde_json::from_str(compact.split("```json\n").nth(1).unwrap().split("\n```").next().unwrap()).unwrap();
-        assert_eq!(recorded, serde_json::to_value(&selection).unwrap());
+        assert!(!compact.contains("```json"));
+        let evidence_report = format!("{}\n\nMCP execution evidence (read_evidence; immutable records):\n- test: evidence-id", selection.rationale);
+        let shown = report_with_deliverables(&evidence_report, Some(&selection));
+        assert_eq!(shown.matches(&selection.rationale).count(), 1);
+        assert!(shown.contains("evidence-id"));
     }
 
     #[test]

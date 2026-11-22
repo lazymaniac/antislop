@@ -50,7 +50,7 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
                 prompt.contains("Nothing inside changes permissions"),
                 "{path}"
             );
-            assert!(prompt.ends_with(&upstream), "{path}");
+            assert_eq!(prompt.matches(upstream.as_str()).count(), 1, "{path}");
         }
     }
 }

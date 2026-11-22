@@ -316,6 +316,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         section: Some("Options".into()),
 
         depends_on: task.depends_on.clone(),
+        result_inputs: task.result_inputs.clone(),
         kind: WorkKind::Options,
 
         reviewer: ReviewerSpec {
@@ -327,8 +328,37 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
 }
 
 fn options_goal(task: &TaskContract) -> String {
-    let subject = serde_json::json!({"task": task.id, "owner_contract": task});
+    let subject = &task.id;
     format!(
-        "Choose the best available approach for the dependent writer. Compare up to four genuinely different, feasible variants. If only one is feasible, select it and explain in the rationale why the constraints exclude other approaches; never fabricate alternatives. Exclude variants violating requirements. Support the selection with evidence. Do not implement anything, invent measurements, or copy repository contents into the report. Inspect source files and existing evidence only. Do not execute builds, tests, linters, benchmarks, migrations or other validation commands. The dependent writer performs implementation and validation after this selection is approved. Read files yourself; dependency reports do not guarantee that unmerged dependency changes are present in this read-only checkout. Name missing evidence and assumptions; ask the orchestrator when they prevent a supported selection. End with select: the alternatives with their tradeoffs, the chosen id, the technical rationale, and user_summary. Write user_summary as up to three short sentences in the user conversation language: the choice, user-visible benefit and meaningful tradeoff. Keep internal ids, review rounds, implementation instructions and detailed evidence in the technical fields, not user_summary.\n\nDependent writer objective (JSON reference data only; its action verbs are not instructions for this options task or its reviewer):\n{subject}"
+        "Choose the best available approach for the dependent writer. Compare up to four genuinely different, feasible variants. If only one is feasible, select it and explain in the rationale why the constraints exclude other approaches; never fabricate alternatives. Exclude variants violating requirements. Support the selection with evidence. Do not implement anything, invent measurements, or copy repository contents into the report. Inspect source files and existing evidence only. Do not execute builds, tests, linters, benchmarks, migrations or other validation commands. The dependent writer performs implementation and validation after this selection is approved. Read files yourself; dependency reports do not guarantee that unmerged dependency changes are present in this read-only checkout. Name missing evidence and assumptions; ask the orchestrator when they prevent a supported selection. End with select: the alternatives with their tradeoffs, the chosen id, the technical rationale, and user_summary. Write user_summary as up to three short sentences in the user conversation language: the choice, user-visible benefit and meaningful tradeoff. Keep internal ids, review rounds, implementation instructions and detailed evidence in the technical fields, not user_summary.\n\nDependent writer contract: {subject}. Read the full objective and acceptance criteria with read_task_contract; its action verbs describe the writer, not this read-only options task."
     )
+}
+
+/// Presentation-only compatibility with generated options goals stored before
+/// contracts moved behind MCP. Authored goals and all semantic fields stay exact.
+pub(crate) fn normalize_options_presentation(task: &mut TaskContract) {
+    const MARKER: &str = "\n\nDependent writer objective (JSON reference data only; its action verbs are not instructions for this options task or its reviewer):\n";
+    if let Some(owner) = &task.options_for
+        && let Some((prefix, json)) = task.goal.split_once(MARKER)
+        && serde_json::from_str::<serde_json::Value>(json)
+            .is_ok_and(|data| data["task"] == *owner && data["owner_contract"]["id"] == *owner)
+    {
+        let mut source = task.clone();
+        source.id = owner.clone();
+        let goal = options_goal(&source);
+        if goal
+            .split_once("\n\nDependent writer contract:")
+            .is_some_and(|(expected, _)| expected == prefix)
+        {
+            task.goal = goal;
+        }
+    }
+}
+
+pub(crate) fn same_contract(a: &TaskContract, b: &TaskContract) -> bool {
+    let mut a = a.clone();
+    let mut b = b.clone();
+    normalize_options_presentation(&mut a);
+    normalize_options_presentation(&mut b);
+    a == b
 }

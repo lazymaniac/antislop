@@ -78,7 +78,11 @@ pub fn findings_text(findings: &[Value]) -> String {
                 let severity = other["severity"].as_str().filter(|s| !s.is_empty());
                 let location = other["where"].as_str().filter(|s| !s.is_empty());
                 format!(
-                    "- {}{}{}",
+                    "- {}{}{}{}",
+                    other["id"]
+                        .as_str()
+                        .map(|id| format!("{id} "))
+                        .unwrap_or_default(),
                     severity.map(|s| format!("[{s}] ")).unwrap_or_default(),
                     other["issue"].as_str().unwrap_or_default(),
                     location.map(|s| format!(" ({s})")).unwrap_or_default(),
@@ -101,15 +105,16 @@ pub(crate) fn round_handoff_prompt(
 ) -> String {
     let (protection, report, findings) = handoff_sections(handoff, reviewer);
     format!(
-        "\n\nRound handoff\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious reviewer findings: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual local files. For a task delivering files, inspect its base/result diff; a report-only task has no delivery commits. Earlier-round results are unreviewed against changed inputs. Preserve user changes and follow repository instructions. A reviewer must assess every obligation and the complete task, including areas outside earlier findings.\n{}",
+        "\n\nRound handoff\nWorktree: {}\nRound: {}\nDelivery: {:?}\nInterrupted before a report: {}\n{}\nPrevious reviewer findings: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual local files. For a task delivering files, inspect its base/result diff; a report-only task has no delivery commits. Earlier-round results are unreviewed against changed inputs. Preserve user changes and follow repository instructions. A reviewer must assess every obligation and the complete task, including areas outside earlier findings.\n{}",
         handoff.worktree.display(),
         handoff.round,
+        handoff.change_kind,
         handoff.interrupted,
         report,
         findings,
         handoff.base,
         handoff.result,
-        serde_json::json!(handoff.files),
+        handoff.files.join(", "),
         handoff_tail(handoff, reviewer, &protection),
     )
 }
@@ -119,25 +124,11 @@ fn handoff_sections(
     reviewer: bool,
 ) -> (String, String, String) {
     let protection = handoff_protection(handoff);
-    let to_fix = handoff
-        .verdict
-        .as_ref()
-        .and_then(|verdict| verdict["findings"].as_array())
-        .is_some_and(|findings| !findings.is_empty());
-    let report =
-        if !reviewer && (handoff.interrupted || !handoff.change_kind.has_delivery() || !to_fix) {
-            latest_report(handoff)
-        } else {
-            String::new()
-        };
-    let findings = if !reviewer && to_fix {
-        "listed above in this prompt".into()
-    } else {
-        handoff
-            .verdict
-            .as_ref()
-            .map_or("none".into(), ToString::to_string)
-    };
+    let report = handoff.report.as_ref().map_or_else(
+        || "No completed worker report is available.".into(),
+        |(round, _)| format!("Previous worker report: read_dependency_result dependency=self, round={round}; use report_history.result_ref for historical inputs. Full verdict: read_dependency_result dependency=self, view=review with the relevant round."));
+    let findings = handoff.verdict.as_ref().and_then(|v| v["findings"].as_array()).map_or_else(
+        || "none".into(), |items| if reviewer { "Use the earlier findings listed for this turn; full verdict: read_dependency_result dependency=self, view=review with the relevant round.".into() } else { crate::lean::prompt_context::untrusted("Unresolved findings", &findings_text(items)) });
     (protection, report, findings)
 }
 
@@ -148,14 +139,7 @@ fn handoff_protection(handoff: &crate::lean::rounds::RoundHandoff) -> String {
     format!(
         "\nChanges already present in the primary working tree at {}:\n{}\nPreserve these changes when integrating. Work only in the allocated worktree; never edit the primary tree during repair. These paths do not prohibit task changes inside your own worktree.\n",
         handoff.primary.display(),
-        serde_json::json!(handoff.protected_paths)
-    )
-}
-
-fn latest_report(handoff: &crate::lean::rounds::RoundHandoff) -> String {
-    handoff.report.as_ref().map_or_else(
-        || "No completed worker report is available.".to_owned(),
-        |(round, report)| format!("Latest worker report (source round {round}):\n{report}"),
+        handoff.protected_paths.join(", ")
     )
 }
 
@@ -166,8 +150,11 @@ fn handoff_tail(
 ) -> String {
     format!(
         "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\nCurrent open comments:\n{}{}",
-        serde_json::json!(handoff.interruptions),
-        serde_json::json!(handoff.comments),
+        crate::lean::prompt_context::markdown(&handoff.interruptions),
+        crate::lean::prompt_context::untrusted(
+            "Open comments",
+            &crate::lean::prompt_context::markdown(&handoff.comments)
+        ),
         protection
     )
 }

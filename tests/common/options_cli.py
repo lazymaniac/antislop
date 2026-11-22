@@ -44,7 +44,7 @@ else:
             implementation = 'B' if scenario in ('reject-once', 'shared-worktree-repair') and count == 1 else settings['implementation']
             if implementation == 'selected':
                 if any(authored['id'] == task for authored in settings['plan']['tasks']):
-                    implementation = re.findall(r'"id":\s*"([AB])"', prompt)[-1]
+                    implementation = re.findall(r'^- id: ([AB])$', prompt, re.M)[-1]
                 else:
                     # Runtime quality gates check the required format directly;
                     # they have no options selection of their own.
@@ -59,13 +59,9 @@ else:
         actual = list(files.values())
         required = open('required-format.txt').read().strip()
         selected = required
-        for line in prompt.splitlines():
-            try:
-                local = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(local, dict) and isinstance(local.get('variant'), dict):
-                selected = local['variant']['id']
+        variants = re.findall(r'^- id: ([AB])$', prompt, re.M)
+        if variants:
+            selected = variants[-1]
         approved = not actual or all(value == selected and value == required for value in actual)
         record_call({'reviewed':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved,'cwd':os.getcwd()})
         ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)

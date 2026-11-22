@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>) {
+pub(super) fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>) {
     let (directory, core, conversation) = core();
     let message = core
         .store
@@ -25,7 +25,12 @@ fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>) {
     (directory, core, conversation, tasks)
 }
 
-fn start(core: &Core, conversation: &str, task: &Task, reviewer: bool) -> (String, store::Turn) {
+pub(super) fn start(
+    core: &Core,
+    conversation: &str,
+    task: &Task,
+    reviewer: bool,
+) -> (String, store::Turn) {
     let role = format!(
         "{}:{}",
         if reviewer { "reviewer" } else { "worker" },
@@ -67,12 +72,8 @@ fn old_input_report_and_raw_evidence_survive_amendment_replan_and_reopen() {
             &json!({"summary":"Sixteen findings","report":report}),
         )
         .unwrap();
-    assert!(
-        completion["result"]["report"]
-            .as_str()
-            .unwrap()
-            .contains(id)
-    );
+    assert_eq!(completion["result"]["report"], report);
+    assert_eq!(core.store.result_evidence(&original.id).unwrap()[0].id, id);
     assert!(
         !completion["result"]["report"]
             .as_str()
@@ -386,7 +387,7 @@ fn evidence_tools_are_nonterminal_and_completion_links_the_wire_record() {
         .wait(&turn.id, &AtomicBool::new(false), || Ok(()))
         .unwrap();
     let result: TurnResult = serde_json::from_str(&finish.text).unwrap();
-    assert!(result.text().contains(id));
+    assert_eq!(result.text(), "Read immutable output references.");
     assert_eq!(core.store.result_evidence(&turn.id).unwrap()[0].id, id);
     let spec: TaskContract = serde_json::from_value(tasks[0].spec.clone()).unwrap();
     let prompt = tasks::reviewer_prompt(".", &spec, &result.text(), None);

@@ -93,7 +93,8 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
 }
 
 fn run_review_turn(input: ReviewTurn<'_>) -> Result<Option<String>> {
-    input.core.turn(input.setup, input.cancel, |first, _| {
+    input.core.turn(input.setup, input.cancel, |session| {
+        let first = session.introduce();
         let prompt = tasks::reviewer_turn_prompt(
             &input.reviewdir.to_string_lossy(),
             input.spec,

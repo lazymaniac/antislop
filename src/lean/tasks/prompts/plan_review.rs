@@ -1,6 +1,7 @@
 use super::*;
 
 pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -> String {
+    let request = crate::lean::prompt_context::untrusted("Request", request);
     let mut prompt = format!(
         "You review a plan before any of it runs or the user sees it. The \
          project is your current working directory: {project}. Read the files \
@@ -17,6 +18,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
 }
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
+    let request = crate::lean::prompt_context::untrusted("Request", request);
     let mut prompt = format!(
         "{}The new plan:\n{}\n\n{GENERATED_NODES}Check it again. {}{}",
         if request.is_empty() {
@@ -64,7 +66,10 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
 /// the reviewer checks that they exist, not their boilerplate.
 fn plan_text(plan: &[TaskContract]) -> String {
     let entries: Vec<_> = plan.iter().map(plan_entry).collect();
-    serde_json::to_string(&entries).unwrap_or_default()
+    crate::lean::prompt_context::untrusted(
+        "Proposed plan",
+        &crate::lean::prompt_context::markdown(&entries),
+    )
 }
 
 fn plan_entry(task: &TaskContract) -> Value {
@@ -90,6 +95,7 @@ fn plan_entry(task: &TaskContract) -> Value {
         "change_kind": task.change_kind(),
         "depends_on": task.depends_on,
         "options_for": task.options_for,
+        "result_inputs": task.result_inputs,
         "quality_gate": task.quality_gate,
         "deferred": task.deferred,
         "added_by_runtime": true,
@@ -133,9 +139,14 @@ pub fn plan_revision_review_prompt(
     };
     format!(
         "{head}\nComplete candidate task IDs: {}\nThis index and the proposed graph above are authoritative. Earlier contracts below are comparison history, not the candidate graph. Before claiming a task is absent or a removed options edge still exists, check the candidate graph rather than the earlier contracts.\nReview a revision within accepted requirements. Preserve every obligation. deferred=true is a deliberate scheduling hold for the task, its generated options/gates and dependent work; a reviewed revision releases it when its prerequisite is resolved. Do not introduce permission decisions or execution budgets. Independent work can proceed while a prerequisite remains unavailable. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only eligible non-gate change_kind=code tasks receive code options; quality gates do not receive options or require selected_approach. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; presentation-only changes preserve approval; a changed goal or requirement triggers reassessment of existing work. An explicit correction request can name redo, but it never discards an integrated change or starts the executor from scratch.\n\nPreviously approved tasks affected by changed contracts or redo: they retain their original report and checkpoint and are reassessed first. Only unresolved obligations go to an executor continuation. Retired tasks remain history and are not runnable; replacements inherit unfinished work. New tasks may be inserted anywhere in the acyclic graph. Generated options must match the current writer objective before review: {}.",
-        serde_json::to_string(&plan.iter().map(|task| &task.id).collect::<Vec<_>>())
-            .unwrap_or_default(),
-        serde_json::to_string(&previous).unwrap_or_default(),
+        plan.iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        crate::lean::prompt_context::untrusted(
+            "Earlier contracts",
+            &crate::lean::prompt_context::markdown(&previous)
+        ),
         listed(approved.kept),
         listed(approved.redone)
     )
@@ -159,6 +170,8 @@ pub fn plan_rejected(findings: &[Value]) -> String {
 }
 
 pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
+    let request = crate::lean::prompt_context::untrusted("Audit request", request);
+    let results = crate::lean::prompt_context::untrusted("Task result index", results);
     format!(
         "You audit whether the user's request was fully delivered. The project \
          is your current working directory: {project}. Read the files yourself \
@@ -174,6 +187,8 @@ pub(in crate::lean) fn final_scope_audit_prompt(
     request: &str,
     results: &str,
 ) -> String {
+    let request = crate::lean::prompt_context::untrusted("Review scope", request);
+    let results = crate::lean::prompt_context::untrusted("Candidate result index", results);
     format!(
         "You are the final independent auditor for a read-only code review. The project is your current working directory: {project}. Inspect the requested target and surrounding code yourself; do not modify files. {OUTSIDE}\n\n\
          User request and scope context:\n<<<\n{request}\n>>>\n\n\
@@ -183,6 +198,8 @@ pub(in crate::lean) fn final_scope_audit_prompt(
 }
 
 pub fn audit_followup(request: &str, results: &str) -> String {
+    let request = crate::lean::prompt_context::untrusted("Audit continuation", request);
+    let results = crate::lean::prompt_context::untrusted("Task result index", results);
     format!(
         "{READ_ONLY_REVIEW} {REVIEW_RULES}\n{}Results of the next plan:\n{results}\n\n{}{}",
         if request.is_empty() {
@@ -195,7 +212,7 @@ pub fn audit_followup(request: &str, results: &str) -> String {
     )
 }
 
-const AUDIT_CHECKS: &str = "Inspect the integrated project, full original documents and relevant task results with read_dependency_result. Check each task acceptance criterion and the combined outcome. Reports alone do not prove code was integrated or checks passed. Search for obligations omitted from the plan. Do not change files. List every obligation in the request, each \
+const AUDIT_CHECKS: &str = "Inspect the integrated project, full original documents and relevant task results with read_dependency_result. Read full contracts and scope with read_task_contract and read_plan_context; the result index is not the complete contract. Check each task acceptance criterion and the combined outcome. Reports alone do not prove code was integrated or checks passed. Search for obligations omitted from the plan. Do not change files. List every obligation in the request, each \
      qualifier included, and decide for each whether the results and the files \
      show it done and whether touched code was left in a cleaner, better state \
      than before. A missing, partial or unreviewed obligation is a high \

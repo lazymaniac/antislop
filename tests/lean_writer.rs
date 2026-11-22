@@ -44,7 +44,7 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
 def cover(answer):
     import re
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
-    if not ids or "```verdict" not in answer:
+    if "Task role: reviewer" not in prompt or not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
     data = json.loads(body.split("```")[0])
@@ -147,7 +147,7 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
 def cover(answer):
     import re
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
-    if not ids or "```verdict" not in answer:
+    if "Task role: reviewer" not in prompt or not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
     data = json.loads(body.split("```")[0])
@@ -1196,8 +1196,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_reviewed_before_landing() 
     for required in [
         "Round handoff",
         "Create hello.txt",
-        "Latest worker report",
-        "wrote hello.txt",
+        "read_dependency_result",
         "C1: The task goal is verified",
         "Current open comments",
         "hello.txt",

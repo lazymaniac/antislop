@@ -13,7 +13,8 @@ pub(super) fn finish(
         && let Some(error) = audit_response_error(
             audit,
             &result.text(),
-            submitted.as_ref().is_some_and(Result::is_ok),
+            submitted.as_ref().is_some_and(Result::is_ok)
+                || remediation_requested(core, context.conversation)?,
         )
     {
         // A finding the orchestrator answers but leaves open without a plan
@@ -56,6 +57,15 @@ pub(super) fn finish(
     handle_plan_answer(core, context, text, plan, addressed, scope, cancel)
 }
 
+/// A successful revision/replan request is the orchestrator's supported route
+/// for remediation. Recording it does not approve the requested work.
+fn remediation_requested(core: &Core, conversation: &str) -> Result<bool> {
+    let Some(turn) = core.store.last_orchestration_turn(conversation)? else {
+        return Ok(false);
+    };
+    Ok(core.store.db().query_row("SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND turn_id=?2 AND kind='plan_remediation_requested')", rusqlite::params![conversation,turn.id], |row| row.get(0))?)
+}
+
 /// Reminders sent for one audit report before a malformed answer stands.
 const MAX_AUDIT_REMINDERS: usize = 3;
 
@@ -78,7 +88,7 @@ impl AuditGap {
 fn audit_response_error(
     audit: &super::AuditResponse,
     response: &str,
-    submits_plan: bool,
+    has_remediation: bool,
 ) -> Option<AuditGap> {
     let lines = response.lines().map(str::trim).collect::<Vec<_>>();
     if audit.error.is_some() {
@@ -102,7 +112,7 @@ fn audit_response_error(
                 "the report requires `{prefix}<assessment>`"
             )));
         }
-        return (status == "open" && !submits_plan).then_some(AuditGap::OpenWithoutPlan(
+        return (status == "open" && !has_remediation).then_some(AuditGap::OpenWithoutPlan(
             "an open audit result needs a remediation plan submitted for independent review",
         ));
     }
@@ -134,7 +144,7 @@ fn audit_response_error(
             .iter()
             .any(|line| line.to_ascii_lowercase().starts_with(&open));
     }
-    if has_open_finding && !submits_plan {
+    if has_open_finding && !has_remediation {
         return Some(AuditGap::OpenWithoutPlan(
             "open audit findings need a remediation plan submitted for independent review",
         ));
@@ -318,6 +328,51 @@ mod tests {
     }
 
     #[test]
+    fn open_audit_findings_accept_a_recorded_replan_request_without_another_full_plan() {
+        with_audited_context(|core, conversation, context| {
+            let turn = core
+                .store
+                .start_turn(
+                    conversation,
+                    ORCHESTRATOR,
+                    "fixture",
+                    context.upto,
+                    Some(&context.graph[0].plan_id),
+                )
+                .unwrap();
+            let receipt = core
+                .agent_tool(
+                    conversation,
+                    ORCHESTRATOR,
+                    &turn.id,
+                    "request_replan",
+                    &json!({"reason":"Plan remediation for the missing evidence"}),
+                )
+                .unwrap();
+            assert_eq!(receipt["state"], "requested");
+            core.store
+                .finish_turn(&turn.id, store::TurnStatus::Done, None)
+                .unwrap();
+            finish(core, context, "Audit response:\nfinding 1: open - the planner will draft the missing evidence work.", &AtomicBool::new(false)).unwrap();
+            assert_eq!(
+                core.store
+                    .messages_by(conversation, ORCHESTRATOR, 0)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                !core
+                    .store
+                    .messages_by(conversation, RUNTIME, 0)
+                    .unwrap()
+                    .iter()
+                    .any(|message| message.text.starts_with(AUDIT_REMINDER))
+            );
+        });
+    }
+
+    #[test]
     fn ignored_audit_findings_are_rejected_before_orchestration_progress() {
         with_audited_context(|core, conversation, context| {
             finish(
@@ -370,9 +425,15 @@ mod tests {
             assert_eq!(retry.asked.len(), 1);
             assert!(retry.asked[0].text.contains("still awaiting your response"));
             assert!(retry.audit_response.is_some());
-            let prompt = super::super::render_prompt(&retry, false, false);
+            let prompt = super::super::render_prompt(
+                &retry,
+                crate::lean::prompt_context::SessionContext {
+                    start: crate::lean::prompt_context::SessionStart::Resumed,
+                    continuation: crate::lean::prompt_context::Continuation::Role,
+                },
+            );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
-            assert!(prompt.contains(r"## Independent audit\nThe request is not fully delivered"));
+            assert!(prompt.contains("read_audit") && prompt.contains("audit_ref"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
 
             finish(
@@ -424,7 +485,13 @@ mod tests {
                 &context.config,
             );
             assert_eq!(setup.role, ORCHESTRATOR);
-            let prompt = super::super::render_prompt(context, false, false);
+            let prompt = super::super::render_prompt(
+                context,
+                crate::lean::prompt_context::SessionContext {
+                    start: crate::lean::prompt_context::SessionStart::Resumed,
+                    continuation: crate::lean::prompt_context::Continuation::Role,
+                },
+            );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
             assert!(prompt.contains("finding N: resolved -"));
@@ -460,7 +527,13 @@ mod tests {
             );
             assert_eq!(setup.role, ORCHESTRATOR);
 
-            let prompt = super::super::render_prompt(context, false, false);
+            let prompt = super::super::render_prompt(
+                context,
+                crate::lean::prompt_context::SessionContext {
+                    start: crate::lean::prompt_context::SessionStart::Resumed,
+                    continuation: crate::lean::prompt_context::Continuation::Role,
+                },
+            );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
             assert!(prompt.contains("Address each new user comment explicitly"));
