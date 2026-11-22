@@ -155,8 +155,8 @@ enum Kind {
 impl Kind {
     fn style(self) -> Style {
         match self {
-            Self::Depends => Style::default().fg(super::theme::ayu::BLUE),
-            Self::Reviews => Style::default().fg(super::theme::ayu::YELLOW),
+            Self::Depends => Style::default().fg(super::theme::ayu::ROUTE),
+            Self::Reviews => Style::default().fg(super::theme::ayu::ROUTE),
             Self::Mail { recent: true } => Style::default()
                 .fg(super::theme::ayu::PURPLE)
                 .add_modifier(Modifier::BOLD),

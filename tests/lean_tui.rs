@@ -457,7 +457,7 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
 }
 
 #[test]
-fn long_activity_labels_fit_the_status_above_chat_input() {
+fn long_activity_labels_fit_the_grouped_canvas_card() {
     let mut app = App::test_app();
     app.focus = Focus::Graph;
     app.view.activity = Some("a".repeat(LARGE_PASTE_BYTES - 1));
@@ -470,22 +470,13 @@ fn long_activity_labels_fit_the_status_above_chat_input() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(rendered.contains(" now "));
-    assert!(rendered.contains(&"a".repeat(30)));
+    assert!(!rendered.contains(" now "));
+    assert!(rendered.contains(&"a".repeat(20)));
     let header: String = terminal.backend().buffer().content[..120]
         .iter()
         .map(|cell| cell.symbol())
         .collect();
     assert!(!header.contains("aaaa"));
-    // Agent updates live only in the "now" box, never above the chat input.
-    let now_row = (0..30)
-        .find(|&y| {
-            (0..120)
-                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                .collect::<String>()
-                .contains(" now ")
-        })
-        .unwrap();
     let rows: Vec<String> = (0..30)
         .map(|y| {
             (0..120)
@@ -493,7 +484,7 @@ fn long_activity_labels_fit_the_status_above_chat_input() {
                 .collect()
         })
         .collect();
-    assert!(rows[usize::from(now_row) + 1].contains(&"a".repeat(30)));
+    // Oversized updates are clipped to their card, without filling the header.
     assert_eq!(rows.iter().filter(|row| row.contains("aaaa")).count(), 1);
 }
 
@@ -1987,7 +1978,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_wide.contains("[?]"));
+    assert!(text_wide.contains("F1 help"));
     assert!(!text_wide.contains("[Session]"));
 
     // 80x24 (compact stacked)
@@ -2004,7 +1995,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_compact.contains("[?]"));
+    assert!(text_compact.contains("decisions"));
 
     // 11x4 (below minimum 12x5)
     let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
@@ -2092,7 +2083,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     );
     app.picker = None;
 
-    // 4. The agent canvas and its progress overlay remain visible before tasks run
+    // 4. Work and its activity remain visible before tasks run.
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.view.activity = Some("compiling tests".into());
     let mut term_overlay = Terminal::new(TestBackend::new(100, 30)).unwrap();
     term_overlay
@@ -2107,8 +2099,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_overlay.contains("Canvas · relations:"));
-    assert!(text_overlay.contains(" now "));
+    assert!(text_overlay.contains("See the whole plan."));
+    assert!(!text_overlay.contains(" now "));
     assert!(text_overlay.contains("compiling tests"));
 
     // 5. ASCII conversion

@@ -110,11 +110,10 @@ impl Size {
         self
     }
 
-    /// Narrow the task cards so that a unit of three fits across the
-    /// viewport with `columns` kept clear beside it.
+    /// Reserve adjacent layout columns while retaining one card per work unit.
     pub(super) fn reserve_columns(&mut self, viewport: u16, columns: u16) {
-        let unit = 2 * CARD_GAP + 2 * FRAME_X + columns;
-        let fit = (viewport.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH);
+        let unit = 2 * FRAME_X + columns;
+        let fit = viewport.saturating_sub(unit).clamp(MIN_WIDTH, 40);
         self.w = self.w.min(fit);
         self.grow();
     }

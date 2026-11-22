@@ -26,20 +26,53 @@ impl Details {
         }
         let content_area = self.text_area;
         let content_scroll = self.scroll;
-        let block = session_block(
-            self,
-            key,
-            true,
-            view.agents.get(key).is_some_and(|agent| agent.running),
-            theme,
+        frame.render_widget(Block::default().style(theme.terminal()), area);
+        let [header, inner, footer] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+        frame.render_widget(Block::default().style(theme.raised()), header);
+        let role = key.split(':').next().unwrap_or(key);
+        let round = self
+            .selected_round
+            .or_else(|| self.task.as_ref().and_then(|task| task["round"].as_u64()));
+        let owner = key
+            .split_once(':')
+            .and_then(|(_, id)| {
+                view.tasks
+                    .iter()
+                    .find(|task| task.id == id || task.uuid.as_deref() == Some(id))
+            })
+            .map(|task| format!("{} / {role}", task.title))
+            .unwrap_or_else(|| role.to_owned());
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("  PTY    ", theme.text()),
+                Span::styled(
+                    theme.chrome(&format!("{} {owner}", if theme.ascii { ">" } else { "›" })),
+                    theme.accent(),
+                ),
+                Span::styled(
+                    theme.chrome(&format!(
+                        "    round {}",
+                        round.map_or_else(|| "—".into(), |round| round.to_string())
+                    )),
+                    theme.dim(),
+                ),
+            ])),
+            Rect::new(header.x, header.y, header.width, 1),
         );
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        self.native_areas[0] = Rect::new(
-            inner.x,
-            inner.y,
-            inner.width,
-            inner.height.saturating_sub(1),
+        let inner = inner.inner(ratatui::layout::Margin::new(
+            u16::from(area.width >= 30) * 2,
+            0,
+        ));
+        self.native_areas[0] = inner;
+        frame.render_widget(
+            Paragraph::new(theme.chrome("  t focus terminal    PgUp scrollback    Ctrl+] return"))
+                .style(theme.dim()),
+            footer,
         );
         let editing = std::mem::replace(&mut self.editing, false);
         if !self.draw_native_panel(frame, key, 0, true, inner, theme) {
@@ -53,6 +86,24 @@ impl Details {
                         .chrome("native session has not started · t input/retry · Ctrl+K direction")
                 });
             frame.render_widget(Paragraph::new(status).style(theme.dim()), inner);
+        }
+        if let Some(error) = self.native.get(key).and_then(|snapshot| {
+            snapshot.error.as_deref().or_else(|| {
+                snapshot
+                    .screen
+                    .as_ref()
+                    .and_then(|screen| screen.error.as_deref())
+            })
+        }) {
+            frame.render_widget(
+                Paragraph::new(theme.clean(error)).style(theme.warning()),
+                Rect::new(
+                    header.x + 2,
+                    header.y + 1,
+                    header.width.saturating_sub(4),
+                    1,
+                ),
+            );
         }
         self.editing = editing;
         self.text_area = content_area;
@@ -135,7 +186,9 @@ impl Details {
         } else {
             status
         };
-        draw_session_status(frame, inner, &status, theme);
+        if self.native_areas[panel].bottom() < inner.bottom() {
+            draw_session_status(frame, inner, &status, theme);
+        }
         true
     }
 
@@ -363,7 +416,7 @@ mod delivery_tests {
             assert_eq!(details.text_area, content);
             assert_eq!(details.scroll, 17);
             let inner = session_block(&details, "orchestrator", true, false, &theme).inner(area);
-            assert_eq!(details.native_areas[0].width, inner.width);
+            assert_eq!(details.native_areas[0].width, inner.width.saturating_sub(2));
             let text = terminal
                 .backend()
                 .buffer()
@@ -373,10 +426,7 @@ mod delivery_tests {
                 .collect::<String>();
             assert!(text.contains("native session has not started"));
             assert!(!text.contains("To "));
-            assert_eq!(
-                terminal.backend().buffer()[(0, 12)].symbol(),
-                if theme.ascii { "+" } else { "┌" }
-            );
+            assert_eq!(terminal.backend().buffer()[(0, 12)].symbol(), " ");
         }
     }
 

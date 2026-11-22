@@ -1,4 +1,3 @@
-use super::header::token_at;
 use super::*;
 
 impl App {
@@ -12,17 +11,7 @@ impl App {
         if self.click_phase_action(col, row) {
             return;
         }
-        let area = self.terminal_area;
-        let [body, _, bar] = Self::main_areas(area);
-        if self.click_help(col, row, bar) || self.click_now(col, row) || self.click_graph(col, row)
-        {
-            return;
-        }
-        if self.on_header(col, row, bar) {
-            self.click_header(col, bar);
-        } else if body.contains((col, row).into()) && area.width >= SIDE_BY_SIDE_BREAKPOINT {
-            self.click_panel(col, area);
-        }
+        let _ = self.click_now(col, row) || self.click_graph(col, row);
     }
 
     fn click_plan_view(&mut self, col: u16, row: u16) -> bool {
@@ -67,18 +56,6 @@ impl App {
         true
     }
 
-    fn click_help(&mut self, col: u16, row: u16, bar: Rect) -> bool {
-        if row == bar.y + (Self::bar_height(self.terminal_area) - 1) / 2
-            && col >= bar.right().saturating_sub(3)
-            && bar.contains((col, row).into())
-        {
-            self.show_help(self.help_here());
-            true
-        } else {
-            false
-        }
-    }
-
     fn click_graph(&mut self, col: u16, row: u16) -> bool {
         let Some(inner) = self
             .graph_area
@@ -119,10 +96,14 @@ impl App {
         else {
             return false;
         };
-        if row <= area.y || row >= area.bottom().saturating_sub(1) {
+        if area.height > 1 && (row <= area.y || row >= area.bottom().saturating_sub(1)) {
             return true;
         }
-        let line = row.saturating_sub(area.y).saturating_sub(1) as usize;
+        let line = if area.height == 1 {
+            0
+        } else {
+            row.saturating_sub(area.y).saturating_sub(1) as usize
+        };
         let Some((agent, visible)) = self.now_click_targets.get(line).and_then(Clone::clone) else {
             return true;
         };
@@ -134,23 +115,5 @@ impl App {
         self.graph_revealed = None;
         self.set_focus(Focus::Graph);
         true
-    }
-
-    /// Any row of the bar: its buttons fill all of them.
-    fn on_header(&self, col: u16, row: u16, bar: Rect) -> bool {
-        bar.contains((col, row).into())
-    }
-
-    fn click_header(&mut self, col: u16, bar: Rect) {
-        let header = self.header_line(bar.width.saturating_sub(4));
-        let text = header
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        let controls = self.view.controls();
-        if let Some(token) = token_at(&text, usize::from(col.saturating_sub(bar.x))) {
-            self.activate_header_token(&token, controls);
-        }
     }
 }

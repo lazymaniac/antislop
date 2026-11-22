@@ -315,7 +315,14 @@ fn capture(app: &mut App) -> String {
         .join("\n")
 }
 
-fn click_header(app: &mut App, label: &str) {
+fn click_workflow_control(app: &mut App, label: &str) {
+    let cancel = label == "Cancel";
+    let label = match label {
+        "Pause" => "space pause",
+        "Continue" => "space continue",
+        "Cancel" => "ctrl p actions",
+        label => label,
+    };
     let mut terminal = Terminal::new(TestBackend::new(500, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let (row, text, start) = (0..40)
@@ -325,7 +332,7 @@ fn click_header(app: &mut App, label: &str) {
                 .collect::<String>();
             text.find(label).map(|start| (row, text, start))
         })
-        .unwrap_or_else(|| panic!("header button {label:?} absent: {}", capture(app)));
+        .unwrap_or_else(|| panic!("workflow control {label:?} absent: {}", capture(app)));
     let column = UnicodeWidthStr::width(&text[..start]) as u16;
     app.mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -333,6 +340,13 @@ fn click_header(app: &mut App, label: &str) {
         row,
         modifiers: KeyModifiers::NONE,
     });
+    if cancel {
+        assert!(app.picker.is_some());
+        for ch in "Cancel current work".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
 }
 
 const CODEX: &str = r##"#!/usr/bin/env python3
@@ -839,6 +853,9 @@ fn real_tui_failed_recovery_keeps_raw_error_and_rejects_stale_freshness_token() 
     app.selected = "conversation".into();
     app.focus = antislop::lean::tui::Focus::Graph;
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    // The reference split keeps the PTY visible. Expand content to inspect the
+    // complete completion result, including the text below its action list.
+    app.key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
     let final_panel = capture(&mut app);
     assert!(final_panel.contains("Session completion"), "{final_panel}");
     assert!(final_panel.contains("Final branch:"), "{final_panel}");
@@ -881,7 +898,11 @@ fn real_tui_failed_recovery_keeps_raw_error_and_rejects_stale_freshness_token() 
         .collect::<Vec<_>>()
         .join(" ");
     assert!(!result_marker.is_empty());
-    assert!(final_panel.contains(&result_marker));
+    let visible_result = final_panel.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        visible_result.contains(&result_marker),
+        "missing {result_marker:?}: {final_panel}"
+    );
     let sequence = json!({
         "conversation": conversation,
         "plan": plan,
@@ -1043,7 +1064,7 @@ fn real_recovery_controls_pause_continue_and_cancel_preserve_reviewed_decision()
     });
     // Cancel through the visible toolbar in the same recovery state. This
     // isolated fixture cannot address a user's active session.
-    click_header(&mut app, "Cancel");
+    click_workflow_control(&mut app, "Cancel");
     wait_for("recovery cancellation event", || {
         fixture
             .client
@@ -1389,7 +1410,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
     );
 
     // Exercise the visible header action route.
-    click_header(&mut app, "Pause");
+    click_workflow_control(&mut app, "Pause");
     pump_until(&mut app, &updates, "paused session state", |app| {
         app.view.paused
     });
@@ -1412,7 +1433,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
         "paused again through command palette",
         |app| app.view.paused,
     );
-    click_header(&mut app, "Continue");
+    click_workflow_control(&mut app, "Continue");
     pump_until(&mut app, &updates, "continued through header", |app| {
         !app.view.paused
     });
@@ -1420,7 +1441,7 @@ fn real_daemon_pause_continue_and_cancel_keep_draft_and_raw_failure_is_not_succe
     assert_eq!(app.input.text, "draft survives pause and cancel 👩‍💻");
 
     // Click the visible header cancel button while the fake worker is held.
-    click_header(&mut app, "Cancel");
+    click_workflow_control(&mut app, "Cancel");
     wait_for("cancel event in isolated daemon", || {
         let Ok(events) = fixture.client.call(&Request::History(
             antislop::lean::daemon::HistoryRequest::Events {

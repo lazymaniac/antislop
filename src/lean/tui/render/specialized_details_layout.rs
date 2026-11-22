@@ -71,7 +71,7 @@ pub(super) fn round_label(details: &Details, selected: u64) -> String {
 pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Block<'static> {
     if !details.overview() {
         return Block::default()
-            .borders(Borders::TOP)
+            .borders(Borders::NONE)
             .border_set(theme.borders())
             .border_style(theme.separator(false));
     }
@@ -83,7 +83,7 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
         " Session · history · G live "
     };
     Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::NONE)
         .border_set(theme.borders())
         .border_style(theme.faint())
         .style(Style::default())
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_details_block_renders_square_corners() {
+    fn overview_details_surface_has_no_box_border() {
         let area = Rect::new(0, 0, 24, 6);
         let details = Details::new("orchestrator".into());
         let theme = Theme::new(true, false);
@@ -333,9 +333,9 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].symbol(), "┌");
-        assert_eq!(buffer[(area.width - 1, 0)].symbol(), "┐");
-        assert_eq!(buffer[(0, area.height - 1)].symbol(), "└");
-        assert_eq!(buffer[(area.width - 1, area.height - 1)].symbol(), "┘");
+        assert_eq!(buffer[(0, 0)].symbol(), " ");
+        assert_eq!(buffer[(area.width - 1, 0)].symbol(), " ");
+        assert_eq!(buffer[(0, area.height - 1)].symbol(), " ");
+        assert_eq!(buffer[(area.width - 1, area.height - 1)].symbol(), " ");
     }
 }

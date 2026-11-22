@@ -444,7 +444,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         );
         assert_eq!(app.navigation.presentation().round, Some(1));
         assert_eq!(app.workbench_terminal_owner(), "worker:t1");
-        assert!(terminal_text(&terminal).contains("CLI worker:t1 · r1"));
+        assert!(terminal_text(&terminal).contains("round 1"));
         assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
         if tab != WorkbenchTab::Diff {
             assert!(terminal_text(&terminal).contains("Round 1"));
@@ -604,12 +604,12 @@ fn clicking_now_focuses_and_scrolls_to_active_agent() {
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let now = app.now_area.expect("Now panel rendered");
+    let now = app.now_area.expect("activity status rendered");
     let initial_offset = app.offset;
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
-        row: now.y + 1,
+        row: now.y,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t11");
@@ -651,16 +651,16 @@ fn now_click_mapping_contains_only_the_rows_shown_in_the_bar() {
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let now = app.now_area.expect("Now panel rendered");
-    assert_eq!(app.now_click_targets.len(), 6);
+    let now = app.now_area.expect("activity status rendered");
+    assert_eq!(app.now_click_targets.len(), 1);
 
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
-        row: now.y + 6,
+        row: now.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(app.selected, "worker:t5");
+    assert_eq!(app.selected, "worker:t0");
     assert_eq!(app.focus, Focus::Graph);
 }
 
@@ -679,11 +679,11 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
     let initial_revision = app.view.layout_revision;
     let initial_scope = app.graph_scope_with_exception();
     let initial_rebuild_count = graph_layout_rebuild_count(&app);
-    let now = app.now_area.expect("Now panel rendered");
+    let now = app.now_area.expect("activity status rendered");
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
-        row: now.y + 1,
+        row: now.y,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t1");
@@ -719,14 +719,14 @@ fn clicking_now_temporarily_exposes_a_filtered_agent() {
     app.graph_scope.query = Some("does-not-match".into());
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let now = app.now_area.expect("Now panel rendered");
+    let now = app.now_area.expect("activity status rendered");
     let initial_offset = app.offset;
     app.graph_revealed = Some("worker:t1".into());
     app.focus = Focus::Chat;
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
-        row: now.y + 1,
+        row: now.y,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t0");
@@ -765,12 +765,12 @@ fn clicking_now_without_an_active_agent_leaves_graph_state_unchanged() {
     app.focus = Focus::Chat;
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let now = app.now_area.expect("Now panel rendered");
+    let now = app.now_area.expect("activity status rendered");
     let graph_state = (app.selected.clone(), app.offset, app.focus);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
-        row: now.y + 1,
+        row: now.y,
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!((app.selected.clone(), app.offset, app.focus), graph_state);
@@ -1272,6 +1272,13 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
             kind: "message".into(),
         })
         .collect();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    app.navigation
+        .update_presentation(|presentation| presentation.tab = WorkbenchTab::Conversation);
+    app.details
+        .as_mut()
+        .unwrap()
+        .prepare_workbench_details(None, WorkbenchTab::Conversation);
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app.workbench_areas.content;
     let offset = app.offset;
@@ -2030,10 +2037,10 @@ fn new_session_header_and_palette_entries_are_available() {
     assert!(header.contains("[Projects]"));
     assert!(header.contains("[Sessions]"));
     assert!(header.contains("[ + New ]"));
-    let controls = app.view.controls();
-    app.activate_header_token("[Projects]", controls);
+    app.key(key_ctrl('g'));
     assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Projects);
-    app.activate_header_token("[Sessions]", controls);
+    app.key(key_press(KeyCode::Esc));
+    app.key(key_ctrl('o'));
     assert_eq!(app.picker.as_ref().unwrap().kind, Kind::Conversations);
 
     let picker = Picker::new(Kind::Commands);
@@ -2501,9 +2508,9 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("[Session]"));
+    assert!(text.contains("session"));
     assert!(text.contains("Canvas"));
-    assert!(text.contains("Ctrl+K"));
+    assert!(text.contains("ctrl k"));
 
     // Switch to Focus::Graph
     app.focus = Focus::Graph;
@@ -2514,9 +2521,9 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("Session"));
-    assert!(text.contains("[Canvas]"));
-    assert!(text.contains("Ctrl+K"));
+    assert!(text.contains("session"));
+    assert!(text.contains("Canvas"));
+    assert!(text.contains("ctrl k"));
 }
 
 #[test]
@@ -2540,7 +2547,8 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
     assert!(text.contains("test"));
     assert!(text.contains("antislop"));
     let strip = view::Stage::Fresh.strip(crate::lean::tui::theme::Theme::from_env().glyphs());
-    assert!(text.contains(&strip), "{text}");
+    assert!(text.contains("See the whole plan."), "{text}");
+    let _ = strip;
 }
 
 #[test]
@@ -2602,6 +2610,26 @@ fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> 
                     .collect::<String>()
             )
         });
+    if !comment && buffer.area.width >= 60 && buffer.area.height >= 20 {
+        let left = (buffer.area.left()..buffer.area.right())
+            .find(|&x| buffer[(x, top)].symbol() == "G")
+            .unwrap();
+        let bottom = (top + 1..buffer.area.bottom())
+            .find(|&y| {
+                (buffer.area.left()..buffer.area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("Send instruction")
+            })
+            .unwrap();
+        let width = buffer
+            .area
+            .width
+            .saturating_sub(4)
+            .min(84)
+            .saturating_sub(4);
+        return Rect::new(left, top + 4, width, bottom.saturating_sub(top + 5));
+    }
     let left = (buffer.area.left()..buffer.area.right())
         .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
         .expect("left frame corner");
@@ -2705,7 +2733,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                         matches!(
                             terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol(),
                             "│" | "|"
-                        ),
+                        ) || (!comment && width >= 60 && height >= 20),
                         "right border {:?}, comment={comment}, viewport={viewport:?}, cursor={cursor:?}",
                         terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol()
                     );
@@ -2935,7 +2963,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
     // Progress overlay renders with "now" title and doesn't obscure orchestrator
-    assert!(text.contains("now"));
+    assert!(!text.contains(" now "));
     assert!(text.contains("orchestrator") || text.contains(ORCHESTRATOR));
 
     // Review orchestrator node cells remain intact in the buffer
@@ -3713,21 +3741,6 @@ fn header_text(app: &App, width: u16) -> String {
         .collect()
 }
 
-fn click_header(app: &mut App, width: u16, token: &str) {
-    let text = header_text(app, width.saturating_sub(4));
-    let at = text
-        .find(token)
-        .unwrap_or_else(|| panic!("{token} in {text}"));
-    let col = unicode_width::UnicodeWidthStr::width(&text[..at]) as u16 + 1;
-    app.terminal_area = Rect::new(0, 0, width, 24);
-    app.mouse(event::MouseEvent {
-        kind: MouseEventKind::Down(event::MouseButton::Left),
-        column: col,
-        row: App::main_areas(app.terminal_area)[2].y,
-        modifiers: KeyModifiers::NONE,
-    });
-}
-
 #[test]
 fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
     let mut app = test_app();
@@ -3776,105 +3789,99 @@ fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
 }
 
 #[test]
-fn footer_has_one_status_row_and_help_preserves_the_draft() {
+fn footer_has_one_keybar_row_and_help_preserves_the_draft() {
     let mut app = test_app();
-    app.set_focus(Focus::Chat);
-    app.paste("draft");
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 50)).unwrap();
+    app.input = InputBuffer::with_text("draft");
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    let row_text = |buffer: &ratatui::buffer::Buffer, y| -> String {
-        (0..120).map(|x| buffer[(x, y)].symbol()).collect()
-    };
-    let buffer = terminal.backend().buffer();
-    assert!(row_text(buffer, 47).trim().is_empty());
-    assert!(row_text(buffer, 48).ends_with("[?]"));
-    assert!(row_text(buffer, 49).trim().is_empty());
+    let hit = app
+        .chrome_keys
+        .iter()
+        .find(|(_, code, _)| *code == KeyCode::F(1))
+        .unwrap()
+        .0;
+    assert_eq!(hit.y, 49);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 118,
-        row: 48,
+        column: hit.x,
+        row: hit.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(app.help, Some(Help::Chat));
-    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(app.help, Some(Help::Graph));
     app.key(key_press(KeyCode::Esc));
-    assert!(app.help.is_none());
     assert_eq!(app.input.text, "draft");
 }
 
 #[test]
-fn footer_clicks_follow_graphemes_and_the_rendered_row() {
+fn footer_clicks_use_rendered_hit_areas_after_unicode_project_names() {
     let mut app = test_app();
-    app.project = "Zażółć 👩‍💻 e\u{301}".into();
+    app.view.approvals.push(view::PendingApproval {
+        request: "r1".into(),
+        role: ORCHESTRATOR.into(),
+        provider: "codex".into(),
+        summary: "Allow command?".into(),
+        orchestrator: false,
+        options: vec![("1".into(), "Allow".into(), "allow".into())],
+    });
+    app.project = "Zażółć 👩‍💻 é".into();
     for (width, height) in [(80, 24), (180, 50)] {
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        let bar = App::main_areas(app.terminal_area)[2];
-        let row = bar.y + (App::bar_height(app.terminal_area) - 1) / 2;
-        let text = header_text(&app, width - 4);
-        // Clicking each displayed grapheme must be safe, including wide emoji.
-        let project_width = unicode_width::UnicodeWidthStr::width(app.project.as_str());
-        for column in 0..project_width as u16 + 1 {
-            app.mouse(event::MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column,
-                row,
-                modifiers: KeyModifiers::NONE,
-            });
-        }
-        if width < SIDE_BY_SIDE_BREAKPOINT {
-            let at = text.find("[Canvas]").unwrap();
-            app.mouse(event::MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: unicode_width::UnicodeWidthStr::width(&text[..at]) as u16 + 1,
-                row,
-                modifiers: KeyModifiers::NONE,
-            });
-            assert_eq!(app.focus, Focus::Graph);
-            app.focus = Focus::Chat;
-        }
+        let hit = app
+            .chrome_keys
+            .iter()
+            .find(|(_, code, _)| *code == KeyCode::Char('d'))
+            .unwrap()
+            .0;
+        assert_eq!(hit.y, height - 1);
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: width - 2,
-            row,
+            column: hit.x,
+            row: hit.y,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(app.help, Some(Help::Chat));
+        assert!(app.decision_inbox.is_some());
         app.key(key_press(KeyCode::Esc));
     }
 }
 
 #[test]
-fn panels_and_buttons_in_the_header_can_be_clicked() {
+fn direction_bar_buttons_and_keybar_are_clickable_and_modal_safe() {
     let mut app = test_app();
-    app.view.idle = false;
-    app.view.cards.push(view::TranscriptCard::System {
-        sent_at: None,
-        title: "x".into(),
-        meta: String::new(),
-        text: "x".into(),
-        tone: Tone::Queued,
-    });
-    app.view.tasks = vec![view::TaskRow {
-        id: "t1".into(),
-        status: "working".into(),
-        ..view::TaskRow::default()
-    }];
-    // Every panel is a button, not only the focused one.
-    click_header(&mut app, 80, "[Canvas]");
-    assert_eq!(app.focus, Focus::Graph);
-    click_header(&mut app, 80, "[Session]");
-    assert_eq!(app.focus, Focus::Chat);
-    // With a dialog open the header ignores clicks.
-    app.focus = Focus::Chat;
-    app.editor = Some(Editor {
-        target: "plan:p1".into(),
-        input: InputBuffer::new(),
-    });
-    click_header(&mut app, 80, "[Canvas]");
-    assert_eq!(app.focus, Focus::Chat);
+    app.input = InputBuffer::with_text("Retained 👩‍💻 é draft");
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let direction = app
+        .chrome_keys
+        .iter()
+        .find(|(_, code, mods)| *code == KeyCode::Char('k') && mods.contains(KeyModifiers::CONTROL))
+        .unwrap()
+        .0;
+    let click = |area: Rect| event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: area.x + 1,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(click(direction));
+    assert_eq!(app.navigation.focus, NavigationFocus::Composer);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let (_, cancel) = app.direction_actions.unwrap();
+    app.mouse(click(cancel));
+    assert_eq!(app.input.text, "Retained 👩‍💻 é draft");
+    assert_eq!(app.navigation.screen, Screen::Graph);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let actions = app
+        .chrome_keys
+        .iter()
+        .find(|(_, code, _)| *code == KeyCode::Char('p'))
+        .unwrap()
+        .0;
+    app.mouse(click(actions));
+    assert!(app.picker.is_some());
+    assert_eq!(app.input.text, "Retained 👩‍💻 é draft");
 }
+
 #[test]
 fn copy_shortcut_queues_text_for_the_rendering_thread() {
     let mut app = test_app();

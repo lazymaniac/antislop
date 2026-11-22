@@ -17,15 +17,31 @@ pub fn sidebar(view: &super::view::View) -> Vec<SidebarRow> {
     let projection = super::work_units::WorkUnits::new(view);
     let mut rows = vec![SidebarRow {
         key: "conversation".into(),
-        label: "Session".into(),
+        label: "SESSION TASKS".into(),
         stage: false,
     }];
     for unit in &projection.units {
         rows.push(SidebarRow {
             key: unit.card.clone(),
+            label: String::new(),
+            stage: false,
+        });
+        rows.push(SidebarRow {
+            key: unit.card.clone(),
             label: unit.title.clone(),
             stage: false,
         });
+        if let Some(task) = unit
+            .task
+            .as_deref()
+            .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+        {
+            rows.push(SidebarRow {
+                key: unit.card.clone(),
+                label: format!("  {} · round {}", task.kind, task.round),
+                stage: false,
+            });
+        }
         for stage in &unit.stages {
             rows.push(SidebarRow {
                 key: stage.id.0.clone(),
@@ -102,7 +118,8 @@ pub struct WorkbenchAreas {
 }
 
 /// Allocate the Workbench once for both task and session content adapters.
-/// The 100x24 threshold is measured against the complete terminal viewport.
+/// Secondary panes need 120 columns; the PTY split needs 30 rows.
+/// Both thresholds are measured against the complete terminal viewport.
 pub fn areas(
     viewport: Rect,
     presentation: &WorkbenchPresentation,
@@ -111,19 +128,28 @@ pub fn areas(
     if viewport.is_empty() {
         return WorkbenchAreas::default();
     }
+    let margin = ratatui::layout::Margin::new(
+        if viewport.width >= 100 {
+            2
+        } else {
+            u16::from(viewport.width >= 40)
+        },
+        u16::from(viewport.height >= 30),
+    );
+    let spacious = viewport.height >= 40;
     let [header, body, footer] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(if spacious { 4 } else { 2 }),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(if spacious { 4 } else { 2 }),
     ])
-    .areas(viewport);
+    .areas(viewport.inner(margin));
     let wide_enough = viewport.width >= 120;
     let list_visible = (wide_enough && presentation.list_visible)
         || (presentation.list_requested && viewport.width >= 60);
     let (list, work) = if list_visible {
         let [list, _, work] = Layout::horizontal([
             Constraint::Length(LIST_WIDTH),
-            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Min(0),
         ])
         .areas(body);
@@ -303,7 +329,7 @@ mod tests {
         presentation.zoomed = true;
         let zoom = areas(viewport, &presentation, NavigationFocus::WorkbenchTerminal);
         assert!(zoom.content.is_empty());
-        assert_eq!(zoom.terminal.height, 38);
+        assert_eq!(zoom.terminal.height, 30);
         assert_eq!(presentation.terminal_percent, before);
     }
 

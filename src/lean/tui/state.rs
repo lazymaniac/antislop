@@ -121,6 +121,8 @@ pub struct App {
     pub graph_tab: usize,
     /// Whether the graph inspector is shown when the terminal meets its minimum size.
     pub graph_inspector_visible: bool,
+    pub chrome_keys: Vec<(Rect, KeyCode, KeyModifiers)>,
+    pub direction_actions: Option<(Rect, Rect)>,
     pub inspector_hits: Vec<(Rect, super::work_units::InspectorAction)>,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
@@ -265,6 +267,8 @@ macro_rules! initial_app {
             graph_anim_anchor: None,
             graph_tab: 0,
             graph_inspector_visible: true,
+            chrome_keys: Vec::new(),
+            direction_actions: None,
             inspector_hits: Vec::new(),
             graph_card_scroll: 0,
             graph_card_area: None,

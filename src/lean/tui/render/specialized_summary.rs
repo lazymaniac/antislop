@@ -35,9 +35,10 @@ pub(super) fn draw(
         Summary::Empty => return false,
     };
     let block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::NONE)
         .border_set(theme.borders())
         .border_style(theme.faint())
+        .style(theme.card())
         .title(theme.chrome(title));
     let inner = block.inner(area);
     frame.render_widget(block, area);

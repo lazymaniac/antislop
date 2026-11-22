@@ -45,6 +45,11 @@ pub(super) fn capture_fixture_view(
 }
 
 #[cfg(test)]
+pub(super) fn bind_capture_owner(view: &mut View, identity: &str) {
+    view.identity = identity.to_owned();
+}
+
+#[cfg(test)]
 pub(super) fn capture_fixture_state(view: &View) -> (bool, bool, bool) {
     view.state
         .lock()
@@ -253,10 +258,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(
-            screen.contains(&format!(
-                "CLI worker:t1 {} r1",
-                Theme::from_env().glyphs().dot
-            )),
+            screen.contains("worker") && screen.contains("round 1"),
             "{screen}"
         );
         // A more recent owner snapshot may supersede the older task snapshot.
@@ -347,12 +349,11 @@ mod tests {
             .buffer()
             .content
             .iter()
-            .take(100)
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(header.contains("CLI worker:t1"), "{header}");
-        assert!(header.contains("r0"), "{header}");
-        assert!(header.contains("pinned"), "{header}");
+        assert_eq!(app.workbench_terminal_owner(), "worker:t1");
+        assert!(header.contains("worker"), "{header}");
+        assert!(app.navigation.presentation().pinned);
     }
     #[test]
     fn resize_while_waiting_for_a_session_is_used_by_the_next_open() {

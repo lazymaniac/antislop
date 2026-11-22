@@ -3,7 +3,7 @@ use crate::lean::tui::theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -28,7 +28,7 @@ pub(super) fn draw_files(
             })
             .title(" Changed files [Tab: switch to diff] ")
     } else {
-        Block::default().borders(Borders::RIGHT)
+        Block::default().padding(ratatui::widgets::Padding::right(2))
     };
     let block = block
         .border_set(theme.borders())
@@ -71,19 +71,24 @@ fn file_row(
     let counts = theme.chrome(&format!(" +{} −{}", file.added, file.removed));
     let path_style = if !selected {
         Style::default()
-    } else if focused {
-        Style::default().add_modifier(Modifier::REVERSED)
     } else {
-        Style::default().add_modifier(Modifier::BOLD)
+        theme.selected()
     };
-    Line::from(vec![
+    let _ = focused;
+    let mut line = Line::from(vec![
         Span::styled(format!("{mark} "), theme.style(Style::default().fg(color))),
         Span::styled(
             truncate(&file.path, width.saturating_sub(counts.width() + 2)),
             path_style,
         ),
         Span::styled(counts, theme.dim()),
-    ])
+    ]);
+    if selected {
+        line.spans
+            .push(Span::raw(" ".repeat(width.saturating_sub(line.width()))));
+        line.style = theme.selected();
+    }
+    line
 }
 
 fn file_marker(status: &str) -> (&'static str, ratatui::style::Color) {

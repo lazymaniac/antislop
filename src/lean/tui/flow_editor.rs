@@ -1555,14 +1555,22 @@ mod tests {
         app.view.tasks[0].status = "failed".into();
         app.view.tasks[0].reason = Some("compile error in lib.rs".into());
         app.focus = Focus::Graph;
-        app.selected = "orchestrator".into();
+        app.selected = "worker:t1".into();
 
         // Even in narrow Graph-only view (width 70 < 85), Attention Inbox is rendered and clickable
-        let mut term = Terminal::new(TestBackend::new(70, 24)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
         let area = app
-            .phase_action_area
-            .expect("phase_action_area rendered in graph view");
+            .inspector_hits
+            .iter()
+            .find_map(|(area, action)| {
+                matches!(
+                    action,
+                    crate::lean::tui::work_units::InspectorAction::Recovery(_)
+                )
+                .then_some(*area)
+            })
+            .expect("recovery action rendered in inspector");
 
         app.mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1614,7 +1622,7 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(
-            rendered.contains("critical path · 1 downstream"),
+            rendered.contains("Critical path · 1 downstream"),
             "{rendered}"
         );
         assert!(rendered.contains("01:"), "{rendered}");
