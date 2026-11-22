@@ -20,6 +20,43 @@ pub fn cleanup_failure(message: String) {
     }
 }
 
+/// Confirm release even when the daemon endpoint is absent.
+pub fn daemon_lock_released(state: &Path) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let lock = match std::fs::OpenOptions::new()
+        .write(true)
+        .open(state.join("core.lock"))
+    {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect daemon lock: {error}")),
+    };
+    // SAFETY: nonblocking flock on our owned descriptor, released on return.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!(
+            "daemon lock not released: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// Mark every owning fixture and the launcher root before reporting cleanup failure.
+pub fn retain_resources(state: &Path, message: &str) {
+    let root = external(&PathBuf::from(
+        std::env::var_os("ANTISLOP_TEST_ROOT").unwrap(),
+    ));
+    assert!(
+        state.starts_with(&root),
+        "daemon state outside owned test root"
+    );
+    for path in state.ancestors().take_while(|path| path.starts_with(&root)) {
+        if let Err(error) = std::fs::write(path.join("retain-resources.log"), message) {
+            eprintln!("cannot mark retained resources {}: {error}", path.display());
+        }
+    }
+}
+
 impl TestDir {
     pub fn path(&self) -> &Path {
         self.directory.as_ref().unwrap().path()
@@ -93,6 +130,13 @@ impl Drop for TestDir {
                 "fixture diagnostic copy failed: {error}; retaining {}",
                 dir.keep().display()
             ));
+            return;
+        }
+        if dir.path().join("retain-resources.log").exists() {
+            eprintln!(
+                "unconfirmed resource release; retaining {}",
+                dir.keep().display()
+            );
             return;
         }
         let path = dir.path().to_path_buf();

@@ -165,3 +165,58 @@ fn panic_after_cli_autostart_stops_the_detached_daemon_before_fixture_cleanup() 
     let mut status = 0;
     assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
 }
+
+#[test]
+fn missing_endpoint_with_live_daemon_retains_state_and_reports_lock() {
+    use antislop::lean::daemon::{Client, ControlRequest, Request};
+    let root = common::tempdir();
+    let path = root.path().to_path_buf();
+    let project = path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    common::initialize_git_project(&project);
+    let config = path.join("config.toml");
+    std::fs::write(&config, include_str!("../examples/antislop.toml")).unwrap();
+    let state = path.join("s");
+    antislop::lean::daemon::private_directory(&state).unwrap();
+    let client = Client::connect(
+        &project,
+        &config,
+        &state,
+        std::path::Path::new(env!("CARGO_BIN_EXE_antislop")),
+    )
+    .unwrap();
+    let pid = client
+        .call(&Request::Control(ControlRequest::Identity))
+        .unwrap()["pid"]
+        .as_i64()
+        .unwrap() as libc::pid_t;
+    let socket = antislop::lean::daemon::socket(&state);
+    let hidden = state.join("hidden.sock");
+    std::fs::rename(&socket, &hidden).unwrap();
+    assert!(!Client::stop(&state, true).unwrap());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _root = root;
+        let _daemon = common::DaemonStateGuard(state.clone());
+    }));
+    // Restore our endpoint before assertions so even a failed regression stops its daemon.
+    std::fs::rename(&hidden, &socket).unwrap();
+    common::stop_daemon(&client);
+    let mut status = 0;
+    // SAFETY: reap the direct daemon child started above.
+    assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+    assert!(result.is_err());
+    assert!(state.join("core.lock").exists(), "active state was deleted");
+    let diagnostic =
+        std::path::PathBuf::from(std::env::var_os("ANTISLOP_TEST_DIAGNOSTICS").unwrap())
+            .join(path.file_name().unwrap())
+            .join("retain-resources.log");
+    let message = std::fs::read_to_string(diagnostic).unwrap();
+    assert!(message.contains("daemon lock not released"), "{message}");
+    // Release only this regression's retained data after confirmed shutdown.
+    std::fs::remove_dir_all(&path).unwrap();
+    let marker = std::path::PathBuf::from(std::env::var_os("ANTISLOP_TEST_ROOT").unwrap())
+        .join("retain-resources.log");
+    if std::fs::read_to_string(&marker).unwrap() == message {
+        std::fs::remove_file(marker).unwrap();
+    }
+}

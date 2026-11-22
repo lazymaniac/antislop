@@ -60,11 +60,15 @@ impl Drop for DaemonStateGuard {
 
 pub fn stop_daemon(client: &antislop::lean::daemon::Client) {
     use std::os::unix::fs::FileTypeExt;
-    if let Err(error) = antislop::lean::daemon::Client::stop(client.state_dir(), true) {
-        resources::cleanup_failure(format!(
+    let stopped = antislop::lean::daemon::Client::stop(client.state_dir(), true);
+    let released = resources::daemon_lock_released(client.state_dir());
+    if let Err(error) = stopped.map(|_| ()).map_err(|e| e.to_string()).and(released) {
+        let message = format!(
             "stop owned daemon {}: {error}",
             client.state_dir().display()
-        ));
+        );
+        resources::retain_resources(client.state_dir(), &message);
+        resources::cleanup_failure(message);
         return;
     }
     // State ownership includes exactly its endpoint, including the long-path fallback.

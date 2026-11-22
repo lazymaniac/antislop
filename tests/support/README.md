@@ -37,7 +37,7 @@ unlink exactly their socket, not sweep shared directories.
 
 `ChildGuard::new(child)` must wrap a spawn immediately, before readiness checks.
 It kills and reaps a still-running child on unwind or normal return. Daemon
-fixtures use common::stop_daemon (Client::stop, which waits for the state lock)
+fixtures use common::stop_daemon (Client::stop followed by an independent nonblocking core.lock check, including when stop returns false)
 before the child guard reaps the process; stop/join background
 workers before dropping their directories. Fields drop in declaration order, so
 when a fixture owns both, explicitly stop the child in its Drop before its
@@ -136,3 +136,9 @@ The ignored `export_catalog` test is an optional current JSON export, not a
 historical archive decoder. Ordinary render checks do not write a catalog.
 Manual export requires `ANTISLOP_CAPTURE_DIR` naming a new external directory;
 keep it outside sources and use the same launcher and durable diagnostics.
+
+Rust daemon cleanup failures write `retain-resources.log` in the state and each
+owning directory up to ANTISLOP_TEST_ROOT. TestDir copies diagnostics and retains
+a marked fixture; the launcher also retains a marked active root. The marker
+contains the raw failure reason. Retention is conservative and requires explicit
+owner cleanup after daemon release has been confirmed; no automatic sweep runs.

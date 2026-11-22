@@ -103,6 +103,17 @@ class ResourcesTest(unittest.TestCase):
             self.assertIn('exit=7', (child_diagnostic / 'command.log').read_text())
             self.assertIn(values['root'], (child_diagnostic / 'output.log').read_text())
 
+    def test_child_retention_marker_preserves_launcher_root_and_diagnostics(self):
+        import shutil
+        with resources() as (active, diagnostic, _):
+            (active / 'retain-resources.log').write_text('daemon lock not released')
+        try:
+            self.assertTrue(active.exists())
+            self.assertEqual((diagnostic / 'remaining/retain-resources.log').read_text(),
+                             'daemon lock not released')
+        finally:
+            shutil.rmtree(active)
+
     def test_missing_child_cleanup(self):
         with resources() as (active, _, env):
             with self.assertRaises(FileNotFoundError):

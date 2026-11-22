@@ -1333,11 +1333,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let third = chat(dir, &project, "third");
     assert!(third.contains("answer: third"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
-    antislop::lean::daemon::Client::at(&state)
-        .call(&antislop::lean::daemon::Request::Control(
-            antislop::lean::daemon::ControlRequest::Shutdown,
-        ))
-        .unwrap();
+    common::stop_daemon(&antislop::lean::daemon::Client::at(&state));
 }
 
 #[test]

@@ -65,7 +65,7 @@ def resources(*, diagnostic_root=None):
         (diagnostic / 'exception.log').write_text(traceback.format_exc())
         raise
     finally:
-        retain = isinstance(sys.exc_info()[1], RetainResources)
+        retain = isinstance(sys.exc_info()[1], RetainResources) or (active / 'retain-resources.log').exists()
         try:
             preserve_logs(active, diagnostic / 'remaining')
         except BaseException:
