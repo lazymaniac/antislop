@@ -13,6 +13,9 @@ pub(super) fn checks(details: &mut Details, view: &View, records: &mut Vec<Rc<De
         )),
         (None, Some(_)) => records.push(record(vec![(dim(), "Loading…".into())], " ")),
         (Some(stored), Some(_)) => {
+            if details.key.starts_with("reviewer:") && !stored["verdict"].is_null() {
+                records.push(super::results::reviewer_result(&stored["verdict"], false));
+            }
             append_checks(&mut details.check, view, &task_id, stored, records)
         }
     }
@@ -69,7 +72,7 @@ fn append_not_started(lines: &mut Vec<(Style, String)>, stored: &Value) {
     if stored["verdict"].is_null() && stored["checks"].as_array().is_none_or(Vec::is_empty) {
         lines.push((
             dim(),
-            "Reviewer has not started yet; checks appear here as they are settled.".into(),
+            "Reviewer has not started yet; all required checks are listed below.".into(),
         ));
     }
 }

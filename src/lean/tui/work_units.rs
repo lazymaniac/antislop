@@ -190,10 +190,14 @@ impl WorkUnit {
                     .find(|stage| graph::health(view, &stage.id.0) == Health::Working)
             })
             .or_else(|| {
-                self.stages
-                    .iter()
-                    .rev()
-                    .find(|stage| view.agents.contains_key(&stage.id.0))
+                if self.task.is_some() {
+                    self.stages.iter().find(|stage| stage.id.0 == self.card)
+                } else {
+                    self.stages
+                        .iter()
+                        .rev()
+                        .find(|stage| view.agents.contains_key(&stage.id.0))
+                }
             })
             .unwrap_or(&self.stages[0])
     }

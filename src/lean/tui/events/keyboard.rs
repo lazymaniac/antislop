@@ -306,17 +306,15 @@ impl App {
         }
         if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
             let backwards = key.code == KeyCode::BackTab;
-            let panes = if self.workbench_areas.list_visible {
-                vec![
-                    NavigationFocus::WorkbenchList,
-                    NavigationFocus::WorkbenchContent,
-                    NavigationFocus::WorkbenchTerminal,
-                ]
+            let content_focus = if self.navigation.presentation().tab == WorkbenchTab::Pty {
+                NavigationFocus::WorkbenchTerminal
             } else {
-                vec![
-                    NavigationFocus::WorkbenchContent,
-                    NavigationFocus::WorkbenchTerminal,
-                ]
+                NavigationFocus::WorkbenchContent
+            };
+            let panes = if self.workbench_areas.list_visible {
+                vec![NavigationFocus::WorkbenchList, content_focus]
+            } else {
+                vec![content_focus]
             };
             let at = panes
                 .iter()
@@ -327,11 +325,6 @@ impl App {
             let focus = self.navigation.focus;
             self.navigation.update_presentation(|presentation| {
                 presentation.focus = focus;
-                if focus == NavigationFocus::WorkbenchContent && presentation.terminal_only_default
-                {
-                    presentation.terminal_only_default = false;
-                    presentation.split = true;
-                }
                 if focus != NavigationFocus::WorkbenchList && self.terminal_area.width < 90 {
                     presentation.list_requested = false;
                 }
@@ -385,10 +378,10 @@ impl App {
             details.native_focus = false;
         }
         self.open_details(key.clone());
-        let focus = if self.navigation.presentation().terminal_only_default
-            && focus == NavigationFocus::WorkbenchContent
+        let focus = if focus == NavigationFocus::WorkbenchTerminal
+            && self.navigation.presentation().tab != WorkbenchTab::Pty
         {
-            NavigationFocus::WorkbenchTerminal
+            NavigationFocus::WorkbenchContent
         } else {
             focus
         };
@@ -417,15 +410,20 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn workbench_select_tab(&mut self, next: WorkbenchTab) -> bool {
-        self.default_diff_request = None;
+        let next = if self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.key.starts_with("reviewer:"))
+            && matches!(next, WorkbenchTab::Results | WorkbenchTab::Checks)
+        {
+            WorkbenchTab::Summary
+        } else {
+            next
+        };
         self.navigation.focus = NavigationFocus::WorkbenchContent;
         self.navigation.update_presentation(|presentation| {
             presentation.focus = NavigationFocus::WorkbenchContent;
             presentation.native_input = false;
-            if presentation.terminal_only_default {
-                presentation.terminal_only_default = false;
-                presentation.split = true;
-            }
         });
         self.remember_workbench();
         if !self.workbench_areas.header.is_empty() && self.workbench_areas.content.is_empty() {
@@ -447,6 +445,9 @@ impl App {
             self.open_diff(&details_key);
         } else {
             self.diff = None;
+        }
+        if next == WorkbenchTab::Pty {
+            self.fetch_workbench_sessions();
         }
         if next == WorkbenchTab::Results {
             self.schedule_output_document_fetch();
@@ -484,6 +485,7 @@ impl App {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && key.code == KeyCode::Char('t')
         {
+            self.workbench_select_tab(WorkbenchTab::Pty);
             self.navigation.focus = NavigationFocus::WorkbenchTerminal;
             self.navigation.update_presentation(|presentation| {
                 presentation.focus = NavigationFocus::WorkbenchTerminal;

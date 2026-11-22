@@ -71,7 +71,7 @@ fn check_state(
     live: Option<&Vec<Value>>,
     verdict: bool,
 ) -> (&'static str, Option<String>, Option<String>) {
-    if let Some(rows) = live {
+    if let Some(rows) = live.filter(|_| !verdict) {
         return rows
             .iter()
             .find(|row| row["id"] == id)

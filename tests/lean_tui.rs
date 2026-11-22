@@ -6992,7 +6992,7 @@ mod text_selection_acceptance {
                         ..Default::default()
                     });
                     app.open_details("worker:t1".into());
-                    app.key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+                    app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
                     let details = app.details.as_mut().unwrap();
                     details.task = Some(json!({"report": "sample café 👩‍👩‍👧‍👦"}));
                     details.switch_tab(antislop::lean::tui::details::RESULT);

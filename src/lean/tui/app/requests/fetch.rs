@@ -410,16 +410,6 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
-        self.default_diff_request = None;
-        if key != "conversation" {
-            let work = crate::lean::tui::work_units::WorkUnits::new(&self.view);
-            if let Some(unit) = work.for_stage(&key) {
-                self.navigation.remembered_stages.insert(
-                    unit.id.clone(),
-                    crate::lean::tui::work_units::StageId(key.clone()),
-                );
-            }
-        }
         let target = if key == "conversation" {
             WorkbenchTarget::Session
         } else {
@@ -440,30 +430,11 @@ impl App {
         }
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = target;
-        let writer = key.starts_with("worker:")
-            && self
-                .view
-                .tasks
-                .iter()
-                .find(|task| key.split_once(':').is_some_and(|(_, id)| id == task.id))
-                .is_some_and(|task| task.change_kind.has_delivery());
-        let changes = writer
-            && self
-                .diff_states
-                .get(&(self.conversation.clone(), key.clone()))
-                .is_some_and(DiffView::has_changes);
         if !target_initialized {
-            let terminal_only = key != "conversation" && !changes;
-            let tab = super::super::super::workbench::default_tab(&key, changes);
+            let tab = super::super::super::workbench::default_tab(&key, false);
             self.navigation.update_presentation(|presentation| {
                 presentation.tab = tab;
-                presentation.terminal_only_default = terminal_only;
-                if terminal_only {
-                    presentation.split = false;
-                    presentation.focus = NavigationFocus::WorkbenchTerminal;
-                } else {
-                    presentation.focus = NavigationFocus::WorkbenchContent;
-                }
+                presentation.focus = NavigationFocus::WorkbenchContent;
             });
         }
         // Opening a target closes its composer; restore a navigation pane instead
@@ -490,14 +461,6 @@ impl App {
         }
         if self.navigation.presentation().tab == WorkbenchTab::Results {
             self.schedule_output_document_fetch();
-        }
-        if !target_initialized && writer && !changes && self.view.plan.is_some() {
-            // Probe off-thread, leaving the diff closed while the task has no
-            // known file changes. A late reply must not replace a chosen tab.
-            self.load_diff(&key);
-            self.default_diff_request =
-                Some((self.conversation.clone(), key.clone(), self.diff_request_id));
-            self.diff = None;
         }
         self.fetch_task();
     }
@@ -568,6 +531,7 @@ impl App {
             details.workbench_memory = [
                 WorkbenchTab::Summary,
                 WorkbenchTab::Conversation,
+                WorkbenchTab::Pty,
                 WorkbenchTab::Results,
                 WorkbenchTab::Checks,
                 WorkbenchTab::Comments,

@@ -10,11 +10,11 @@ fn numbered_tabs_and_global_agent_keys_respect_native_input_and_editors() {
         ..Default::default()
     }];
     app.open_details("worker:t1".into());
-    assert!(app.navigation.presentation().terminal_only_default);
-    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
     assert!(app.diff.is_none());
     let tabs = workbench::tabs_for("worker:t1", true);
-    assert_eq!(tabs.last(), Some(&WorkbenchTab::Conversation));
+    assert_eq!(tabs.get(1), Some(&WorkbenchTab::Pty));
     assert!(!tabs.contains(&WorkbenchTab::Checks));
     for (index, tab) in tabs.iter().enumerate() {
         app.key(key_press(KeyCode::Char(char::from(b'1' + index as u8))));
@@ -25,18 +25,32 @@ fn numbered_tabs_and_global_agent_keys_respect_native_input_and_editors() {
     app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
     assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
     app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Pty);
     let input = app.bind_native_input_for_test();
     app.key(key_press(KeyCode::Char('t')));
     app.key(key_press(KeyCode::Char('1')));
     assert!(
         matches!(input.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Key {event})) if event.code == KeyCode::Char('1'))
     );
-    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Pty);
     app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
     assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t1");
     assert!(!app.native_focused());
-    assert!(workbench::tabs_for("reviewer:t1", true).contains(&WorkbenchTab::Checks));
+    assert_eq!(
+        workbench::tabs_for("reviewer:t1", true),
+        [
+            WorkbenchTab::Summary,
+            WorkbenchTab::Pty,
+            WorkbenchTab::Comments,
+            WorkbenchTab::Diff,
+            WorkbenchTab::Conversation,
+        ]
+    );
+    for former_tab in [WorkbenchTab::Results, WorkbenchTab::Checks] {
+        app.workbench_select_tab(former_tab);
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+        assert_eq!(app.details.as_ref().unwrap().tab, details::CHECKS);
+    }
     app.details.as_mut().unwrap().searching = true;
     app.key(event::KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
     assert_eq!(app.details.as_ref().unwrap().key, "reviewer:t1");
@@ -122,4 +136,109 @@ fn refreshed_results_keep_ready_layout_while_scrolling_until_content_changes() {
         build("changed"),
     )]));
     assert_ne!(details.documents["result"], old);
+}
+
+#[test]
+fn graph_enter_follows_options_and_review_then_defaults_to_worker() {
+    let mut app = test_app();
+    app.view.tasks = vec![
+        view::TaskRow {
+            id: "options".into(),
+            kind: "options".into(),
+            status: "running".into(),
+            ..Default::default()
+        },
+        view::TaskRow {
+            id: "build".into(),
+            depends_on: vec!["options".into()],
+            reviewer_summary: Some("review".into()),
+            ..Default::default()
+        },
+    ];
+    app.view
+        .task_meta
+        .entry("options".into())
+        .or_default()
+        .options_for = Some("build".into());
+    app.view.agents.insert(
+        "worker:options".into(),
+        view::Agent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    for (running, expected) in [
+        (Some("worker:options"), "worker:options"),
+        (Some("worker:build"), "worker:build"),
+        (Some("reviewer:build"), "reviewer:build"),
+        (None, "worker:build"),
+    ] {
+        for agent in app.view.agents.values_mut() {
+            agent.running = false;
+        }
+        app.view.tasks[0].status = if running == Some("worker:options") {
+            "running"
+        } else {
+            "complete"
+        }
+        .into();
+        app.view.tasks[1].status = if running.is_some() {
+            "running"
+        } else {
+            "complete"
+        }
+        .into();
+        if let Some(key) = running {
+            app.view.agents.entry(key.into()).or_default().running = true;
+        }
+        app.select_node("worker:build".into());
+        app.key(key_press(KeyCode::Enter));
+        assert_eq!(app.details.as_ref().unwrap().key, expected);
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+        assert_eq!(app.workbench_terminal_owner(), expected);
+        app.key(key_press(KeyCode::Esc));
+        assert_eq!(app.navigation.screen, Screen::Graph);
+    }
+}
+
+#[test]
+fn pty_tab_owns_the_terminal_and_summary_keeps_the_full_content_area() {
+    let mut app = test_app();
+    app.view.tasks.push(view::TaskRow {
+        id: "t1".into(),
+        change_kind: crate::lean::tasks::ChangeKind::Code,
+        ..Default::default()
+    });
+    let mut known_diff = DiffView::new("t1".into());
+    known_diff.load(Ok(serde_json::json!({"files":[{
+        "path":"a.rs", "status":"modified", "added":1, "removed":0,
+        "binary":false, "lines":[]
+    }]})));
+    app.diff_states
+        .insert((app.conversation.clone(), "worker:t1".into()), known_diff);
+    for (width, height) in [(160, 50), (80, 24), (12, 5)] {
+        app.open_details("worker:t1".into());
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+        assert!(app.diff.is_none());
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
+        assert!(app.diff.is_none());
+        assert!(app.workbench_areas.terminal.is_empty());
+        assert!(!app.workbench_areas.split);
+        app.workbench_select_tab(WorkbenchTab::Pty);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        if height > 5 {
+            assert!(!app.workbench_areas.terminal.is_empty());
+        }
+        assert!(app.workbench_areas.content.height <= 1);
+        if width >= 80 {
+            assert!(terminal_text(&terminal).contains("PTY"));
+            assert!(!app.details.as_ref().unwrap().native_areas[0].is_empty());
+        }
+        app.workbench_select_tab(WorkbenchTab::Summary);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.details.as_ref().unwrap().native_areas[0].is_empty());
+        assert!(!app.native_focused());
+    }
 }

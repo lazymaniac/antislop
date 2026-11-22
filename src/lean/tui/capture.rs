@@ -1257,8 +1257,10 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.screen = Screen::Workbench;
             app.navigation.target = WorkbenchTarget::Session;
             app.navigation.focus = NavigationFocus::WorkbenchTerminal;
-            app.navigation
-                .update_presentation(|presentation| presentation.split = true);
+            app.navigation.update_presentation(|presentation| {
+                presentation.split = false;
+                presentation.tab = WorkbenchTab::Pty;
+            });
             let mut details = Details::new("orchestrator".into());
             details.conversation = app.conversation.clone();
             details.native_areas[0] = Rect::new(25, 2, 50, 10);
@@ -1540,13 +1542,13 @@ fn apply_workbench_fixture(app: &mut App, id: &str) {
             WorkbenchTab::Results
         }
         "workbench-tab-checks" | "checks-empty" | "checks-waiting" | "checks-error" => {
-            WorkbenchTab::Checks
+            WorkbenchTab::Summary
         }
         "workbench-tab-comments" | "comments-empty" => WorkbenchTab::Comments,
         "summary-empty" | "summary-waiting" => WorkbenchTab::Summary,
         _ => WorkbenchTab::Diff,
     };
-    let key = if tab == WorkbenchTab::Checks {
+    let key = if id.starts_with("checks-") || id == "workbench-tab-checks" {
         "reviewer:t1"
     } else {
         "worker:t1"
@@ -1663,13 +1665,13 @@ fn workbench_identity(app: &App, fixture: Fixture) -> bool {
     let expected_tab = match fixture.view {
         "workbench-conversation" => WorkbenchTab::Conversation,
         "workbench-results" => WorkbenchTab::Results,
-        "workbench-checks" => WorkbenchTab::Checks,
+        "workbench-checks" => WorkbenchTab::Summary,
         "workbench-comments" => WorkbenchTab::Comments,
         "workbench-diff" => WorkbenchTab::Diff,
         "workbench-summary" => WorkbenchTab::Summary,
         _ => return false,
     };
-    let key = if expected_tab == WorkbenchTab::Checks {
+    let key = if fixture.view == "workbench-checks" {
         "reviewer:t1"
     } else {
         "worker:t1"
@@ -1682,6 +1684,7 @@ fn workbench_identity(app: &App, fixture: Fixture) -> bool {
                 && workbench::tabs_for(key, true).contains(&expected_tab)
                 && details.tab
                     == match expected_tab {
+                        WorkbenchTab::Summary if key.starts_with("reviewer:") => details::CHECKS,
                         WorkbenchTab::Results => details::RESULT,
                         WorkbenchTab::Checks => details::CHECKS,
                         WorkbenchTab::Comments => details::COMMENTS,
@@ -2197,7 +2200,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         "composer-broadcast" | "composer-steer" | "composer-interrupt" => app.details.as_ref().is_some_and(|details| details.drafts.borrow().values().any(|draft| match fixture.id { "composer-broadcast" => draft.address.as_deref() == Some("all"), "composer-steer" => draft.mode == crate::lean::store::Delivery::Steer, _ => draft.mode == crate::lean::store::Delivery::Interrupt })),
         "workbench-tab-conversation" => app.navigation.presentation().tab == WorkbenchTab::Conversation,
         "workbench-tab-results" => app.navigation.presentation().tab == WorkbenchTab::Results,
-        "workbench-tab-checks" => app.navigation.presentation().tab == WorkbenchTab::Checks,
+        "workbench-tab-checks" => app.navigation.presentation().tab == WorkbenchTab::Summary,
         "workbench-tab-comments" => app.navigation.presentation().tab == WorkbenchTab::Comments,
         "workbench-tab-diff" => app.navigation.presentation().tab == WorkbenchTab::Diff,
         "comment-editor" => app.editor.as_ref().is_some_and(|editor| editor.target == "task:t1"),
@@ -2502,10 +2505,9 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
             );
         }
         "split-below-height" | "split-at-height" | "split-above-height" => {
-            let expected = height >= 30;
             assert_eq!(
-                panels["workbench_split"], expected,
-                "Workbench split boundary must use the actual post-draw layout"
+                panels["workbench_split"], false,
+                "PTY uses its own tab at every viewport height"
             );
         }
         "diff-below-width" | "diff-at-width" | "diff-above-width" => {
@@ -2581,7 +2583,7 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         ),
         "workbench-tab-conversation" => assert_eq!(record["active_tab"], "Conversation"),
         "workbench-tab-results" => assert_eq!(record["active_tab"], "Results"),
-        "workbench-tab-checks" => assert_eq!(record["active_tab"], "Checks"),
+        "workbench-tab-checks" => assert_eq!(record["active_tab"], "Summary"),
         "workbench-tab-comments" => assert_eq!(record["active_tab"], "Comments"),
         "workbench-tab-diff" => {
             assert_eq!(record["active_tab"], "Diff");

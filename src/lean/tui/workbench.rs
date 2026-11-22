@@ -183,7 +183,11 @@ pub(in crate::lean::tui) fn areas_with_footer(
         && presentation.split
         && !presentation.zoomed
         && work.height > MIN_PANEL_HEIGHT * 2;
-    let (content, separator, terminal) = if can_split {
+    let (content, separator, terminal) = if presentation.tab == WorkbenchTab::Pty {
+        let [tabs, terminal] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(work);
+        (tabs, Rect::default(), terminal)
+    } else if can_split {
         let usable = work.height.saturating_sub(1);
         let percent = u16::from(presentation.terminal_percent.clamp(1, 99));
         let preferred_terminal = (u32::from(usable) * u32::from(percent) / 100) as u16;
@@ -202,8 +206,6 @@ pub(in crate::lean::tui) fn areas_with_footer(
         } else {
             (work, Rect::default(), Rect::default())
         }
-    } else if focus == NavigationFocus::WorkbenchTerminal {
-        (Rect::default(), Rect::default(), work)
     } else {
         (work, Rect::default(), Rect::default())
     };
@@ -215,7 +217,7 @@ pub(in crate::lean::tui) fn areas_with_footer(
         header,
         footer,
         list_visible,
-        split: can_split,
+        split: can_split && presentation.tab != WorkbenchTab::Pty,
     }
 }
 
@@ -251,12 +253,9 @@ pub(in crate::lean::tui) fn resize_areas(
 
 pub fn tabs_for(key: &str, delivers_changes: bool) -> Vec<WorkbenchTab> {
     let role = key.split_once(':').map_or(key, |(role, _)| role);
-    let mut tabs = vec![WorkbenchTab::Summary];
-    if key != "conversation" {
+    let mut tabs = vec![WorkbenchTab::Summary, WorkbenchTab::Pty];
+    if key != "conversation" && role != "reviewer" {
         tabs.push(WorkbenchTab::Results);
-    }
-    if role == "reviewer" {
-        tabs.push(WorkbenchTab::Checks);
     }
     tabs.push(WorkbenchTab::Comments);
     if delivers_changes {
@@ -266,12 +265,8 @@ pub fn tabs_for(key: &str, delivers_changes: bool) -> Vec<WorkbenchTab> {
     tabs
 }
 
-pub fn default_tab(key: &str, delivers_changes: bool) -> WorkbenchTab {
-    if delivers_changes && key.starts_with("worker:") {
-        WorkbenchTab::Diff
-    } else {
-        WorkbenchTab::Summary
-    }
+pub fn default_tab(_key: &str, _delivers_changes: bool) -> WorkbenchTab {
+    WorkbenchTab::Summary
 }
 
 pub fn neighbour_tab(
@@ -313,6 +308,7 @@ fn tab_label(tab: WorkbenchTab) -> &'static str {
     match tab {
         WorkbenchTab::Summary => "Summary",
         WorkbenchTab::Conversation => "Conversation",
+        WorkbenchTab::Pty => "PTY",
         WorkbenchTab::Results => "Results",
         WorkbenchTab::Checks => "Checks",
         WorkbenchTab::Comments => "Comments",
@@ -343,7 +339,10 @@ mod tests {
 
     #[test]
     fn shell_threshold_split_and_small_viewport_focus_are_bounded() {
-        let presentation = WorkbenchPresentation::default();
+        let presentation = WorkbenchPresentation {
+            split: true,
+            ..Default::default()
+        };
         let below = areas(
             Rect::new(0, 0, 119, 29),
             &presentation,
@@ -366,16 +365,16 @@ mod tests {
             NavigationFocus::WorkbenchTerminal,
         );
         assert!(!short.split);
-        assert!(short.content.is_empty());
-        assert_eq!(
-            short.terminal.height,
-            short.footer.y - short.header.bottom()
-        );
+        assert!(short.terminal.is_empty());
+        assert_eq!(short.content.height, short.footer.y - short.header.bottom());
     }
 
     #[test]
     fn split_resize_and_zoom_keep_a_valid_preference() {
-        let mut presentation = WorkbenchPresentation::default();
+        let mut presentation = WorkbenchPresentation {
+            split: true,
+            ..Default::default()
+        };
         let viewport = Rect::new(0, 0, 120, 40);
         assert!(resize_at(viewport, &mut presentation, 12));
         assert!(presentation.terminal_percent > 40);
@@ -388,10 +387,25 @@ mod tests {
     }
 
     #[test]
-    fn tab_policy_defaults_to_diff_only_for_delivery_agents() {
-        assert_eq!(default_tab("worker:task", true), WorkbenchTab::Diff);
-        assert_eq!(default_tab("reviewer:task", false), WorkbenchTab::Summary);
-        assert!(tabs_for("reviewer:task", false).contains(&WorkbenchTab::Checks));
+    fn tab_policy_includes_pty_and_limits_role_specific_tabs() {
+        for key in [
+            "worker:task",
+            "reviewer:task",
+            "worker:options",
+            "planner",
+            "plan-reviewer",
+            "auditor",
+            "conversation",
+            "orchestrator",
+        ] {
+            for delivers in [false, true] {
+                assert_eq!(default_tab(key, delivers), WorkbenchTab::Summary);
+                assert_eq!(tabs_for(key, delivers)[1], WorkbenchTab::Pty);
+            }
+        }
+        assert!(tabs_for("worker:task", true).contains(&WorkbenchTab::Pty));
+        assert!(!tabs_for("reviewer:task", false).contains(&WorkbenchTab::Checks));
+        assert!(!tabs_for("reviewer:task", false).contains(&WorkbenchTab::Results));
         assert!(!tabs_for("worker:task", true).contains(&WorkbenchTab::Checks));
         assert!(!tabs_for("worker:task", false).contains(&WorkbenchTab::Diff));
     }

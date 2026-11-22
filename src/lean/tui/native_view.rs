@@ -215,6 +215,7 @@ mod tests {
         details.fetched_events = 10;
         details.native_areas[0] = Rect::new(1, 1, 40, 10);
         app.details = Some(details);
+        app.workbench_select_tab(WorkbenchTab::Pty);
         app.workbench_sessions = vec![crate::lean::store::SessionInfo {
             turn_id: "old-turn".into(),
             plan_id: None,
@@ -460,6 +461,7 @@ mod tests {
         let mut details = Details::new("orchestrator".into());
         details.task = Some(json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}));
         app.details = Some(details);
+        app.workbench_select_tab(WorkbenchTab::Pty);
         app.sync_native_views();
         assert!(app.native_views.is_empty());
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -629,8 +631,10 @@ mod tests {
             app.view.tasks[0].status = phase.into();
             let address = format!("{role}:options");
             app.navigation.target = WorkbenchTarget::Agent(address.clone());
-            app.navigation
-                .update_presentation(|presentation| presentation.native_input = false);
+            app.navigation.update_presentation(|presentation| {
+                presentation.native_input = false;
+                presentation.tab = WorkbenchTab::Pty;
+            });
             app.details.as_mut().unwrap().key = address;
             let (commands, received) = mpsc::sync_channel(8);
             let stopped = Arc::new(AtomicBool::new(false));

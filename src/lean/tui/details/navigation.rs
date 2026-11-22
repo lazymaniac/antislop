@@ -11,7 +11,8 @@ impl Details {
             crate::lean::tui::WorkbenchTab::Summary if self.key.starts_with("reviewer:") => CHECKS,
             crate::lean::tui::WorkbenchTab::Summary
             | crate::lean::tui::WorkbenchTab::Conversation
-            | crate::lean::tui::WorkbenchTab::Diff => 0,
+            | crate::lean::tui::WorkbenchTab::Diff
+            | crate::lean::tui::WorkbenchTab::Pty => 0,
             crate::lean::tui::WorkbenchTab::Results => RESULT,
             crate::lean::tui::WorkbenchTab::Checks => CHECKS,
             crate::lean::tui::WorkbenchTab::Comments => COMMENTS,

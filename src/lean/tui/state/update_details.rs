@@ -240,44 +240,7 @@ impl App {
                     && request_id == self.diff_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
                 {
-                    if let Some((_, key, _)) = self
-                        .default_diff_request
-                        .as_ref()
-                        .filter(|(conversation, _, request)| {
-                            conversation == &self.conversation && *request == request_id
-                        })
-                        .cloned()
-                    {
-                        self.default_diff_request = None;
-                        if let Err(error) = &reply {
-                            self.notice = Some(format!("Could not load task changes: {error}"));
-                        }
-                        let mut diff = DiffView::new(task);
-                        diff.load(reply);
-                        if diff.has_changes()
-                            && self.navigation.target == WorkbenchTarget::Agent(key.clone())
-                            && self.navigation.screen == Screen::Workbench
-                            && self.navigation.presentation().terminal_only_default
-                            && !self.navigation.presentation().native_input
-                        {
-                            self.navigation.update_presentation(|presentation| {
-                                presentation.terminal_only_default = false;
-                                presentation.tab = WorkbenchTab::Diff;
-                                presentation.split = true;
-                                presentation.focus = NavigationFocus::WorkbenchContent;
-                            });
-                            self.navigation.focus = NavigationFocus::WorkbenchContent;
-                            if let Some(details) = &mut self.details {
-                                details.prepare_workbench_details(
-                                    Some(WorkbenchTab::Summary),
-                                    WorkbenchTab::Diff,
-                                );
-                            }
-                            self.diff = Some(diff.clone());
-                        }
-                        self.diff_states
-                            .insert((self.conversation.clone(), key), diff);
-                    } else if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task) {
+                    if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task) {
                         diff.load(reply);
                     }
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
@@ -298,66 +261,6 @@ mod tests {
     use serde_json::json;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
-
-    #[test]
-    fn default_diff_opens_only_for_real_changes_and_never_overrides_a_chosen_tab() {
-        for (files, manual) in [(false, false), (true, false), (true, true)] {
-            let mut app = App::test_app();
-            app.view.plan = Some("p1".into());
-            app.view.tasks.push(view::TaskRow {
-                id: "t1".into(),
-                change_kind: crate::lean::tasks::ChangeKind::Code,
-                ..Default::default()
-            });
-            app.open_details("worker:t1".into());
-            assert!(app.default_diff_request.is_some());
-            assert!(app.diff.is_none());
-            let request_id = app.diff_request_id;
-            if manual {
-                app.workbench_select_tab(WorkbenchTab::Results);
-            }
-            let file = json!({"path":"a.rs","old_path":null,"status":"modified","binary":false,"added":1,"removed":0,"lines":[]});
-            app.apply_diff(Update::Diff {
-                conversation: app.conversation.clone(),
-                plan: app.view.plan.clone(),
-                generation: app.generation,
-                request_id,
-                task: "t1".into(),
-                reply: Ok(json!({"files":if files {vec![file]} else {vec![]}})),
-            });
-            assert_eq!(app.diff.is_some(), files && !manual);
-            assert_eq!(
-                app.navigation.presentation().tab,
-                if manual {
-                    WorkbenchTab::Results
-                } else if files {
-                    WorkbenchTab::Diff
-                } else {
-                    WorkbenchTab::Summary
-                }
-            );
-            if !files {
-                assert!(app.navigation.presentation().terminal_only_default);
-            }
-        }
-        for key in [
-            "worker:t1",
-            "reviewer:t1",
-            ORCHESTRATOR,
-            crate::lean::PLANNER,
-        ] {
-            let mut app = App::test_app();
-            app.view.plan = Some("p1".into());
-            app.view.tasks.push(view::TaskRow {
-                id: "t1".into(),
-                ..Default::default()
-            });
-            app.open_details(key.into());
-            assert!(app.default_diff_request.is_none());
-            assert!(app.diff.is_none());
-            assert!(app.navigation.presentation().terminal_only_default);
-        }
-    }
 
     #[test]
     fn diff_refresh_preserves_file_selection_and_ignores_stale_replies() {

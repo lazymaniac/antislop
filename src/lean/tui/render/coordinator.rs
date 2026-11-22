@@ -188,6 +188,12 @@ mod tests {
             KeyCode::Right,
             event::KeyModifiers::SHIFT,
         ));
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Pty);
+        assert_eq!(app.details.as_ref().unwrap().tab, 0);
+        app.key(event::KeyEvent::new(
+            KeyCode::Right,
+            event::KeyModifiers::SHIFT,
+        ));
         assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
         assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
     }
@@ -213,7 +219,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert!(app.workbench_areas.content.width > 0);
-        assert!(app.workbench_areas.terminal.height > 0);
+        assert!(app.workbench_areas.terminal.is_empty());
         assert!(app.graph_area.is_none());
         assert_eq!(app.input.text, "draft 👩‍💻 é");
         app.key(event::KeyEvent::new(
@@ -531,7 +537,7 @@ mod tests {
         let areas = app.workbench_areas;
         assert_eq!(areas.list.width, 30);
         assert_eq!(areas.content.x, 35);
-        assert!(areas.content.height.abs_diff(areas.terminal.height) <= 1);
+        assert!(areas.terminal.is_empty());
         let buffer = terminal.backend().buffer();
         assert_eq!(
             buffer[(areas.content.x, areas.content.y)].bg,
@@ -541,6 +547,12 @@ mod tests {
             buffer[(areas.content.x - 1, areas.content.y)].bg,
             crate::lean::tui::theme::ayu::BG
         );
+        app.workbench_select_tab(WorkbenchTab::Pty);
+        terminal
+            .draw(|frame| app.draw_with_theme(frame, &theme))
+            .unwrap();
+        let areas = app.workbench_areas;
+        let buffer = terminal.backend().buffer();
         assert_eq!(
             buffer[(areas.terminal.x, areas.terminal.y)].bg,
             crate::lean::tui::theme::ayu::RAISED
