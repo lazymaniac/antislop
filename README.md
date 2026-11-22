@@ -84,6 +84,10 @@ plan acceptance/rejection/revision, task editing/addition/splitting/holding/reti
 dependency linking, direct execution, rigor, recovery, approval mode, takeover,
 configuration and completion actions available.
 
+The top bar shows `> antislop <branch>` and the session's status and total work
+time. The clock counts overlapping agent turns once, excludes idle gaps, and
+restores its total from recorded events when the TUI is reopened.
+
 Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
 Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining
 a dirty draft. Chat sends with Enter/Ctrl+S; Alt+Enter/Ctrl+J inserts a newline,

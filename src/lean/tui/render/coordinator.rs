@@ -334,6 +334,55 @@ mod tests {
     }
 
     #[test]
+    fn session_header_shows_branch_status_and_total_time_without_collisions() {
+        for width in [40, 80, 160] {
+            for ascii in [false, true] {
+                let theme = Theme::new(true, ascii);
+                let mut app = App::test_app();
+                app.view.idle = true;
+                app.projects.push(workspace::ProjectConn {
+                    path: "test".into(),
+                    name: "test".into(),
+                    client: app.client.clone(),
+                    branch: Some("main".into()),
+                    conversations: Vec::new(),
+                });
+                for (seq, kind, timestamp) in
+                    [(1, "turn_started", 1_000), (2, "turn_finished", 61_000)]
+                {
+                    app.view.apply(&serde_json::json!({"seq":seq, "kind":kind, "turn_id":"header-turn", "created_ms":timestamp,
+                        "payload":{"role":"orchestrator", "status":"done"}}));
+                }
+                let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+                terminal
+                    .draw(|frame| app.draw_with_theme(frame, &theme))
+                    .unwrap();
+                let row = |terminal: &Terminal<TestBackend>| {
+                    (0..width)
+                        .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
+                        .collect::<String>()
+                };
+                assert!(row(&terminal).contains("> antislop  main"));
+                assert!(row(&terminal).contains("ready"));
+                assert!(row(&terminal).contains("01:00"));
+                app.view.session_branch = Some(format!("feat/👩‍💻é{}", "-long".repeat(80)));
+                app.view.paused = true;
+                app.navigation.screen = Screen::Workbench;
+                app.details = Some(Details::new("conversation".into()));
+                terminal
+                    .draw(|frame| app.draw_with_theme(frame, &theme))
+                    .unwrap();
+                let header = row(&terminal);
+                assert!(header.contains("feat/👩‍💻"), "{width}: {header}");
+                assert!(header.contains("é"), "{width}: {header}");
+                assert!(header.contains("paused"), "{header}");
+                assert!(header.contains("01:00"), "{header}");
+                assert!(!header.contains("Canvas") && !header.contains("/ session"));
+            }
+        }
+    }
+
+    #[test]
     fn approved_reference_spacing_and_surfaces_at_160_by_50() {
         let theme = Theme::new(true, false);
         let mut app = App::test_app();
@@ -342,7 +391,7 @@ mod tests {
             .draw(|frame| app.draw_with_theme(frame, &theme))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(2, 1)].symbol(), "›");
+        assert_eq!(buffer[(2, 1)].symbol(), ">");
         assert_eq!(buffer[(2, 1)].fg, crate::lean::tui::theme::ayu::CYAN);
         assert_eq!(buffer[(122, 3)].bg, crate::lean::tui::theme::ayu::PANEL);
         assert_eq!(buffer[(121, 3)].bg, crate::lean::tui::theme::ayu::BG);

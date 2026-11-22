@@ -2169,7 +2169,7 @@ src
       is_filtered():bool
      = RELATIONS
     grouped
-     draw(view,canvas,node,unit,selected,_critical,theme) ~139 > selected,Theme.card,right,WorkUnit.health,active_stage,as_str,format_clock_mm_ss,elapsed_ms,Theme.{fit,status,dim,text},flatten,health,accent,chrome,Theme.decision
+     draw(view,canvas,node,unit,selected,_critical,theme) ~139 > selected,Theme.card,right,WorkUnit.health,active_stage,as_str,format_clock_mm_ss,WorkUnit.elapsed_ms,Theme.{fit,status,dim,text},flatten,health,accent,chrome,Theme.decision
     health/cards
      activity_line(view,key):Option<String> > task_{card,activity}
      card_lines(view,key,width,max):Vec<String> > card_text,node_name,fit_lines
@@ -2473,7 +2473,7 @@ src
     chat
      - chat_header
     chrome
-     brand(frame,area,project,status,theme) > Theme.fit,accent
+     brand(frame,area,app,theme):Option<Rect> ~54 > Theme.clean,chrome,accent
      direction(frame,area,target,theme) > Theme.{card,text}
      inset(area):Rect
      keybar(app,frame,area,keys,theme) > chrome,Theme.dim
@@ -2712,7 +2712,7 @@ src
      draw_with_theme(frame,theme) > sync_interview,draw_min_term_guard,sync_{native_views,approval,rigor_recommendation},draw_{plan_history,secondary_or_main,remaining}
      draw_graph(frame,area,theme) ~67 > graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,draw_{graph_inspector,expanded_card_panels,expanded_entry_arrows,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame,theme) ~53 > inset,areas,len,chrome,brand,Theme.decision,draw_graph,direction,draw_footer
+     draw_main(frame,theme) > inset,areas,len,brand,Theme.decision,draw_graph,direction,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
@@ -2986,6 +2986,10 @@ src
       on_task(view,payload) ~40 > clean_line,as_str,update_task_row,report_task_{reason,selection},feedback_is_current
       on_task_recovery(view,payload) > clean_line,event_text,bound,update_recovery_row
       - TaskProgress,update_task_identity,clear_finished_activity,update_task_feedback,apply_recovery_outcome
+    session_time
+     SessionTime(C{completed_ms,active,{since,last}_ms,after})
+      observe(event) > as_str,remove
+      elapsed_ms(now_ms):u64
    view.rs
     dim():Style > Theme.from_env
     CompletionActionState(C{kind,result})
@@ -2999,7 +3003,7 @@ src
     TaskRow(C{id,uuid,title,summary,reviewer_summary,section,kind,goal,depends_on,parallel_with,change_kind,focus,risks,status,round,activity,reason,revision_token,effect,effect_cut,obligations,integration})
     TranscriptCard(E{Message,Plan,System,Comment,Completion})
      sent_at():Option<i64>
-    View(C{team,team_{reason,recommended},plan_head_revision,task_meta,workflow_{phase,sent_at},session_branch,interview_question,scope_confirmation_summary,user_decision,requirements_{summary,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,event_created_ms,agents,links,mailbox,comments,comment_progress,reviews,audit_error,paused,autonomous,approvals,messages,cards,pending_scope_revision,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
+    View(C{team,team_{reason,recommended},plan_head_revision,task_meta,workflow_{phase,sent_at},session_{branch,time},interview_question,scope_confirmation_summary,user_decision,requirements_{summary,progress},latest_user_message,comment_scopes,layout_revision,{check,task_check}_events,transcript,tasks,plan,plan_{doc,preview},activity,idle,after,event_created_ms,agents,links,mailbox,comments,comment_progress,reviews,audit_error,paused,autonomous,approvals,messages,cards,pending_scope_revision,{plan,conversation}_revision_token,roles,comment_turns,mail,task_rows})
      set_session_action_result(action,result) ~46
      apply(event)
      active_rigor():crate::lean::tasks::Team
@@ -3255,6 +3259,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 169,372 LOC · input 1,551,678 · output 48,449 tokens · state e09429f6e2e7 · targets AGENTS.md
+· 169,564 LOC · input 1,553,588 · output 48,491 tokens · state 8c26af07aea2 · targets AGENTS.md
 ```
 <!-- hologram:end -->

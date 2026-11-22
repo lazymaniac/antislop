@@ -190,21 +190,16 @@ fn draw_workbench_chrome(
     } else {
         "preview"
     };
-    super::chrome::brand(
-        frame,
-        areas.header,
-        &app.project,
-        &theme.chrome(&format!(
-            "● {role} {state} · round {}{}",
-            terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
-            if presentation.pinned {
-                " · pinned"
-            } else {
-                " · following"
-            }
-        )),
-        theme,
-    );
+    super::chrome::brand(frame, areas.header, app, theme);
+    let context = theme.chrome(&format!(
+        "{role} {state} · round {} · {}",
+        terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
+        if presentation.pinned {
+            "pinned"
+        } else {
+            "following"
+        },
+    ));
     let task = app
         .details
         .as_ref()
@@ -212,10 +207,29 @@ fn draw_workbench_chrome(
         .and_then(|id| app.view.tasks.iter().find(|task| task.id == id));
     let title = task.map_or("Session", |task| task.title.as_str());
     let y = areas.header.y + if areas.header.height >= 4 { 2 } else { 1 };
+    let context_width = if areas.header.width >= 80 {
+        (unicode_width::UnicodeWidthStr::width(context.as_str()) as u16).min(areas.header.width / 2)
+    } else {
+        0
+    };
+    let title_width = areas
+        .header
+        .width
+        .saturating_sub(context_width + u16::from(context_width > 0) * 3);
     frame.render_widget(
-        Paragraph::new(format!("Workbench / {}", theme.clean(title))).style(theme.text()),
-        Rect::new(areas.header.x, y, areas.header.width, 1),
+        Paragraph::new(theme.fit(
+            &format!("Workbench / {}", theme.clean(title)),
+            usize::from(title_width),
+        ))
+        .style(theme.text()),
+        Rect::new(areas.header.x, y, title_width, 1),
     );
+    if context_width > 0 {
+        frame.render_widget(
+            Paragraph::new(theme.fit(&context, usize::from(context_width))).style(theme.dim()),
+            Rect::new(areas.header.right() - context_width, y, context_width, 1),
+        );
+    }
     let direction = Rect::new(
         areas.footer.x,
         areas.footer.y,
@@ -481,20 +495,7 @@ impl App {
         ])
         .areas(body);
         let pending = self.view.approvals.len() + usize::from(self.view.user_decision);
-        let status = if self.view.paused {
-            "paused".to_owned()
-        } else if self.view.idle {
-            "ready".to_owned()
-        } else {
-            theme.chrome("● running")
-        };
-        super::chrome::brand(
-            frame,
-            identity,
-            &self.project,
-            &theme.chrome(&format!("{status}  ·  Canvas")),
-            theme,
-        );
+        let status_area = super::chrome::brand(frame, identity, self, theme);
         if pending > 0 && identity.height > 1 && identity.width >= 60 {
             frame.render_widget(
                 Paragraph::new(theme.chrome(&format!("{pending} decision(s) · d")))
@@ -503,12 +504,7 @@ impl App {
             );
         }
         self.draw_graph(frame, canvas, theme);
-        if identity.width >= 80 && !identity.is_empty() {
-            let status = format!("{status}  ·  Canvas");
-            let width = (unicode_width::UnicodeWidthStr::width(status.as_str()) as u16)
-                .min(identity.width / 3);
-            self.now_area = Some(Rect::new(identity.right() - width, identity.y, width, 1));
-        }
+        self.now_area = status_area;
 
         super::chrome::direction(frame, invitation, "session", theme);
         self.chrome_keys

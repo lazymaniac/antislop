@@ -43,6 +43,23 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 | Direction | Full-width filled invitation; raised composer with dark input and mint Send action |
 | Bottom chrome | One quiet keybar; mouse hit regions come from the rendered labels |
 
+The top bar reads `> antislop <session branch>` on the left and the session
+status plus total work time on the right, in both Canvas and Workbench. Before
+the session creates a branch it uses the project's cached branch; an unavailable
+branch is shown as a dash. Long names are clipped on grapheme boundaries before
+the reserved status/time area. The clock unions recorded agent-turn intervals,
+so concurrent agents count once and idle gaps do not count. Replaying the
+existing event log restores the total after reopening or switching sessions;
+no database or protocol change is needed. Hours appear when the total reaches
+one hour. Workbench terminal owner, round, input mode and pin state remain on
+the Workbench title row.
+
+Hologram's timing-helper similarity notice compares `SessionTime::elapsed_ms`
+with `WorkUnit::elapsed_ms`. The latter adds member-agent durations for a work
+card; the session clock unions overlapping turn intervals, so reusing the card
+total would count parallel work more than once. Both reuse the existing clock
+formatter. The new projection state is reconstructed from existing events.
+
 Application colors match the reference tokens, including selected cards and
 diff additions/removals. Native CLI output retains its own colors and text.
 The exact 160×50 offsets, pane widths, split and backgrounds have a regression
@@ -58,7 +75,7 @@ Validation completed on 2026-11-22 with the pinned Rust toolchain:
 
 - Formatting, `cargo.sh check`, clippy for all targets with warnings denied,
   and `git diff --check`.
-- Full library suite: 1,105 passed; seven opt-in tests ignored.
+- Full library suite: 1,108 passed; seven opt-in tests ignored.
 - `lean_core`: 27 passed; `lean_tui`: 116 passed.
 - Messaging: 21 passed; approvals: two; recovery: 20; workflow: three.
 - Real daemon sequences: navigation two passed (host clipboard test remains

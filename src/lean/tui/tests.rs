@@ -2508,8 +2508,8 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("session"));
-    assert!(text.contains("Canvas"));
+    assert!(text.contains("> antislop"));
+    assert!(text.contains("00:00"));
     assert!(text.contains("ctrl k"));
 
     // Switch to Focus::Graph
@@ -2521,8 +2521,8 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("session"));
-    assert!(text.contains("Canvas"));
+    assert!(text.contains("> antislop"));
+    assert!(text.contains("00:00"));
     assert!(text.contains("ctrl k"));
 }
 
@@ -2544,7 +2544,7 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
     assert!(!text.contains("[Session]"));
     assert!(!text.contains("(Ctrl+T session)"));
-    assert!(text.contains("test"));
+    assert!(text.contains("ready"));
     assert!(text.contains("antislop"));
     assert!(!text.contains("See the whole plan."), "{text}");
     assert!(!text.contains("Dependencies on the left"), "{text}");
