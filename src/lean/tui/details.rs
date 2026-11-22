@@ -251,7 +251,9 @@ impl Details {
             .is_some_and(super::WorkbenchTab::uses_overview)
     }
 
-    /// Whether the active details view has an allocated live PTY area.
+    /// Whether a terminal area is allocated, or the overview layout requests one
+    /// through its terminal-only or split presentation. This does not imply
+    /// that a live PTY is attached.
     pub fn terminal_visible(&self) -> bool {
         self.native_areas.iter().any(|area| !area.is_empty())
             || (self.overview() && (!self.show_info || self.split))

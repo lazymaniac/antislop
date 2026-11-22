@@ -8293,3 +8293,56 @@ fn select_workbench_tab(app: &mut App, tab: antislop::lean::tui::WorkbenchTab) {
     }
     assert_eq!(app.navigation.presentation().tab, tab);
 }
+
+#[test]
+fn retained_details_visibility_includes_layout_before_attachment() {
+    let visible: fn(&Details) -> bool = Details::terminal_visible;
+    let mut details = Details::new("worker:t1".into());
+    details.native_areas = [Rect::default(); 2];
+    details.tab = 0;
+    details.show_info = false;
+    details.split = false;
+    assert!(
+        visible(&details),
+        "overview requests a terminal before allocation"
+    );
+    details.show_info = true;
+    assert!(!visible(&details));
+    details.split = true;
+    assert!(visible(&details));
+    details.tab = 1;
+    assert!(
+        !visible(&details),
+        "results do not request the overview fallback"
+    );
+    details.native_areas[1] = Rect::new(0, 0, 10, 2);
+    assert!(visible(&details), "allocated area is an independent branch");
+}
+
+#[test]
+fn retained_theme_helpers_remain_public_and_respect_modes() {
+    let checkbox: fn(&Theme, &str) -> String = Theme::checkbox;
+    let warn: fn(&Theme) -> Style = Theme::warn;
+    let purple: fn(&Theme) -> Style = Theme::purple;
+    for color in [false, true] {
+        for ascii in [false, true] {
+            let theme = Theme::new(color, ascii);
+            assert_eq!(checkbox(&theme, "queued"), "[ ]");
+            assert_eq!(
+                checkbox(&theme, "completed"),
+                if ascii { "[x]" } else { "[✓]" }
+            );
+            assert!(!warn(&theme).add_modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                theme.warning().add_modifier.contains(Modifier::BOLD),
+                !color,
+                "warning adds emphasis in monochrome mode"
+            );
+            assert_eq!(warn(&theme).fg.is_some(), color);
+            assert_eq!(purple(&theme).fg.is_some(), color);
+            if color {
+                assert_ne!(warn(&theme), purple(&theme));
+            }
+        }
+    }
+}

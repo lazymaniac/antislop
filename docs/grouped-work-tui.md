@@ -29,7 +29,7 @@ Canvas Enter restores a remembered valid stage or selects current activity.
 Selecting a stage explicitly never changes its underlying role. External mail
 routes join work cards; the inspector retains exact internal endpoints.
 
-The visual baseline is [Canvas](../work/visualizations/agent-layout-1.html) and
+The design baseline is [Canvas](../work/visualizations/agent-layout-1.html) and
 [Workbench with PTY](../work/visualizations/agent-workbench-pty.html). The terminal
 translation uses a single font size and maps spacing onto cells. At 160×50:
 
@@ -43,6 +43,13 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 | Direction | Full-width filled invitation; raised composer with dark input and mint Send action |
 | Bottom chrome | One quiet keybar; mouse hit regions come from the rendered labels |
 
+The retained PNG design references are [Canvas](../work/visualizations/agent-layout-1.png)
+and [Workbench with PTY](../work/visualizations/agent-workbench-pty-uniform-font.png).
+They are historical design material, not captures of the current application;
+their original generation path and current manual use are unconfirmed. See
+[the retention decision](api-and-reference-retention.md) for the evidence and
+conditions for reconsidering them.
+
 Application colors match the reference tokens, including selected cards and
 diff additions/removals. Native CLI output retains its own colors and text.
 The exact 160×50 offsets, pane widths, split and backgrounds have a regression
@@ -54,7 +61,8 @@ Reviewed 160×50 captures: [Canvas](images/tui-canvas.png),
 These rasterize the real TestBackend cell buffers with a fixed monospace font;
 native PTY cells come from deterministic terminal fixtures.
 
-Validation completed on 2026-11-22 with the pinned Rust toolchain:
+Historical validation of the visual correction on 2026-11-22 with the pinned
+Rust toolchain (these totals are not validation of subsequent changes):
 
 - Formatting, `cargo.sh check`, clippy for all targets with warnings denied,
   and `git diff --check`.

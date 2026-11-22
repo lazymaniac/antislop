@@ -1998,3 +1998,25 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         "applied"
     );
 }
+
+#[test]
+fn retained_store_queries_remain_publicly_callable() {
+    use antislop::lean::store::Store;
+
+    // Compile the public boundary without promoting all historical SQL details
+    // to new semantic contracts. Use the existing external fixture owner.
+    let targets = Store::pending_mail_targets;
+    let answer = Store::turn_final_answer;
+    let plans = Store::pending_mail_plans;
+    let count = Store::count_since_user;
+    let ran = Store::last_plan_that_ran;
+    let approved = Store::last_plan_with_approvals;
+    let dir = common::tempdir();
+    let store = Store::open(&dir.path().join("api.db")).unwrap();
+    assert!(targets(&store, "absent").unwrap().is_empty());
+    assert_eq!(answer(&store, "absent", "absent").unwrap(), None);
+    assert!(plans(&store).unwrap().is_empty());
+    assert_eq!(count(&store, "absent", "orchestrator").unwrap(), 0);
+    assert!(ran(&store, "absent", "except").unwrap().is_none());
+    assert!(approved(&store, "absent", None).unwrap().is_empty());
+}

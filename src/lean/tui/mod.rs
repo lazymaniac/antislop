@@ -1,7 +1,7 @@
-//! Terminal frontend for one conversation: the chat with the orchestrator
-//! beside the team graph. It never waits on the daemon in its draw loop: a
-//! poller thread long-polls events and every action runs on its own thread,
-//! so typing, scrolling and sending stay instant.
+//! Terminal frontend for one conversation: Canvas, inspector, Workbench and
+//! the session composer. Drawing uses local projections and cached documents;
+//! daemon requests and event polling run on background threads and deliver
+//! updates to the frontend. See `docs/grouped-work-tui.md` for the surface map.
 
 mod buffer;
 mod app {

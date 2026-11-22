@@ -1,5 +1,7 @@
 //! Lean core: native CLI agents working on the project's own files, small
-//! rows of state and an event log. See docs/lean-core.md.
+//! rows of state and an event log. `store` owns persistence, `core` coordinates
+//! work, and `daemon` serves frontends. For the terminal surfaces, see
+//! `docs/grouped-work-tui.md`.
 
 pub mod agent;
 pub mod cli;
