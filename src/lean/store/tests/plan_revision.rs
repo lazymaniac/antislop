@@ -463,13 +463,41 @@ fn rejected_revision_reviews_are_counted_since_the_last_applied_one() {
 
 #[test]
 fn an_accepted_plan_keeps_approved_tasks_whose_contracts_did_not_change() {
-    let (_dir, store, conversation, run, mut first) = fixture();
+    let (dir, store, conversation, run, mut first) = fixture();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    store
+        .db()
+        .execute(
+            "UPDATE conversations SET project=?2 WHERE id=?1",
+            params![conversation, project.to_str().unwrap()],
+        )
+        .unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(project.join("input.txt"), "source").unwrap();
+    let revision =
+        crate::lean::git::commit_all(&project, crate::lean::git::CommitPurpose::TestFixture)
+            .unwrap();
     store.queue_plan(&conversation, &first[0].plan_id).unwrap();
     for task in &mut first {
         task.status = "approved".into();
         task.round = 3;
         task.report = Some(format!("{} inspected", task.spec["id"]));
         store.update_task(task).unwrap();
+        store
+            .db()
+            .execute(
+                "INSERT INTO task_source_revisions VALUES(?1,0,?2)",
+                params![task.id, revision],
+            )
+            .unwrap();
     }
     std::thread::sleep(std::time::Duration::from_millis(3));
     let mut changed = first[1].spec.clone();
@@ -722,3 +750,6 @@ fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation(
         status::COORDINATING
     );
 }
+
+#[path = "plan_revision/source_reuse.rs"]
+mod source_reuse;

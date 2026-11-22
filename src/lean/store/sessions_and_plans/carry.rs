@@ -59,7 +59,7 @@ fn carry_plan_tasks(
         };
         let unchanged_contract = same_contract(&old.1, &spec);
         let source_changes = source_changes(tx, old, project, &mut current_source)?;
-        let unchanged_sources = source_changes.is_empty();
+        let unchanged_sources = source_changes.as_ref().is_some_and(Vec::is_empty);
         let unchanged_dependencies = dependencies_are_current(tx, plan_id, old)?;
         let unchanged_scope:bool=tx.query_row("SELECT t.status='approved' AND coalesce(a.scope_id=b.scope_id,0) FROM tasks t LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) a ON a.plan_id=t.plan_id LEFT JOIN (SELECT plan_id,scope_id FROM plan_scopes p WHERE revision=(SELECT max(revision) FROM plan_scopes x WHERE x.plan_id=p.plan_id)) b ON b.plan_id=?2 WHERE t.id=?1",params![old.0,plan_id],|r|r.get(0))?;
         let compatible =
@@ -72,7 +72,7 @@ fn carry_plan_tasks(
                 .filter(|key| old.1[*key] != spec[*key])
                 .cloned()
                 .collect::<Vec<_>>();
-            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) SELECT conversation_id,plan_id,'task_reassessment_required',?2,?3 FROM tasks WHERE id=?1",params![id,serde_json::json!({"task":id,"source":old.0,"contract_fields":fields,"changed_paths":source_changes.iter().take(12).collect::<Vec<_>>(),"changed_path_count":source_changes.len(),"dependency_producer_changed":!unchanged_dependencies,"scope_changed":!unchanged_scope}).to_string(),now_ms()])?;
+            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) SELECT conversation_id,plan_id,'task_reassessment_required',?2,?3 FROM tasks WHERE id=?1",params![id,serde_json::json!({"task":id,"source":old.0,"contract_fields":fields,"source_comparison_unknown":source_changes.is_none(),"changed_paths":source_changes.as_ref().map(|paths| paths.iter().take(12).collect::<Vec<_>>()),"changed_path_count":source_changes.as_ref().map(Vec::len),"dependency_producer_changed":!unchanged_dependencies,"scope_changed":!unchanged_scope}).to_string(),now_ms()])?;
         }
         carry(tx, &id, old, compatible)?;
         if compatible {
@@ -83,7 +83,11 @@ fn carry_plan_tasks(
                 reasons.push("contract fields changed");
             }
             if !unchanged_sources {
-                reasons.push("project inputs changed");
+                reasons.push(if source_changes.is_none() {
+                    "source comparison unavailable"
+                } else {
+                    "project inputs changed"
+                });
             }
             if !unchanged_dependencies {
                 reasons.push("dependency producer changed");
@@ -120,18 +124,19 @@ fn dependencies_are_current(
     Ok(true)
 }
 
+// None means no trustworthy comparison; it is never evidence of unchanged inputs.
 fn source_changes(
     tx: &rusqlite::Transaction<'_>,
     source: &Row,
     project: &std::path::Path,
     snapshot: &mut Option<String>,
-) -> Result<Vec<String>> {
+) -> Result<Option<Vec<String>>> {
     let revision: Option<String> = tx.query_row("SELECT revision FROM task_source_revisions WHERE task_id=?1 AND generation=coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)",[&source.0],|r|r.get(0)).optional()?;
     let Some(revision) = revision else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     if !crate::lean::git::is_repository(project) {
-        return Ok(vec!["project is no longer a git repository".into()]);
+        return Ok(None);
     }
     let spec: crate::lean::tasks::TaskContract = serde_json::from_value(source.1.clone())?;
     let current = if spec.change_kind() == crate::lean::tasks::ChangeKind::Artifact {
@@ -156,7 +161,7 @@ fn source_changes(
     let paths = crate::lean::git::changed_files(project, &revision, &current)?;
     // Reads are not inferred from a writer's diff. Any changed project input
     // may invalidate a report, so only reuse work against unchanged inputs.
-    Ok(paths)
+    Ok(Some(paths))
 }
 
 /// The last plan with approved work, and whether it answered the same
