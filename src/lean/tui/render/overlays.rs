@@ -10,15 +10,21 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame, theme: &Theme) {
     }
     if let Some(flow_editor) = &app.flow_editor {
         flow_editor.draw(frame, theme);
+        draw_foreground(app, frame, theme);
         return;
     }
     super::direction::draw(app, frame, theme);
     draw_interview(app, frame, theme);
-    draw_picker(app, frame, theme);
-    draw_help(app, frame);
     modal::draw_unblock(app, frame);
     modal::draw_graph_filters(app, frame);
+    draw_foreground(app, frame, theme);
+}
+
+// These layers can be opened over configuration and flow/comment editors.
+pub(super) fn draw_foreground(app: &mut App, frame: &mut Frame, theme: &Theme) {
+    draw_picker(app, frame, theme);
     app.draw_decision_inbox(frame, theme);
+    draw_help(app, frame);
 }
 
 fn draw_selection(app: &mut App, frame: &mut Frame) {

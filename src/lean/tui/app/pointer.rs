@@ -1,5 +1,6 @@
 use super::super::*;
 mod click;
+use super::super::input_owner::{InputKind, InputOwner};
 
 impl App {
     pub(in crate::lean::tui) fn bar_height(area: Rect) -> u16 {
@@ -124,6 +125,11 @@ impl App {
     }
 
     fn mouse_inner(&mut self, mouse: event::MouseEvent) -> bool {
+        self.sync_interview();
+        if self.handle_modal_mouse(mouse) {
+            self.workbench_dragging = false;
+            return true;
+        }
         if self.navigation.focus == NavigationFocus::Composer
             || self.details.as_ref().is_some_and(|details| details.editing)
         {
@@ -167,13 +173,6 @@ impl App {
         if self.handle_native_mouse(mouse) {
             return true;
         }
-        if self.plan_history.is_some() {
-            return true;
-        }
-        self.sync_interview();
-        if self.handle_modal_mouse(mouse) {
-            return true;
-        }
         self.handle_content_mouse(mouse);
         true
     }
@@ -182,14 +181,10 @@ impl App {
         if self.navigation.screen != Screen::Workbench {
             return false;
         }
-        if self.help.is_some()
-            || self.picker.is_some()
-            || self.editor.is_some()
-            || self.interview_visible()
-            || self.plan_history.is_some()
-            || self.plan_view.is_some()
-            || self.modal_blocks_mouse()
-        {
+        if !matches!(
+            self.input_owner(InputKind::Mouse),
+            InputOwner::Navigation | InputOwner::Composer | InputOwner::DetailsInput
+        ) {
             self.workbench_dragging = false;
             return false;
         }
@@ -351,28 +346,30 @@ impl App {
 
     fn handle_modal_mouse(&mut self, mouse: event::MouseEvent) -> bool {
         self.update_selection_context();
-        if self.modal_blocks_mouse() {
-            self.click_graph_filters(mouse);
-            self.click_unblock(mouse);
-            if self
-                .config_editor
-                .as_ref()
-                .is_none_or(|editor| !editor.visible)
-                && self.unblock.is_none()
-                && self.recovery_consent.is_none()
-                && self.graph_filters.is_none()
-                && self.flow_editor.is_none()
-                && self.decision_inbox.is_none()
-                && matches!(
+        match self.input_owner(InputKind::Mouse) {
+            InputOwner::Filters => self.click_graph_filters(mouse),
+            InputOwner::Recovery => self.click_unblock(mouse),
+            InputOwner::Help | InputOwner::Interview => {
+                if matches!(
                     mouse.kind,
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                )
-            {
-                self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+                ) {
+                    self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+                }
             }
-            return true;
+            InputOwner::History
+            | InputOwner::Decisions
+            | InputOwner::Picker
+            | InputOwner::Config
+            | InputOwner::Flow
+            | InputOwner::Consent
+            | InputOwner::Editor => {}
+            InputOwner::Plan
+            | InputOwner::Composer
+            | InputOwner::DetailsInput
+            | InputOwner::Navigation => return false,
         }
-        false
+        true
     }
 
     fn update_selection_context(&mut self) {
@@ -381,17 +378,6 @@ impl App {
         }
         self.text_selection
             .invalidate_context(&self.selection_context());
-    }
-
-    fn modal_blocks_mouse(&self) -> bool {
-        self.config_editor
-            .as_ref()
-            .is_some_and(|editor| editor.visible)
-            || self.unblock.is_some()
-            || self.recovery_consent.is_some()
-            || self.graph_filters.is_some()
-            || self.interview_visible()
-            || self.decision_inbox.is_some()
     }
 
     fn click_graph_filters(&mut self, mouse: event::MouseEvent) {

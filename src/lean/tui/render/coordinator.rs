@@ -31,6 +31,7 @@ impl App {
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
             self.text_selection = Default::default();
             editor.draw_themed(frame, theme);
+            super::overlays::draw_foreground(self, frame, theme);
             return;
         }
         super::specialized_screens::draw_secondary_or_main(self, frame, theme);

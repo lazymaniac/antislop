@@ -4306,6 +4306,282 @@ fn canvas_and_stage_composers_own_their_keys_and_preserve_independent_drafts() {
 }
 
 #[test]
+fn modal_input_help_precedes_background_composer_buttons() {
+    let mut app = test_app();
+    app.set_focus(Focus::Chat);
+    app.navigation.focus = NavigationFocus::Composer;
+    app.input = InputBuffer::with_text("unsent 👩‍💻 é");
+    let focus = app.navigation.clone();
+    let send = Rect::new(1, 1, 6, 1);
+    let cancel = Rect::new(8, 1, 8, 1);
+    app.direction_actions = Some((send, cancel));
+    app.show_help(Help::Chat);
+    for area in [send, cancel] {
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.help.is_some());
+        assert_eq!(app.navigation, focus);
+        assert_eq!(app.input.text, "unsent 👩‍💻 é");
+    }
+    app.paste("must not reach composer");
+    app.key(key_press(KeyCode::Char('x')));
+    assert_eq!(app.input.text, "unsent 👩‍💻 é");
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.help.is_none());
+    assert_eq!(app.navigation, focus);
+    app.paste(" continued");
+    assert_eq!(app.input.text, "unsent 👩‍💻 é continued");
+}
+
+#[test]
+fn modal_input_flow_blocks_paste_and_background_pointer_navigation() {
+    let mut app = test_app();
+    app.set_focus(Focus::Chat);
+    app.input = InputBuffer::with_text("draft");
+    app.flow_editor = Some(flow_editor::FlowEditor::add_dependent(&app.view, "t1"));
+    let title = app.flow_editor.as_ref().unwrap().title_input.text.clone();
+    let navigation = app.navigation.clone();
+    let scroll = app.scroll;
+    app.paste("not a chat message");
+    for kind in [
+        MouseEventKind::ScrollUp,
+        MouseEventKind::ScrollDown,
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+    ] {
+        app.mouse(event::MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(app.input.text, "draft");
+    assert_eq!(app.scroll, scroll);
+    assert_eq!(app.navigation, navigation);
+    assert_eq!(app.flow_editor.as_ref().unwrap().title_input.text, title);
+    assert!(app.native_input_blocked());
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.flow_editor.is_none());
+    assert_eq!(app.input.text, "draft");
+}
+
+#[test]
+fn modal_input_help_picker_and_comment_editor_have_one_owner() {
+    let mut app = test_app();
+    app.editor = Some(Editor {
+        target: "comment:test".into(),
+        input: InputBuffer::with_text("comment"),
+    });
+    app.picker = Some(Picker::new(Kind::Commands));
+    app.picker.as_mut().unwrap().query = "query".into();
+    app.show_help(Help::Picker);
+    app.paste(" ignored");
+    app.key(key_press(KeyCode::Char('x')));
+    assert_eq!(app.picker.as_ref().unwrap().query, "query");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment");
+    app.key(key_press(KeyCode::Esc));
+    app.paste(" picker");
+    assert_eq!(app.picker.as_ref().unwrap().query, "querypicker");
+    app.key(key_press(KeyCode::Esc));
+    app.paste(" editor");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment editor");
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.editor.is_none());
+    assert_eq!(app.get_comment_draft("comment:test").text, "comment editor");
+}
+
+#[test]
+fn modal_input_restores_native_key_paste_and_mouse_after_help() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("session draft");
+    app.open_details("worker:t1".into());
+    app.key(key_press(KeyCode::Tab));
+    let received = app.bind_native_input_for_test();
+    app.key(key_press(KeyCode::Char('t')));
+    assert!(app.native_focused());
+    let navigation = app.navigation.clone();
+    app.show_help(Help::Details);
+    app.key(key_press(KeyCode::Char('x')));
+    app.paste("hidden paste");
+    let mouse = event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 2,
+        row: 2,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(mouse);
+    assert!(received.try_recv().is_err());
+    assert_eq!(app.navigation, navigation);
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.native_focused());
+    let key = key_press(KeyCode::Char('x'));
+    app.key(key);
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Key { event })) if event == key)
+    );
+    app.paste("native paste");
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Paste { text })) if text == "native paste")
+    );
+    app.mouse(mouse);
+    assert!(matches!(
+        received.try_recv(),
+        Ok(native_view::Command::Input(
+            crate::lean::terminal::Input::Mouse { .. }
+        ))
+    ));
+    assert_eq!(app.input.text, "session draft");
+}
+
+#[test]
+fn modal_input_help_is_visible_over_flow_and_configuration() {
+    for configuration in [false, true] {
+        let mut app = test_app();
+        if configuration {
+            app.config_editor = Some(
+                config::ConfigEditor::new(
+                    include_str!("../../../examples/antislop.toml"),
+                    "project.toml".into(),
+                )
+                .unwrap(),
+            );
+        } else {
+            app.flow_editor = Some(flow_editor::FlowEditor::add_dependent(&app.view, "t1"));
+        }
+        app.key(key_press(KeyCode::F(1)));
+        assert!(app.help.is_some());
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(
+            terminal_text(&terminal).contains("help ·"),
+            "configuration={configuration}"
+        );
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.help.is_none());
+        assert_eq!(app.config_editor.is_some(), configuration);
+        assert_eq!(app.flow_editor.is_some(), !configuration);
+    }
+}
+
+#[test]
+fn modal_input_decision_filter_and_recovery_isolate_search_and_drafts() {
+    for layer in 0..3 {
+        let mut app = test_app();
+        app.open_details("worker:t1".into());
+        app.details.as_mut().unwrap().searching = true;
+        app.details.as_mut().unwrap().query = "saved query".into();
+        app.input = InputBuffer::with_text("saved draft");
+        match layer {
+            0 => {
+                app.view.approvals.push(view::PendingApproval {
+                    request: "permission".into(),
+                    role: "worker:t1".into(),
+                    provider: "codex".into(),
+                    summary: "Allow?".into(),
+                    orchestrator: false,
+                    options: vec![],
+                });
+                app.open_decision_inbox();
+                assert!(app.decision_inbox.is_some());
+            }
+            1 => app.graph_filters = Some(Default::default()),
+            _ => app.unblock = Some(unblock::Unblock::orchestrator()),
+        }
+        let navigation = app.navigation.clone();
+        app.paste("ignored");
+        app.key(key_ctrl('o'));
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.navigation, navigation);
+        assert_eq!(app.details.as_ref().unwrap().query, "saved query");
+        assert_eq!(app.input.text, "saved draft");
+        assert!(app.native_input_blocked());
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.decision_inbox.is_none());
+        assert!(app.graph_filters.is_none());
+        assert!(app.unblock.is_none());
+        assert!(app.details.as_ref().unwrap().searching);
+    }
+}
+
+#[test]
+fn modal_input_image_drop_belongs_to_picker_or_comment_editor() {
+    for picker in [false, true] {
+        let mut app = test_app();
+        app.set_focus(Focus::Chat);
+        app.input = InputBuffer::with_text("chat draft");
+        app.editor = Some(Editor {
+            target: "comment:test".into(),
+            input: InputBuffer::with_text("comment"),
+        });
+        if picker {
+            app.picker = Some(Picker::new(Kind::Commands));
+        }
+        app.paste("file:///missing-modal-image.png");
+        assert_eq!(app.input.text, "chat draft");
+        assert!(app.image_drafts.is_empty());
+        assert!(app.notice.is_none());
+        if picker {
+            assert_eq!(
+                app.picker.as_ref().unwrap().query,
+                "file:///missing-modal-image.png"
+            );
+            assert_eq!(app.editor.as_ref().unwrap().input.text, "comment");
+        } else {
+            assert_eq!(
+                app.editor.as_ref().unwrap().input.text,
+                "commentfile:///missing-modal-image.png"
+            );
+        }
+    }
+}
+
+#[test]
+fn modal_input_preserves_event_specific_form_and_composer_exceptions() {
+    let mut app = test_app();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((
+        42,
+        serde_json::from_value(
+            serde_json::json!({"id":"scope", "context":"Scope", "question":"Which scope?", "options":[]}),
+        )
+        .unwrap(),
+    ));
+    app.sync_interview();
+    app.interview_forms
+        .get_mut(&app.conversation)
+        .unwrap()
+        .visible = true;
+    app.editor = Some(Editor {
+        target: "comment:test".into(),
+        input: InputBuffer::with_text("comment"),
+    });
+    app.key(key_press(KeyCode::Char('x')));
+    app.paste(" paste");
+    assert_eq!(app.interview_forms[&app.conversation].input.text, "x");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment paste");
+
+    let mut app = test_app();
+    app.open_details("conversation".into());
+    app.set_focus(Focus::Chat);
+    app.navigation.focus = NavigationFocus::Composer;
+    app.details.as_mut().unwrap().searching = true;
+    app.details.as_mut().unwrap().query = "kept search".into();
+    app.paste("session paste");
+    assert_eq!(app.input.text, "session paste");
+    assert_eq!(app.details.as_ref().unwrap().query, "kept search");
+}
+
+#[test]
 fn sidebar_projection_builds_on_actual_draw() {
     let mut app = test_app();
     app.view.tasks = (0..40)

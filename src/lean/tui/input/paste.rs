@@ -1,3 +1,4 @@
+use super::super::input_owner::{InputKind, InputOwner};
 use super::*;
 
 impl App {
@@ -85,25 +86,26 @@ impl App {
             self.native_send(crate::lean::terminal::Input::Paste { text: text.into() });
             return true;
         }
-        if self.plan_history.is_some()
-            || self.help.is_some()
-            || self.decision_inbox.is_some()
-            || self.unblock.is_some()
-            || self.recovery_consent.is_some()
-            || self.graph_filters.is_some()
-        {
-            return true;
+        match self.input_owner(InputKind::Paste) {
+            InputOwner::History
+            | InputOwner::Help
+            | InputOwner::Decisions
+            | InputOwner::Flow
+            | InputOwner::Filters
+            | InputOwner::Consent
+            | InputOwner::Recovery => true,
+            InputOwner::Config => {
+                if let Some(editor) = self.config_editor.as_mut() {
+                    editor.paste(text);
+                }
+                true
+            }
+            _ => false,
         }
-
-        if let Some(editor) = self.config_editor.as_mut().filter(|editor| editor.visible) {
-            editor.paste(text);
-            return true;
-        }
-        false
     }
 
     fn paste_form(&mut self, text: &str) -> bool {
-        if self.picker.is_some() || self.editor.is_some() || !self.interview_visible() {
+        if self.input_owner(InputKind::Paste) != InputOwner::Interview {
             return false;
         }
         if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
@@ -113,16 +115,10 @@ impl App {
     }
 
     fn paste_details(&mut self, text: &str) -> bool {
-        if self.picker.is_some()
-            || self.editor.is_some()
-            || self.plan_view.is_some()
-            || (self.diff.is_some()
-                && !self.details.as_ref().is_some_and(|details| details.editing))
-        {
-            return false;
-        }
-        if self.navigation.focus == NavigationFocus::Composer
-            && !self.details.as_ref().is_some_and(|details| details.editing)
+        if !matches!(
+            self.input_owner(InputKind::Paste),
+            InputOwner::DetailsInput | InputOwner::Navigation
+        ) || self.diff.is_some() && !self.details.as_ref().is_some_and(|details| details.editing)
         {
             return false;
         }
@@ -143,18 +139,28 @@ impl App {
     }
 
     fn paste_picker_editor_or_chat(&mut self, text: &str) {
-        if let Some(picker) = &mut self.picker {
-            picker.query.push_str(&sanitize_single_line_paste(text));
-            picker.selected = 0;
-        } else if let Some(editor) = &mut self.editor {
-            editor.input.insert_str(&sanitize_paste(text));
-        } else if self.chat_paste_enabled() {
-            self.input.insert_str(&sanitize_paste(text));
+        match self.input_owner(InputKind::Paste) {
+            InputOwner::Picker => {
+                if let Some(picker) = &mut self.picker {
+                    picker.query.push_str(&sanitize_single_line_paste(text));
+                    picker.selected = 0;
+                }
+            }
+            InputOwner::Editor => {
+                if let Some(editor) = &mut self.editor {
+                    editor.input.insert_str(&sanitize_paste(text));
+                }
+            }
+            _ if self.chat_paste_enabled() => self.input.insert_str(&sanitize_paste(text)),
+            _ => {}
         }
     }
 
     fn chat_paste_enabled(&self) -> bool {
-        self.navigation.background_focus == Focus::Chat
+        matches!(
+            self.input_owner(InputKind::Paste),
+            InputOwner::Composer | InputOwner::Navigation
+        ) && self.navigation.background_focus == Focus::Chat
             && self.plan_view.is_none()
             && self.diff.is_none()
             && (self.details.is_none()

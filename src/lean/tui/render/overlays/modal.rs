@@ -3,8 +3,7 @@ use super::super::super::*;
 pub(super) fn draw_unblock(app: &mut App, frame: &mut Frame) {
     if let Some(consent) = &app.recovery_consent {
         consent.draw(frame);
-    }
-    if let Some(modal) = &mut app.unblock {
+    } else if let Some(modal) = &mut app.unblock {
         modal.draw(frame);
     }
 }

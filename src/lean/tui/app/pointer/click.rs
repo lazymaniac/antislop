@@ -1,11 +1,9 @@
 use super::*;
 
 impl App {
+    // The pointer adapter has already dispatched modal-owned events.
     pub(super) fn mouse_click(&mut self, col: u16, row: u16) {
-        if self.picker.is_some() || self.editor.is_some() || self.help.is_some() {
-            return;
-        }
-        if self.click_plan_view(col, row) || self.dialog_open() {
+        if self.click_plan_view(col, row) || self.content_covers_graph() {
             return;
         }
         if self.click_phase_action(col, row) {
@@ -23,12 +21,8 @@ impl App {
         true
     }
 
-    fn dialog_open(&self) -> bool {
-        self.diff.is_some()
-            || self.details.is_some()
-            || self.picker.is_some()
-            || self.editor.is_some()
-            || self.help.is_some()
+    fn content_covers_graph(&self) -> bool {
+        self.diff.is_some() || self.details.is_some()
     }
 
     fn click_phase_action(&mut self, col: u16, row: u16) -> bool {
