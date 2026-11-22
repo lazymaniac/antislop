@@ -1,4 +1,7 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
+
+const COMMENT_QUOTE_GRAPHEME_LIMIT: usize = 200;
 
 pub(super) fn is_rejection_target(target: &str) -> bool {
     target.starts_with("reject:") || target.starts_with("unblock:")
@@ -16,7 +19,12 @@ pub(super) fn comment_text(editor: &Editor, view: &view::View) -> String {
                 .find(|row| row.number == line)
                 .map(|row| row.text)
         })
-        .map(|text| text.trim().chars().take(200).collect::<String>())
+        .map(|text| {
+            text.trim()
+                .graphemes(true)
+                .take(COMMENT_QUOTE_GRAPHEME_LIMIT)
+                .collect::<String>()
+        })
         .filter(|text| !text.is_empty());
     match quote {
         Some(quote) => format!("> {quote}\n{}", editor.input.text),
@@ -305,4 +313,56 @@ pub(super) fn send_addressed_deliveries(
     Ok(
         serde_json::json!({"mail_ids":receipts,"recipient":"all","state":if steered { "steered" } else { "queued" }}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comment_quote_preserves_graphemes_at_the_limit() {
+        let prefix = "a".repeat(199);
+        for last in ["b", "e\u{301}", "👩‍💻"] {
+            let quote = format!("{prefix}{last}");
+            for suffix in ["", "z"] {
+                let mut view = View::default();
+                view.plan_doc = format!("first line\n  {quote}{suffix}  ");
+                let mut editor = Editor {
+                    target: "plan:line:2".into(),
+                    input: InputBuffer::default(),
+                };
+                editor.input.text = "  draft e\u{301} 👩‍💻\nsecond line  ".into();
+                assert_eq!(
+                    comment_text(&editor, &view),
+                    format!("> {quote}\n  draft e\u{301} 👩‍💻\nsecond line  ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn comment_quote_preserves_short_text_and_paths_without_a_quote() {
+        let mut view = View::default();
+        view.plan_doc = "first line\n  short e\u{301} 👩‍💻  \n\n \t \nlast line".into();
+        for (target, quote) in [
+            ("plan:line:2", Some("short e\u{301} 👩‍💻")),
+            ("plan:line:3", None),
+            ("plan:line:4", None),
+            ("plan:line:0", None),
+            ("plan:line:99", None),
+            ("plan:line:invalid", None),
+            ("plan", None),
+        ] {
+            let mut editor = Editor {
+                target: target.into(),
+                input: InputBuffer::default(),
+            };
+            editor.input.text = "  draft\nunchanged  ".into();
+            let expected = match quote {
+                Some(quote) => format!("> {quote}\n  draft\nunchanged  "),
+                None => "  draft\nunchanged  ".into(),
+            };
+            assert_eq!(comment_text(&editor, &view), expected, "{target}");
+        }
+    }
 }
