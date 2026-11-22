@@ -22,7 +22,6 @@ pub fn cleanup_failure(message: String) {
 
 /// Confirm release even when the daemon endpoint is absent.
 pub fn daemon_lock_released(state: &Path) -> Result<(), String> {
-    use std::os::fd::AsRawFd;
     let lock = match std::fs::OpenOptions::new()
         .write(true)
         .open(state.join("core.lock"))
@@ -31,10 +30,24 @@ pub fn daemon_lock_released(state: &Path) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("inspect daemon lock: {error}")),
     };
-    // SAFETY: nonblocking flock on our owned descriptor, released on return.
+    daemon_lock_released_file(&lock)
+}
+
+/// Descriptor-level probe, also exercised with a retained shared descriptor.
+pub fn daemon_lock_released_file(lock: &std::fs::File) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: nonblocking flock on a descriptor kept alive by the caller.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(format!(
             "daemon lock not released: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // A fork can retain the same open file description beyond our close.
+    // SAFETY: release only our successfully acquired temporary probe lock.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) } != 0 {
+        return Err(format!(
+            "release daemon lock probe: {}",
             std::io::Error::last_os_error()
         ));
     }

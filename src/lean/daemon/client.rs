@@ -336,17 +336,27 @@ fn wait_unlocked(state: &Path) -> Result<()> {
         .create(true)
         .truncate(false)
         .open(state.join("core.lock"))?;
+    wait_unlocked_file(&lock)
+}
+
+fn wait_unlocked_file(lock: &std::fs::File) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
-    // SAFETY: flock on an owned descriptor, closed on return.
+    // SAFETY: flock on a descriptor kept alive by the caller.
     while unsafe {
         libc::flock(
-            std::os::fd::AsRawFd::as_raw_fd(&lock),
+            std::os::fd::AsRawFd::as_raw_fd(lock),
             libc::LOCK_EX | libc::LOCK_NB,
         )
     } != 0
     {
         require(Instant::now() < deadline, "the old daemon did not stop")?;
         std::thread::sleep(Duration::from_millis(20));
+    }
+    // Closing our descriptor alone can leave this temporary lock held by a
+    // concurrently forked child sharing its open file description until exec.
+    // SAFETY: release only the probe lock successfully acquired above.
+    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(lock), libc::LOCK_UN) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
     Ok(())
 }
@@ -357,6 +367,23 @@ mod tests {
     use crate::lean::daemon::SessionRequest;
     use serde_json::json;
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn stop_confirmation_releases_its_probe_with_a_shared_descriptor() {
+        use std::os::fd::AsRawFd;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("core.lock");
+        let probe = std::fs::File::create(&path).unwrap();
+        let inherited = probe.try_clone().unwrap();
+        wait_unlocked_file(&probe).unwrap();
+        drop(probe);
+        let next = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        // SAFETY: both descriptors belong to this fixture. The clone models
+        // another process retaining the same open file description after fork.
+        let acquired = unsafe { libc::flock(next.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        drop(inherited);
+        assert_eq!(acquired, 0, "confirmation left its temporary lock held");
+    }
 
     #[test]
     fn reconnect_reports_the_launch_failure_instead_of_the_lost_socket() {

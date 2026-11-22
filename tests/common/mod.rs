@@ -5,7 +5,7 @@ use std::path::Path;
 #[path = "../support/resources.rs"]
 mod resources;
 #[allow(unused_imports)]
-pub use resources::{ChildGuard, TestDir, tempdir};
+pub use resources::{ChildGuard, TestDir, daemon_lock_released_file, tempdir};
 
 pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);

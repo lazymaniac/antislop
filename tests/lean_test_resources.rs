@@ -5,6 +5,27 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Stdio};
 
 #[test]
+fn cleanup_confirmation_releases_only_its_own_shared_probe() {
+    use std::os::fd::AsRawFd;
+    let root = common::tempdir();
+    let path = root.path().join("core.lock");
+    let probe = std::fs::File::create(&path).unwrap();
+    let inherited = probe.try_clone().unwrap();
+    common::daemon_lock_released_file(&probe).unwrap();
+    drop(probe);
+    let owner = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    // SAFETY: these are fixture-owned descriptors; the clone retains the same
+    // open file description as a child between fork and exec would retain.
+    let acquired = unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    drop(inherited);
+    assert_eq!(acquired, 0, "cleanup left its temporary probe locked");
+    let contender = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    assert!(common::daemon_lock_released_file(&contender).is_err());
+    let still_locked = unsafe { libc::flock(contender.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(still_locked, -1, "failed probe unlocked the actual owner");
+}
+
+#[test]
 fn parallel_fixtures_have_short_private_sockets_even_with_a_long_project() {
     let threads: Vec<_> = (0..12)
         .map(|_| {
