@@ -95,7 +95,7 @@ pub(super) fn keybar(app: &mut App, frame: &mut Frame, area: Rect, theme: &Theme
 }
 
 fn completion(app: &App) -> Option<&[view::CompletionActionState]> {
-    app.view.cards.iter().rev().find_map(|card| match card {
+    app.view.active_completion().and_then(|card| match card {
         view::TranscriptCard::Completion { actions, .. } => Some(actions.as_slice()),
         _ => None,
     })

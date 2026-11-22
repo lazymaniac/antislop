@@ -3882,6 +3882,81 @@ fn workbench_completion_key_marks_the_selected_action_as_pending_for_this_sessio
 }
 
 #[test]
+fn completion_actions_expire_when_work_continues_and_return_for_the_next_completion() {
+    use crate::lean::daemon::{SessionActionKind, SessionActionResult};
+    for workbench in [false, true] {
+        for resumed_by in ["acknowledgement", "replay", "failure"] {
+            let mut app = test_app();
+            if workbench {
+                app.open_details("conversation".into());
+            }
+            app.input = InputBuffer::with_text("Retained draft 👩‍💻");
+            let completed = |seq| serde_json::json!({"seq":seq,"kind":"session_completed","payload":{"summary":"Retained result","branch":"feature/result"}});
+            app.view.apply(&completed(1));
+            let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+            let previous = workbench_summary::project(&app.view, "conversation");
+            match resumed_by {
+                "acknowledgement" => {
+                    app.view.set_session_action_result(
+                        SessionActionKind::ContinueWork,
+                        SessionActionResult::Queued { message: 0 },
+                    );
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+                    app.apply_update(Update::SessionAction {
+                        conversation: app.conversation.clone(),
+                        action: SessionActionKind::ContinueWork,
+                        result: SessionActionResult::Queued { message: 7 },
+                    });
+                }
+                "replay" => {
+                    app.view.apply(&serde_json::json!({"seq":2,"kind":"message","payload":{"author":"user","text":"Continue work in this session","seq":7}}));
+                    app.view.apply(&serde_json::json!({"seq":3,"turn_id":"continued","kind":"turn_started","payload":{"role":"orchestrator"}}));
+                    app.view.apply(&serde_json::json!({"seq":4,"turn_id":"continued","kind":"turn_finished","payload":{"role":"orchestrator","status":"done"}}));
+                }
+                _ => app.apply_update(Update::SessionAction {
+                    conversation: app.conversation.clone(),
+                    action: SessionActionKind::ContinueWork,
+                    result: SessionActionResult::Failed {
+                        details: "socket disconnected".into(),
+                    },
+                }),
+            }
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            if resumed_by == "failure" {
+                assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+                assert!(terminal_text(&terminal).contains("socket disconnected"));
+                continue;
+            }
+            assert!(
+                !terminal_text(&terminal).contains("AVAILABLE ACTIONS"),
+                "{resumed_by}"
+            );
+            assert!(
+                !app.select_session_action(2),
+                "historical actions cannot be resubmitted"
+            );
+            assert!(!workbench_summary::unchanged(
+                &previous,
+                &app.view,
+                "conversation"
+            ));
+            assert!(matches!(
+                workbench_summary::project(&app.view, "conversation"),
+                workbench_summary::Summary::Empty
+            ));
+            assert!(app.view.cards.iter().any(|card| matches!(card, TranscriptCard::Completion { summary, .. } if summary == "Retained result")));
+            assert_eq!(app.input.text, "Retained draft 👩‍💻");
+            app.view.apply(&completed(5));
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+        }
+    }
+}
+
+#[test]
 fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
     let mut app = test_app();
     app.view.apply(&serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p","tasks":[{"id":"t1","title":"Work","change_kind":"none"}]}}));

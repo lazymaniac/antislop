@@ -30,6 +30,9 @@ fn selected_session_action_request(
 
 impl App {
     pub(in crate::lean::tui) fn select_session_action(&mut self, index: usize) -> bool {
+        if self.view.active_completion().is_none() {
+            return false;
+        }
         if let Some(crate::lean::tui::TranscriptCard::Completion { actions, .. }) = self
             .view
             .cards

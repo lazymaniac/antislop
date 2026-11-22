@@ -32,10 +32,8 @@ pub struct Completion {
 pub fn project(view: &view::View, key: &str) -> Summary {
     if key == "conversation" {
         return view
-            .cards
-            .iter()
-            .rev()
-            .find_map(|card| {
+            .active_completion()
+            .and_then(|card| {
                 if let TranscriptCard::Completion {
                     branch,
                     summary,
@@ -98,11 +96,7 @@ pub fn project(view: &view::View, key: &str) -> Summary {
 /// Compare borrowed inputs before cloning or wrapping potentially large text.
 pub(in crate::lean::tui) fn unchanged(summary: &Summary, view: &view::View, key: &str) -> bool {
     if key == "conversation" {
-        let card = view
-            .cards
-            .iter()
-            .rev()
-            .find(|card| matches!(card, TranscriptCard::Completion { .. }));
+        let card = view.active_completion();
         return match (summary, card) {
             (Summary::Empty, None) => true,
             (

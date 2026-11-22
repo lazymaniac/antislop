@@ -2664,7 +2664,7 @@ src
      request(request,done)
      task_row_round(key):Option<u64>
      refetch_stale_details() > schedule_output_document_fetch,details_are_stale,fetch_task
-     select_session_action(index):bool ~51 > selected_session_action_request,set_session_action_result
+     select_session_action(index):bool ~54 > active_completion,selected_session_action_request,set_session_action_result
      handle_plan_action(action) > accept_plan,open_plan_{rejection,comment},submit_plan_review,set_comment
      header_line(width):Line<'static> > header_line_themed
      header_line_themed(width,theme):Line<'static> > header_project_label,chrome,header_status,controls,prepend_header_notice
@@ -2887,7 +2887,7 @@ src
      is_running(status):bool
      progress_line(view,id,title,was,now,reason):Option<(String,crate::lean::tui::theme::Tone)> > progress_status,len
     conversation.rs
-     View: comment_state(id):&str > as_str; comment_error(id):Option<&str>; comment_activity():Option<String>; orchestrator_activity():Option<String> > comment_activity; push(style,text) > Entry; plan_proposed():bool > all; stage():Stage > workflow_stage,plan_proposed,is_running,stage_after_activity; draft_plan_comments():Vec<&Comment> > open_plan_comments; open_plan_comments():Vec<&Comment>; plan_resumable():bool > audit_retryable; audit_retryable():bool > all; agent_key(role):String; mail_key(name):String; report_progress(id,title,was,now,reason) > {progress,append_progress}_line; system_card(title,text,tone) > push; advance_messages(from,to); row_of(key):Option<&mut TaskRow>
+     View: active_completion():Option<&TranscriptCard>; comment_state(id):&str > as_str; comment_error(id):Option<&str>; comment_activity():Option<String>; orchestrator_activity():Option<String> > comment_activity; push(style,text) > Entry; plan_proposed():bool > all; stage():Stage > workflow_stage,plan_proposed,is_running,stage_after_activity; draft_plan_comments():Vec<&Comment> > open_plan_comments; open_plan_comments():Vec<&Comment>; plan_resumable():bool > audit_retryable; audit_retryable():bool > all; agent_key(role):String; mail_key(name):String; report_progress(id,title,was,now,reason) > {progress,append_progress}_line; system_card(title,text,tone) > push; advance_messages(from,to); row_of(key):Option<&mut TaskRow>
      - View: has_started
     goals
      task_goal(kind,title,goal,summary):Cow<'a,str> ~56 > as_str,first_sentence
@@ -3055,8 +3055,8 @@ src
     WorkbenchContext(C{target,role,round,focus})
     WorkbenchRole(E{Session,Worker,Reviewer,Other})
    workbench_summary
-    project(view,key):Summary ~65 > Completion,from_unblock,auditor,orchestrator,is_blocked,Recovery,choices_for
-    unchanged(summary,view,key):bool ~59 > is_blocked,choices_for
+    project(view,key):Summary ~63 > Completion,from_unblock,auditor,orchestrator,is_blocked,Recovery,choices_for
+    unchanged(summary,view,key):bool ~55 > is_blocked,choices_for
     Completion(C{branch,summary,actions,selected,latest_result})
     Recovery(C{task,title,status,reason,choices})
     Summary(E{Recovery,Completion,Empty})
@@ -3269,6 +3269,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 170,587 LOC · input 1,563,379 · output 48,669 tokens · state addbffc9476a · targets AGENTS.md
+· 170,688 LOC · input 1,564,678 · output 48,685 tokens · state a144c9014cb7 · targets AGENTS.md
 ```
 <!-- hologram:end -->
