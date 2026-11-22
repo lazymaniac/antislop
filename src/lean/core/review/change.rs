@@ -116,8 +116,8 @@ impl Core {
             open.is_empty(),
             "send the draft plan comments with Review and resolve all open ones before activating the reviewed plan",
         )?;
-        self.start_plan(conversation, plan_id, |store| {
-            store.queue_plan(conversation, plan_id).map(|_| ())
+        self.start_plan(conversation, plan_id, |store, cancel| {
+            store.queue_plan_cancellable(conversation, plan_id, cancel)
         })
     }
 

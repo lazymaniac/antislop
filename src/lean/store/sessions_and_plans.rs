@@ -191,13 +191,29 @@ impl Store {
     /// Runtime callers retain the integration lock through source revalidation
     /// and publication. External editors are observed, not locked, by snapshots.
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
-        let (all, captured) = {
+        self.queue_plan_cancellable(
+            conversation,
+            plan_id,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .map(|tasks| tasks.len())
+    }
+
+    /// Cancellation observed before commit rolls back carry and activation;
+    /// after commit the caller must pass this same flag to the runner.
+    pub(in crate::lean) fn queue_plan_cancellable(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<Task>> {
+        let captured = {
             let mut db = self.db();
             let tx = db.transaction()?;
-            let all = proposed_task_count(&tx, conversation, plan_id)?;
+            proposed_task_count(&tx, conversation, plan_id)?;
             let captured = carry::capture(&tx, conversation, plan_id)?;
             tx.commit()?;
-            (all, captured)
+            captured
         };
         let prepared = captured.compare_sources()?;
         prepared.validate_sources()?;
@@ -227,8 +243,15 @@ impl Store {
         }
         record_plan_activation(&tx, conversation, plan_id)?;
         advance_workflow(&tx, conversation, plan_id)?;
+        // Decode carried Content while rollback is still possible. The caller
+        // publishes these prepared tasks without another fallible Store read.
+        let tasks = self.plan_on_connection(&tx, plan_id)?;
+        crate::require(
+            !cancel.load(std::sync::atomic::Ordering::SeqCst),
+            "plan start cancelled",
+        )?;
         tx.commit()?;
-        Ok(all as usize)
+        Ok(tasks)
     }
 
     /// Moves every task of a plan that is still `from` to `to`.

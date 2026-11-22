@@ -62,7 +62,9 @@ impl Core {
             let plans = self.activity.plans.lock().expect("plans mutex");
             if !plans.contains_key(conversation) {
                 drop(plans);
-                self.start_plan_with_scope_lock(conversation, plan_id, |_| Ok(()))?;
+                self.start_plan_with_scope_lock(conversation, plan_id, |store, _| {
+                    store.active_plan_tasks(conversation, plan_id)
+                })?;
             }
         }
         Ok(())
@@ -72,7 +74,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         plan_id: &str,
-        queue: impl FnOnce(&Store) -> Result<()>,
+        queue: impl FnOnce(&Store, &AtomicBool) -> Result<Vec<Task>>,
     ) -> Result<Vec<Task>> {
         // A current writer may hold integration while waiting for orchestration.
         // Reject replacement start before waiting for that lock. The inner
@@ -145,7 +147,7 @@ mod start_tests {
         let id = conversation.id.clone();
         let joining = std::thread::spawn(move || {
             let result =
-                worker.start_plan(&id, "replacement", |_| panic!("replacement was queued"));
+                worker.start_plan(&id, "replacement", |_, _| panic!("replacement was queued"));
             tx.send(result.map_err(|error| error.to_string())).unwrap();
         });
         let immediate = rx.recv_timeout(std::time::Duration::from_secs(2));

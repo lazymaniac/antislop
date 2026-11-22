@@ -40,26 +40,26 @@ impl Core {
                 "the session is paused; continue it before retrying the final audit",
             )?;
         }
-        self.start_plan(conversation, plan_id, |store| {
+        self.start_plan(conversation, plan_id, |store, cancel| {
+            require(!cancel.load(Ordering::SeqCst), "plan start cancelled")?;
             if store.requeue_plan(conversation, plan_id)? > 0 {
-                return Ok(());
+                return store.active_plan_tasks(conversation, plan_id);
             }
             if retry_audit && store.plan(plan_id)?.iter().all(|task| task.status == status::APPROVED && task.spec["deferred"] != true) {
-                return Ok(());
+                return store.active_plan_tasks(conversation, plan_id);
             }
             let waiting: bool = store.db().query_row(
                 "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.conversation_id=?1 AND t.plan_id=?2
                  AND (EXISTS(SELECT 1 FROM agent_questions q WHERE q.id=json_extract(t.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
                   OR EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(t.feedback,'$.waiting_request') AND w.released=0)))",
                 rusqlite::params![conversation,plan_id], |row| row.get(0))?;
-            require(
-                false,
+            Err(Error::Invalid(
                 if waiting {
                     "this plan is waiting for agent answers or their revision/dependency; resolve its open questions before resuming"
                 } else {
                     "this plan has nothing to resume"
-                },
-            )
+                }.into(),
+            ))
         })
     }
 

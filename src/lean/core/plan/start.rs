@@ -1,4 +1,6 @@
 mod runner;
+#[cfg(test)]
+mod tests;
 
 use crate::lean::*;
 
@@ -8,11 +10,12 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         plan_id: &str,
-        queue: impl FnOnce(&Store) -> Result<()>,
+        queue: impl FnOnce(&Store, &AtomicBool) -> Result<Vec<Task>>,
     ) -> Result<Vec<Task>> {
         let operation = self.operation(conversation)?;
         let starting = self.locks.turn(conversation, "plan-start");
-        let _starting = starting.lock().expect("conversation plan start");
+        let _starting = mail::lock_cancellable(&starting, &operation.cancel)
+            .ok_or_else(|| Error::Invalid("plan start cancelled".into()))?;
         require(
             !self.activity.plan_running(conversation),
             "a plan is already running",
@@ -29,27 +32,22 @@ impl Core {
         self.require_accepting()?;
         self.ensure_plan_can_start(conversation)?;
         self.validate_plan_inputs(conversation, plan_id)?;
-        let mut plans = self.activity.plans.lock().expect("plans mutex");
         require(
-            !plans.contains_key(conversation),
+            !self.activity.plan_running(conversation),
             "a plan is already running",
         )?;
-        queue(&self.store)?;
-        let activated: bool = self.store.db().query_row(
-            "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
-            rusqlite::params![plan_id, conversation],
-            |r| r.get(0),
-        )?;
-        require(activated, "plan is not active")?;
+        let tasks = queue(&self.store, &operation.cancel)?;
 
         self.activity
             .blocked_seen
             .lock()
             .expect("blocked mutex")
             .remove(conversation);
-        let tasks = self.store.plan(plan_id)?;
         self.announce_plan_tasks(conversation, &tasks);
-        let cancel = Arc::new(AtomicBool::new(false));
+        // Cancellation after queue's commit belongs to the runner too. Keep
+        // the preparation lease until the runner slot has been published.
+        let cancel = operation.cancel.clone();
+        let mut plans = self.activity.plans.lock().expect("plans mutex");
         plans.insert(conversation.to_owned(), cancel.clone());
         drop(plans);
         drop(integration);

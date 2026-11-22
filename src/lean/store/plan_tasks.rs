@@ -152,10 +152,32 @@ impl Store {
 
     /// Tasks of one plan, in the orchestrator's order.
     pub fn plan(&self, plan_id: &str) -> Result<Vec<Task>> {
+        self.plan_on_connection(&self.db(), plan_id)
+    }
+
+    pub(in crate::lean) fn active_plan_tasks(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+    ) -> Result<Vec<Task>> {
         let db = self.db();
-        self.plan_task_rows(&db, plan_id)?
+        let activated: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM plan_activations WHERE plan_id=?1 AND conversation_id=?2)",
+            params![plan_id, conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(activated, "plan is not active")?;
+        self.plan_on_connection(&db, plan_id)
+    }
+
+    pub(in crate::lean::store) fn plan_on_connection(
+        &self,
+        db: &rusqlite::Connection,
+        plan_id: &str,
+    ) -> Result<Vec<Task>> {
+        self.plan_task_rows(db, plan_id)?
             .into_iter()
-            .map(|row| self.decode_plan_task(&db, row))
+            .map(|row| self.decode_plan_task(db, row))
             .collect()
     }
 
