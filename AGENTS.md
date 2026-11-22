@@ -2712,7 +2712,7 @@ src
      draw_with_theme(frame,theme) > sync_interview,draw_min_term_guard,sync_{native_views,approval,rigor_recommendation},draw_{plan_history,secondary_or_main,remaining}
      draw_graph(frame,area,theme) ~67 > graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,draw_{graph_inspector,expanded_card_panels,expanded_entry_arrows,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame,theme) ~69 > inset,areas,len,chrome,brand,Theme.{dim,decision},draw_graph,direction,draw_footer
+     draw_main(frame,theme) ~53 > inset,areas,len,chrome,brand,Theme.decision,draw_graph,direction,draw_footer
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
@@ -3255,6 +3255,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 169,389 LOC · input 1,551,855 · output 48,451 tokens · state 65eade48a3ed · targets AGENTS.md
+· 169,372 LOC · input 1,551,678 · output 48,449 tokens · state e09429f6e2e7 · targets AGENTS.md
 ```
 <!-- hologram:end -->

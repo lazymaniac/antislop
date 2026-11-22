@@ -35,7 +35,7 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 
 | Element | Geometry and treatment |
 |---|---|
-| Outer chrome | Two-column side margins, one-row top margin; separate brand and title rows |
+| Outer chrome | Two-column side margins, one-row top margin; Canvas starts below the brand, without a heading or subtitle |
 | Canvas | Flat work cards; three-column gap before the padded 36-column inspector |
 | Workbench | 30-column task hierarchy, three-column gap, equal content/PTY shares |
 | Content | Filled panel with padded title and tabs; no nested diff toolbar or box outlines |

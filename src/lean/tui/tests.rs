@@ -2546,9 +2546,8 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
     assert!(!text.contains("(Ctrl+T session)"));
     assert!(text.contains("test"));
     assert!(text.contains("antislop"));
-    let strip = view::Stage::Fresh.strip(crate::lean::tui::theme::Theme::from_env().glyphs());
-    assert!(text.contains("See the whole plan."), "{text}");
-    let _ = strip;
+    assert!(!text.contains("See the whole plan."), "{text}");
+    assert!(!text.contains("Dependencies on the left"), "{text}");
 }
 
 #[test]

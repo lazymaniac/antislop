@@ -344,9 +344,8 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(2, 1)].symbol(), "›");
         assert_eq!(buffer[(2, 1)].fg, crate::lean::tui::theme::ayu::CYAN);
-        assert_eq!(buffer[(2, 3)].symbol(), "S");
-        assert_eq!(buffer[(122, 6)].bg, crate::lean::tui::theme::ayu::PANEL);
-        assert_eq!(buffer[(121, 6)].bg, crate::lean::tui::theme::ayu::BG);
+        assert_eq!(buffer[(122, 3)].bg, crate::lean::tui::theme::ayu::PANEL);
+        assert_eq!(buffer[(121, 3)].bg, crate::lean::tui::theme::ayu::BG);
         assert_eq!(buffer[(2, 44)].bg, crate::lean::tui::theme::ayu::PANEL);
         assert_eq!(buffer[(2, 49)].symbol(), "↑");
         assert!(

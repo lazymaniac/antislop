@@ -2099,7 +2099,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_overlay.contains("See the whole plan."));
+    assert!(!text_overlay.contains("See the whole plan."));
+    assert!(!text_overlay.contains("Dependencies on the left"));
     assert!(!text_overlay.contains(" now "));
     assert!(text_overlay.contains("compiling tests"));
 

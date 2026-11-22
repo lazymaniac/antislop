@@ -470,13 +470,12 @@ impl App {
         self.chat_area = body;
         let body = super::chrome::inset(body);
         let spacious = body.height >= 25;
-        let [identity, heading, canvas, invitation] = Layout::vertical([
+        let [identity, canvas, invitation] = Layout::vertical([
             Constraint::Length(if spacious {
                 2
             } else {
                 u16::from(body.height >= 10)
             }),
-            Constraint::Length(if spacious { 3 } else { 0 }),
             Constraint::Min(1),
             Constraint::Length(if spacious { 3 } else { 2 }),
         ])
@@ -496,27 +495,12 @@ impl App {
             &theme.chrome(&format!("{status}  ·  Canvas")),
             theme,
         );
-        if !heading.is_empty() {
+        if pending > 0 && identity.height > 1 && identity.width >= 60 {
             frame.render_widget(
-                Paragraph::new("See the whole plan.").style(theme.text()),
-                Rect::new(heading.x, heading.y, heading.width, 1),
+                Paragraph::new(theme.chrome(&format!("{pending} decision(s) · d")))
+                    .style(theme.decision()),
+                Rect::new(identity.right().saturating_sub(22), identity.y + 1, 22, 1),
             );
-            if heading.height > 1 {
-                frame.render_widget(
-                    Paragraph::new(
-                        theme.chrome("Dependencies on the left · selected work on the right"),
-                    )
-                    .style(theme.dim()),
-                    Rect::new(heading.x, heading.y + 1, heading.width, 1),
-                );
-            }
-            if pending > 0 && heading.width >= 60 {
-                frame.render_widget(
-                    Paragraph::new(theme.chrome(&format!("{pending} decision(s) · d")))
-                        .style(theme.decision()),
-                    Rect::new(heading.right().saturating_sub(22), heading.y, 22, 1),
-                );
-            }
         }
         self.draw_graph(frame, canvas, theme);
         if identity.width >= 80 && !identity.is_empty() {
