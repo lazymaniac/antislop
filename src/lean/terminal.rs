@@ -1,8 +1,8 @@
 //! Persistent, viewport-sized terminal state owned by the daemon.
 use super::{Core, native};
+use crate::invalid;
 use crate::{Result, require};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use native::invalid;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

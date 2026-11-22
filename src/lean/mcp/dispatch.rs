@@ -3,7 +3,7 @@ use super::gateway::{
 };
 use super::tools::scoped_tools;
 use crate::Result;
-use crate::lean::native::invalid;
+use crate::invalid;
 use serde_json::{Value, json};
 use std::time::Instant;
 

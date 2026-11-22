@@ -315,8 +315,6 @@ fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
         .native
         .prepare_scoped(&core, "g", "reviewer", &spec, "")
         .unwrap();
-    // Gemini reads its static settings from the system location.
-    assert!(session._settings.is_none());
     let outcome = session
         .run(
             &core.native,

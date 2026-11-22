@@ -26,6 +26,11 @@ fn sql_message(error: &rusqlite::Error) -> String {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub(crate) fn invalid(error: impl std::fmt::Display) -> Error {
+    Error::Invalid(error.to_string())
+}
+
 pub fn require(condition: bool, message: &str) -> Result<()> {
     if condition {
         Ok(())

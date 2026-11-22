@@ -5,7 +5,7 @@
 //! session's MCP gateway (`mcp.rs`).
 use super::terminal::{self, State};
 use super::{Core, agent, launch, mcp, store};
-use crate::{Error, Result, require};
+use crate::{Error, Result, invalid, require};
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::path::Path;
@@ -15,13 +15,12 @@ use std::time::{Duration, Instant};
 
 pub(crate) mod approvals;
 mod readiness;
-/// Makes a headless-style test script answer as an interactive agent CLI too
-/// (see `tests/support/fixture_cli.rs`).
 mod registry;
 mod stops;
 pub(crate) use stops::StopCause;
 mod session;
 
+/// Adapts fixture scripts to the interactive CLI protocol in tests.
 #[cfg(test)]
 pub(crate) mod fixture {
     include!("../../tests/support/fixture_cli.rs");
@@ -39,10 +38,6 @@ pub(crate) const SCREEN_LINES: usize = 12;
 /// A dialog can be taller than the lines shown in a failure.
 pub(crate) const APPROVAL_LINES: usize = 40;
 
-pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
-    Error::Invalid(error.to_string())
-}
-
 #[derive(Default)]
 pub struct Registry {
     sessions: Mutex<HashMap<(String, String), Arc<Session>>>,
@@ -54,7 +49,6 @@ pub struct Session {
     core: Weak<Core>,
     pub(crate) spec: agent::Spec,
     signature: String,
-    _settings: Option<tempfile::NamedTempFile>,
     gateway: mcp::Gateway,
     pub(crate) terminal: Mutex<terminal::Session>,
     screen: Arc<Mutex<State>>,

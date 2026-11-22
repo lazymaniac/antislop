@@ -60,3 +60,32 @@ fn append_resume_model(command: &mut CommandBuilder, spec: &Spec) {
         command.args(["--model", model]);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_overlay_preserves_user_policy_and_other_configuration() {
+        let gateway = Gateway::start().unwrap();
+        let mut config = json!({
+            "permission": {"bash": "ask"},
+            "model": "user/model",
+            "agent": {"personal": {"mode": "primary", "permission": {"edit": "deny"}}},
+            "mcp": {"personal": {"type": "remote", "url": "https://example.invalid/mcp"}}
+        });
+        let original = config.clone();
+        install_agent(&mut config).unwrap();
+        install_gateway(&mut config, &gateway).unwrap();
+        assert_eq!(config["permission"], original["permission"]);
+        assert_eq!(config["model"], original["model"]);
+        assert_eq!(config["agent"]["personal"], original["agent"]["personal"]);
+        assert_eq!(config["mcp"]["personal"], original["mcp"]["personal"]);
+        assert_eq!(config["mcp"][SERVER]["url"], gateway.url());
+        assert_eq!(
+            config["mcp"][SERVER]["headers"]["Authorization"],
+            format!("Bearer {}", gateway.token())
+        );
+        assert!(config["agent"][SERVER]["permission"].is_null());
+    }
+}

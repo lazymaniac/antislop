@@ -17,7 +17,7 @@ use tools::tool_list;
 pub use transport::bridge;
 
 #[cfg(test)]
-use crate::lean::native::invalid;
+use crate::invalid;
 #[cfg(test)]
 use dispatch::{call, dispatch};
 #[cfg(test)]
