@@ -11,12 +11,14 @@ pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame, theme: &T
 }
 
 fn draw_plan(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
-    let Some(plan) = &mut app.plan_view else {
+    if app.plan_view.is_none() {
         return false;
-    };
+    }
+    let area = super::chrome::branded_area(app, frame, theme);
+    let plan = app.plan_view.as_mut().unwrap();
     // PlanView::draw and its presentation helpers remain pending ownership transfer
     // to tui-specialized-screens; this coordinator only dispatches and syncs viewport state.
-    plan.draw(frame, frame.area(), &app.view, theme);
+    plan.draw(frame, area, &app.view, theme);
     app.text_area = Some(Rect::new(
         plan.doc_area.x.saturating_add(planview::GUTTER as u16),
         plan.doc_area.y,

@@ -1,5 +1,5 @@
 mod chat;
-mod chrome;
+pub(super) mod chrome;
 mod composer;
 mod coordinator;
 pub(super) mod direction;

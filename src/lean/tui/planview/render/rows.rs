@@ -75,10 +75,14 @@ fn append_text_pieces(
 }
 
 fn text_piece_row(plan: &PlanView, doc: &DocLine, piece: Piece<'_>, theme: &Theme) -> VisualRow {
-    let selected = piece.doc_index == plan.cursor;
+    let selected = piece.doc_index == plan.cursor && !plan.graph_focused;
     VisualRow {
         doc: Some(piece.doc_index),
-        line: Line::from(piece_spans(plan, doc, &piece, selected, theme)),
+        line: Line::from(piece_spans(plan, doc, &piece, selected, theme)).style(if selected {
+            theme.selected()
+        } else {
+            theme.card()
+        }),
     }
 }
 
@@ -94,10 +98,7 @@ fn piece_spans(
             theme.chrome(&gutter(doc.number, selected, piece.index)),
             gutter_style(selected, theme),
         ),
-        Span::styled(
-            piece.text.to_owned(),
-            theme.style(document_style(doc, selected)),
-        ),
+        Span::styled(piece.text.to_owned(), document_style(doc, selected, theme)),
     ];
     if piece.index + 1 == piece.count {
         append_heading_badge(&mut spans, plan, doc, theme);
@@ -107,20 +108,18 @@ fn piece_spans(
 
 fn gutter_style(selected: bool, theme: &Theme) -> Style {
     if selected {
-        theme.warning()
+        theme.accent()
     } else {
         theme.dim()
     }
 }
 
-fn document_style(doc: &DocLine, selected: bool) -> Style {
+fn document_style(doc: &DocLine, selected: bool, theme: &Theme) -> Style {
     let style = match doc.state {
-        SectionState::Done => Style::default()
-            .fg(crate::lean::tui::theme::ayu::GREEN)
-            .add_modifier(Modifier::UNDERLINED),
-        SectionState::Problem => Style::default().fg(crate::lean::tui::theme::ayu::RED),
-        SectionState::Working => Style::default().fg(crate::lean::tui::theme::ayu::BLUE),
-        SectionState::Open => Style::default(),
+        SectionState::Done => theme.status("approved"),
+        SectionState::Problem => theme.error(),
+        SectionState::Working => theme.accent(),
+        SectionState::Open => theme.text(),
     };
     let style = if doc.is_heading {
         style.add_modifier(Modifier::BOLD)
@@ -128,7 +127,7 @@ fn document_style(doc: &DocLine, selected: bool) -> Style {
         style
     };
     if selected {
-        style.add_modifier(Modifier::REVERSED)
+        theme.selected().patch(style)
     } else {
         style
     }
@@ -217,7 +216,7 @@ fn comment_lines(
         clean(&comment.text)
     );
     if let Some(error) = view.comment_error(comment.id) {
-        text.push_str(&format!("\n{indent}  Error: {}", clean(error)));
+        text.push_str(&format!("\n  Error: {}", clean(error)));
     }
     let style = comment_style(comment, theme);
     crate::lean::tui::view::wrap(&text, width.max(1))

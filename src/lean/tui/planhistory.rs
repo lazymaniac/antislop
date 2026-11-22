@@ -142,10 +142,10 @@ impl Browser {
 
     #[cfg(test)]
     pub fn draw(&mut self, frame: &mut Frame) {
-        self.draw_with_theme(frame, &Theme::from_env());
+        self.draw_with_theme(frame, frame.area(), &Theme::from_env());
     }
 
-    pub fn draw_with_theme(&mut self, frame: &mut Frame, theme: &Theme) {
+    pub fn draw_with_theme(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let separator = theme.chrome("·");
         let navigation = if self.loading {
             format!("loading {separator} {} total", self.total)
@@ -163,7 +163,7 @@ impl Browser {
             self.view.plan_doc = self.report_text();
         }
         self.plan_view
-            .draw_history(frame, frame.area(), &self.view, theme, &navigation);
+            .draw_history(frame, area, &self.view, theme, &navigation);
     }
 
     fn sync_document(&mut self) {

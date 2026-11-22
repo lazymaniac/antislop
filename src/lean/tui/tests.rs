@@ -1811,7 +1811,7 @@ fn proposed_plan_opens_for_review_and_keeps_a_persistent_entry_after_dismissal()
         });
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert!(app.plan_view.is_some());
-        assert!(terminal_text(&terminal).contains("Accept"));
+        assert!(terminal_text(&terminal).contains("a accept"));
         assert_eq!(app.input.text, "Unsent draft 👩‍💻");
     }
 }
@@ -3198,6 +3198,14 @@ fn the_plan_opens_from_every_panel_and_rejecting_asks_for_a_reason() {
     app.input.insert_char('x');
     app.key(key_ctrl('l'));
     assert!(app.plan_view.is_some());
+    assert_eq!(app.input.text, "x");
+
+    app.view.session_branch = Some("feature/plan-ui".into());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal_text(&terminal);
+    assert!(text.contains("> antislop") && text.contains("feature/plan-ui"));
+    assert!(text.contains("C comment plan") && text.contains("Esc back"));
     assert_eq!(app.input.text, "x");
 
     app.handle_plan_action(PlanAction::Reject);

@@ -1134,6 +1134,10 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.flow_editor = Some(FlowEditor::edit_task(&app.view, &app.view.tasks[0]));
         }
         "plan-view" => {
+            apply_fixture(app, "workbench-summary");
+            app.navigation.screen = Screen::Graph;
+            app.details = None;
+            app.view.session_branch = Some("feature/plan-review".into());
             app.view.plan = Some("p-fixture".into());
             app.view.plan_doc =
                 "# Plan\n\nImplement the requested change with verified acceptance criteria."
@@ -2806,10 +2810,9 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "workbench-diff"
         | "session-native-pty" => theme.card(),
         "configuration" => theme.title(),
-        // History navigation is painted inside planview::graph::panel: the
-        // accent span inherits the focused card's background.
+        // History navigation uses the same flat canvas as the plan shell.
         "plan-history" if fixture.id == "plan-history-loading" => {
-            theme.card().patch(theme.accent())
+            theme.overlay().patch(theme.accent())
         }
         "plan-history" => theme.accent(),
         "comment-editor" => theme.accent(),

@@ -113,6 +113,8 @@ pub struct PlanView {
     pub graph_selected: usize,
     pub graph_offset: (u16, u16),
     pub graph_area: Rect,
+    /// Full task pane, including its header and selected-task details.
+    pub(super) task_area: Rect,
     pub task_rects: Vec<(Rect, usize)>,
     pub(in crate::lean::tui) graph_reveal: bool,
     task_scroll: usize,
@@ -142,6 +144,7 @@ impl PlanView {
             graph_selected: 0,
             graph_offset: (0, 0),
             graph_area: Rect::default(),
+            task_area: Rect::default(),
             task_rects: Vec::new(),
             graph_reveal: true,
             task_scroll: 0,

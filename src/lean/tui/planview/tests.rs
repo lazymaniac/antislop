@@ -258,7 +258,7 @@ fn review_sends_the_drafts_only_when_there_are_some() {
     term.draw(|f| plan.draw(f, f.area(), &view, &theme))
         .unwrap();
     let text = screen(&term).join("\n");
-    assert!(text.contains("Review: send (R)"), "{text}");
+    assert!(text.contains("R send review"), "{text}");
     assert!(text.contains("1 draft comment(s)"), "{text}");
     assert!(text.contains("1 unresolved comment(s)"), "{text}");
     assert!(
@@ -267,7 +267,7 @@ fn review_sends_the_drafts_only_when_there_are_some() {
     );
     let rect = plan.button_rects[3];
     assert_eq!(
-        plan.mouse_click(rect.x + 2, rect.y + 1, &view),
+        plan.mouse_click(rect.x + 2, rect.y, &view),
         PlanAction::SubmitReview
     );
     // D takes back the draft on the cursor's line.
@@ -420,10 +420,10 @@ fn split_plan_handles_small_terminals_and_terminal_fallbacks() {
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
         term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(false, true)))
             .unwrap();
-        assert_eq!(
+        assert_ne!(
             term.backend().buffer()[(0, 0)].symbol(),
             "+",
-            "application border"
+            "the application shell has no enclosing border"
         );
         for cell in &term.backend().buffer().content {
             assert_eq!(cell.fg, ratatui::style::Color::Reset);
@@ -449,13 +449,9 @@ fn a_phone_screen_stacks_the_panes_and_keeps_every_label_whole() {
     term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
         .unwrap();
     let rows = screen(&term);
-    assert!(
-        rows[1].trim_end_matches([' ', '│']).ends_with("Esc close"),
-        "{}",
-        rows[1]
-    );
+    assert!(rows[rows.len() - 2].trim_end().ends_with("Esc back"));
     let buttons = &rows[rows.len() - 3];
-    for label in ["Accept (a)", "Reject (x)", "Comment (C)", "No drafts"] {
+    for label in ["a accept", "x reject", "C comment plan", "R no drafts"] {
         assert!(buttons.contains(label), "{buttons}");
     }
     assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
@@ -470,5 +466,42 @@ fn a_phone_screen_stacks_the_panes_and_keeps_every_label_whole() {
     assert!(
         tasks > description && tasks - description <= 5,
         "stacked and fitted"
+    );
+}
+
+#[test]
+fn compact_plan_switches_readable_panes_without_losing_document_position() {
+    let view = graph_view();
+    let theme = Theme::new(true, false);
+    let mut plan = PlanView::new("p".into());
+    plan.cursor = plan.description_lines(&view).len() - 1;
+    let mut term = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+        .unwrap();
+    assert!(screen(&term).join("\n").contains("Keep this note"));
+    let document_position = (plan.cursor, plan.scroll);
+    assert!(plan.graph_area.is_empty());
+    press(&mut plan, &view, KeyCode::Char('v'));
+    press(&mut plan, &view, KeyCode::Down);
+    term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+        .unwrap();
+    assert!(plan.doc_area.is_empty());
+    assert!(screen(&term).join("\n").contains("t2: Title t2"));
+    assert_eq!((plan.cursor, plan.scroll), document_position);
+    assert!(plan.button_rects.iter().all(|rect| rect.height == 1));
+    press(&mut plan, &view, KeyCode::Char('v'));
+    term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+        .unwrap();
+    assert_eq!((plan.cursor, plan.scroll), document_position);
+    assert!(screen(&term).join("\n").contains("Keep this note"));
+
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    term.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+        .unwrap();
+    let footer = plan.button_rects[0];
+    plan.mouse_click(plan.graph_area.x, footer.y + 1, &view);
+    assert!(
+        !plan.graph_focused,
+        "footer hints do not focus the task pane"
     );
 }

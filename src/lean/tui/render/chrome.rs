@@ -2,7 +2,7 @@
 use super::super::*;
 use unicode_width::UnicodeWidthStr;
 
-pub(super) fn inset(area: Rect) -> Rect {
+pub(in crate::lean::tui) fn inset(area: Rect) -> Rect {
     area.inner(ratatui::layout::Margin::new(
         if area.width >= 100 {
             2
@@ -119,4 +119,28 @@ pub(super) fn keybar(
         app.chrome_keys.push((hit, *code, *modifiers));
         x = x.saturating_add(width + 4);
     }
+}
+
+/// Keep live and historical plans in the same application shell as Canvas.
+pub(super) fn branded_area(app: &App, frame: &mut Frame, theme: &Theme) -> Rect {
+    let screen = frame.area();
+    let body = inset(screen);
+    let height = if body.height >= 25 {
+        2
+    } else {
+        u16::from(body.height >= 10)
+    };
+    brand(
+        frame,
+        Rect::new(body.x, body.y, body.width, height),
+        app,
+        theme,
+    );
+    let top = body.y + height;
+    Rect::new(
+        screen.x,
+        top,
+        screen.width,
+        screen.bottom().saturating_sub(top),
+    )
 }
