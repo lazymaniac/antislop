@@ -40,7 +40,7 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 | Workbench | 30-column task hierarchy, three-column gap, equal content/PTY shares |
 | Content | Filled panel with padded title and tabs; no nested diff toolbar or box outlines |
 | Native terminal | Raised header, dark `#0a1114` surface, quiet controls, visible attachment errors |
-| Direction | Full-width filled invitation; raised composer with dark input and mint Send action |
+| Direction | One full-width dock: invitation becomes an inline editor; questions and available actions expand above it |
 | Bottom chrome | One quiet keybar; mouse hit regions come from the rendered labels |
 
 The top bar reads `> antislop <session branch>` on the left and the session
@@ -67,15 +67,34 @@ test. The capture catalog also checks real diff-plus-PTY output, compact layouts
 pending decisions, unavailable history, errors, drafts and monochrome/ASCII modes.
 
 Reviewed 160×50 captures: [Canvas](images/tui-canvas.png),
-[Workbench](images/tui-workbench.png), [direction composer](images/tui-direction.png).
+[Workbench](images/tui-workbench.png), [direction input](images/tui-direction.png),
+[inline question](images/tui-question.png).
 These rasterize the real TestBackend cell buffers with a fixed monospace font;
 native PTY cells come from deterministic terminal fixtures.
+
+The direction editor occupies the bottom dock instead of a centered popup.
+Its keybar immediately follows the input surface. The same dock serves session
+and agent drafts, recipient/broadcast selection, queue/steer/interrupt, delivery
+errors and attachments. Questions expand above it without changing focus;
+selecting an answer never submits it. The original Form keyboard handler and
+scope cache still own answers and bounded scope scrolling. Custom answers use
+the dock input, with their own draft, while Esc restores the direction draft.
+Completion buttons call the existing session-action handler; CLI approvals
+retain the explicit decision inbox. No new request or automatic approval was
+introduced. Responsive footer height is included in Workbench geometry and
+separator dragging, so a focused native terminal stays visible when the dock grows.
+
+The dock review's Hologram API finding records local rectangles, hit targets and
+the footer-aware layout adapters. `Form::draw_inline` shares `draw_layout` with
+the original modal renderer; its name-similarity notice against diff file-list
+rendering is unrelated to that shared question renderer. The original form,
+scope cache, and session-action handler are reused rather than duplicated.
 
 Validation completed on 2026-11-22 with the pinned Rust toolchain:
 
 - Formatting, `cargo.sh check`, clippy for all targets with warnings denied,
   and `git diff --check`.
-- Full library suite: 1,108 passed; seven opt-in tests ignored.
+- Full library suite: 1,109 passed; seven opt-in tests ignored.
 - `lean_core`: 27 passed; `lean_tui`: 116 passed.
 - Messaging: 21 passed; approvals: two; recovery: 20; workflow: three.
 - Real daemon sequences: navigation two passed (host clipboard test remains

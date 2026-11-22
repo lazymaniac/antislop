@@ -2,20 +2,6 @@ use super::super::*;
 mod click;
 
 impl App {
-    pub(in crate::lean::tui) fn bar_height(area: Rect) -> u16 {
-        let _ = area;
-        1
-    }
-
-    pub(in crate::lean::tui) fn main_areas(area: Rect) -> [Rect; 3] {
-        Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(u16::from(area.height >= 6)),
-            Constraint::Length(Self::bar_height(area)),
-        ])
-        .areas(area)
-    }
-
     pub(in crate::lean::tui) fn mouse_scroll(&mut self, down: bool) {
         if self.scroll_help(down) {
             return;
@@ -124,14 +110,81 @@ impl App {
     }
 
     fn mouse_inner(&mut self, mouse: event::MouseEvent) -> bool {
-        if self.navigation.focus == NavigationFocus::Composer
-            || self.details.as_ref().is_some_and(|details| details.editing)
+        let dock_uncovered = self.picker.is_none()
+            && self.help.is_none()
+            && self.editor.is_none()
+            && self.decision_inbox.is_none()
+            && self.unblock.is_none()
+            && self.recovery_consent.is_none()
+            && self.graph_filters.is_none()
+            && self.plan_history.is_none()
+            && self.plan_view.is_none()
+            && self.flow_editor.is_none()
+            && !self
+                .config_editor
+                .as_ref()
+                .is_some_and(|editor| editor.visible);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && dock_uncovered
+            && let Some((_, action)) = self
+                .direction_choices
+                .iter()
+                .find(|(rect, _)| rect.contains((mouse.column, mouse.row).into()))
+                .copied()
+        {
+            match action {
+                render::direction::Action::Answer(index) => {
+                    if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                        form.selected = index;
+                        form.visible = true;
+                    }
+                }
+                render::direction::Action::Decisions => self.open_decision_inbox(),
+                render::direction::Action::Session(index) => {
+                    self.select_session_action(index);
+                }
+            }
+            return true;
+        }
+        if self.interview_visible()
+            && dock_uncovered
+            && matches!(
+                mouse.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+        {
+            self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && dock_uncovered
+            && (self.navigation.focus == NavigationFocus::Composer
+                || self.interview_visible()
+                || self.details.as_ref().is_some_and(|details| details.editing))
+            && let Some((_, code, modifiers)) = self
+                .chrome_keys
+                .iter()
+                .find(|(rect, _, _)| {
+                    rect.y == self.direction_area.bottom()
+                        && rect.contains((mouse.column, mouse.row).into())
+                })
+                .copied()
+        {
+            self.key(event::KeyEvent::new(code, modifiers));
+            return true;
+        }
+        if dock_uncovered
+            && (self.navigation.focus == NavigationFocus::Composer
+                || self.details.as_ref().is_some_and(|details| details.editing)
+                || self.interview_visible())
         {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && let Some((send, cancel)) = self.direction_actions
             {
                 if send.contains((mouse.column, mouse.row).into()) {
-                    if self.details.as_ref().is_some_and(|details| details.editing) {
+                    if self.interview_visible() {
+                        self.key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    } else if self.details.as_ref().is_some_and(|details| details.editing) {
                         self.submit_agent_message();
                     } else {
                         self.submit();
@@ -197,8 +250,8 @@ impl App {
             match mouse.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     let mut presentation = self.navigation.presentation();
-                    if super::super::workbench::resize_at(
-                        self.terminal_area,
+                    if super::super::workbench::resize_areas(
+                        self.workbench_areas,
                         &mut presentation,
                         mouse.row,
                     ) {

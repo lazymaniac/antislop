@@ -46,7 +46,12 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     );
     let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
     let historical_diff = app.historical_diff_selected();
-    let areas = super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
+    let areas = super::super::workbench::areas_with_footer(
+        frame.area(),
+        &presentation,
+        app.navigation.focus,
+        super::direction::footer_height(app, frame.area()),
+    );
     app.workbench_areas = areas;
     draw_workbench_chrome(
         frame,
@@ -236,39 +241,30 @@ fn draw_workbench_chrome(
         areas.footer.width,
         areas.footer.height.saturating_sub(1),
     );
-    super::chrome::direction(
-        frame,
-        direction,
-        if matches!(app.navigation.target, WorkbenchTarget::Session) {
-            "session"
-        } else {
-            "task"
-        },
-        theme,
-    );
-    app.chrome_keys
-        .push((direction, KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.direction_area = direction;
     let footer = Rect::new(
         areas.footer.x,
         areas.footer.bottom().saturating_sub(1),
         areas.footer.width,
         1,
     );
-    super::chrome::keybar(
-        app,
-        frame,
-        footer,
-        &[
-            ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
-            ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
-            ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
-            ("z expand", KeyCode::Char('z'), KeyModifiers::NONE),
-            ("esc back", KeyCode::Esc, KeyModifiers::NONE),
-            ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
-            ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
-        ],
-        theme,
-    );
+    if !super::direction::keybar(app, frame, footer, theme) {
+        super::chrome::keybar(
+            app,
+            frame,
+            footer,
+            &[
+                ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
+                ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
+                ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
+                ("z expand", KeyCode::Char('z'), KeyModifiers::NONE),
+                ("esc back", KeyCode::Esc, KeyModifiers::NONE),
+                ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
+                ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
+            ],
+            theme,
+        );
+    }
     if !areas.separator.is_empty() {
         frame.render_widget(
             Paragraph::new(if theme.ascii { "..." } else { "⋯" })
@@ -446,15 +442,10 @@ fn draw_workbench_list(
 }
 
 impl App {
-    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect, _bar_height: u16, theme: &Theme) {
-        let footer = Rect::new(
-            footer.x + u16::from(footer.width >= 40) * 2,
-            footer.y,
-            footer
-                .width
-                .saturating_sub(u16::from(footer.width >= 40) * 4),
-            1,
-        );
+    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect, theme: &Theme) {
+        if super::direction::keybar(self, frame, footer, theme) {
+            return;
+        }
         let pause = if self.view.paused {
             "space continue"
         } else {
@@ -479,19 +470,17 @@ impl App {
 
     pub(super) fn draw_main(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
-        let bar_height = Self::bar_height(area);
-        let [body, _, footer] = Self::main_areas(area);
+        let body = super::chrome::inset(area);
         self.chat_area = body;
-        let body = super::chrome::inset(body);
         let spacious = body.height >= 25;
-        let [identity, canvas, invitation] = Layout::vertical([
+        let [identity, canvas, dock] = Layout::vertical([
             Constraint::Length(if spacious {
                 2
             } else {
                 u16::from(body.height >= 10)
             }),
             Constraint::Min(1),
-            Constraint::Length(if spacious { 3 } else { 2 }),
+            Constraint::Length(super::direction::footer_height(self, area)),
         ])
         .areas(body);
         let pending = self.view.approvals.len() + usize::from(self.view.user_decision);
@@ -506,10 +495,8 @@ impl App {
         self.draw_graph(frame, canvas, theme);
         self.now_area = status_area;
 
-        super::chrome::direction(frame, invitation, "session", theme);
-        self.chrome_keys
-            .push((invitation, KeyCode::Char('k'), KeyModifiers::CONTROL));
-
-        self.draw_footer(frame, footer, bar_height, theme);
+        self.direction_area = Rect::new(dock.x, dock.y, dock.width, dock.height.saturating_sub(1));
+        let footer = Rect::new(dock.x, dock.bottom().saturating_sub(1), dock.width, 1);
+        self.draw_footer(frame, footer, theme);
     }
 }

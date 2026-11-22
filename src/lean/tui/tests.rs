@@ -2589,7 +2589,10 @@ fn app_draw_transcript_empty_state() {
     assert!(text.contains("No messages in this conversation"));
 }
 
-fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+fn rendered_editor_viewport(app: &App, buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+    if !comment {
+        return app.direction_input_area;
+    }
     let title = if comment { "comment on" } else { "Give" };
     let top = (buffer.area.top()..buffer.area.bottom())
         .find(|&y| {
@@ -2609,26 +2612,6 @@ fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> 
                     .collect::<String>()
             )
         });
-    if !comment && buffer.area.width >= 60 && buffer.area.height >= 20 {
-        let left = (buffer.area.left()..buffer.area.right())
-            .find(|&x| buffer[(x, top)].symbol() == "G")
-            .unwrap();
-        let bottom = (top + 1..buffer.area.bottom())
-            .find(|&y| {
-                (buffer.area.left()..buffer.area.right())
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("Send instruction")
-            })
-            .unwrap();
-        let width = buffer
-            .area
-            .width
-            .saturating_sub(4)
-            .min(84)
-            .saturating_sub(4);
-        return Rect::new(left, top + 4, width, bottom.saturating_sub(top + 5));
-    }
     let left = (buffer.area.left()..buffer.area.right())
         .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
         .expect("left frame corner");
@@ -2666,7 +2649,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                     app.input.text.clone()
                 };
                 terminal.draw(|frame| app.draw(frame)).unwrap();
-                let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                let viewport = rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
                 assert!(viewport.contains(terminal.get_cursor_position().unwrap()));
                 assert_eq!(
                     if comment {
@@ -2683,7 +2666,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                 input: InputBuffer::default(),
             });
             terminal.draw(|frame| app.draw(frame)).unwrap();
-            let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+            let viewport = rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
             for text in [
                 "a".repeat(usize::from(viewport.width - 1)),
                 "b".repeat(usize::from(viewport.width)),
@@ -2709,7 +2692,8 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                         app.key(event::KeyEvent::new(key, KeyModifiers::NONE));
                     }
                     terminal.draw(|frame| app.draw(frame)).unwrap();
-                    let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                    let viewport =
+                        rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert!(
                         viewport.contains(cursor),
@@ -2732,7 +2716,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                         matches!(
                             terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol(),
                             "│" | "|"
-                        ) || (!comment && width >= 60 && height >= 20),
+                        ) || !comment,
                         "right border {:?}, comment={comment}, viewport={viewport:?}, cursor={cursor:?}",
                         terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol()
                     );
@@ -3357,32 +3341,15 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         assert!(initial.contains("PgUp/PgDn / Mouse wheel"));
         assert!(initial.contains("👩‍💻"));
         assert!(initial.contains("e\u{301}"));
-        let buffer = terminal.backend().buffer();
-        let title_row = (0..height)
-            .find(|&y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("Question · choose an answer")
-            })
-            .unwrap();
-        let left = (0..width)
-            .find(|&x| buffer[(x, title_row)].symbol() == "┌")
-            .unwrap();
-        let right = (0..width)
-            .rfind(|&x| buffer[(x, title_row)].symbol() == "┐")
-            .unwrap();
-        let bottom = (title_row..height)
-            .find(|&y| buffer[(left, y)].symbol() == "└")
-            .unwrap();
+        let left = app.direction_area.x;
+        let right = app.direction_area.right() - 1;
+        let title_row = app.direction_area.y;
+        let bottom = app.direction_input_area.y - 1;
         assert!(left > 0 && right < width - 1, "side margins stay visible");
-        assert!(
-            title_row > 0 && bottom < height - 1,
-            "vertical margins stay visible"
-        );
+        assert!(title_row > 0 && bottom < height - 1);
         assert!(
             right - left > width * 3 / 4,
-            "scope modal spans both panels"
+            "question extension spans the dock"
         );
         let offset = app.offset;
         let chat_scroll = app.scroll;
@@ -3434,7 +3401,13 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         assert!(screen(&terminal).contains("REQ000"));
         app.key(key_press(KeyCode::Down));
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert!(screen(&terminal).contains("Request changes"));
+        assert!(
+            screen(&terminal).contains("Request changes"),
+            "selected={} visible={} {}",
+            app.interview_forms[&app.conversation].selected,
+            app.interview_visible(),
+            screen(&terminal)
+        );
         assert_eq!(app.interview_forms[&app.conversation].selected, 1);
         app.interview_forms
             .get_mut(&app.conversation)
@@ -3799,7 +3772,7 @@ fn footer_has_one_keybar_row_and_help_preserves_the_draft() {
         .find(|(_, code, _)| *code == KeyCode::F(1))
         .unwrap()
         .0;
-    assert_eq!(hit.y, 49);
+    assert_eq!(hit.y, 48);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: hit.x,
@@ -3832,7 +3805,7 @@ fn footer_clicks_use_rendered_hit_areas_after_unicode_project_names() {
             .find(|(_, code, _)| *code == KeyCode::Char('d'))
             .unwrap()
             .0;
-        assert_eq!(hit.y, height - 1);
+        assert_eq!(hit.y, height - 1 - u16::from(height >= 30));
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: hit.x,

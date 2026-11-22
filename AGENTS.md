@@ -2337,20 +2337,23 @@ src
     Snapshot(C{task,documents})
    interview/render
     ScopeCheckpoint(C{offset,sanitizer,wrapper})
-    - ScopeWrapState,ScopePass,ScopeWrapper,question_rows,wrapped_{scope,scope_from},record_checkpoint,
-      append_{answer_rows,interview_footer,wrapped},option_rows,append_{option,option_label,input_rows}
+    - FormRows,ScopeWrapState,ScopePass,ScopeWrapper,ScopeRows,content_box,{render_interview,question}_rows,
+      wrapped_{scope,scope_from},record_checkpoint,visible_rows,append_{answer_rows,interview_footer},interview_box,
+      append_wrapped,option_rows,append_{option,option_label,input_rows}
     - ScopeWrapper: new,from_state,emit_{row,borrowed},consume,finish
    interview.rs
-    Form(C{event,question,scope_{summary,revision,source_revision,cache},selected,input,visible,sending,sent,error,scroll,scroll_step,manual_scroll})
-     key(key):Option<String> > key_global,len,navigate_choice,submit_or_insert_newline,edit_key,insert_character
+    Form(C{event,question,scope_{summary,revision,source_revision,cache},selected,input,visible,sending,sent,error,choice_areas,scroll,scroll_step,manual_scroll})
+     key(key):Option<String> > key_global,insert_char,navigate_choice,submit_or_insert_newline,edit_key,insert_character
      scroll_by(down,lines)
-     draw(frame,screen,theme) ~60 > interview_box,rows,row_count,content_box,visual_cursor,visible_{scroll,rows},ScopeRows,render_interview_rows,place_cursor
+     draw(frame,screen,theme) > draw_layout
+     draw_inline(frame,screen,theme) > draw_layout
      new(event,question):Self
      paste(text) > insert_str,sanitize_paste
      set_scope_summary(summary) > clear_layout
      sync_scope_summary(summary,source_revision) > set_scope_summary
+     - rows,visible_scroll,place_cursor
     - ScopeCache,ScopeCacheKey,ScopeWindow
-    - ScopeCache: prepare,window
+    - ScopeCache: prepare,row_count,window
    layout/lines
     compute_visual_lines(text,width):Vec<VisualLineInfo> > paragraph_end,wrap_paragraph,empty_line
     visual_text_lines(text,width):Vec<String> > compute_visual_lines,visual_text_lines_from_layout
@@ -2484,7 +2487,11 @@ src
      panel_wrap_width(area):usize > panel_editor_area
      Panel(C{title,status,lines,focused,cursor})
     direction
-     draw(app,frame,theme) ~170 > panel_wrap_width,visual_text_lines,chrome,overlay,Theme.button,draw_panel
+     draw(app,frame,theme) ~159 > extension_height,areas,draw_extension,editing,direction,question,raised,Theme.{fit,clean,dim},chrome,accent,visual_text_lines
+     footer_height(app,viewport):u16 > interview_visible,question,editing,extension_height
+     keybar(app,frame,area,theme):bool > editing
+     Action(E{Answer,Decisions,Session})
+     - completion
     overlays
      editor
       draw_editor(app,frame,theme):bool ~45 > visual_text_lines,comments_on,visual_cursor,editor_box,draw_editor_cursor
@@ -2590,7 +2597,7 @@ src
     update_records
      - {save,apply_saved}_config
    state.rs
-    App(C{native_views,workbench_sessions,workbench_sessions_{request_id,inflight,pending,after,fetch_after},conversations_request_id,conversation_deletions,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,result_fetch,focus,navigation,navigation_revision,send_navigation,selected,relations,offset,details,diff,plan_view,editor,picker,rigor_recommendations_shown,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_send,image_drafts,send_{images,operation_keys},failed_comment,{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_{states,projects},graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,inspector_visible},chrome_keys,direction_actions,inspector_hits,graph_card_{scroll,area},{detail,diff}_states,details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,workbench_{areas,dragging},graph_viewport,unblock,recovery_consent,approval,approval_hidden,decision_inbox,approval_submissions,graph_filters,flow_editor,graph_link_source,projects,active_project,new_conversation_request_id,deleted_conversations})
+    App(C{native_views,workbench_sessions,workbench_sessions_{request_id,inflight,pending,after,fetch_after},conversations_request_id,conversation_deletions,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,result_fetch,focus,navigation,navigation_revision,send_navigation,selected,relations,offset,details,diff,plan_view,editor,picker,rigor_recommendations_shown,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_send,image_drafts,send_{images,operation_keys},failed_comment,{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_{states,projects},graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,inspector_visible},chrome_keys,direction_{actions,area,input_area,choices},inspector_hits,graph_card_{scroll,area},{detail,diff}_states,details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,workbench_{areas,dragging},graph_viewport,unblock,recovery_consent,approval,approval_hidden,decision_inbox,approval_submissions,graph_filters,flow_editor,graph_link_source,projects,active_project,new_conversation_request_id,deleted_conversations})
      open_unblock(named) > agent_key,audit_retryable,auditor,targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) ~40 > open_{interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,apply_rigor_team,rigor,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},accept_plan,trigger_direct_execute,toggle_flow_link
@@ -2641,8 +2648,6 @@ src
      selection_context():String > hash
      selection_blocked():bool > interview_visible
      mouse_click(col,row) > click_plan_view,dialog_open,click_{phase_action,now,graph}
-     bar_height(area):u16
-     main_areas(area):[Rect; 3] > areas
      mouse_scroll(down) > scroll_help,interview_visible,scroll_{details,graph,chat}
      mouse(mouse):bool > mouse_inner
      register_project(conn):usize > Projects.from_env,spawn_project_poller,len
@@ -2709,10 +2714,10 @@ src
      phase_action():Option<(&'static str,Command)> > interview_visible,plan_proposed,audit_retryable
      draw_phase_action(frame,area,theme) > phase_action,Theme.button,borders
      draw(frame) > draw_with_theme
-     draw_with_theme(frame,theme) > sync_interview,draw_min_term_guard,sync_{native_views,approval,rigor_recommendation},draw_{plan_history,secondary_or_main,remaining}
+     draw_with_theme(frame,theme) > sync_interview,overlay,draw_min_term_guard,sync_{native_views,approval,rigor_recommendation},draw_{plan_history,secondary_or_main,remaining}
      draw_graph(frame,area,theme) ~67 > graph_{areas,expansion,scope_with_exception},get_with_expanded,keep_graph_selection_visible,center_animated_card,draw_graph_position_markers,new_window,draw_{graph_inspector,expanded_card_panels,expanded_entry_arrows,progress}
      graph_expansion():(Option<String>,u8)
-     draw_main(frame,theme) > inset,areas,len,brand,Theme.decision,draw_graph,direction,draw_footer
+     draw_main(frame,theme) > inset,areas,footer_height,len,brand,Theme.decision,draw_{graph,footer}
      draw_transcript(frame,area,theme) > prepare_transcript_rows,add_workflow_card,{add_plain,add_empty}_transcript,draw_transcript_viewport
      transcript_visible_rows(start,end,history_height,extra,theme):Vec<Row> > append_visible_history
      transcript_card_rows(entry,found,width,theme):Vec<Row> > comment_{card_ref,rows},standard_card_rows
@@ -3031,11 +3036,13 @@ src
      get(id):Option<&WorkUnit>
      card_key(key):String > for_stage
    workbench
-    areas(viewport,presentation,focus):WorkbenchAreas ~72 > WorkbenchAreas
+    areas(viewport,presentation,focus):WorkbenchAreas > areas_with_footer
+    areas_with_footer(viewport,presentation,focus,footer_height):WorkbenchAreas ~72 > areas,WorkbenchAreas
     context(target,presentation):WorkbenchContext > WorkbenchContext
     default_tab(key,delivers_changes):WorkbenchTab
     neighbour_tab(key,delivers_changes,current,direction):WorkbenchTab > tabs_for
-    resize_at(viewport,presentation,row):bool > areas
+    resize_areas(current,presentation,row):bool
+    resize_at(viewport,presentation,row):bool > resize_areas,areas
     sidebar(view):Vec<SidebarRow> > WorkUnits.new,SidebarRow
     tab_line(key,delivers,active,theme):ratatui::text::Line<'static> > tabs_for
     tabs_for(key,delivers_changes):Vec<WorkbenchTab>
@@ -3259,6 +3266,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 169,564 LOC · input 1,553,588 · output 48,491 tokens · state 8c26af07aea2 · targets AGENTS.md
+· 169,998 LOC · input 1,557,662 · output 48,612 tokens · state 1315e4274377 · targets AGENTS.md
 ```
 <!-- hologram:end -->

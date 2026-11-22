@@ -88,6 +88,13 @@ The top bar shows `> antislop <branch>` and the session's status and total work
 time. The clock counts overlapping agent turns once, excludes idle gaps, and
 restores its total from recorded events when the TUI is reopened.
 
+Ctrl+K turns the bottom direction bar into an inline editor. It grows for
+multiline text; Enter sends and Esc restores navigation while keeping the draft.
+Questions and available session actions appear above it. Click an answer to
+select it, then Enter to submit; choose Other to type in the same bottom input.
+Long scope questions retain PgUp/PgDn and wheel scrolling. New questions never
+take keyboard focus from an editor or native terminal.
+
 Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
 Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining
 a dirty draft. Chat sends with Enter/Ctrl+S; Alt+Enter/Ctrl+J inserts a newline,

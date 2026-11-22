@@ -11,6 +11,11 @@ impl Form {
             return None;
         }
         self.manual_scroll = false;
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('j') {
+            self.selected = self.question.options.len();
+            self.input.insert_char('\n');
+            return None;
+        }
         let custom = self.question.options.len();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         self.navigate_choice(key.code, custom);

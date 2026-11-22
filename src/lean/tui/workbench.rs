@@ -125,6 +125,20 @@ pub fn areas(
     presentation: &WorkbenchPresentation,
     focus: NavigationFocus,
 ) -> WorkbenchAreas {
+    areas_with_footer(
+        viewport,
+        presentation,
+        focus,
+        if viewport.height >= 40 { 3 } else { 2 },
+    )
+}
+
+pub(in crate::lean::tui) fn areas_with_footer(
+    viewport: Rect,
+    presentation: &WorkbenchPresentation,
+    focus: NavigationFocus,
+    footer_height: u16,
+) -> WorkbenchAreas {
     if viewport.is_empty() {
         return WorkbenchAreas::default();
     }
@@ -140,7 +154,7 @@ pub fn areas(
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(if spacious { 4 } else { 2 }),
         Constraint::Min(0),
-        Constraint::Length(if spacious { 4 } else { 2 }),
+        Constraint::Length(footer_height),
     ])
     .areas(viewport.inner(margin));
     let wide_enough = viewport.width >= 120;
@@ -180,7 +194,7 @@ pub fn areas(
         } else {
             (work, Rect::default(), Rect::default())
         }
-    } else if viewport.height < 30 && focus == NavigationFocus::WorkbenchTerminal {
+    } else if focus == NavigationFocus::WorkbenchTerminal {
         (Rect::default(), Rect::default(), work)
     } else {
         (work, Rect::default(), Rect::default())
@@ -199,7 +213,18 @@ pub fn areas(
 
 /// Resize the PTY share from a pointer position, clamped to both 8-row minima.
 pub fn resize_at(viewport: Rect, presentation: &mut WorkbenchPresentation, row: u16) -> bool {
-    let current = areas(viewport, presentation, NavigationFocus::WorkbenchContent);
+    resize_areas(
+        areas(viewport, presentation, NavigationFocus::WorkbenchContent),
+        presentation,
+        row,
+    )
+}
+
+pub(in crate::lean::tui) fn resize_areas(
+    current: WorkbenchAreas,
+    presentation: &mut WorkbenchPresentation,
+    row: u16,
+) -> bool {
     if !current.split
         || current.content.height + current.separator.height + current.terminal.height == 0
     {
@@ -329,7 +354,7 @@ mod tests {
         presentation.zoomed = true;
         let zoom = areas(viewport, &presentation, NavigationFocus::WorkbenchTerminal);
         assert!(zoom.content.is_empty());
-        assert_eq!(zoom.terminal.height, 30);
+        assert_eq!(zoom.terminal.height, 31);
         assert_eq!(presentation.terminal_percent, before);
     }
 

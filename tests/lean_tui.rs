@@ -390,7 +390,10 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
 
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.input_shown, LARGE_PASTE_BYTES - 9);
+    assert_eq!(
+        app.input_shown,
+        LARGE_PASTE_BYTES - usize::from(app.direction_input_area.height - 1)
+    );
     let cursor = terminal.get_cursor_position().unwrap();
     assert_eq!(cursor.y, 10);
     assert_eq!(terminal.backend().buffer()[(3, cursor.y)].symbol(), "f");
@@ -1995,7 +1998,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_compact.contains("decisions"));
+    assert!(text_compact.contains("enter send"));
 
     // 11x4 (below minimum 12x5)
     let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();

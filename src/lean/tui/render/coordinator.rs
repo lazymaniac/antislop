@@ -12,6 +12,9 @@ impl App {
         self.inspector_hits.clear();
         self.chrome_keys.clear();
         self.direction_actions = None;
+        self.direction_area = Rect::default();
+        self.direction_input_area = Rect::default();
+        self.direction_choices.clear();
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
@@ -334,6 +337,114 @@ mod tests {
     }
 
     #[test]
+    fn direction_edits_in_place_and_questions_preserve_the_background_draft() {
+        for (width, height) in [(80, 24), (160, 50)] {
+            let mut app = App::test_app();
+            app.input = InputBuffer::with_text("direction draft 👩‍💻é");
+            app.key(event::KeyEvent::new(
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL,
+            ));
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(app.direction_input_area.y >= height - 8);
+            assert!(
+                app.direction_input_area
+                    .contains(terminal.get_cursor_position().unwrap())
+            );
+            let input_bottom = app.direction_area.bottom();
+            assert!(
+                app.chrome_keys
+                    .iter()
+                    .any(|(rect, code, _)| rect.y == input_bottom && *code == KeyCode::Enter)
+            );
+            assert!(app.graph_area.unwrap().bottom() <= app.direction_area.y);
+            if width == 160 {
+                let help = app
+                    .chrome_keys
+                    .iter()
+                    .find(|(_, code, _)| *code == KeyCode::F(1))
+                    .unwrap()
+                    .0;
+                let send = app.direction_actions.unwrap().0;
+                app.mouse(event::MouseEvent {
+                    kind: event::MouseEventKind::Down(event::MouseButton::Left),
+                    column: help.x,
+                    row: help.y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert!(app.help.is_some());
+                app.mouse(event::MouseEvent {
+                    kind: event::MouseEventKind::Down(event::MouseButton::Left),
+                    column: send.x,
+                    row: send.y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert!(
+                    !app.sending,
+                    "a covering dialog isolates the dock's Send action"
+                );
+                app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            }
+            app.view.apply(
+                &serde_json::json!({"seq":1, "kind":"user_decision_requested", "payload":{
+                "id":"scope", "question":"Which scope?", "context":"Choose the scope to implement.",
+                "options":[{"label":"Small"},{"label":"Full"}]}}),
+            );
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert_eq!(app.navigation.focus, NavigationFocus::Composer);
+            assert!(
+                !app.interview_visible(),
+                "incoming questions do not steal focus"
+            );
+            let own = app
+                .direction_choices
+                .iter()
+                .find(|(_, action)| matches!(action, super::super::direction::Action::Answer(2)))
+                .unwrap()
+                .0;
+            app.mouse(event::MouseEvent {
+                kind: event::MouseEventKind::Down(event::MouseButton::Left),
+                column: own.x,
+                row: own.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(app.interview_visible());
+            app.paste("custom answer 👩‍💻é");
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(
+                app.direction_input_area
+                    .contains(terminal.get_cursor_position().unwrap())
+            );
+            let first = app
+                .direction_choices
+                .iter()
+                .find(|(_, action)| matches!(action, super::super::direction::Action::Answer(0)))
+                .unwrap()
+                .0;
+            app.mouse(event::MouseEvent {
+                kind: event::MouseEventKind::Down(event::MouseButton::Left),
+                column: first.x,
+                row: first.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(app.interview_forms[&app.conversation].selected, 0);
+            assert!(
+                !app.interview_forms[&app.conversation].sending,
+                "selection does not submit"
+            );
+            app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            assert!(!app.interview_visible());
+            assert_eq!(app.input.text, "direction draft 👩‍💻é");
+            assert_eq!(
+                app.interview_forms[&app.conversation].input.text,
+                "custom answer 👩‍💻é"
+            );
+            assert!(app.decision_inbox.is_none());
+        }
+    }
+
+    #[test]
     fn session_header_shows_branch_status_and_total_time_without_collisions() {
         for width in [40, 80, 160] {
             for ascii in [false, true] {
@@ -395,12 +506,12 @@ mod tests {
         assert_eq!(buffer[(2, 1)].fg, crate::lean::tui::theme::ayu::CYAN);
         assert_eq!(buffer[(122, 3)].bg, crate::lean::tui::theme::ayu::PANEL);
         assert_eq!(buffer[(121, 3)].bg, crate::lean::tui::theme::ayu::BG);
-        assert_eq!(buffer[(2, 44)].bg, crate::lean::tui::theme::ayu::PANEL);
-        assert_eq!(buffer[(2, 49)].symbol(), "↑");
+        assert_eq!(buffer[(2, 46)].bg, crate::lean::tui::theme::ayu::PANEL);
+        assert_eq!(buffer[(2, 48)].symbol(), "↑");
         assert!(
             app.chrome_keys
                 .iter()
-                .any(|(rect, key, mods)| rect.height == 3
+                .any(|(rect, key, mods)| rect.height == 2
                     && *key == KeyCode::Char('k')
                     && mods.contains(KeyModifiers::CONTROL))
         );
@@ -417,7 +528,7 @@ mod tests {
         let areas = app.workbench_areas;
         assert_eq!(areas.list.width, 30);
         assert_eq!(areas.content.x, 35);
-        assert_eq!(areas.content.height.abs_diff(areas.terminal.height), 1);
+        assert!(areas.content.height.abs_diff(areas.terminal.height) <= 1);
         let buffer = terminal.backend().buffer();
         assert_eq!(
             buffer[(areas.content.x, areas.content.y)].bg,

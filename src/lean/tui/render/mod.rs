@@ -2,7 +2,7 @@ mod chat;
 mod chrome;
 mod composer;
 mod coordinator;
-mod direction;
+pub(super) mod direction;
 mod overlays;
 mod plan_history;
 mod specialized_dashboard;
