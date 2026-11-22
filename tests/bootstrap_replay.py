@@ -12,7 +12,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "support"))
 from resources import external, resources, process as owned_process
-from replay_cleanup import restore_listener, stop_daemon, cleanup_replay
+from replay_cleanup import restore_listener, stop_daemon, cleanup_replay, RelayConnections
 import hashlib
 import json
 import os
@@ -140,6 +140,7 @@ def main():
         proxy_identity = None
         accept_worker = None
         workers = []
+        connections = RelayConnections()
         try:
             original = wait(lambda: rpc('identity'))
             log('original', original)
@@ -178,13 +179,18 @@ def main():
             proxy.settimeout(.1)
 
             def relay(frontend):
+                backend = None
                 try:
                     with frontend, socket.socket(socket.AF_UNIX) as backend:
-                        request = frontend.makefile('rb').readline()
+                        if not connections.add(backend):
+                            return
+                        with frontend.makefile('rb') as stream:
+                            request = stream.readline()
                         envelope = json.loads(request)
                         backend.connect(str(upstream))
                         backend.sendall(request)
-                        response = backend.makefile('rb').readline()
+                        with backend.makefile('rb') as stream:
+                            response = stream.readline()
                         op = envelope['request']['op']
                         if op in ('events', 'events_paged') and not held.is_set():
                             log('held-real-events', envelope)
@@ -197,11 +203,16 @@ def main():
                             frontend.sendall(response)
                 except (OSError, json.JSONDecodeError) as error:
                     log('relay-ended', str(error))
+                finally:
+                    connections.remove(frontend)
+                    connections.remove(backend)
 
             def accept():
                 while not proxy_stop.is_set():
                     try:
                         connection, _ = proxy.accept()
+                        if not connections.add(connection):
+                            continue
                         worker = threading.Thread(target=relay, args=(connection,))
                         workers.append(worker)
                         worker.start()
@@ -318,7 +329,7 @@ def main():
                 release, proxy_stop, proxy,
                 lambda: restore_listener(pathlib.Path(sock), upstream,
                                          upstream_identity, proxy_identity),
-                daemon_cleanup.close, front, accept_worker, workers, log)
+                daemon_cleanup.close, front, accept_worker, workers, log, connections)
 
 
 if __name__ == '__main__':

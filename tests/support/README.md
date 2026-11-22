@@ -65,6 +65,10 @@ cleanup errors fail a normally returning test and are printed during an existing
 runs are retained intentionally; their caller owns retention. Never delete
 preexisting ignored state or another run based on its name.
 
+Replay cleanup owns active relay connections and shuts them down before joining
+workers, including when daemon stop fails. Late connections are closed immediately
+after shutdown begins; the original failure still retains fixture diagnostics.
+
 `tests/test_resources.py` and `lean_test_resources` exercise parallel allocation,
 bind/connect with long project paths, panic/readiness failure, failed spawn,
 reaping, selective diagnostic retention, neighbor preservation and environment
@@ -81,8 +85,6 @@ values follow the same external-path contract.
 output directory, and uses the current cargo.sh runner even for archived sources.
 The archived baseline is compiled in an external temporary source snapshot and
 its tests run with external cwd; it never writes state into that source snapshot.
-The missing render tool is independent of this contract; its archive tests can use
-these resource contexts when that tool is restored.
 
 The resource owners do not promise cleanup after a program deliberately removes
 its own fixture root or escapes ownership. For in-process Core consumers the
@@ -97,8 +99,7 @@ ANTISLOP_TASK_STATE. Those former fixture-location variables are no longer read.
 Set ANTISLOP_TEST_DIAGNOSTICS to your own durable parent for retained logs.
 Generated provider scripts and shims must be placed in an allocated fixture;
 common/support installers validate the canonical parent against the source root
-before modifying it. The render archive test also uses the Python context,
-independently of whether its missing production tool is restored or removed.
+before modifying it.
 
 Bootstrap replay restores its renamed listener only while the endpoint is absent
 or still belongs to its proxy; a rebound successor endpoint is preserved. Cleanup
@@ -108,3 +109,30 @@ means release could not be confirmed: selected logs are copied, but the active
 directory is retained and its exact path is printed for diagnosis.
 Run `python3 -B tests/test_replay_cleanup.py` after building the debug binary to
 exercise controlled failures after rename and proxy installation, before handoff.
+
+## Render checks
+
+`tests/test_reference_renders.py` tested the retired Python archive codec, not
+rendering: exact byte round trips, gzip/base64 validation, length/SHA-256 checks,
+duplicate keys and refusal to overwrite output. Commit `d07b7f4a2` removed the
+codec together with its historical render archives and adapter documentation.
+The orphaned test is removed too; compatibility with that historical envelope
+and its publication behavior is no longer checked or provided.
+
+Current rendering remains checked by the ordinary library tests
+`lean::tui::capture::fixture_contracts_reach_the_requested_views_and_export_full_buffers`
+and `lean::tui::capture::semantic_contracts_reject_corrupted_capture_evidence`.
+They render through real `App::draw`/TestBackend, validate fixture registration,
+geometry and complete cell buffers, and reject corrupted state, style and cells.
+`lean_tui` adds rendering and input regressions. CI runs these through
+`./cargo.sh test --locked --all-targets`, using the resource launcher above.
+For targeted capture regressions, run:
+
+```sh
+./cargo.sh test --lib lean::tui::capture::
+```
+
+The ignored `export_catalog` test is an optional current JSON export, not a
+historical archive decoder. Ordinary render checks do not write a catalog.
+Manual export requires `ANTISLOP_CAPTURE_DIR` naming a new external directory;
+keep it outside sources and use the same launcher and durable diagnostics.

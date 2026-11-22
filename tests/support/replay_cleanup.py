@@ -1,8 +1,40 @@
 """Cleanup for the exclusively owned bootstrap replay fixture."""
 import fcntl
 import os
+import socket
+import threading
 
 from resources import RetainResources
+
+
+class RelayConnections:
+    """Own active relay sockets and unblock their reads before joining workers."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.sockets = set()
+        self.stopped = False
+
+    def add(self, connection):
+        with self.lock:
+            if self.stopped:
+                connection.close()
+                return False
+            self.sockets.add(connection)
+            return True
+
+    def remove(self, connection):
+        with self.lock:
+            self.sockets.discard(connection)
+
+    def shutdown(self):
+        with self.lock:
+            self.stopped = True
+            for connection in self.sockets:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass  # Already closed or not connected.
+                connection.close()
 
 
 def identity(path):
@@ -42,7 +74,7 @@ def stop_daemon(command, binary, state):
                 raise RetainResources(f'daemon still owns {lock}: {result.stdout} {result.stderr}') from error
 
 
-def cleanup_replay(release, proxy_stop, proxy, restore, stop, front, accept_worker, workers, log):
+def cleanup_replay(release, proxy_stop, proxy, restore, stop, front, accept_worker, workers, log, connections=None):
     """Attempt every release even if another fails; retain state on any failure."""
     errors = []
 
@@ -62,6 +94,8 @@ def cleanup_replay(release, proxy_stop, proxy, restore, stop, front, accept_work
     attempt(front.wait)
     attempt(restore)
     attempt(stop)
+    if connections is not None:
+        attempt(connections.shutdown)
     if accept_worker is not None:
         attempt(accept_worker.join)
     for worker in workers:

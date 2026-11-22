@@ -11,7 +11,7 @@ from unittest.mock import Mock
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).parent / 'support'))
 from resources import SOURCE, RetainResources, process, resources
-from replay_cleanup import cleanup_replay, restore_listener, stop_daemon
+from replay_cleanup import cleanup_replay, restore_listener, stop_daemon, RelayConnections
 
 
 class ReplayCleanupTest(unittest.TestCase):
@@ -86,6 +86,49 @@ class ReplayCleanupTest(unittest.TestCase):
         restore.assert_called_once()
         stop.assert_called_once()
         self.assertFalse(worker.is_alive())
+
+    def test_stop_failure_unblocks_active_relay_reads(self):
+        release, stopped = threading.Event(), threading.Event()
+        for buffered in (False, True):
+            with self.subTest(buffered=buffered):
+                frontend, backend = socket.socketpair()
+                entered, finished = threading.Event(), threading.Event()
+                def relay():
+                    try:
+                        with frontend:
+                            entered.set()
+                            if buffered:
+                                with frontend.makefile('rb') as stream:
+                                    stream.readline()
+                            else:
+                                frontend.recv(1)
+                    except OSError:
+                        pass
+                    finally:
+                        connections.remove(frontend)
+                        finished.set()
+                connections = RelayConnections()
+                connections.add(frontend)
+                worker = threading.Thread(target=relay)
+                worker.start()
+                entered.wait()
+                front = Mock()
+                front.poll.return_value = 0
+                front.returncode = 0
+                try:
+                    with self.assertRaisesRegex(RetainResources, 'injected stop failure'):
+                        cleanup_replay(release, stopped, None, lambda: None,
+                            Mock(side_effect=RuntimeError('injected stop failure')),
+                            front, None, [worker], Mock(), connections)
+                    self.assertTrue(finished.is_set())
+                    self.assertFalse(worker.is_alive())
+                    late, peer = socket.socketpair()
+                    with peer:
+                        self.assertFalse(connections.add(late))
+                        self.assertEqual(late.fileno(), -1)
+                finally:
+                    backend.close()
+                    worker.join()
 
     def test_false_stop_success_retains_resources_and_diagnostics(self):
         import fcntl
