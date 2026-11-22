@@ -8,6 +8,7 @@ impl Details {
     ) {
         let previous_state = (self.scroll, self.query.clone());
         self.switch_tab(match next {
+            crate::lean::tui::WorkbenchTab::Summary if self.key.starts_with("reviewer:") => CHECKS,
             crate::lean::tui::WorkbenchTab::Summary
             | crate::lean::tui::WorkbenchTab::Conversation
             | crate::lean::tui::WorkbenchTab::Diff => 0,
@@ -62,6 +63,7 @@ impl Details {
         self.fetch_in_flight = false;
         self.show_info = false;
         self.selected_round = None;
+        self.round_report_pending = false;
         self.resume_round = false;
         self.task_uuid = None;
         self.available_rounds.clear();
@@ -151,7 +153,11 @@ impl Details {
             let next = (index as isize + direction)
                 .clamp(0, rounds.len().saturating_sub(1) as isize) as usize;
             let round = rounds[next];
+            if round == current {
+                return;
+            }
             self.selected_round = (round != latest).then_some(round);
+            self.round_report_pending = true;
             self.editing = false;
             self.task = None;
             self.documents.clear();

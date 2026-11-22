@@ -61,7 +61,13 @@ review, tasks with their dedicated options and applicable reviewer stages, and
 final audit. Shared options and work without an established owner stay separate.
 Tab selects an underlying stage in the inspector; Enter opens that stage's
 Workbench. Each stage retains its own history, results, evidence, checks,
-comments, recovery actions, draft, and native terminal.
+comments, recovery actions, draft, and native terminal. Agents without known file
+changes initially show their PTY; selecting a tab opens content. Reviewer Summary
+shows acceptance checks and their evidence. Conversation is the last tab and
+shows the agent's recorded prompt and message exchange as a scrollable chat.
+Prompts are retained for new turns; prompts not recorded by older runtimes cannot
+be reconstructed. The orchestration inspector shows full recent messages, with
+wheel and Shift+PgUp/PgDn scrolling independent of the graph.
 
 | Context | Controls |
 |---|---|
@@ -69,9 +75,9 @@ comments, recovery actions, draft, and native terminal.
 | Sessions and projects | Ctrl+N new; Ctrl+O sessions; Ctrl+G projects |
 | Workflow | `d` decisions; `h` plan history; Ctrl+L plan; Space pause/continue; Ctrl+X cancel |
 | Canvas | arrows select; Enter Workbench; Tab/Shift+Tab stages; `/` search; `f` filters; `g` grouping; 1–4 relations; `z` fold/expand |
-| Workbench | Ctrl+Left/Right tabs; Tab/Shift+Tab panes; arrows select sidebar stages; `,`/`.` rounds; Alt+Left/Right result documents |
+| Workbench | 1–9 tabs; Left/Right or Shift+Left/Right previous/next tab; Shift+Up/Down agents; Tab/Shift+Tab panes; `,`/`.` rounds; Alt+Left/Right result documents |
 | Presentation | Ctrl+B inspector/sidebar; `p` pin terminal; `z` zoom; Alt+Up/Down resize |
-| Native PTY | `t` focuses and enables native input; Ctrl+] returns to app navigation; every other key goes to the CLI |
+| Native PTY | `t` enables input; Ctrl+] returns to navigation; Shift+Up/Down switches agents; other keys go to the CLI |
 | Composer | displayed, changeable recipient; Ctrl+R recipients/broadcast; Ctrl+T queue/steer/interrupt; Enter send; Alt+Enter/Ctrl+J newline; Esc retains draft |
 | Editing and exit | editors and modals own their keys; Ctrl+C exits outside native input; Ctrl+Y copies selected application text |
 
@@ -104,7 +110,7 @@ select it, then Enter to submit; choose Other to type in the same bottom input.
 Long scope questions retain PgUp/PgDn and wheel scrolling. New questions never
 take keyboard focus from an editor or native terminal.
 
-Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
+Configuration uses Shift+Left/Right sections, Up/Down fields, Enter choices,
 Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining
 a dirty draft. Chat sends with Enter/Ctrl+S; Alt+Enter/Ctrl+J inserts a newline,
 Ctrl+V attaches a clipboard image and Alt+Backspace removes the latest attachment.

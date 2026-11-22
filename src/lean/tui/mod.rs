@@ -50,6 +50,7 @@ mod input;
 mod inspection;
 pub mod interview;
 mod layout;
+mod message_inspector;
 mod native_view;
 mod navigation;
 pub mod palette;

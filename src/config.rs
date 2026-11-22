@@ -42,8 +42,9 @@ impl Config {
     }
 
     pub fn from_toml(source: &str) -> Result<Self> {
-        let config: Self =
+        let mut config: Self =
             toml::from_str(source).map_err(|error| diagnostics::toml_error(source, error))?;
+        config.routing.remove(&WorkKind::Context);
         config.validate()?;
         Ok(config)
     }

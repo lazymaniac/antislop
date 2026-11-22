@@ -6992,9 +6992,7 @@ mod text_selection_acceptance {
                         ..Default::default()
                     });
                     app.open_details("worker:t1".into());
-                    app.navigation.update_presentation(|presentation| {
-                        presentation.tab = antislop::lean::tui::WorkbenchTab::Results;
-                    });
+                    app.key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
                     let details = app.details.as_mut().unwrap();
                     details.task = Some(json!({"report": "sample café 👩‍👩‍👧‍👦"}));
                     details.switch_tab(antislop::lean::tui::details::RESULT);
@@ -7049,7 +7047,7 @@ mod text_selection_acceptance {
             assert_eq!(app.text_selection.text().as_deref(), Some("sample"));
             assert_eq!(app.input.text, "retained draft");
             if mode == 1 {
-                app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+                app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
                 assert!(
                     app.text_selection.text().is_none(),
                     "tab changes invalidate immediately"

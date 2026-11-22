@@ -320,12 +320,9 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
     assert!(app.graph_expanded.is_none());
     app.key(key_press(KeyCode::Down));
-    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
     terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Esc));
     app.key(key_press(KeyCode::Esc));
@@ -362,6 +359,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
         ..Default::default()
     }];
     app.key(key_press(KeyCode::Enter));
+    app.workbench_select_tab(WorkbenchTab::Summary);
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(app.workbench_terminal_owner(), "worker:t1");
     let mut details = Details::new("worker:t1".into());
@@ -420,7 +418,7 @@ fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty()
             if app.navigation.presentation().tab == tab {
                 break;
             }
-            app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+            app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         }
         assert_eq!(app.navigation.presentation().tab, tab);
         terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -833,6 +831,8 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     }];
     app.selected = "worker:t1".into();
     app.key(key_press(KeyCode::Enter));
+    assert!(app.navigation.presentation().terminal_only_default);
+    app.open_diff("worker:t1");
     assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Diff);
     assert!(app.diff.is_some());
     app.key(key_press(KeyCode::Up));
@@ -840,14 +840,13 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     assert_eq!(app.selected, "worker:t1");
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     for expected in [
-        WorkbenchTab::Summary,
         WorkbenchTab::Conversation,
+        WorkbenchTab::Summary,
         WorkbenchTab::Results,
-        WorkbenchTab::Checks,
         WorkbenchTab::Comments,
         WorkbenchTab::Diff,
     ] {
-        app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         assert_eq!(app.navigation.presentation().tab, expected);
         assert_eq!(app.diff.is_some(), expected == WorkbenchTab::Diff);
         assert_eq!(
@@ -857,9 +856,9 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
         assert_eq!(app.selected, "worker:t1");
         terminal.draw(|frame| app.draw(frame)).unwrap();
     }
-    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     app.view.tasks[0].change_kind = crate::lean::tasks::ChangeKind::None;
-    app.key(event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+    app.key(event::KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Comments);
     assert!(
         app.diff.is_none(),
@@ -886,9 +885,12 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     app.key(key_press(KeyCode::Enter));
     assert_eq!(
         app.navigation.presentation().tab,
-        WorkbenchTab::Diff,
-        "a code task shows Diff even before a branch is reported"
+        WorkbenchTab::Summary,
+        "without known changes a code task starts in PTY preview"
     );
+    assert!(app.diff.is_none());
+    assert!(app.navigation.presentation().terminal_only_default);
+    app.open_diff("worker:t1");
     let file = |path: &str| {
         serde_json::json!({
             "path": path, "old_path": null, "status": "modified",
@@ -950,6 +952,7 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
     });
     let panned = app.offset;
     app.key(key_press(KeyCode::Enter));
+    app.workbench_select_tab(WorkbenchTab::Summary);
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_eq!(app.offset, panned);
     let before = app.workbench_areas;
@@ -1259,6 +1262,7 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     app.key(key_press(KeyCode::Enter));
+    app.workbench_select_tab(WorkbenchTab::Summary);
     terminal.draw(|frame| app.draw(frame)).unwrap();
     app.details.as_mut().unwrap().task = Some(serde_json::json!({"round": 1}));
     app.view.messages = (0..100)
@@ -1279,6 +1283,7 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
         .as_mut()
         .unwrap()
         .prepare_workbench_details(None, WorkbenchTab::Conversation);
+    app.details.as_mut().unwrap().follow = false;
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app.workbench_areas.content;
     let offset = app.offset;
@@ -1430,7 +1435,7 @@ fn configuration_keeps_ctrl_p_palette_access_and_contextual_help() {
         Help::Picker
             .lines_for_width(80)
             .iter()
-            .any(|line| line.contains("Ctrl+Left/Right"))
+            .any(|line| line.contains("Shift+Left/Right"))
     );
 }
 
@@ -1590,6 +1595,7 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
         ..Default::default()
     }];
     app.key(key_press(KeyCode::Enter));
+    app.workbench_select_tab(WorkbenchTab::Summary);
     app.key(key_press(KeyCode::Tab));
     app.key(key_press(KeyCode::Char('z')));
     assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
@@ -1635,11 +1641,8 @@ fn reopening_a_workbench_target_does_not_restore_a_closed_composer_focus() {
     app.open_details("worker:t1".into());
     assert!(!app.details.as_ref().unwrap().editing);
     assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
-    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
     app.key(key_press(KeyCode::Tab));
     assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
 }
@@ -1654,6 +1657,7 @@ fn rendered_workbench_tabs_are_clickable_and_leave_native_input() {
             ..Default::default()
         });
         app.open_details(target.into());
+        app.workbench_select_tab(WorkbenchTab::Summary);
         let _native = app.bind_native_input_for_test();
         let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
         for tab in workbench::tabs_for(target, target != "conversation") {
@@ -1702,12 +1706,9 @@ fn compact_workbench_tab_navigation_reveals_content_and_names_the_focused_pane()
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.workbench_areas.content.is_empty());
     assert!(terminal_text(&terminal).contains("Terminal"));
-    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Comments);
     assert!(!app.workbench_areas.content.is_empty());
     assert!(terminal_text(&terminal).contains("Content"));
     assert!(
@@ -1843,14 +1844,11 @@ fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_tar
     assert!(!app.navigation.presentation().list_visible);
     app.navigation
         .update_presentation(|presentation| presentation.split = false);
-    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)));
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
-    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)));
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)));
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT)));
     assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
-    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)));
+    assert!(app.key_inner(event::KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)));
     assert!(app.key_inner(key_press(KeyCode::Char('.'))));
     assert_eq!(app.navigation.presentation().round, None);
 
@@ -1859,19 +1857,16 @@ fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_tar
         app.navigation.target,
         WorkbenchTarget::Agent("reviewer:t1".into())
     );
-    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
     assert!(app.key_inner(key_ctrl('w')));
     assert_eq!(
         app.navigation.target,
         WorkbenchTarget::Agent("worker:t1".into())
     );
-    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
     assert!(!app.navigation.presentation().list_visible);
     assert!(!app.navigation.presentation().split);
-    assert_eq!(
-        app.navigation.presentation().tab,
-        WorkbenchTab::Conversation
-    );
+    assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
     assert_eq!(app.navigation.presentation().round, None);
 }
 
@@ -4716,3 +4711,6 @@ fn graph_inspector_prioritizes_each_selected_roles_content_and_preserves_actions
         }
     }
 }
+
+#[path = "tests/workbench_regressions.rs"]
+mod workbench_regressions;

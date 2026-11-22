@@ -61,7 +61,7 @@ pub struct Entry {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MessageEntry {
     pub id: String,
     pub sent_at: Option<i64>,

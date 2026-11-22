@@ -65,7 +65,7 @@ pub(super) fn round_label(details: &Details, selected: u64) -> String {
     } else {
         "history · return to current to send"
     };
-    format!("Round {selected} · {availability}{mode} · ,/. choose · Ctrl+←/→ tabs")
+    format!("Round {selected} · {availability}{mode} · ,/. choose · Shift+←/→ tabs")
 }
 
 pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Block<'static> {
@@ -240,7 +240,7 @@ pub(super) fn overview_split_hint(
             "t terminal",
             "Ctrl+K message",
             "e all",
-            "Ctrl+←/→ tabs",
+            "Shift+←/→ tabs",
             ",/. rounds",
             "Ctrl+W stage",
             "Esc back",

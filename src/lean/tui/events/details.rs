@@ -52,7 +52,7 @@ impl App {
             .as_ref()
             .is_some_and(|d| d.tab == RESULT || d.tab == CHECKS)
         {
-            self.fetch_task();
+            self.refetch_stale_details();
         }
     }
 

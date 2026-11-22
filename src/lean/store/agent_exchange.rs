@@ -266,6 +266,28 @@ fn record_question_answer(
 }
 
 impl Store {
+    /// Exact turn history, including settled questions from older input generations.
+    pub(in crate::lean) fn turn_question_history(
+        &self,
+        conversation: &str,
+        turn: &str,
+    ) -> Result<Vec<Value>> {
+        let db = self.db();
+        let mut query = db.prepare("SELECT q.id,q.state,q.question,q.answer,
+            COALESCE((SELECT m.created_ms FROM messages m WHERE m.conversation_id=q.conversation_id AND m.author='runtime' AND instr(m.text,'Agent question '||q.id||',')=1 ORDER BY m.rowid LIMIT 1),t.started_ms),
+            (SELECT e.created_ms FROM events e WHERE e.conversation_id=q.conversation_id AND e.kind='agent_question_answered' AND json_extract(e.payload,'$.request')=q.id ORDER BY e.seq DESC LIMIT 1)
+            FROM agent_questions q JOIN turns t ON t.id=q.turn_id WHERE q.conversation_id=?1 AND q.turn_id=?2 ORDER BY q.rowid")?;
+        Ok(query
+            .query_map(params![conversation, turn], |r| {
+                Ok(serde_json::json!({
+                    "request":r.get::<_,String>(0)?, "state":r.get::<_,String>(1)?,
+                    "question":r.get::<_,String>(2)?, "answer":r.get::<_,Option<String>>(3)?,
+                    "asked_ms":r.get::<_,i64>(4)?, "answered_ms":r.get::<_,Option<i64>>(5)?
+                }))
+            })?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+
     pub(in crate::lean) fn local_questions(&self, turn: &str) -> Result<Vec<Value>> {
         let db = self.db();
         let mut query = db.prepare("SELECT q.id,q.state,q.question,q.answer FROM agent_questions q JOIN turns old ON old.id=q.turn_id JOIN turn_scopes os ON os.turn_id=old.id JOIN turn_inputs oi ON oi.turn_id=old.id JOIN turns cur ON cur.id=?1 JOIN turn_scopes cs ON cs.turn_id=cur.id JOIN turn_inputs ci ON ci.turn_id=cur.id WHERE old.role=cur.role AND os.task_id=cs.task_id AND oi.generation=ci.generation ORDER BY (q.state IN ('pending','awaiting_user')) DESC,q.rowid DESC LIMIT 32")?;

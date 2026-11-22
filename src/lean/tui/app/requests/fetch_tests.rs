@@ -1,4 +1,5 @@
 use super::*;
+use crossterm::event::KeyEvent;
 use serde_json::json;
 use std::os::unix::net::UnixListener;
 use std::sync::mpsc;
@@ -399,4 +400,86 @@ fn deletion_replies_keep_other_pending_decisions_and_their_selection() {
     assert!(picker.delete_target.is_none());
     assert_eq!(picker.conversations, vec![first]);
     assert!(app.conversation_deletions.is_empty());
+}
+
+#[test]
+fn round_shortcuts_fetch_each_selected_snapshot_and_scrolling_does_not_refetch_it() {
+    let state = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+    let server = std::thread::spawn(move || {
+        for round in [1, 2] {
+            for op in ["task_rounds", "task_round", "result_documents"] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(stream);
+                let request = crate::transport::read::<Value>(&mut reader)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(request["request"]["op"], op);
+                let data = match op {
+                    "task_rounds" => json!([{"round":1},{"round":2}]),
+                    "task_round" => {
+                        assert_eq!(request["request"]["round"], round);
+                        json!({"id":uuid,"round":round,"status":"done","report":format!("Retained report for round {round}"),"turns":[]})
+                    }
+                    _ => {
+                        json!([{"id":"latest-output","path":"latest.md","source_commit":"latest-commit"}])
+                    }
+                };
+                crate::transport::write(reader.get_mut(), &json!({"data":data,"error":null}))
+                    .unwrap();
+            }
+        }
+    });
+    let (mut app, updates) = App::test_app_with_client(Client::at(state.path()));
+    app.view.plan = Some("plan".into());
+    app.view.tasks.push(view::TaskRow {
+        id: "t1".into(),
+        uuid: Some(uuid.into()),
+        round: 2,
+        ..Default::default()
+    });
+    app.navigation.screen = Screen::Workbench;
+    app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
+    app.navigation
+        .update_presentation(|presentation| presentation.tab = WorkbenchTab::Results);
+    let mut details = Details::new("worker:t1".into());
+    details.task_uuid = Some(uuid.into());
+    details.available_rounds = vec![1, 2];
+    details.prepare_workbench_details(None, WorkbenchTab::Results);
+    app.details = Some(details);
+    for (key, round) in [(',', 1), ('.', 2)] {
+        app.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+        let update = updates
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(&update, Update::Task { round: actual, .. } if *actual == round));
+        app.apply_update(update);
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.task.as_ref().unwrap()["round"], round);
+        let document = details
+            .documents
+            .get("result")
+            .expect("round report loaded");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let page = loop {
+            if let Some(page) = document.viewport(80, 30, 0, false).unwrap() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert!(
+            page.lines
+                .iter()
+                .any(|(_, text)| text.contains(&format!("Retained report for round {round}")))
+        );
+        let request = app.task_request_id;
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.task_request_id, request,
+            "scrolling reuses the selected snapshot"
+        );
+    }
+    server.join().unwrap();
 }

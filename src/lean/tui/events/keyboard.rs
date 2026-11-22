@@ -139,6 +139,28 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if !control && !alt {
+            if let KeyCode::Char(digit @ '1'..='9') = key.code
+                && !(self.navigation.target == WorkbenchTarget::Session
+                    && self.navigation.presentation().tab == WorkbenchTab::Summary
+                    && self.view.active_completion().is_some())
+            {
+                let key = self
+                    .details
+                    .as_ref()
+                    .map_or("conversation", |details| details.key.as_str());
+                let delivery = self
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.task_id())
+                    .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
+                    .is_some_and(|task| task.change_kind.has_delivery());
+                if let Some(tab) = super::super::workbench::tabs_for(key, delivery)
+                    .get((digit as u8 - b'1') as usize)
+                    .copied()
+                {
+                    return self.workbench_select_tab(tab);
+                }
+            }
             match key.code {
                 KeyCode::Char('d') => {
                     self.open_decision_inbox();
@@ -169,26 +191,7 @@ impl App {
                 });
                 return true;
             }
-            let rows = super::super::workbench::sidebar(&self.view);
-            let address = self
-                .details
-                .as_ref()
-                .map_or("conversation", |details| details.key.as_str());
-            let at = rows
-                .iter()
-                .position(|row| row.stage && row.key == address)
-                .unwrap_or(0);
-            let next = if key.code == KeyCode::Down {
-                ((at + 1)..rows.len())
-                    .find(|index| rows[*index].stage)
-                    .unwrap_or(at)
-            } else {
-                (0..at)
-                    .rev()
-                    .find(|index| rows[*index].stage || *index == 0)
-                    .unwrap_or(at)
-            };
-            self.open_work_card_or_stage(&rows[next]);
+            self.workbench_step_agent(key.code == KeyCode::Down);
             self.navigation.focus = NavigationFocus::WorkbenchList;
             self.navigation.update_presentation(|presentation| {
                 presentation.focus = NavigationFocus::WorkbenchList;
@@ -260,7 +263,9 @@ impl App {
             }
             return true;
         }
-        if control && matches!(key.code, KeyCode::Left | KeyCode::Right) {
+        if (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
             return self.workbench_change_tab(if key.code == KeyCode::Right { 1 } else { -1 });
         }
         if control && key.code == KeyCode::Char('w') {
@@ -294,6 +299,8 @@ impl App {
                 self.navigation.update_presentation(|presentation| {
                     presentation.round = details.selected_round;
                 });
+                self.fetch_task();
+                self.schedule_output_document_fetch();
                 return true;
             }
         }
@@ -320,6 +327,11 @@ impl App {
             let focus = self.navigation.focus;
             self.navigation.update_presentation(|presentation| {
                 presentation.focus = focus;
+                if focus == NavigationFocus::WorkbenchContent && presentation.terminal_only_default
+                {
+                    presentation.terminal_only_default = false;
+                    presentation.split = true;
+                }
                 if focus != NavigationFocus::WorkbenchList && self.terminal_area.width < 90 {
                     presentation.list_requested = false;
                 }
@@ -343,6 +355,53 @@ impl App {
         false
     }
 
+    pub(in crate::lean::tui) fn workbench_step_agent(&mut self, down: bool) {
+        let keys: Vec<String> = super::super::workbench::sidebar(&self.view)
+            .into_iter()
+            .filter(|row| row.stage)
+            .map(|row| row.key)
+            .collect();
+        let Some(first) = keys.first() else {
+            return;
+        };
+        let current = self.details.as_ref().map(|details| &details.key);
+        let next = current
+            .and_then(|key| keys.iter().position(|candidate| candidate == key))
+            .map(|at| {
+                if down {
+                    (at + 1).min(keys.len() - 1)
+                } else {
+                    at.saturating_sub(1)
+                }
+            });
+        let key = next.map_or(first, |index| &keys[index]);
+        if current == Some(key) {
+            return;
+        }
+        let focus = self.navigation.focus;
+        self.navigation
+            .update_presentation(|presentation| presentation.native_input = false);
+        if let Some(details) = &mut self.details {
+            details.native_focus = false;
+        }
+        self.open_details(key.clone());
+        let focus = if self.navigation.presentation().terminal_only_default
+            && focus == NavigationFocus::WorkbenchContent
+        {
+            NavigationFocus::WorkbenchTerminal
+        } else {
+            focus
+        };
+        self.navigation.focus = focus;
+        self.navigation.update_presentation(|presentation| {
+            presentation.focus = focus;
+            presentation.native_input = false;
+        });
+        if let Some(details) = &mut self.details {
+            details.native_focus = false;
+        }
+    }
+
     fn workbench_change_tab(&mut self, direction: isize) -> bool {
         let Some(details) = &self.details else {
             return false;
@@ -358,6 +417,16 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn workbench_select_tab(&mut self, next: WorkbenchTab) -> bool {
+        self.default_diff_request = None;
+        self.navigation.focus = NavigationFocus::WorkbenchContent;
+        self.navigation.update_presentation(|presentation| {
+            presentation.focus = NavigationFocus::WorkbenchContent;
+            presentation.native_input = false;
+            if presentation.terminal_only_default {
+                presentation.terminal_only_default = false;
+                presentation.split = true;
+            }
+        });
         self.remember_workbench();
         if !self.workbench_areas.header.is_empty() && self.workbench_areas.content.is_empty() {
             self.navigation.focus = NavigationFocus::WorkbenchContent;
@@ -382,10 +451,22 @@ impl App {
         if next == WorkbenchTab::Results {
             self.schedule_output_document_fetch();
         }
+        if next == WorkbenchTab::Conversation && details_key != "conversation" {
+            self.fetch_task();
+        }
         true
     }
 
     fn route_native_or_history(&mut self, key: KeyEvent) -> Option<bool> {
+        if self.navigation.screen == Screen::Workbench
+            && self.graph_expanded.is_none()
+            && !self.native_input_blocked()
+            && key.modifiers == KeyModifiers::SHIFT
+            && matches!(key.code, KeyCode::Up | KeyCode::Down)
+        {
+            self.workbench_step_agent(key.code == KeyCode::Down);
+            return Some(true);
+        }
         if self.native_focused() {
             self.route_native_key(key);
             return Some(true);

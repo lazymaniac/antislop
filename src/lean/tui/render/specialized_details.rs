@@ -50,6 +50,13 @@ impl Details {
             }
             return;
         }
+        if workbench_tab == Some(WorkbenchTab::Summary) && self.key.starts_with("reviewer:") {
+            self.draw_detail_content(frame, body, areas.footer, view, theme);
+            if let Some(terminal) = terminal {
+                self.draw_workbench_terminal(frame, terminal, view, theme);
+            }
+            return;
+        }
         if workbench_tab == Some(WorkbenchTab::Summary)
             && self.draw_workbench_summary(frame, body, view, theme)
         {
@@ -99,9 +106,15 @@ impl Details {
         let inner = self.draw_detail_block(frame, body, theme);
         let width = usize::from(inner.width.saturating_sub(1));
         let records = self.project_dialogue_entries(view);
-        let lines = self.layout_cache.update(records, &self.query, width);
+        let lines = self
+            .layout_cache
+            .update_chat(records, &self.query, width, theme);
         let bottom = lines.len().saturating_sub(usize::from(inner.height));
-        self.scroll = self.scroll.min(bottom);
+        self.scroll = if self.follow && self.query.is_empty() {
+            bottom
+        } else {
+            self.scroll.min(bottom)
+        };
         let end = self
             .scroll
             .saturating_add(usize::from(inner.height))

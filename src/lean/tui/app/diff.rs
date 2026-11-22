@@ -3,6 +3,7 @@ use crate::lean::daemon::ConversationRequest;
 
 impl App {
     pub fn open_diff(&mut self, key: &str) {
+        self.default_diff_request = None;
         if !key.contains(':') {
             return;
         }
@@ -20,8 +21,15 @@ impl App {
             }
             self.result_fetch.cancel_document_fetch();
             let previous = self.navigation.presentation().tab;
-            self.navigation
-                .update_presentation(|presentation| presentation.tab = WorkbenchTab::Diff);
+            self.navigation.update_presentation(|presentation| {
+                presentation.tab = WorkbenchTab::Diff;
+                if presentation.terminal_only_default {
+                    presentation.terminal_only_default = false;
+                    presentation.split = true;
+                }
+                presentation.focus = NavigationFocus::WorkbenchContent;
+            });
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
             if let Some(details) = &mut self.details {
                 details.prepare_workbench_details(Some(previous), WorkbenchTab::Diff);
             }

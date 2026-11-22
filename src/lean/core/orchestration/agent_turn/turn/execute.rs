@@ -29,6 +29,7 @@ fn execute_profile(
     let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt)?;
     events.prompt_bytes.set(Some(text.len()));
     check_task_inputs(core, &state.role)?;
+    events.announce("agent", json!({"type":"prompt", "text": text}));
     let handler = tool_handler(core, state);
     run_cli(core, state, &mut prepared, &text, &handler, cancel, events)
 }

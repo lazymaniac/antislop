@@ -187,7 +187,11 @@ fn command_resolution_preserves_precedence_and_argument_order() {
 #[test]
 fn a_route_to_a_missing_profile_is_rejected() {
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    config.routing.get_mut(&WorkKind::Context).unwrap().executor = "nobody".into();
+    config
+        .routing
+        .get_mut(&WorkKind::Requirements)
+        .unwrap()
+        .executor = "nobody".into();
     assert!(config.validate().is_err());
 }
 
@@ -247,7 +251,11 @@ fn assignments_still_require_existing_profiles_and_consistent_orchestration() {
     assert!(config.validate().is_err());
 
     let mut config = original.clone();
-    config.routing.get_mut(&WorkKind::Context).unwrap().reviewer = "missing".into();
+    config
+        .routing
+        .get_mut(&WorkKind::Requirements)
+        .unwrap()
+        .reviewer = "missing".into();
     assert!(config.validate().is_err());
 
     let mut config = original;
@@ -442,4 +450,24 @@ fn removed_permission_and_execution_budget_settings_are_rejected() {
             "{setting}"
         );
     }
+}
+
+#[test]
+fn legacy_context_route_is_removed_before_validation_and_serialization() {
+    let text = format!(
+        "{}\n[routing.context]\nexecutor = \"deleted-context-agent\"\nreviewer = \"deleted-reviewer\"\n",
+        include_str!("../../examples/antislop.toml")
+    );
+    let config = Config::from_toml(&text).unwrap();
+    assert!(!config.routing.contains_key(&WorkKind::Context));
+    assert!(
+        serde_json::to_value(&config).unwrap()["routing"]
+            .get("context")
+            .is_none()
+    );
+    assert!(
+        config
+            .resolve(WorkKind::Requirements, RoleKind::Executor)
+            .is_ok()
+    );
 }

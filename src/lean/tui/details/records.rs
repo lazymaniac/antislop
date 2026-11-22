@@ -63,9 +63,17 @@ mod conversation {
     ) -> Vec<Rc<DetailRecord>> {
         let mut records = Vec::new();
         let mut retained_ids = HashSet::new();
-        for message in view
-            .messages
+        let prompts: Vec<MessageEntry> = details
+            .task
+            .as_ref()
+            .and_then(|task| task["_conversation_prompts"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|prompt| serde_json::from_value(prompt.clone()).ok())
+            .collect();
+        let mut messages: Vec<_> = prompts
             .iter()
+            .chain(view.messages.iter())
             .chain(view.cards.iter().filter_map(|card| {
                 if let TranscriptCard::Message(message) = card {
                     Some(message)
@@ -73,14 +81,13 @@ mod conversation {
                     None
                 }
             }))
-        {
+            .collect();
+        messages.sort_by_key(|message| message.sent_at.unwrap_or(i64::MAX));
+        for message in messages {
             if !retained_ids.insert(message.id.as_str()) {
                 continue;
             }
-            if details.key != "conversation"
-                && normalize_identity(view, &message.sender) != details.key
-                && normalize_identity(view, &message.target) != details.key
-            {
+            if details.key != "conversation" && !view.message_involves(message, &details.key) {
                 continue;
             }
             if let Some((old, projected)) = cache.messages.get(&message.id)
@@ -156,17 +163,6 @@ mod conversation {
         records
     }
 
-    fn normalize_identity(view: &View, identity: &str) -> String {
-        if matches!(
-            identity.split_once(':').map(|(role, _)| role),
-            Some("worker" | "reviewer")
-        ) {
-            view.agent_key(identity)
-        } else {
-            view.agent_key(&View::mail_key(identity))
-        }
-    }
-
     fn push_message(records: &mut Vec<Rc<DetailRecord>>, details: &Details, message: MessageEntry) {
         let title = format!(
             "{} → {} · {}",
@@ -229,7 +225,7 @@ mod conversation {
     ) {
         let date = sent_at.and_then(message_datetime).unwrap_or_default();
         let date_width = UnicodeWidthStr::width(date.as_str());
-        let width = details.text_area.width as usize;
+        let width = usize::from(details.text_area.width.saturating_sub(3));
         let title = fit_header(&title, width.saturating_sub(date_width + 1));
         let title_width = UnicodeWidthStr::width(title.as_str());
         let gap = width.saturating_sub(title_width + date_width).max(1);
@@ -381,7 +377,7 @@ mod tests {
             .find(|line| line.contains("You → Session"))
             .unwrap();
         assert!(header.contains("2023-11-14"), "{header}");
-        assert_eq!(unicode_width::UnicodeWidthStr::width(header.as_str()), 80);
+        assert_eq!(unicode_width::UnicodeWidthStr::width(header.as_str()), 77);
 
         let empty = details.project_dialogue_entries(&View::default());
         assert!(

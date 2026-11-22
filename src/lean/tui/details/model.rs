@@ -15,6 +15,7 @@ pub(in crate::lean::tui) struct LayoutCache {
     records: Vec<Rc<DetailRecord>>,
     query: String,
     width: usize,
+    mode: Option<Theme>,
     lines: Vec<Line<'static>>,
 }
 
@@ -25,7 +26,28 @@ impl LayoutCache {
         query: &str,
         width: usize,
     ) -> &[Line<'static>] {
-        let unchanged = self.width == width
+        self.update_styled(records, query, width, None)
+    }
+
+    pub(in crate::lean::tui) fn update_chat(
+        &mut self,
+        records: Vec<Rc<DetailRecord>>,
+        query: &str,
+        width: usize,
+        theme: &Theme,
+    ) -> &[Line<'static>] {
+        self.update_styled(records, query, width, Some(*theme))
+    }
+
+    fn update_styled(
+        &mut self,
+        records: Vec<Rc<DetailRecord>>,
+        query: &str,
+        width: usize,
+        mode: Option<Theme>,
+    ) -> &[Line<'static>] {
+        let unchanged = self.mode == mode
+            && self.width == width
             && self.query == query
             && self.records.len() == records.len()
             && self
@@ -34,7 +56,8 @@ impl LayoutCache {
                 .zip(&records)
                 .all(|(a, b)| Rc::ptr_eq(a, b) || a == b);
         if !unchanged {
-            let append_only = query.is_empty()
+            let append_only = self.mode == mode
+                && query.is_empty()
                 && self.width == width
                 && self.query == query
                 && self.records.len() <= records.len()
@@ -49,15 +72,60 @@ impl LayoutCache {
                 self.lines.clear();
                 0
             };
-            self.lines.extend(
-                Details::render_records(&records[start..], query)
-                    .into_iter()
-                    .flat_map(|(style, text)| {
-                        wrap(&text, width)
+            if let Some(theme) = mode {
+                let query = query.to_lowercase();
+                for record in &records[start..] {
+                    if !query.is_empty() && !record.search_text.to_lowercase().contains(&query) {
+                        continue;
+                    }
+                    let Some((_, heading)) = record.lines.first() else {
+                        continue;
+                    };
+                    let body = record
+                        .lines
+                        .iter()
+                        .skip(1)
+                        .map(|(_, text)| text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let fill = if heading.starts_with("You ") || heading.starts_with("user ") {
+                        theme.raised()
+                    } else {
+                        theme.card()
+                    };
+                    let props = super::super::theme::CardProps {
+                        fill,
+                        accent: theme.accent(),
+                        head: vec![Span::styled(heading.clone(), theme.title())],
+                        right: String::new(),
+                        body: &body,
+                        max_body: usize::MAX,
+                        width: width.min(usize::from(u16::MAX)) as u16,
+                    };
+                    self.lines.extend(
+                        super::super::message_inspector::formatted_card(&theme, props)
                             .into_iter()
-                            .map(move |line| Line::styled(line, style))
-                    }),
-            );
+                            .map(|row| row.line.style(row.fill)),
+                    );
+                }
+                if self.lines.is_empty() && !query.is_empty() {
+                    self.lines.push(Line::styled(
+                        format!("No messages matching query \"{query}\"."),
+                        theme.dim(),
+                    ));
+                }
+            } else {
+                self.lines.extend(
+                    Details::render_records(&records[start..], query)
+                        .into_iter()
+                        .flat_map(|(style, text)| {
+                            wrap(&text, width)
+                                .into_iter()
+                                .map(move |line| Line::styled(line, style))
+                        }),
+                );
+            }
+            self.mode = mode;
             self.records = records;
             self.query = query.to_owned();
             self.width = width;
@@ -95,6 +163,8 @@ pub struct Details {
     pub text_area: Rect,
     /// None follows the current round; an explicit older round freezes selection.
     pub selected_round: Option<u64>,
+    /// After changing rounds, show that round's report before shared output files.
+    pub(in crate::lean::tui) round_report_pending: bool,
     pub available_rounds: Vec<u64>,
     pub latest_observed: u64,
     pub active_panel: usize,

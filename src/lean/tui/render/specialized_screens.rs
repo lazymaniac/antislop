@@ -298,8 +298,8 @@ fn draw_workbench_chrome(
             frame,
             footer,
             &[
-                ("ctrl ← tabs", KeyCode::Left, KeyModifiers::CONTROL),
-                ("ctrl →", KeyCode::Right, KeyModifiers::CONTROL),
+                ("shift ← tabs", KeyCode::Left, KeyModifiers::SHIFT),
+                ("shift →", KeyCode::Right, KeyModifiers::SHIFT),
                 ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
                 ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
                 ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),

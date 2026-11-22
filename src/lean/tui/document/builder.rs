@@ -1,4 +1,5 @@
 use crate::Result;
+use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,9 +19,15 @@ pub struct Document {
     pub(super) files: Arc<Files>,
     /// Byte ranges of the blocks in the text file, in order.
     pub(super) ranges: Arc<Vec<(u64, u64)>>,
+    fingerprint: [u8; 32],
     pub(super) owner: Option<Arc<()>>,
     pub(super) alive: Weak<()>,
     pub(super) layouts: Arc<Mutex<Vec<(LayoutKey, LayoutState)>>>,
+}
+impl Document {
+    pub(in crate::lean::tui) fn same_content(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint && self.ranges == other.ranges
+    }
 }
 impl PartialEq for Document {
     fn eq(&self, other: &Self) -> bool {
@@ -57,6 +64,7 @@ pub struct Builder {
     text: File,
     ranges: Vec<(u64, u64)>,
     offset: u64,
+    digest: Sha256,
 }
 
 pub(super) fn private_file(path: &Path) -> Result<File> {
@@ -80,6 +88,7 @@ impl Builder {
             text,
             ranges: Vec::new(),
             offset: 0,
+            digest: Sha256::new(),
         })
     }
 
@@ -92,16 +101,19 @@ impl Builder {
     ) -> Result<()> {
         let start = self.offset;
         self.text.write_all(header.as_bytes())?;
+        self.digest.update(header.as_bytes());
         self.offset += header.len() as u64;
         let mut sanitizer = crate::lean::tui::sanitize::Sanitizer::default();
         source(&mut |chunk| {
             let clean = sanitizer.push(chunk);
             self.text.write_all(clean.as_bytes())?;
+            self.digest.update(clean.as_bytes());
             self.offset += clean.len() as u64;
             Ok(())
         })?;
         let end = self.offset;
         self.text.write_all(b"\n")?;
+        self.digest.update(b"\n");
         self.offset += 1;
         self.ranges.push((start, end));
         Ok(())
@@ -114,6 +126,7 @@ impl Builder {
             alive: Arc::downgrade(&owner),
             owner: Some(owner),
             files: self.files,
+            fingerprint: self.digest.finalize().into(),
             ranges: Arc::new(self.ranges),
             layouts: Arc::new(Mutex::new(Vec::new())),
         })

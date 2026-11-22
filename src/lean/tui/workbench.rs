@@ -251,17 +251,18 @@ pub(in crate::lean::tui) fn resize_areas(
 
 pub fn tabs_for(key: &str, delivers_changes: bool) -> Vec<WorkbenchTab> {
     let role = key.split_once(':').map_or(key, |(role, _)| role);
-    let mut tabs = vec![WorkbenchTab::Summary, WorkbenchTab::Conversation];
+    let mut tabs = vec![WorkbenchTab::Summary];
     if key != "conversation" {
         tabs.push(WorkbenchTab::Results);
     }
-    if matches!(role, "worker" | "reviewer") {
+    if role == "reviewer" {
         tabs.push(WorkbenchTab::Checks);
     }
     tabs.push(WorkbenchTab::Comments);
     if delivers_changes {
         tabs.push(WorkbenchTab::Diff);
     }
+    tabs.push(WorkbenchTab::Conversation);
     tabs
 }
 
@@ -297,7 +298,7 @@ pub(super) fn tab_line(
             spans.push(Span::styled("  ", theme.dim()));
         }
         spans.push(Span::styled(
-            tab_label(tab),
+            format!("{} {}", index + 1, tab_label(tab)),
             if tab == active {
                 theme.accent()
             } else {
@@ -326,8 +327,9 @@ pub(super) fn tab_hits(area: Rect, key: &str, delivers: bool) -> Vec<(Rect, Work
     let mut x = area.x;
     tabs_for(key, delivers)
         .into_iter()
-        .filter_map(|tab| {
-            let width = tab_label(tab).len() as u16;
+        .enumerate()
+        .filter_map(|(index, tab)| {
+            let width = format!("{} {}", index + 1, tab_label(tab)).len() as u16;
             let hit = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
             x = x.saturating_add(width + 2);
             (!hit.is_empty()).then_some((hit, tab))
@@ -390,7 +392,7 @@ mod tests {
         assert_eq!(default_tab("worker:task", true), WorkbenchTab::Diff);
         assert_eq!(default_tab("reviewer:task", false), WorkbenchTab::Summary);
         assert!(tabs_for("reviewer:task", false).contains(&WorkbenchTab::Checks));
-        assert!(tabs_for("worker:task", true).contains(&WorkbenchTab::Checks));
+        assert!(!tabs_for("worker:task", true).contains(&WorkbenchTab::Checks));
         assert!(!tabs_for("worker:task", false).contains(&WorkbenchTab::Diff));
     }
 

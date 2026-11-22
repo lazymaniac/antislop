@@ -21,14 +21,13 @@ use ratatui::{
 use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
 
-pub const WORK_KINDS: [WorkKind; 18] = [
+pub const WORK_KINDS: [WorkKind; 17] = [
     WorkKind::Implementation,
     WorkKind::Refactoring,
     WorkKind::Testing,
     WorkKind::TestDesign,
     WorkKind::StaticAnalysis,
     WorkKind::Architecture,
-    WorkKind::Context,
     WorkKind::Requirements,
     WorkKind::Options,
     WorkKind::Planning,

@@ -10,6 +10,7 @@ impl App {
         self.phase_action_command = None;
         self.now_click_targets.clear();
         self.inspector_hits.clear();
+        self.inspector_messages.area = Rect::default();
         self.chrome_keys.clear();
         self.workbench_tabs.clear();
         self.direction_actions = None;
@@ -181,14 +182,14 @@ mod tests {
             KeyCode::Char('1'),
             event::KeyModifiers::NONE,
         ));
-        assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
-        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+        assert_eq!(app.details.as_ref().unwrap().tab, 0);
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
         app.key(event::KeyEvent::new(
             KeyCode::Right,
-            event::KeyModifiers::CONTROL,
+            event::KeyModifiers::SHIFT,
         ));
-        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Checks);
-        assert_eq!(app.details.as_ref().unwrap().tab, details::CHECKS);
+        assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
+        assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
     }
 
     #[test]
@@ -523,6 +524,7 @@ mod tests {
             ..Default::default()
         });
         app.open_details("worker:t1".into());
+        app.workbench_select_tab(WorkbenchTab::Summary);
         terminal
             .draw(|frame| app.draw_with_theme(frame, &theme))
             .unwrap();

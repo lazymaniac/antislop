@@ -88,13 +88,7 @@ impl Preview<'_> {
             .messages
             .iter()
             .rev()
-            .filter(|message| {
-                [&message.sender, &message.target]
-                    .into_iter()
-                    .any(|endpoint| {
-                        endpoint == key || view.agent_key(&View::mail_key(endpoint)) == key
-                    })
-            })
+            .filter(|message| view.message_involves(message, key))
             .take(3)
             .collect();
         if messages.is_empty() {
