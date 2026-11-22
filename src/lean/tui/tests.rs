@@ -4587,3 +4587,124 @@ fn canvas_and_stage_composers_own_their_keys_and_preserve_independent_drafts() {
     );
     assert_eq!(app.input.text, "Session 👩‍💻 é\nd");
 }
+
+#[test]
+fn graph_inspector_prioritizes_each_selected_roles_content_and_preserves_actions() {
+    use crate::lean::tui::view::{AUDITOR, PLAN_REVIEWER};
+    use crate::lean::tui::work_units::InspectorAction;
+    for (width, height) in [(160, 40), (160, 24), (80, 24)] {
+        let mut app = test_app();
+        app.graph_inspector_visible = true;
+        app.navigation.compact_secondary = width < 120;
+        app.input = InputBuffer::with_text("Unsent 👩‍💻 é draft");
+        app.view.plan_doc = "Published plan".into();
+        app.view.plan_preview = Some("Proposed migration plan\n".repeat(100));
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Migration".into(),
+            goal: "Keep persisted data".into(),
+            status: "approved".into(),
+            round: 2,
+            effect: Some("Worker migrated the schema".into()),
+            effect_cut: Some(true),
+            summary: Some("Migration delivered".into()),
+            reviewer_summary: Some("Reviewer checked data integrity".into()),
+            obligations: Some(serde_json::json!({"total":2,"ok":2,"missing":0})),
+            ..Default::default()
+        });
+        for key in [
+            crate::lean::PLANNER,
+            PLAN_REVIEWER,
+            AUDITOR,
+            "worker:t1",
+            "reviewer:t1",
+        ] {
+            app.view.agents.insert(key.into(), view::Agent::default());
+        }
+        app.view
+            .reviews
+            .insert(PLAN_REVIEWER.into(), vec!["Plan verdict: approved".into()]);
+        app.view
+            .reviews
+            .insert(AUDITOR.into(), vec!["Audit verdict: complete".into()]);
+        for (index, (sender, target, text)) in [
+            ("You", ORCHESTRATOR, "Obsolete exchange"),
+            (ORCHESTRATOR, "You", "Earlier response"),
+            ("You", ORCHESTRATOR, "Current question"),
+            ("t1/reviewer", ORCHESTRATOR, "Newest reply 👩‍💻 é"),
+            ("t1", "planner", "Unrelated private mail"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            app.view.messages.push(view::MessageEntry {
+                id: index.to_string(),
+                sent_at: None,
+                sender: sender.into(),
+                target: target.into(),
+                text: text.into(),
+                state: "delivered".into(),
+                kind: "agent".into(),
+            });
+        }
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        for (key, heading, text) in [
+            (ORCHESTRATOR, "Recent messages", "Newest reply"),
+            (
+                crate::lean::PLANNER,
+                "Latest submitted plan",
+                "Proposed migration plan",
+            ),
+            (PLAN_REVIEWER, "Latest review", "Plan verdict: approved"),
+            (AUDITOR, "Latest review", "Audit verdict: complete"),
+            ("worker:t1", "Worker result", "effect: [fragment]"),
+            (
+                "reviewer:t1",
+                "Review result",
+                "Reviewer checked data integrity",
+            ),
+        ] {
+            app.select_work_stage(key.into());
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let (hit, _) = app
+                .inspector_hits
+                .iter()
+                .find(|(_, action)| matches!(action, InspectorAction::Results(role) if role == key))
+                .expect("the selected stage retains its results action");
+            let buffer = terminal.backend().buffer();
+            let inspector = buffer
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row[usize::from(hit.x)..usize::from(hit.right())]
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                inspector.contains(heading),
+                "{key} {width}x{height}: {inspector}"
+            );
+            assert!(
+                inspector.contains(text),
+                "{key} {width}x{height}: {inspector}"
+            );
+            assert!(inspector.contains("Results & evidence"), "{inspector}");
+            assert!(!inspector.contains("Unrelated private mail"));
+            assert!(!inspector.contains("Obsolete exchange"));
+            if key == ORCHESTRATOR && height == 40 {
+                assert!(
+                    inspector.contains("Current question")
+                        && inspector.contains("Earlier response")
+                );
+                assert!(inspector.find("Newest reply") < inspector.find("Current question"));
+            }
+            if key == crate::lean::PLANNER {
+                assert!(!inspector.contains("Published plan"));
+            }
+            assert_eq!(app.input.text, "Unsent 👩‍💻 é draft");
+        }
+    }
+}
