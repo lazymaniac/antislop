@@ -2490,7 +2490,7 @@ src
      draw(app,frame,theme) ~159 > extension_height,areas,draw_extension,editing,direction,question,raised,Theme.{fit,clean,dim},chrome,accent,visual_text_lines
      footer_height(app,viewport):u16 > interview_visible,question,editing,extension_height
      keybar(app,frame,area,theme):bool > editing
-     Action(E{Answer,Decisions,Session})
+     Action(E{Answer,Review,Decisions,Session})
      - completion
     overlays
      editor
@@ -3266,6 +3266,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 169,998 LOC · input 1,557,662 · output 48,612 tokens · state 1315e4274377 · targets AGENTS.md
+· 170,074 LOC · input 1,558,363 · output 48,614 tokens · state d04fc84bc1c9 · targets AGENTS.md
 ```
 <!-- hologram:end -->

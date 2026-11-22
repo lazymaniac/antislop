@@ -139,6 +139,11 @@ impl App {
                         form.visible = true;
                     }
                 }
+                render::direction::Action::Review => {
+                    if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                        form.visible = true;
+                    }
+                }
                 render::direction::Action::Decisions => self.open_decision_inbox(),
                 render::direction::Action::Session(index) => {
                     self.select_session_action(index);
@@ -146,14 +151,20 @@ impl App {
             }
             return true;
         }
-        if self.interview_visible()
+        if (self.interview_visible()
+            || self.direction_choices.iter().any(|(rect, action)| {
+                matches!(action, render::direction::Action::Review)
+                    && rect.contains((mouse.column, mouse.row).into())
+            }))
             && dock_uncovered
             && matches!(
                 mouse.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
             )
         {
-            self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                form.scroll_by(mouse.kind == MouseEventKind::ScrollDown, 3);
+            }
             return true;
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)

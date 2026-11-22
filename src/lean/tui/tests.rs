@@ -3292,7 +3292,6 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         "Planning must use this scope."
     );
 
-    app.run_workflow(Command::InterviewQuestion);
     let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let screen: String = terminal
@@ -3308,6 +3307,10 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
     assert!(screen.contains("rejectedrecords."));
     assert!(screen.contains("Doyouconfirmthisscope"));
     assert!(screen.contains("planningcanbegin?"));
+    assert!(
+        !app.interview_visible(),
+        "the scope is visible before focusing or choosing an answer"
+    );
 
     // The scope decision spans both panels with margins and starts at the
     // beginning of a long summary. The wheel must scroll the modal only.
@@ -3320,6 +3323,56 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
         app.view.after += 1;
         app.sync_interview();
+        app.interview_forms
+            .get_mut(&app.conversation)
+            .unwrap()
+            .visible = false;
+        terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let preview = || {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(preview().contains("REQ000"));
+        let area = app
+            .direction_choices
+            .iter()
+            .find(|(_, action)| matches!(action, render::direction::Action::Review))
+            .unwrap()
+            .0;
+        let offset_before_review = app.offset;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let scrolled: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!scrolled.contains("REQ000"));
+        assert!(
+            !app.interview_visible(),
+            "reading scope does not steal keyboard focus"
+        );
+        assert_eq!(app.offset, offset_before_review);
+        assert_eq!(app.input.text, "chat draft");
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
         app.run_workflow(Command::InterviewQuestion);
         app.interview_forms
             .get_mut(&app.conversation)

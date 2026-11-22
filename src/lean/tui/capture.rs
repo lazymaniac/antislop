@@ -1092,6 +1092,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             .expect("fixture question deserializes");
             let mut form = interview::Form::new(42, question);
             if id == "interview-scope" {
+                form.visible = false;
                 form.set_scope_summary(Some(
                     "TUI capture adapter: all renderer families and six terminal geometries.",
                 ));

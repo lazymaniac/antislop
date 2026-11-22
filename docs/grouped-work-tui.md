@@ -69,6 +69,7 @@ pending decisions, unavailable history, errors, drafts and monochrome/ASCII mode
 Reviewed 160×50 captures: [Canvas](images/tui-canvas.png),
 [Workbench](images/tui-workbench.png), [direction input](images/tui-direction.png),
 [inline question](images/tui-question.png).
+The [scope preview](images/tui-scope.png) shows the unfocused confirmation at 80×24.
 These rasterize the real TestBackend cell buffers with a fixed monospace font;
 native PTY cells come from deterministic terminal fixtures.
 
@@ -83,6 +84,11 @@ Completion buttons call the existing session-action handler; CLI approvals
 retain the explicit decision inbox. No new request or automatic approval was
 introduced. Responsive footer height is included in Workbench geometry and
 separator dragging, so a focused native terminal stays visible when the dock grows.
+
+Scope confirmations show the actual scope summary in the unfocused preview,
+before any choice is made. The preview uses the same bounded scope renderer as
+the focused question: wheel scrolling reads it without moving the Canvas or
+taking keyboard focus, and clicking the scope focuses the answer controls.
 
 The dock review's Hologram API finding records local rectangles, hit targets and
 the footer-aware layout adapters. `Form::draw_inline` shares `draw_layout` with

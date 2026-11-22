@@ -4,6 +4,7 @@ use super::super::*;
 #[derive(Debug, Clone, Copy)]
 pub(in crate::lean::tui) enum Action {
     Answer(usize),
+    Review,
     Decisions,
     Session(usize),
 }
@@ -23,12 +24,10 @@ fn editing(app: &App) -> bool {
 
 fn extension_height(app: &App, viewport: Rect) -> u16 {
     if let Some(form) = question(app) {
-        let preferred = if app.interview_visible() {
-            if app.view.scope_confirmation_summary.is_some() {
-                16
-            } else {
-                (form.question.options.len() as u16 * 2 + 6).min(16)
-            }
+        let preferred = if app.view.scope_confirmation_summary.is_some() {
+            16
+        } else if app.interview_visible() {
+            (form.question.options.len() as u16 * 2 + 6).min(16)
         } else {
             form.question.options.len() as u16 + 4
         };
@@ -264,7 +263,9 @@ fn draw_extension(app: &mut App, frame: &mut Frame, area: Rect, theme: &Theme) {
         return;
     }
     frame.render_widget(Block::default().style(theme.card()), area);
-    if app.interview_visible() {
+    if app.interview_visible()
+        || (question(app).is_some() && app.view.scope_confirmation_summary.is_some())
+    {
         if let Some(form) = app.interview_forms.get_mut(&app.conversation) {
             form.draw_inline(frame, area, theme);
             app.direction_choices.extend(
@@ -272,6 +273,7 @@ fn draw_extension(app: &mut App, frame: &mut Frame, area: Rect, theme: &Theme) {
                     .iter()
                     .map(|(rect, index)| (*rect, Action::Answer(*index))),
             );
+            app.direction_choices.push((area, Action::Review));
         }
         return;
     }

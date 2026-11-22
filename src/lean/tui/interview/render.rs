@@ -107,7 +107,12 @@ impl Form {
         }
         let block = if row_count > viewport {
             block.title_bottom(format!(
-                " PgUp/PgDn / Mouse wheel | {}-{}/{} ",
+                " {} | {}-{}/{} ",
+                if inline && !self.visible {
+                    theme.chrome("Mouse wheel scroll · click scope to focus")
+                } else {
+                    "PgUp/PgDn / Mouse wheel".to_owned()
+                },
                 scroll + 1,
                 scroll.saturating_add(viewport).min(row_count),
                 row_count
@@ -141,7 +146,11 @@ impl Form {
         let (option_selected, mut choices) = option_rows(
             &mut rows,
             &self.question.options,
-            self.selected,
+            if inline && !self.visible {
+                usize::MAX
+            } else {
+                self.selected
+            },
             width,
             theme,
         );
