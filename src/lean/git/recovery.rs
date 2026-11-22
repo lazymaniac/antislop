@@ -4,7 +4,7 @@ use std::path::Component;
 /// Only changed source bytes, not the entire repository. A dirty file can
 /// change again while `git status` continues to show the same `M` entry.
 pub fn recovery_fingerprint(project: &Path, scope: &[String]) -> Result<String> {
-    let repository = is_repository(project)?;
+    let repository = repository_probe(project)?;
     let (paths, mut observed) = scope_observations(project, scope, repository)?;
     if repository && !paths.is_empty() {
         append_repository_state(project, &paths, &mut observed)?;
@@ -12,7 +12,7 @@ pub fn recovery_fingerprint(project: &Path, scope: &[String]) -> Result<String> 
     Ok(crate::hash(observed.join("\0").as_bytes()))
 }
 
-fn is_repository(project: &Path) -> Result<bool> {
+pub(crate) fn repository_probe(project: &Path) -> Result<bool> {
     let probe = git(project, &["rev-parse", "--is-inside-work-tree"])?;
     if probe.status.success() {
         return Ok(true);

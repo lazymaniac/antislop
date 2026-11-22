@@ -1,7 +1,7 @@
 use super::*;
 
 #[path = "sessions_and_plans/carry.rs"]
-mod carry;
+pub(in crate::lean::store) mod carry;
 #[path = "sessions_and_plans/recovery.rs"]
 mod recovery;
 
@@ -186,19 +186,43 @@ impl Store {
     }
 
     /// Queues every task of a proposed plan, all or none; tasks approved in
-    /// the previous plan with the same contract stay approved.
+    /// the previous plan with the same contract stay approved. A repeated
+    /// activation is rejected without writes; resumption uses `requeue_plan`.
+    /// Runtime callers retain the integration lock through source revalidation
+    /// and publication. External editors are observed, not locked, by snapshots.
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        let (all, captured) = {
+            let mut db = self.db();
+            let tx = db.transaction()?;
+            let all = proposed_task_count(&tx, conversation, plan_id)?;
+            let captured = carry::capture(&tx, conversation, plan_id)?;
+            tx.commit()?;
+            (all, captured)
+        };
+        let prepared = captured.compare_sources()?;
+        prepared.validate_sources()?;
         let mut db = self.db();
-        let tx = db.transaction()?;
-        let all = proposed_task_count(&tx, conversation, plan_id)?;
-        tx.execute(
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        crate::require(
+            carry::capture(&tx, conversation, plan_id)? == captured,
+            "carry inputs changed during preparation; approve the plan again",
+        )?;
+        proposed_task_count(&tx, conversation, plan_id)?;
+        carry::execute(
+            &tx,
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2 AND status<>'superseded'",
             params![conversation, plan_id],
         )?;
-        if let Some(text) = carry::carry_approved(&tx, conversation, plan_id)? {
-            tx.execute(
+        if let Some(text) = carry::apply(&tx, &prepared)? {
+            carry::execute(
+                &tx,
                 "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'notice',?3,?4)",
-                params![conversation, plan_id, serde_json::json!({"text": text}).to_string(), now_ms()],
+                params![
+                    conversation,
+                    plan_id,
+                    serde_json::json!({"text": text}).to_string(),
+                    now_ms()
+                ],
             )?;
         }
         record_plan_activation(&tx, conversation, plan_id)?;
@@ -260,12 +284,14 @@ fn proposed_task_count(
     conversation: &str,
     plan_id: &str,
 ) -> Result<i64> {
-    let proposed: i64 = tx.query_row(
+    let proposed: i64 = carry::one(
+        tx,
         "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2 AND status='proposed'",
         params![conversation, plan_id],
         |row| row.get(0),
     )?;
-    let all: i64 = tx.query_row(
+    let all: i64 = carry::one(
+        tx,
         "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2 AND status<>'superseded'",
         params![conversation, plan_id],
         |row| row.get(0),
@@ -283,7 +309,8 @@ fn record_plan_activation(
     plan_id: &str,
 ) -> Result<()> {
     // Activation records the reviewed plan used by scheduling and recovery.
-    tx.execute(
+    carry::execute(
+        tx,
         "INSERT INTO plan_activations(plan_id,conversation_id) VALUES(?1,?2)",
         params![plan_id, conversation],
     )?;
@@ -295,14 +322,21 @@ fn advance_workflow(
     conversation: &str,
     plan_id: &str,
 ) -> Result<()> {
-    let changed = tx.execute(
+    let changed = carry::execute(
+        tx,
         "UPDATE session_workflow SET phase='implementation' WHERE conversation_id=?1 AND phase<>'interview'",
         [conversation],
     )?;
     if changed > 0 {
-        tx.execute(
+        carry::execute(
+            tx,
             "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'workflow',?3,?4)",
-            params![conversation, plan_id, serde_json::json!({"phase":"implementation"}).to_string(), now_ms()],
+            params![
+                conversation,
+                plan_id,
+                serde_json::json!({"phase":"implementation"}).to_string(),
+                now_ms()
+            ],
         )?;
     }
     Ok(())

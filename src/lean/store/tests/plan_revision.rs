@@ -753,3 +753,6 @@ fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation(
 
 #[path = "plan_revision/source_reuse.rs"]
 mod source_reuse;
+
+#[path = "plan_revision/carry_cost.rs"]
+mod carry_cost;

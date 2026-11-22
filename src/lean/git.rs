@@ -5,6 +5,7 @@
 #[path = "git/recovery.rs"]
 mod recovery;
 pub use recovery::recovery_fingerprint;
+pub(crate) use recovery::repository_probe;
 mod artifact_update;
 mod artifacts;
 pub(crate) use artifact_update::parent::Parent;
@@ -29,13 +30,63 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(super) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Ok(Command::new("git")
+    #[cfg(test)]
+    test_observation::arguments(args);
+    Ok(command(dir).args(args).output()?)
+}
+
+pub(super) fn command(dir: &Path) -> Command {
+    #[cfg(test)]
+    test_observation::command();
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(dir)
-        .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()?)
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
+#[cfg(test)]
+pub(crate) mod test_observation {
+    use std::cell::RefCell;
+    #[derive(Default, Debug, PartialEq, Eq)]
+    pub struct Counts {
+        pub commands: usize,
+        pub diffs: usize,
+        pub probes: usize,
+        pub resolutions: usize,
+    }
+    thread_local! {
+        static COUNTS: RefCell<Counts> = RefCell::default();
+        static DIFF_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
+    }
+    pub fn command() {
+        COUNTS.with(|c| c.borrow_mut().commands += 1);
+    }
+    pub fn arguments(args: &[&str]) {
+        COUNTS.with(|c| {
+            let mut c = c.borrow_mut();
+            c.diffs += usize::from(args.contains(&"diff"));
+            c.probes += usize::from(args == ["rev-parse", "--is-inside-work-tree"]);
+            c.resolutions += usize::from(args.starts_with(&["rev-parse", "--verify"]));
+        });
+        if args.contains(&"diff") {
+            let hook = DIFF_HOOK.with(|h| h.borrow_mut().take());
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+    }
+    pub fn on_next_diff(hook: impl FnOnce() + 'static) {
+        DIFF_HOOK.with(|h| {
+            assert!(h.borrow().is_none());
+            *h.borrow_mut() = Some(Box::new(hook));
+        });
+    }
+    pub fn take() -> Counts {
+        COUNTS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+    }
 }
 
 /// Look up one literal entry in a tree object without listing its descendants.
