@@ -251,7 +251,7 @@ fn graph_scrolls_through_many_short_cards() {
             ..Default::default()
         })
         .collect();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t0".into();
     let mut terminal = Terminal::new(TestBackend::new(180, 32)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -298,14 +298,14 @@ fn graph_scrolls_through_many_short_cards() {
             .all(|node| node.height <= HEIGHT)
     );
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 }
 
 #[test]
 fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
     for focus in [Focus::Chat, Focus::Graph] {
         let mut app = App::test_app();
-        app.focus = focus;
+        app.set_focus(focus);
         assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
     }
@@ -412,7 +412,7 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
 #[test]
 fn long_activity_labels_fit_the_grouped_canvas_card() {
     let mut app = App::test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.activity = Some("a".repeat(LARGE_PASTE_BYTES - 1));
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -699,7 +699,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         let mut app = App::test_app();
         app.input = InputBuffer::with_text("chat draft?");
         if help != Help::Graph {
-            app.focus = Focus::Graph;
+            app.set_focus(Focus::Graph);
             app.selected = "worker:t1".into();
         }
         if matches!(
@@ -776,7 +776,7 @@ fn help_blocks_typing_and_action_shortcuts_until_explicitly_dismissed() {
         app.paste("pasted text");
         assert_eq!(app.help, Some(Help::Graph));
         assert_eq!(app.input.text, "draft");
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         assert!(app.picker.is_none());
 
         app.key(KeyEvent::new(dismiss, KeyModifiers::NONE));
@@ -1042,7 +1042,7 @@ fn app_fake_request_capture_through_app() {
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.navigation.screen = antislop::lean::tui::Screen::Graph;
     app.details = None;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.editor.is_some());
@@ -1249,9 +1249,9 @@ fn app_graph_details_diff_navigation_and_search() {
         }
     }));
 
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert!(
         app.navigation
             .work_selection
@@ -1271,7 +1271,11 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.relations, Relations::default());
-    assert_eq!(app.focus, Focus::Graph, "Esc closed only the menu");
+    assert_eq!(
+        app.navigation.background_focus,
+        Focus::Graph,
+        "Esc closed only the menu"
+    );
 
     // Arrow navigation in Graph
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
@@ -1299,7 +1303,7 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.diff.is_none());
     assert!(app.details.is_some());
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
     app.graph_expanded = None;
     app.details = None;
@@ -1325,7 +1329,7 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(app.picker.is_none());
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     assert_eq!(app.scroll, usize::MAX);
     assert!(app.found.is_some());
 }
@@ -1347,7 +1351,7 @@ fn enter_opens_workbench_and_graph_detail_state_remains_renderable() {
             ..Default::default()
         },
     );
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
 
@@ -1381,7 +1385,7 @@ fn enter_opens_workbench_and_graph_detail_state_remains_renderable() {
     // Closing the retained graph detail view restores ordinary graph navigation.
     app.graph_expanded = None;
     app.navigation.screen = Screen::Graph;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     assert!(app.graph_expanded.is_none());
     assert!(app.details.is_some());
 }
@@ -1423,7 +1427,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     fn graph(app: &App) -> Graph {
@@ -1568,7 +1572,7 @@ fn expanded_card_resize_redraws_same_app_with_margins_and_clipping() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t3".into();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -1728,7 +1732,7 @@ fn graph_position_markers_follow_offscreen_nodes_and_resize() {
             ..TaskRow::default()
         })
         .collect();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.graph_revealed = Some(app.selected.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -1802,7 +1806,7 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             title: "Measured card".into(),
             ..TaskRow::default()
         }];
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.selected = "worker:t1".into();
         app.graph_inspector_visible = false;
         app.graph_expanded = Some("worker:t1".into());
@@ -3425,7 +3429,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         assert!(cursor.x < width && cursor.y < height);
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.input.text, "test command");
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         app.open_details("conversation".into());
         terminal.draw(|frame| app.draw(frame)).unwrap();
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -3799,7 +3803,7 @@ fn test_spatial_graph_rdm_relation_markers_and_visible_only_navigation() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     app.set_graph_filter(Some("second".into()));
@@ -3981,7 +3985,7 @@ fn test_refresh_updates_preserve_graph_selection() {
         }
     }));
 
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t2".into();
 
     app.view.apply(&json!({
@@ -4077,6 +4081,48 @@ fn test_inspector_conversation_switch_preserves_details_memory() {
     let d = app.details.as_ref().unwrap();
     assert_eq!(d.scroll, 42);
     assert_eq!(d.query, "szukana_fraza");
+}
+
+#[test]
+fn new_conversation_does_not_inherit_closed_details_search_or_scroll() {
+    for legacy in [false, true] {
+        let mut app = App::test_app();
+        app.open("conv-A".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for ch in "query only in A".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.details.as_ref().unwrap().query, "query only in A");
+        app.details.as_mut().unwrap().scroll = 42;
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.details.is_none());
+
+        app.open("conv-B".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.query, "", "new conversation, legacy={legacy}");
+        assert_eq!(details.scroll, 0, "new conversation, legacy={legacy}");
+        app.details.as_mut().unwrap().query = "only B".into();
+        app.details.as_mut().unwrap().scroll = 7;
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        app.open("conv-A".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.query, "query only in A", "legacy={legacy}");
+        assert_eq!(details.scroll, 42, "legacy={legacy}");
+    }
 }
 
 #[test]
@@ -4636,7 +4682,7 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
             ..Default::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     let mut terminal = Terminal::new(TestBackend::new(160, 70)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -4708,7 +4754,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     for task in &mut app.view.tasks {
         task.status = "working".into();
     }
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     // 1. Initial draw on 80x24 terminal
@@ -5033,7 +5079,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     for &(term_name, term_w, term_h, _inner_w, _inner_h) in &terminal_configs {
         let (mut app, _rx) =
             App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
 
         // 1. Long chain: c1 -> c2 -> c3 -> c4
         app.view.tasks = vec![
@@ -5688,7 +5734,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
-    app.details.as_mut().unwrap().tab = antislop::lean::tui::details::CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let issued = app.task_request_id;
     let check = |id: &str, task: &str, seq| Update::Events {
         conversation: "test-conv".into(),
@@ -5959,7 +6005,6 @@ fn configuration_shortcut_is_removed_from_palette_and_profile_actions_work() {
 
 #[test]
 fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
@@ -5968,7 +6013,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         observer: false,
     });
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let request = app.task_request_id;
     app.apply_update(Update::Task {
         documents: Default::default(),
@@ -7064,7 +7109,6 @@ mod text_selection_acceptance {
 
 #[test]
 fn checks_retry_failed_fetch_on_next_empty_event_batch() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
     let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.apply_update(Update::Events {
@@ -7074,7 +7118,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
         observer: false,
     });
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let issued = app.task_request_id;
     let failure = updates.recv_timeout(Duration::from_secs(3)).unwrap();
     assert!(matches!(&failure, Update::TaskFailed { .. }));
@@ -7112,7 +7156,6 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
 
 #[test]
 fn checks_refetch_on_task_verdict_in_the_same_round() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
@@ -7121,7 +7164,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
         observer: false,
     });
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let issued = app.task_request_id;
     app.apply_update(Update::Task {
         documents: Default::default(),
@@ -7144,7 +7187,6 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
 
 #[test]
 fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
     let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
@@ -7186,7 +7228,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     });
     app.open_details("worker:t1".into());
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7281,7 +7323,6 @@ fn task_replies_match_saved_conversation_plan_round_and_request_generation() {
 
 #[test]
 fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.view.plan = Some("p1".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -7290,7 +7331,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
         ..Default::default()
     });
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let mut issued = Vec::new();
     for round in 1..=3 {
         if round > 1 {
@@ -7376,7 +7417,6 @@ fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
 
 #[test]
 fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
     let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.view.plan = Some("p1".into());
@@ -7386,7 +7426,7 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
         ..Default::default()
     });
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let batch = || Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7771,11 +7811,10 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
 
 #[test]
 fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,observer:false,});
     app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
     let issued = app.task_request_id;
     for seq in 3..10 {
         app.apply_update(Update::Events {
@@ -8214,7 +8253,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     assert_eq!(req1["team"], "feature");
 
     // 2. Visual edge linking (`l` on t1, then move to t2 and press Enter) sends Fast-Path revise_plan
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
     assert_eq!(app.graph_link_source.as_deref(), Some("t1"));
@@ -8231,7 +8270,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let _ = rx_updates.recv_timeout(Duration::from_secs(2));
 
     // 3. Direct execution (`/direct`) sends `/direct ...` message over daemon socket
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("Fix typo in config");
     app.run_workflow(Command::DirectExecute);
     let req3 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -8239,4 +8278,18 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     assert_eq!(req3["text"], "/direct Fix typo in config");
 
     handle.join().unwrap();
+}
+
+// Drive the public input boundary, rather than changing the standalone Details
+// selection underneath an active Workbench.
+fn select_workbench_tab(app: &mut App, tab: antislop::lean::tui::WorkbenchTab) {
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(app.navigation.presentation().tab) {
+        if app.navigation.presentation().tab == tab {
+            return;
+        }
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    }
+    assert_eq!(app.navigation.presentation().tab, tab);
 }

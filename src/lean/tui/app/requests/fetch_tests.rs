@@ -15,11 +15,8 @@ fn reopening_details_restores_independent_workbench_tab_state() {
         (WorkbenchTab::Conversation, (8, "conversation query")),
         (WorkbenchTab::Diff, (13, "diff query")),
     ] {
-        let slot = usize::MAX - tab as usize;
-        app.details_scroll_memory
-            .insert(("worker:t1".into(), slot), scroll);
-        app.details_query_memory
-            .insert(("worker:t1".into(), slot), query.into());
+        app.workbench_memory
+            .insert(("worker:t1".into(), tab), (scroll, query.into()));
     }
 
     app.restore_details("worker:t1");

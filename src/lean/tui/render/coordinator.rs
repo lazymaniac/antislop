@@ -177,14 +177,20 @@ mod tests {
             KeyCode::Char('1'),
             event::KeyModifiers::NONE,
         ));
-        assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
+        assert_eq!(
+            app.details.as_ref().unwrap().content_tab(),
+            Some(WorkbenchTab::Results)
+        );
         assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
         app.key(event::KeyEvent::new(
             KeyCode::Right,
             event::KeyModifiers::CONTROL,
         ));
         assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Checks);
-        assert_eq!(app.details.as_ref().unwrap().tab, details::CHECKS);
+        assert_eq!(
+            app.details.as_ref().unwrap().content_tab(),
+            Some(WorkbenchTab::Checks)
+        );
     }
 
     #[test]
@@ -241,7 +247,7 @@ mod tests {
         let mut app = App::test_app();
         for (width, height) in [(140, 30), (100, 24), (99, 24), (85, 24), (84, 24), (12, 5)] {
             for focus in [Focus::Chat, Focus::Graph] {
-                app.focus = focus;
+                app.set_focus(focus);
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let theme = Theme::new(true, false);
                 terminal

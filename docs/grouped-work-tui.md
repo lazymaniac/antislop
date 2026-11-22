@@ -86,3 +86,24 @@ those have different responsibilities. The diff adapter calls the original
 `draw_body`, and capture fixtures reuse `capture_fixture_view`. The recovery
 sequence helper was renamed to `click_workflow_control` because it clicks the
 rendered keybar and action palette rather than the removed toolbar.
+
+### Navigation model for frontend adapters
+
+`NavigationState` owns the current `screen`, `target` and `focus`.
+`WorkbenchPresentation.focus` remembers a target's preferred focus;
+`NavigationState.background_focus` retains the graph/chat surface behind a
+Workbench pane or composer. These values have different lifetimes and conversation
+snapshots preserve them without reconciling mirrored fields. Frontend callers that
+previously wrote `App.focus` should use `App::set_focus(Focus)` to select a surface;
+read `navigation.background_focus` for the retained surface and `navigation.focus`
+for the current input focus. `ConversationState.focus` is likewise replaced by its
+navigation state. Keeping writable mirrors would reintroduce ambiguous ownership.
+
+Workbench content receives `WorkbenchTab` directly. Scroll/query memory uses
+`(target key, WorkbenchTab)`, scoped to the conversation, without reserved integer
+slots. `Details.tab`, its numeric switch methods, and standalone rendering remain
+the compatibility boundary for older callers. The Workbench adapter ignores that
+numeric selection; callers inspecting active Workbench selection should read
+`navigation.presentation().tab`. Calling `Details::switch_tab` or standalone
+`Details::draw` selects the legacy API again. Modal keyboard, paste and pointer
+routing retain their existing precedence; this model does not grant PTY input.

@@ -178,7 +178,7 @@ impl App {
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = WorkbenchTarget::Session;
         self.navigation.focus = NavigationFocus::Composer;
-        self.focus = Focus::Chat;
+        self.navigation.background_focus = Focus::Chat;
     }
 
     pub(super) fn apply_project_ready(&mut self, update: Update) {

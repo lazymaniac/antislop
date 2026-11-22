@@ -230,7 +230,7 @@ impl App {
         let Some(details) = self
             .details
             .as_mut()
-            .filter(|details| details.tab == details::RESULT)
+            .filter(|details| details.on_tab(WorkbenchTab::Results))
         else {
             self.result_fetch.cancel_document_fetch();
             if let Some(details) = self.details.as_mut() {
@@ -328,7 +328,7 @@ impl App {
             checks_only: self
                 .details
                 .as_ref()
-                .is_some_and(|details| details.tab == CHECKS),
+                .is_some_and(|details| details.on_tab(WorkbenchTab::Checks)),
             client: self.client.clone(),
             updates: self.updates.clone(),
         })
@@ -527,23 +527,7 @@ impl App {
             details.drafts = std::rc::Rc::clone(&self.agent_drafts);
             details.scroll_memory = self.details_scroll_memory.clone();
             details.query_memory = self.details_query_memory.clone();
-            details.workbench_memory = [
-                WorkbenchTab::Summary,
-                WorkbenchTab::Conversation,
-                WorkbenchTab::Results,
-                WorkbenchTab::Checks,
-                WorkbenchTab::Comments,
-                WorkbenchTab::Diff,
-            ]
-            .into_iter()
-            .filter_map(|tab| {
-                // These reserved high slots are disjoint from legacy Details indices.
-                let slot = usize::MAX - tab as usize;
-                let scroll = self.details_scroll_memory.get(&(key.to_owned(), slot))?;
-                let query = self.details_query_memory.get(&(key.to_owned(), slot))?;
-                Some(((key.to_owned(), tab), (*scroll, query.clone())))
-            })
-            .collect();
+            details.workbench_memory = self.workbench_memory.clone();
             details.selected_round = presentation.round;
             details.restore_current_tab();
             details.prepare_workbench_details(None, presentation.tab);

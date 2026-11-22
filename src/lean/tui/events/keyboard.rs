@@ -76,7 +76,7 @@ impl App {
                 } else {
                     NavigationFocus::WorkbenchContent
                 };
-                self.focus = if self.navigation.screen == Screen::Graph {
+                self.navigation.background_focus = if self.navigation.screen == Screen::Graph {
                     Focus::Graph
                 } else {
                     Focus::Chat
@@ -392,7 +392,7 @@ impl App {
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
             }
-            if self.focus == Focus::Graph && self.graph_tab == 1 {
+            if self.navigation.background_focus == Focus::Graph && self.graph_tab == 1 {
                 self.graph_tab = 0;
             }
         } else {
@@ -438,7 +438,7 @@ impl App {
                 .details
                 .as_ref()
                 .is_some_and(|details| details.searching)
-            || (self.focus == Focus::Chat
+            || (self.navigation.background_focus == Focus::Chat
                 && self.help.is_none()
                 && self.plan_view.is_none()
                 && (self.details.is_none() || self.graph_expanded.is_some())
@@ -616,14 +616,14 @@ impl App {
 
     fn route_base_layout(&mut self, key: KeyEvent) -> bool {
         if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-            if self.focus == Focus::Graph {
+            if self.navigation.background_focus == Focus::Graph {
                 self.cycle_work_stage(key.code == KeyCode::BackTab);
             } else {
                 self.toggle_focus();
             }
             return true;
         }
-        if self.focus == Focus::Graph {
+        if self.navigation.background_focus == Focus::Graph {
             return self.route_graph(key);
         }
         self.chat_key(key)
@@ -676,7 +676,7 @@ impl App {
                 details.editing = true;
             }
             self.navigation.focus = NavigationFocus::Composer;
-            self.focus = Focus::Chat;
+            self.navigation.background_focus = Focus::Chat;
             return true;
         }
         if control {

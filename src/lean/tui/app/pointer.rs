@@ -45,7 +45,7 @@ impl App {
         if self.graph_expanded.is_none() && self.scroll_details(down) {
             return;
         }
-        if self.focus == Focus::Graph {
+        if self.navigation.background_focus == Focus::Graph {
             self.scroll_graph(down, false);
         } else {
             self.scroll_chat(down);

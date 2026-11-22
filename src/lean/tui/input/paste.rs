@@ -154,7 +154,7 @@ impl App {
     }
 
     fn chat_paste_enabled(&self) -> bool {
-        self.focus == Focus::Chat
+        self.navigation.background_focus == Focus::Chat
             && self.plan_view.is_none()
             && self.diff.is_none()
             && (self.details.is_none()

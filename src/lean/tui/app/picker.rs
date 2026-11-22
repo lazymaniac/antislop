@@ -239,7 +239,7 @@ impl App {
         let details = self.details.as_ref().map(|details| {
             let mut query = std::collections::hash_map::DefaultHasher::new();
             details.query.hash(&mut query);
-            (&details.key, details.tab, query.finish())
+            (&details.key, details.content_tab(), query.finish())
         });
         format!(
             "{}:{}:{}:{:?}:{:?}",

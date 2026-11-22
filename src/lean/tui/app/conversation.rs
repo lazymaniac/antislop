@@ -115,6 +115,11 @@ impl App {
         self.relations = Relations::default();
         self.offset = (0, 0);
         self.scroll = 0;
+        // These maps belong to the active conversation; its snapshot was saved
+        // before activation, including the legacy Details adapter memory.
+        self.workbench_memory.clear();
+        self.details_scroll_memory.clear();
+        self.details_query_memory.clear();
         self.navigation = NavigationState::default();
         self.set_focus(Focus::Graph);
         self.graph_scope = Scope::default();

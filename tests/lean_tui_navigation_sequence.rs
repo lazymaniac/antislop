@@ -311,7 +311,7 @@ fn open_reviewer_workbench(
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     assert!(app.picker.is_some());
     for character in task_id.chars() {
@@ -429,7 +429,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         |app| app.view.agents.contains_key("orchestrator"),
         "graph agent",
     );
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     if app
         .interview_forms
         .get(&conversation_a)
@@ -455,7 +455,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(
@@ -786,7 +786,7 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     assert!(app.picker.is_some(), "graph agent picker must open by key");
     for character in "t1".chars() {

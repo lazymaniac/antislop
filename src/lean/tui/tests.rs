@@ -295,7 +295,7 @@ fn multiple_dropped_file_uris_attach_as_a_batch() {
 #[test]
 fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((120, 48));
     app.view.tasks = vec![
         view::TaskRow {
@@ -350,7 +350,7 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
 fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty() {
     let state = tempfile::tempdir().unwrap();
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((100, 28));
     app.selected = "worker:t1".into();
     app.view.plan = Some("plan".into());
@@ -593,7 +593,7 @@ fn graph_layout_rebuild_count(app: &App) -> usize {
 #[test]
 fn clicking_now_focuses_and_scrolls_to_active_agent() {
     let mut app = test_app();
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.view.tasks = (0..12)
         .map(|index| view::TaskRow {
             id: format!("t{index}"),
@@ -613,7 +613,7 @@ fn clicking_now_focuses_and_scrolls_to_active_agent() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t11");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let scope = app.graph_scope_with_exception();
@@ -661,7 +661,7 @@ fn now_click_mapping_contains_only_the_rows_shown_in_the_bar() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t0");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 }
 
 #[test]
@@ -687,7 +687,7 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert!(app.graph_visibility_exception.is_none());
     assert_eq!(app.view.layout_revision, initial_revision);
     assert_eq!(app.graph_scope_with_exception(), initial_scope);
@@ -722,7 +722,7 @@ fn clicking_now_temporarily_exposes_a_filtered_agent() {
     let now = app.now_area.expect("activity status rendered");
     let initial_offset = app.offset;
     app.graph_revealed = Some("worker:t1".into());
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
@@ -730,7 +730,7 @@ fn clicking_now_temporarily_exposes_a_filtered_agent() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t0");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(
         app.offset, initial_offset,
         "an already visible target stays put"
@@ -762,18 +762,29 @@ fn clicking_now_without_an_active_agent_leaves_graph_state_unchanged() {
     }];
     app.selected = "worker:t1".into();
     app.offset = (3, 4);
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let now = app.now_area.expect("activity status rendered");
-    let graph_state = (app.selected.clone(), app.offset, app.focus);
+    let graph_state = (
+        app.selected.clone(),
+        app.offset,
+        app.navigation.background_focus,
+    );
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
         row: now.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!((app.selected.clone(), app.offset, app.focus), graph_state);
+    assert_eq!(
+        (
+            app.selected.clone(),
+            app.offset,
+            app.navigation.background_focus
+        ),
+        graph_state
+    );
     assert!(app.graph_visibility_exception.is_none());
 }
 
@@ -825,7 +836,7 @@ fn pointer_graph_filter_change_clears_now_visibility_exception() {
 #[test]
 fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
         change_kind: crate::lean::tasks::ChangeKind::Code,
@@ -875,7 +886,7 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
 #[test]
 fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((120, 48));
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
@@ -925,7 +936,7 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
 #[test]
 fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = (1..=4)
         .map(|n| view::TaskRow {
             id: format!("t{n}"),
@@ -1012,7 +1023,7 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
 #[test]
 fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = vec![
         view::TaskRow {
             id: "t1".into(),
@@ -1187,7 +1198,7 @@ fn grouped_task_long_title_keeps_incoming_routes_visible_after_resize() {
 #[test]
 fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view
         .agents
         .insert(view::ORCHESTRATOR.into(), view::Agent::default());
@@ -1242,7 +1253,7 @@ fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
 #[test]
 fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = (1..=4)
         .map(|n| view::TaskRow {
             id: format!("t{n}"),
@@ -1330,7 +1341,7 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
 #[test]
 fn graph_comment_popup_shows_scoped_history_and_keeps_the_element_draft() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.comment_drafts.insert(
         App::comment_key(&app.conversation, app.view.plan.as_deref(), "worker:t1"),
@@ -1441,7 +1452,7 @@ fn active_picker_owns_global_shortcuts_and_escape_before_zoom() {
     app.navigation
         .update_presentation(|presentation| presentation.split = true);
     app.navigation.zoom(true);
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.picker = Some(Picker::new(Kind::History));
     app.picker.as_mut().unwrap().query = "keep query".into();
 
@@ -1583,7 +1594,7 @@ fn escape_restores_zoom_split_before_leaving_workbench() {
 #[test]
 fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
@@ -1818,7 +1829,7 @@ fn ctrl_m_opens_workflow_rigor_picker_from_chat_and_graph() {
     assert_eq!(app.input.text, "draft stays here");
 
     app.picker = None;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     assert!(app.key(key_ctrl('m')));
     assert!(matches!(
         app.picker.as_ref().map(|picker| picker.kind),
@@ -1830,7 +1841,7 @@ fn ctrl_m_opens_workflow_rigor_picker_from_chat_and_graph() {
 #[test]
 fn ctrl_enter_opens_workflow_rigor_picker_for_terminals_that_encode_ctrl_m_as_enter() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     let key = event::KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
 
     assert!(app.key(key));
@@ -2140,7 +2151,7 @@ fn ac_key_03_multiline_boundary_up() {
 #[test]
 fn ac_modal_02_comment_editor_dismissal_preserves_graph_selection() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "reviewer:t1".into();
     app.editor = Some(Editor {
         target: app.selected.clone(),
@@ -2197,7 +2208,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
     let mut app = test_app();
     app.input = InputBuffer::with_text("@t2 please investigate");
     app.key(key_press(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(app.input.text, "@t2 please investigate");
 
     app.key(key_press(KeyCode::Char('c')));
@@ -2209,7 +2220,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
     assert_eq!(app.input.text, "@t2 please investigate");
 
     app.key(key_ctrl('k'));
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     assert_eq!(app.input.text, "@t2 please investigate");
 }
 
@@ -2217,7 +2228,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
 fn comment_targets_from_graph_and_details() {
     let mut app = test_app();
     app.selected = "worker:t2".into();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.key(key_press(KeyCode::Char('c')));
     assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
 
@@ -2485,7 +2496,7 @@ fn agent_canvas_remains_available_in_every_workflow_phase() {
             }
             app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
             terminal.draw(|frame| app.draw(frame)).unwrap();
-            assert_eq!(app.focus, Focus::Graph, "{phase}");
+            assert_eq!(app.navigation.background_focus, Focus::Graph, "{phase}");
             assert!(app.graph_area.is_some(), "{phase}");
             assert_eq!(app.input.text, "unsent draft");
         }
@@ -2498,7 +2509,7 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
     use ratatui::backend::TestBackend;
 
     let mut app = test_app();
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     let backend = TestBackend::new(84, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -2513,7 +2524,7 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
     assert!(text.contains("ctrl k"));
 
     // Switch to Focus::Graph
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     terminal
         .draw(|frame| {
             app.draw(frame);
@@ -2948,7 +2959,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
         status: "working".into(),
         ..view::TaskRow::default()
     }];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
 
     let backend = TestBackend::new(100, 30);
@@ -2981,7 +2992,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
     let mut app_compact = test_app();
     app_compact.view.activity = Some("very long activity line".into());
     app_compact.view.tasks = app.view.tasks.clone();
-    app_compact.focus = Focus::Graph;
+    app_compact.set_focus(Focus::Graph);
 
     // Create a fake test terminal where inner area forces collision
     let backend_tiny = TestBackend::new(60, 12);
@@ -3331,7 +3342,7 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         .map(|index| format!("REQ{index:03} preserve rows 👩‍💻e\u{301}\n"))
         .collect::<String>();
     app.input = InputBuffer::with_text("chat draft");
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     for (width, height) in [(120, 24), (84, 16)] {
         app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
         app.view.after += 1;
@@ -3532,7 +3543,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
 
     // The graph key acts on the selected step.
     app.view.tasks.push(task("t4", "failed"));
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "reviewer:t4".into();
     // Stage Blocked keeps the graph visible: nothing is running.
     app.key(key_press(KeyCode::Char('u')));
@@ -3674,7 +3685,7 @@ fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
     assert!(app.view.controls().resume_plan);
     assert_eq!(app.view.stage(), view::Stage::Blocked);
     assert_eq!(app.phase_action().unwrap().1, Command::TaskActions);
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
     app.key(key_press(KeyCode::Char('u')));
     let modal = app.unblock.take().unwrap();
@@ -3696,7 +3707,7 @@ fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
 #[test]
 fn the_orchestrator_actions_open_without_a_plan_and_with_an_existing_plan() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
     for plan in [None, Some("p1".into())] {
         app.view.plan = plan;
@@ -3722,7 +3733,7 @@ fn an_active_step_can_be_restarted_from_the_actions_menu() {
         ..Default::default()
     }];
     app.selected = "worker:t1".into();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.key(key_press(KeyCode::Char('u')));
     assert_eq!(app.unblock.as_ref().unwrap().task, "t1");
     app.key(key_press(KeyCode::Enter));
@@ -3931,7 +3942,7 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app.graph_area.expect("graph drawn beside the chat");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     for _ in 0..3 {
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -3947,7 +3958,11 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
         app.offset.1, scrolled,
         "the selection does not pull it back"
     );
-    assert_eq!(app.focus, Focus::Graph, "scrolling moves no focus");
+    assert_eq!(
+        app.navigation.background_focus,
+        Focus::Graph,
+        "scrolling moves no focus"
+    );
 }
 
 #[test]

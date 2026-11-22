@@ -7,14 +7,7 @@ impl Details {
         next: crate::lean::tui::WorkbenchTab,
     ) {
         let previous_state = (self.scroll, self.query.clone());
-        self.switch_tab(match next {
-            crate::lean::tui::WorkbenchTab::Summary
-            | crate::lean::tui::WorkbenchTab::Conversation
-            | crate::lean::tui::WorkbenchTab::Diff => 0,
-            crate::lean::tui::WorkbenchTab::Results => RESULT,
-            crate::lean::tui::WorkbenchTab::Checks => CHECKS,
-            crate::lean::tui::WorkbenchTab::Comments => COMMENTS,
-        });
+        self.workbench_tab = Some(next);
         if let Some(previous) = previous {
             self.workbench_memory
                 .insert((self.key.clone(), previous), previous_state);
@@ -42,6 +35,11 @@ impl Details {
     }
 
     pub fn switch_tab(&mut self, next: usize) {
+        if self.workbench_tab.is_some() {
+            self.save_current_tab();
+            self.workbench_tab = None;
+            self.restore_current_tab();
+        }
         let next_tab = next % TABS.len();
         if next_tab == self.tab || !tabs_for(&self.key).contains(&next_tab) {
             return;
@@ -54,6 +52,7 @@ impl Details {
 
     pub fn switch_key(&mut self, new_key: String) {
         self.save_current_tab();
+        self.workbench_tab = None;
         self.key = new_key;
         let tabs = tabs_for(&self.key);
         if !tabs.contains(&self.tab) {
@@ -102,6 +101,7 @@ impl Details {
         };
         let key = format!("{other}:{id}");
         self.save_current_tab();
+        self.workbench_tab = None;
         self.key = key;
         self.tab = tabs_for(&self.key)[0];
         // Replies for the previous role are ignored; let this role refetch.
@@ -171,6 +171,11 @@ impl Details {
     }
 
     pub fn save_current_tab(&mut self) {
+        if let Some(tab) = self.workbench_tab {
+            self.workbench_memory
+                .insert((self.key.clone(), tab), (self.scroll, self.query.clone()));
+            return;
+        }
         self.scroll_memory
             .insert((self.key.clone(), self.tab), self.scroll);
         self.query_memory
@@ -178,6 +183,18 @@ impl Details {
     }
 
     pub fn restore_current_tab(&mut self) {
+        if let Some(tab) = self.workbench_tab {
+            let (scroll, query) = self
+                .workbench_memory
+                .get(&(self.key.clone(), tab))
+                .cloned()
+                .unwrap_or_default();
+            self.scroll = scroll;
+            self.query = query;
+            self.follow = self.overview() && !self.show_info;
+            self.pending_g = false;
+            return;
+        }
         self.scroll = *self
             .scroll_memory
             .get(&(self.key.clone(), self.tab))

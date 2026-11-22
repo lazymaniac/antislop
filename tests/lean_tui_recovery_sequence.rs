@@ -816,7 +816,7 @@ fn real_tui_failed_recovery_keeps_raw_error_and_rejects_stale_freshness_token() 
         })
     });
     app.selected = "conversation".into();
-    app.focus = antislop::lean::tui::Focus::Graph;
+    app.set_focus(antislop::lean::tui::Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // The reference split keeps the PTY visible. Expand content to inspect the
     // complete completion result, including the text below its action list.
@@ -1295,7 +1295,7 @@ fn real_tui_manual_snapshot_consent_runs_dependent_dag_to_completion() {
         })
     });
     app.selected = "conversation".into();
-    app.focus = antislop::lean::tui::Focus::Graph;
+    app.set_focus(antislop::lean::tui::Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let final_panel = capture(&mut app);
     assert!(final_panel.contains("Session completion"), "{final_panel}");

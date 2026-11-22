@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn graph_card_does_not_attach_a_cli_pty() {
         let mut app = App::test_app();
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.graph_viewport = Some((120, 48));
         app.view.tasks = vec![crate::lean::tui::view::TaskRow {
             id: "t1".into(),
@@ -559,7 +559,7 @@ mod tests {
         use std::time::Instant;
         let mut app = App::test_app();
         app.animate_graph = true;
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.graph_viewport = Some((120, 48));
         app.view.tasks = vec![crate::lean::tui::view::TaskRow {
             id: "t1".into(),
@@ -594,7 +594,7 @@ mod tests {
         use crossterm::event::KeyEvent;
 
         let mut app = App::test_app();
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.navigation.screen = crate::lean::tui::Screen::Workbench;
         app.navigation.target = WorkbenchTarget::Agent("worker:options".into());
         app.navigation.focus = NavigationFocus::WorkbenchTerminal;

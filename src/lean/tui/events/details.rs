@@ -47,11 +47,12 @@ impl App {
     }
 
     fn details_fetch_current_task(&mut self) {
-        if self
-            .details
-            .as_ref()
-            .is_some_and(|d| d.tab == RESULT || d.tab == CHECKS)
-        {
+        if self.details.as_ref().is_some_and(|d| {
+            matches!(
+                d.content_tab(),
+                Some(WorkbenchTab::Results | WorkbenchTab::Checks)
+            )
+        }) {
             self.fetch_task();
         }
     }

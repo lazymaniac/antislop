@@ -128,7 +128,7 @@ fn plan_review_acceptance_is_tokened_and_keeps_tui_state_correlated() {
     let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
     app.project = project.to_string_lossy().into_owned();
     app.conversation = conversation_id.clone();
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.navigation.screen = Screen::Graph;
 
     let mut dialog_path = codex.as_os_str().to_owned();
@@ -393,7 +393,7 @@ fn plan_review_acceptance_is_tokened_and_keeps_tui_state_correlated() {
     let (mut rejected, rejected_updates) = App::test_app_with_client(daemon.client.clone());
     rejected.project = project.to_string_lossy().into_owned();
     rejected.conversation = rejection_id.clone();
-    rejected.focus = Focus::Chat;
+    rejected.set_focus(Focus::Chat);
     rejected.navigation.screen = Screen::Graph;
     pump_until_plan(&mut rejected, &rejected_updates, &rejection_id, |app| {
         !app.view.approvals.is_empty()

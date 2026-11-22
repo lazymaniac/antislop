@@ -14,7 +14,7 @@ impl App {
             Help::Diff
         } else if self.details.is_some() {
             Help::Details
-        } else if self.focus == Focus::Graph {
+        } else if self.navigation.background_focus == Focus::Graph {
             Help::Graph
         } else {
             Help::Chat
