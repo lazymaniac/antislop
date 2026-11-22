@@ -2,9 +2,13 @@
 //! Cards are separated by background and accents, not heavy borders;
 //! NO_COLOR keeps only modifiers, and ASCII mode keeps only ASCII glyphs.
 
-use super::sanitize::sanitize;
-use unicode_segmentation::UnicodeSegmentation;
+#[cfg(test)]
 use unicode_width::UnicodeWidthStr;
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static MATERIALIZED_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 mod tokens;
 pub use tokens::{ASCII, Glyphs, Theme, Tone, UNICODE, ayu, tone};
@@ -13,51 +17,13 @@ mod ascii;
 pub(super) use ascii::ascii_character;
 mod palette;
 
-/// Word wrap by display width, respecting grapheme cluster boundaries.
-/// Wrap at spaces, splitting only a word wider than a row; a list item's
-/// continuation rows line up under the text after its marker.
-pub fn wrap(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = vec![];
-    let sanitized = sanitize(text);
-    for paragraph in sanitized.split('\n') {
-        let hang = hanging_indent(paragraph).filter(|hang| hang * 2 <= width);
-        let indent = hang.map_or(String::new(), |hang| " ".repeat(hang));
-        let mut line = String::new();
-        let mut used = 0;
-        let mut break_line = |line: &mut String, used: &mut usize| {
-            lines.push(std::mem::replace(line, indent.clone()));
-            *used = indent.len();
-        };
-        for word in paragraph.split_inclusive(' ') {
-            let w = word.width();
-            if used > indent.len() && used + w.min(width) > width {
-                break_line(&mut line, &mut used);
-            }
-            for g in word.graphemes(true) {
-                let gw = g.width();
-                if used + gw > width && used > indent.len() {
-                    break_line(&mut line, &mut used);
-                }
-                line.push_str(g);
-                used += gw;
-            }
-        }
-        lines.push(line);
-    }
-    lines
-}
+mod wrapping;
+pub(super) use wrapping::{Paragraphs, wrapped_rows};
 
-/// The columns before a list item's text: its leading spaces and a `-`,
-/// `*`, `•` or `N.` marker with the space after it.
-fn hanging_indent(paragraph: &str) -> Option<usize> {
-    let body = paragraph.trim_start_matches(' ');
-    let lead = paragraph.len() - body.len();
-    let (marker, _) = body.split_once(' ')?;
-    let numbered = marker.strip_suffix('.').is_some_and(|number| {
-        !number.is_empty() && number.len() <= 3 && number.bytes().all(|b| b.is_ascii_digit())
-    });
-    (matches!(marker, "-" | "*" | "•") || numbered).then_some(lead + marker.width() + 1)
+/// Word wrap by display width, respecting grapheme cluster boundaries.
+/// The eager API collects the same producer used by bounded previews.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    wrapped_rows([text], width, Paragraphs::Split).collect()
 }
 
 mod rows;

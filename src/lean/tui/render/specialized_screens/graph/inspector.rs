@@ -3,6 +3,11 @@ use crate::lean::tui::theme::Theme;
 use crate::lean::tui::view::{self, AUDITOR, ORCHESTRATOR, PLAN_REVIEWER, TaskRow, View};
 use ratatui::{style::Style, text::Line};
 
+#[cfg(test)]
+thread_local! {
+    static PLAN_PROBE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) fn role_content(
     view: &View,
     key: &str,
@@ -11,6 +16,9 @@ pub(super) fn role_content(
     height: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
     let mut preview = Preview {
         lines: Vec::new(),
         width,
@@ -62,27 +70,47 @@ impl Preview<'_> {
     }
 
     fn text(&mut self, text: &str, style: Style, limit: usize) {
+        self.fragments([text], style, limit);
+    }
+
+    fn fragments<'a>(
+        &mut self,
+        fragments: impl IntoIterator<Item = &'a str>,
+        style: Style,
+        limit: usize,
+    ) {
         let limit = limit.min(self.remaining());
         if limit == 0 || self.width == 0 {
             return;
         }
-        let clean = view::clean(text);
-        let mut rows = clean.lines().flat_map(|line| view::wrap(line, self.width));
+        let mut rows = crate::lean::tui::theme::wrapped_rows(
+            fragments,
+            self.width,
+            crate::lean::tui::theme::Paragraphs::Lines,
+        );
         let start = self.lines.len();
         self.lines.extend(
             rows.by_ref()
                 .take(limit)
                 .map(|line| Line::styled(line, style)),
         );
-        if rows.next().is_some() && self.lines.len() > start {
+        if rows.has_more() && self.lines.len() > start {
             let last = self.lines.last_mut().unwrap();
-            let text = view::truncate(&last.to_string(), self.width.saturating_sub(3));
-            *last = Line::styled(format!("{text}..."), style);
+            let marker = match self.width {
+                1 => ".",
+                2 => "..",
+                _ => "...",
+            };
+            let text = view::truncate(&last.to_string(), self.width.saturating_sub(marker.len()));
+            *last = Line::styled(format!("{text}{marker}"), style);
         }
     }
 
     fn messages(&mut self, view: &View, key: &str) {
         self.heading("Recent messages");
+        if self.remaining() == 0 {
+            return;
+        }
         // Newest first: the latest exchange stays visible on short terminals.
         let messages: Vec<_> = view
             .messages
@@ -107,8 +135,8 @@ impl Preview<'_> {
             if rows == 0 {
                 break;
             }
-            self.text(
-                &format!("{}: {}", message.sender, message.text),
+            self.fragments(
+                [message.sender.as_str(), ": ", message.text.as_str()],
                 self.theme.text(),
                 rows.min(4),
             );
@@ -122,12 +150,19 @@ impl Preview<'_> {
         } else {
             "Current plan"
         });
-        if !document.trim().is_empty() {
+        if self.remaining() == 0 {
+            return;
+        }
+        if document.chars().any(|c| {
+            #[cfg(test)]
+            PLAN_PROBE_BYTES.with(|count| count.set(count.get() + c.len_utf8()));
+            !c.is_whitespace()
+        }) {
             self.text(document, self.theme.text(), self.remaining());
         } else if !view.tasks.is_empty() {
             for task in &view.tasks {
-                self.text(
-                    &format!("{}: {}", task.id, task.title),
+                self.fragments(
+                    [task.id.as_str(), ": ", task.title.as_str()],
                     self.theme.text(),
                     2,
                 );
@@ -170,6 +205,9 @@ impl Preview<'_> {
                 self.text(&taskinfo::integration_line(task), self.theme.dim(), 2);
             }
         }
+        if self.remaining() == 0 {
+            return;
+        }
         self.heading("Goal");
         self.text(
             &view::task_goal(&task.kind, &task.title, &task.goal, None),
@@ -178,7 +216,7 @@ impl Preview<'_> {
         );
         if let Some(meta) = view.task_meta.get(&task.id) {
             for criterion in &meta.acceptance_criteria {
-                self.text(&format!("- {}", criterion.text), self.theme.dim(), 2);
+                self.fragments(["- ", criterion.text.as_str()], self.theme.dim(), 2);
                 if self.remaining() == 0 {
                     break;
                 }
@@ -230,3 +268,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../tests/support/inspector_stream.rs"]
+mod stream_tests;
