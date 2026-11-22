@@ -1,7 +1,7 @@
 //! The daemon owns a project's `Core`, so work goes on after a frontend
-//! detaches. One request per connection, one JSON line each way. Every reply
-//! is small; `events` is a long poll that returns as soon as something new is
-//! recorded.
+//! detaches. A Unix connection can carry sequential request/reply exchanges.
+//! The shared transport sends small JSON messages as lines and chunks large
+//! messages into ordered frames. `events` long-polls for newly recorded events.
 
 use super::Core;
 use crate::{Error, Result, config::Config, require};
@@ -71,9 +71,9 @@ const PROTOCOL_VERSION: u32 = 6;
 
 pub(crate) use protocol::RequestEnvelope;
 
-// Protocol ownership handoff: RequestEnvelope, Request, WireRequest, their conversions, and
-// serde wire-representation implementations belong to runtime-protocol.
-// Daemon retains lifecycle and dispatch; keep protocol behavior compatible.
+// The local protocol module owns the envelope, operation declaration, grouped
+// application requests and flat serde wire model. Lifecycle validates the protocol
+// version; dispatch and leases consume the grouped requests.
 pub use protocol::{
     ControlRequest, ConversationRequest, HistoryRequest, Request, SessionActionKind,
     SessionActionResult, SessionRequest, TerminalRequest,

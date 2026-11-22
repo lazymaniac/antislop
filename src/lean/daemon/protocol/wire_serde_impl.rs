@@ -1,5 +1,5 @@
-use super::wire::WireRequest;
-use crate::lean::daemon::Request;
+use super::Request;
+use super::operations::WireRequest;
 use serde::{Deserialize, Serialize};
 
 impl Serialize for Request {
@@ -7,7 +7,7 @@ impl Serialize for Request {
     where
         S: serde::Serializer,
     {
-        super::convert::encode(self.clone()).serialize(serializer)
+        super::operations::encode(self.clone()).serialize(serializer)
     }
 }
 
@@ -16,6 +16,6 @@ impl<'de> Deserialize<'de> for Request {
     where
         D: serde::Deserializer<'de>,
     {
-        WireRequest::deserialize(deserializer).map(super::convert::decode)
+        WireRequest::deserialize(deserializer).map(super::operations::decode)
     }
 }

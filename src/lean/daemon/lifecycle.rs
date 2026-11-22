@@ -255,6 +255,42 @@ mod tests {
     }
 
     #[test]
+    fn protocol_version_is_checked_after_decoding_the_envelope() {
+        for (protocol, expected) in [
+            (6, None),
+            (
+                5,
+                Some("incompatible daemon protocol; restart client and daemon together"),
+            ),
+            (
+                7,
+                Some("incompatible daemon protocol; restart client and daemon together"),
+            ),
+        ] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            crate::transport::write(
+                &mut client,
+                &json!({
+                    "protocol": protocol, "request": {"op":"identity"}
+                }),
+            )
+            .unwrap();
+            let result = read_request(&mut BufReader::new(server));
+            if let Some(error) = expected {
+                assert_eq!(result.unwrap_err().to_string(), error);
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    Some((
+                        Request::Control(super::super::ControlRequest::Identity),
+                        None
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn daemon_serves_sequential_session_requests_on_one_connection() {
         let (temp, runtime, listener) = runtime();
         let project = runtime.project.clone();
