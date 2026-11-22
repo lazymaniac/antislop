@@ -262,13 +262,14 @@ impl App {
                 .list
                 .contains((mouse.column, mouse.row).into())
         {
+            let rows = super::super::workbench::sidebar(&self.view);
             let row = mouse.row.saturating_sub(self.workbench_areas.list.y) as usize
                 + super::super::workbench::visible_start(
-                    &self.view,
+                    &rows,
                     &self.navigation.target,
                     self.workbench_areas.list.height,
                 );
-            if let Some(row) = super::super::workbench::sidebar(&self.view).get(row) {
+            if let Some(row) = rows.get(row) {
                 self.open_work_card_or_stage(row);
             }
             return true;

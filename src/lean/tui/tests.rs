@@ -4304,3 +4304,118 @@ fn canvas_and_stage_composers_own_their_keys_and_preserve_independent_drafts() {
     );
     assert_eq!(app.input.text, "Session 👩‍💻 é\nd");
 }
+
+#[test]
+fn sidebar_projection_builds_on_actual_draw() {
+    let mut app = test_app();
+    app.view.tasks = (0..40)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("Task {n}"),
+            reviewer_summary: Some("Reviewed".into()),
+            ..Default::default()
+        })
+        .collect();
+    app.open_details("reviewer:t39".into());
+    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+    eprintln!(
+        "actual App::draw visible sidebar: WorkUnits={} rows={}",
+        builds.0, builds.1
+    );
+    assert_eq!(builds, (1, 1));
+    assert!(app.workbench_areas.list_visible);
+    app.view.tasks[39].title = "Updated".into();
+    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+    eprintln!(
+        "actual App::draw refreshed sidebar: WorkUnits={} rows={}",
+        builds.0, builds.1
+    );
+    assert_eq!(builds, (1, 1));
+    app.navigation
+        .update_presentation(|presentation| presentation.list_visible = false);
+    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+    eprintln!(
+        "actual App::draw hidden sidebar: WorkUnits={} rows={}",
+        builds.0, builds.1
+    );
+    assert_eq!(builds, (0, 0));
+    assert!(!app.workbench_areas.list_visible);
+}
+
+#[test]
+fn sidebar_scroll_click_and_refresh_preserve_stage_order() {
+    let mut app = test_app();
+    app.view.tasks = (0..20)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("Task {n}"),
+            reviewer_summary: Some("Review".into()),
+            ..Default::default()
+        })
+        .collect();
+    app.view.tasks.push(view::TaskRow {
+        id: "options".into(),
+        kind: "options".into(),
+        title: "Options".into(),
+        ..Default::default()
+    });
+    app.view.tasks[19].depends_on.push("options".into());
+    app.view
+        .task_meta
+        .entry("options".into())
+        .or_default()
+        .options_for = Some("t19".into());
+    app.open_details("reviewer:t19".into());
+    let rows = workbench::sidebar(&app.view);
+    let stages: Vec<_> = rows
+        .iter()
+        .filter(|r| r.stage)
+        .map(|r| r.key.as_str())
+        .collect();
+    assert_eq!(
+        &stages[stages.len() - 3..],
+        ["worker:options", "worker:t19", "reviewer:t19"]
+    );
+    let target = WorkbenchTarget::Agent("worker:t19".into());
+    let start = workbench::visible_start(&rows, &target, 2);
+    assert!(rows[start].stage, "prefer stage over header with same key");
+    let mut terminal = Terminal::new(TestBackend::new(140, 12)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let area = app.workbench_areas.list;
+    let start = workbench::visible_start(&rows, &app.navigation.target, area.height);
+    assert!(start > 0);
+    let (offset, expected) = rows
+        .iter()
+        .skip(start)
+        .take(usize::from(area.height))
+        .enumerate()
+        .find(|(_, r)| r.key == "worker:t19" && r.stage)
+        .unwrap();
+    let expected = expected.key.clone();
+    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: area.x,
+        row: area.y + offset as u16,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.details.as_ref().unwrap().key, expected);
+    assert_eq!(workbench::PROJECTION_BUILDS.with(|count| count.get().1), 1);
+    app.view.tasks[19].title = "Changed title".into();
+    app.view.tasks[19].round = 7;
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal_text(&terminal);
+    assert!(text.contains("Changed title"));
+    assert!(text.contains("round 7"));
+    app.view = view::View::default();
+    app.open_details("orchestrator".into());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!terminal_text(&terminal).contains("Changed title"));
+}

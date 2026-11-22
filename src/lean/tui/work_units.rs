@@ -49,6 +49,11 @@ pub struct WorkUnits {
 
 impl WorkUnits {
     pub fn new(view: &View) -> Self {
+        #[cfg(test)]
+        super::workbench::PROJECTION_BUILDS.with(|count| {
+            let (units, rows) = count.get();
+            count.set((units + 1, rows));
+        });
         let options_owner = options_owners(view);
         let mut result = Self {
             options_owner,

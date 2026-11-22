@@ -6,30 +6,52 @@
 use super::{NavigationFocus, WorkbenchPresentation, WorkbenchTab, WorkbenchTarget};
 use ratatui::layout::{Constraint, Layout, Rect};
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static PROJECTION_BUILDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 #[derive(Debug, Clone)]
 pub struct SidebarRow {
     pub key: String,
     pub label: String,
     pub stage: bool,
+    pub(super) metadata: bool,
 }
 
 pub fn sidebar(view: &super::view::View) -> Vec<SidebarRow> {
     let projection = super::work_units::WorkUnits::new(view);
+    sidebar_with_units(view, &projection)
+}
+
+/// Derive rows from the same ownership projection used to paint selection.
+pub(super) fn sidebar_with_units(
+    view: &super::view::View,
+    projection: &super::work_units::WorkUnits,
+) -> Vec<SidebarRow> {
+    #[cfg(test)]
+    PROJECTION_BUILDS.with(|count| {
+        let (units, rows) = count.get();
+        count.set((units, rows + 1));
+    });
     let mut rows = vec![SidebarRow {
         key: "conversation".into(),
         label: "SESSION TASKS".into(),
         stage: false,
+        metadata: false,
     }];
     for unit in &projection.units {
         rows.push(SidebarRow {
             key: unit.card.clone(),
             label: String::new(),
             stage: false,
+            metadata: false,
         });
         rows.push(SidebarRow {
             key: unit.card.clone(),
             label: unit.title.clone(),
             stage: false,
+            metadata: false,
         });
         if let Some(task) = unit
             .task
@@ -40,6 +62,7 @@ pub fn sidebar(view: &super::view::View) -> Vec<SidebarRow> {
                 key: unit.card.clone(),
                 label: format!("  {} · round {}", task.kind, task.round),
                 stage: false,
+                metadata: true,
             });
         }
         for stage in &unit.stages {
@@ -47,14 +70,14 @@ pub fn sidebar(view: &super::view::View) -> Vec<SidebarRow> {
                 key: stage.id.0.clone(),
                 label: format!("  {}", stage.label),
                 stage: true,
+                metadata: false,
             });
         }
     }
     rows
 }
 
-pub fn visible_start(view: &super::view::View, target: &WorkbenchTarget, height: u16) -> usize {
-    let rows = sidebar(view);
+pub fn visible_start(rows: &[SidebarRow], target: &WorkbenchTarget, height: u16) -> usize {
     let selected = match target {
         WorkbenchTarget::Session => "conversation",
         WorkbenchTarget::Agent(key) => key,
