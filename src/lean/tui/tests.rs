@@ -4889,46 +4889,139 @@ fn modal_input_preserves_event_specific_form_and_composer_exceptions() {
 
 #[test]
 fn sidebar_projection_builds_on_actual_draw() {
-    let mut app = test_app();
-    app.view.tasks = (0..40)
-        .map(|n| view::TaskRow {
-            id: format!("t{n}"),
-            title: format!("Task {n}"),
-            reviewer_summary: Some("Reviewed".into()),
-            ..Default::default()
-        })
-        .collect();
-    app.open_details("reviewer:t39".into());
-    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
-    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
-    eprintln!(
-        "actual App::draw visible sidebar: WorkUnits={} rows={}",
-        builds.0, builds.1
+    for size in [40, 80, 160, 320] {
+        let mut app = test_app();
+        app.view.tasks = (0..size)
+            .map(|n| view::TaskRow {
+                id: format!("t{n}"),
+                title: format!("Task {n}"),
+                reviewer_summary: Some("Reviewed".into()),
+                ..Default::default()
+            })
+            .collect();
+        app.open_details(format!("reviewer:t{}", size - 1));
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size, size)
+        );
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw visible sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (1, 1));
+        assert!(app.workbench_areas.list_visible);
+        app.view.tasks[size - 1].title = "Updated".into();
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size, size)
+        );
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw refreshed sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (1, 1));
+        app.navigation
+            .update_presentation(|presentation| presentation.list_visible = false);
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(workbench::METADATA_WORK.with(|count| count.get()), (0, 0));
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw hidden sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (0, 0));
+        assert!(!app.workbench_areas.list_visible);
+    }
+}
+
+#[test]
+fn sidebar_metadata_uses_first_match_and_current_view() {
+    for size in [0, 1, 40, 80, 160, 320] {
+        let mut view = view::View::default();
+        view.tasks = (0..size)
+            .map(|n| view::TaskRow {
+                id: format!("t{n}"),
+                ..Default::default()
+            })
+            .collect();
+        let projection = super::work_units::WorkUnits::new(&view);
+        view.tasks.truncate(size / 2);
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        let rows = workbench::sidebar_with_units(&view, &projection);
+        assert_eq!(rows.iter().filter(|row| row.metadata).count(), size / 2);
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size / 2, size)
+        );
+        eprintln!(
+            "missing metadata units={size} index_visits={} lookups={size}",
+            size / 2
+        );
+        assert_eq!(rows.iter().filter(|row| row.stage).count(), size + 1);
+    }
+    let mut view = view::View::default();
+    view.tasks = vec![view::TaskRow {
+        id: "task".into(),
+        kind: "implementation".into(),
+        round: 3,
+        title: "Title".into(),
+        reviewer_summary: Some("Review".into()),
+        ..Default::default()
+    }];
+    let projection = super::work_units::WorkUnits::new(&view);
+    view.tasks.push(view::TaskRow {
+        id: "task".into(),
+        kind: "wrong duplicate".into(),
+        round: 99,
+        ..Default::default()
+    });
+    let rows = workbench::sidebar_with_units(&view, &projection);
+    let metadata: Vec<_> = rows.iter().filter(|row| row.metadata).collect();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].label, "  implementation · round 3");
+    view.tasks.reverse();
+    let rows = workbench::sidebar_with_units(&view, &projection);
+    assert_eq!(
+        rows.iter().find(|row| row.metadata).unwrap().label,
+        "  wrong duplicate · round 99"
     );
-    assert_eq!(builds, (1, 1));
-    assert!(app.workbench_areas.list_visible);
-    app.view.tasks[39].title = "Updated".into();
-    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
-    eprintln!(
-        "actual App::draw refreshed sidebar: WorkUnits={} rows={}",
-        builds.0, builds.1
+    view.tasks.clear();
+    let missing = workbench::sidebar_with_units(&view, &projection);
+    assert!(missing.iter().all(|row| !row.metadata));
+    assert_eq!(
+        missing
+            .iter()
+            .filter(|row| row.stage)
+            .map(|row| &row.key)
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .filter(|row| row.stage)
+            .map(|row| &row.key)
+            .collect::<Vec<_>>()
     );
-    assert_eq!(builds, (1, 1));
-    app.navigation
-        .update_presentation(|presentation| presentation.list_visible = false);
-    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
-    terminal.draw(|frame| app.draw(frame)).unwrap();
-    let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
-    eprintln!(
-        "actual App::draw hidden sidebar: WorkUnits={} rows={}",
-        builds.0, builds.1
-    );
-    assert_eq!(builds, (0, 0));
-    assert!(!app.workbench_areas.list_visible);
 }
 
 #[test]
@@ -4992,10 +5085,12 @@ fn sidebar_scroll_click_and_refresh_preserve_stage_order() {
     assert_eq!(workbench::PROJECTION_BUILDS.with(|count| count.get().1), 1);
     app.view.tasks[19].title = "Changed title".into();
     app.view.tasks[19].round = 7;
+    app.view.tasks[19].kind = "research".into();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let text = terminal_text(&terminal);
     assert!(text.contains("Changed title"));
     assert!(text.contains("round 7"));
+    assert!(text.contains("research"));
     app.view = view::View::default();
     app.open_details("orchestrator".into());
     terminal.draw(|frame| app.draw(frame)).unwrap();
