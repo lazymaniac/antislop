@@ -227,6 +227,15 @@ impl View {
         }
     }
 
+    /// Match display names, plan-local role addresses and runtime task UUIDs.
+    pub(in crate::lean::tui) fn message_involves(&self, message: &MessageEntry, key: &str) -> bool {
+        [&message.sender, &message.target]
+            .into_iter()
+            .any(|endpoint| {
+                self.agent_key(endpoint) == key || self.agent_key(&Self::mail_key(endpoint)) == key
+            })
+    }
+
     /// A short line for what just happened to a task, kept in one card.
     pub(super) fn report_progress(
         &mut self,

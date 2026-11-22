@@ -172,8 +172,8 @@ fn tab_window_keeps_the_active_tab_visible_at_minimum_width() {
 #[test]
 fn details_footer_hints_prioritized_by_width() {
     // COMMENTS tab
-    assert!(details_footer_hint(COMMENTS, 100).contains("Ctrl+→ changes"));
-    assert!(!details_footer_hint(COMMENTS, 30).contains("Ctrl+→ changes"));
+    assert!(details_footer_hint(COMMENTS, 100).contains("Shift+→ changes"));
+    assert!(!details_footer_hint(COMMENTS, 30).contains("Shift+→ changes"));
     assert!(details_footer_hint(COMMENTS, 30).contains("Esc"));
 
     // Other tabs
@@ -274,10 +274,7 @@ fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
             .map(|tab| tab_name(key, tab))
             .collect()
     };
-    assert_eq!(
-        names("worker:t1"),
-        ["Worker", "Results", "Checks", "Comments"]
-    );
+    assert_eq!(names("worker:t1"), ["Worker", "Results", "Comments"]);
     assert_eq!(
         names("reviewer:t1"),
         ["Reviewer", "Review", "Checks", "Comments"]
@@ -874,4 +871,52 @@ fn typed_workbench_tabs_ignore_the_standalone_selection_and_keep_role_identity()
         details.switch_tab(COMMENTS);
         assert_eq!(details.content_tab(), Some(WorkbenchTab::Comments));
     }
+}
+
+#[test]
+fn reviewer_summary_displays_accepted_pending_and_issue_checks() {
+    let mut details = Details::new("reviewer:t1".into());
+    details.prepare_workbench_details(None, crate::lean::tui::WorkbenchTab::Summary);
+    assert_eq!(
+        details.content_tab(),
+        Some(crate::lean::tui::WorkbenchTab::Summary)
+    );
+    details.load_task(reviewer_task(serde_json::json!({"checks":[
+        {"id":"goal","state":"settled","status":"ok","note":"Verified goal"},
+        {"id":"C1","state":"settled","status":"issue","note":"Missing test"}
+    ]})));
+    assert!(details.shows_checks());
+    assert_eq!(details.selected_check().as_deref(), Some("goal"));
+    let mut view = View::default();
+    view.tasks.push(super::super::view::TaskRow {
+        id: "t1".into(),
+        ..Default::default()
+    });
+    let text = details
+        .records(&view)
+        .iter()
+        .map(|record| record.search_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("1 accepted") && text.contains("1 with issues"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Verified goal")
+            && text.contains("Missing test")
+            && text.contains("not checked yet"),
+        "{text}"
+    );
+}
+
+#[test]
+fn first_session_run_is_available_as_round_zero_but_pre_task_round_is_hidden() {
+    let metadata = serde_json::json!({"round":1,"_rounds":[{"round":0},{"round":1}]});
+    let mut orchestrator = Details::new("orchestrator".into());
+    orchestrator.load_task(metadata.clone());
+    assert_eq!(orchestrator.available_rounds, [0, 1]);
+    let mut worker = Details::new("worker:t1".into());
+    worker.load_task(metadata);
+    assert_eq!(worker.available_rounds, [1]);
 }

@@ -733,6 +733,21 @@ fn answered_questions_return_their_answer_on_wait_and_are_not_asked_again() {
     core.store
         .answer_agent_question(&conversation, &request, "Use Markdown")
         .unwrap();
+    let history = core
+        .store
+        .turn_question_history(&conversation, &turn.id)
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["question"], "Which report format?");
+    assert_eq!(history[0]["answer"], "Use Markdown");
+    assert_eq!(history[0]["state"], "answered");
+    assert!(history[0]["answered_ms"].is_i64());
+    assert!(
+        core.store
+            .turn_question_history("foreign-conversation", &turn.id)
+            .unwrap()
+            .is_empty()
+    );
     for _ in 0..2 {
         let answer = core
             .agent_tool(

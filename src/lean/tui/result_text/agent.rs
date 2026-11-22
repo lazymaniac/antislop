@@ -11,14 +11,7 @@ pub(in crate::lean::tui) fn agent_result(raw: &str) -> String {
         TurnResult::Requirements { markdown, .. } => markdown,
         TurnResult::Question { question } => question.transcript(),
         TurnResult::Completed { .. } => worker_report(raw),
-        TurnResult::Plan {
-            document, tasks, ..
-        } => {
-            format!(
-                "{document}\n\n{}",
-                section("Tasks", &serde_json::json!(tasks))
-            )
-        }
+        TurnResult::Plan { document, .. } => document,
         TurnResult::Review { report, verdict } => {
             format!(
                 "{report}\n\n{}",
@@ -73,6 +66,13 @@ fn append_value(value: &Value, depth: usize, lines: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn planner_results_display_only_the_authored_document() {
+        let raw = json!({"type":"plan","document":"# Plan\nFull authored explanation", "tasks":[{"id":"hidden-task","title":"Raw task title","goal":"Raw task goal","kind":"analysis","change_kind":"none"}]}).to_string();
+        serde_json::from_str::<TurnResult>(&raw).unwrap();
+        assert_eq!(agent_result(&raw), "# Plan\nFull authored explanation");
+    }
 
     #[test]
     fn formats_all_session_deliverables_and_keeps_their_content() {

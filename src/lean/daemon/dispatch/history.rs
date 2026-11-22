@@ -167,13 +167,17 @@ fn session_events(context: &Context<'_>, request: Request) -> Result<Route> {
             include_messages,
         }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
-            core.store.session_events_with_messages(
+            let mut page = core.store.session_events_with_messages(
                 &conversation,
                 &turn,
                 after,
                 limit.unwrap_or(100),
                 include_messages.unwrap_or(true),
-            )?
+            )?;
+            if after == 0 {
+                page["questions"] = json!(core.store.turn_question_history(&conversation, &turn)?);
+            }
+            page
         }),
         request => Route::Unmatched(request),
     })

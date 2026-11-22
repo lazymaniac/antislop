@@ -58,7 +58,7 @@ pub fn is_overview(tab: usize) -> bool {
 /// Each role exposes only its own tabs.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" => vec![0, RESULT, CHECKS, COMMENTS],
+        "worker" => vec![0, RESULT, COMMENTS],
         "reviewer" => vec![REVIEWER, RESULT, CHECKS, COMMENTS],
         "planner" => vec![0, RESULT, COMMENTS],
         "plan-reviewer" | "auditor" => vec![0, RESULT, COMMENTS],
@@ -82,6 +82,13 @@ impl Details {
 
     pub(in crate::lean::tui) fn on_tab(&self, tab: super::WorkbenchTab) -> bool {
         self.content_tab() == Some(tab)
+    }
+
+    /// Reviewer Workbench summaries expose the same live checks and actions.
+    pub(in crate::lean::tui) fn shows_checks(&self) -> bool {
+        self.on_tab(super::WorkbenchTab::Checks)
+            || (self.workbench_tab == Some(super::WorkbenchTab::Summary)
+                && self.key.starts_with("reviewer:"))
     }
 
     pub(super) fn fetch_failed(&mut self, error: &str) -> bool {
@@ -123,7 +130,7 @@ impl Details {
             .unwrap_or_default();
         // Round 0 records the task before its first round started; no agent
         // worked in it, so once a round has run it is not one to look at.
-        if self.available_rounds.iter().any(|round| *round > 0) {
+        if self.task_id().is_some() && self.available_rounds.iter().any(|round| *round > 0) {
             self.available_rounds.retain(|round| *round > 0);
         }
         self.task = Some(task);
@@ -160,7 +167,15 @@ impl Details {
     ) {
         self.documents
             .retain(|key, _| key.starts_with("result_document:") || documents.contains_key(key));
-        self.documents.extend(documents);
+        for (key, document) in documents {
+            if self
+                .documents
+                .get(&key)
+                .is_none_or(|old| !old.same_content(&document))
+            {
+                self.documents.insert(key, document);
+            }
+        }
         let source = self.task.as_ref().map(|task| &task["_result_documents"]);
         let has_result = self.documents.contains_key("result");
         if source != Some(&self.result_metadata_source)
@@ -168,6 +183,10 @@ impl Details {
             || self.result_index.is_empty()
         {
             self.rebuild_result_index();
+        }
+        if self.round_report_pending && self.documents.contains_key("result") {
+            self.selected_result_document = Some("result".into());
+            self.round_report_pending = false;
         }
     }
 
@@ -206,9 +225,9 @@ impl Details {
             .flatten()
     }
 
-    /// The id of the selected check, on the Checks tab.
+    /// The id of the selected check, wherever check records are displayed.
     pub fn selected_check(&self) -> Option<String> {
-        if !self.on_tab(super::WorkbenchTab::Checks) {
+        if !self.shows_checks() {
             return None;
         }
         let rows = check_rows(self.task.as_ref()?);
@@ -249,6 +268,7 @@ impl Details {
     pub fn overview(&self) -> bool {
         self.content_tab()
             .is_some_and(super::WorkbenchTab::uses_overview)
+            && !self.shows_checks()
     }
 
     /// Whether a terminal area is allocated, or the overview layout requests one

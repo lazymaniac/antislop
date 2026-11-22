@@ -250,6 +250,18 @@ impl App {
             self.workbench_dragging = false;
             return false;
         }
+        if matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        ) && self.workbench_areas.list_visible
+            && self
+                .workbench_areas
+                .list
+                .contains((mouse.column, mouse.row).into())
+        {
+            self.workbench_step_agent(mouse.kind == MouseEventKind::ScrollDown);
+            return true;
+        }
         if self.workbench_dragging {
             match mouse.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
@@ -388,6 +400,15 @@ impl App {
             self.text_selection.mouse(mouse);
         }
         match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self
+                    .inspector_messages
+                    .area
+                    .contains((mouse.column, mouse.row).into()) =>
+            {
+                self.inspector_messages
+                    .scroll(mouse.kind == MouseEventKind::ScrollDown, 3);
+            }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 if self
                     .graph_card_area

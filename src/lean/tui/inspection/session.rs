@@ -36,6 +36,81 @@ fn session_page(client: &Client, conversation: &str, turn: &str, after: u64) -> 
     ))
 }
 
+/// Fetch the selected role's recorded prompts, never reconstruct them from a
+/// later task contract. Event text is read through the bounded content API.
+pub(in crate::lean::tui) fn load_prompts(
+    client: &Client,
+    conversation: &str,
+    key: &str,
+    task: &mut Value,
+) -> Result<()> {
+    let role = key.split(':').next().unwrap_or(key);
+    let mut prompts = Vec::new();
+    for run in task["turns"].as_array().into_iter().flatten() {
+        if run["role"]
+            .as_str()
+            .is_none_or(|value| value.split(':').next() != Some(role))
+        {
+            continue;
+        }
+        let Some(turn) = run["turn_id"].as_str() else {
+            continue;
+        };
+        let mut after = 0;
+        loop {
+            let page = session_page(client, conversation, turn, after)?;
+            for event in page["events"].as_array().into_iter().flatten() {
+                if event["kind"] != "agent" || event["payload"]["type"] != "prompt" {
+                    continue;
+                }
+                let text = if let Some(text) = event["payload"]["text"].as_str() {
+                    text.to_owned()
+                } else {
+                    let mut text = String::new();
+                    read_session_text(
+                        client,
+                        conversation,
+                        event["seq"].as_u64().unwrap_or(0),
+                        &mut |chunk| {
+                            text.push_str(chunk);
+                            Ok(())
+                        },
+                    )?;
+                    text
+                };
+                prompts.push(serde_json::json!({
+                    "id": format!("prompt:{turn}:{}", event["seq"]),
+                    "sent_at": event["created_ms"], "sender":"Runtime", "target":key,
+                    "text":text, "state":"prompt", "kind":"prompt"
+                }));
+            }
+            if after == 0 {
+                for question in page["questions"].as_array().into_iter().flatten() {
+                    let id = question["request"].as_str().unwrap_or_default();
+                    prompts.push(serde_json::json!({
+                        "id":format!("question:{id}"),"sent_at":question["asked_ms"],
+                        "sender":key,"target":ORCHESTRATOR,"text":question["question"],
+                        "state":question["state"],"kind":"question"
+                    }));
+                    if let Some(answer) = question["answer"].as_str() {
+                        prompts.push(serde_json::json!({
+                            "id":format!("answer:{id}"),"sent_at":question["answered_ms"],
+                            "sender":ORCHESTRATOR,"target":key,"text":answer,
+                            "state":question["state"],"kind":"answer"
+                        }));
+                    }
+                }
+            }
+            if page["has_more"] != true {
+                break;
+            }
+            after = next_event_cursor(&page, after)?;
+        }
+    }
+    task["_conversation_prompts"] = Value::Array(prompts);
+    Ok(())
+}
+
 fn append_final_events(
     builder: &mut document::Builder,
     client: &Client,
@@ -80,6 +155,18 @@ fn append_session_content(
     sink: &mut dyn FnMut(&str) -> Result<()>,
 ) -> Result<()> {
     let mut formatter = super::super::result_text::ReportStream::default();
+    read_session_text(client, conversation, event, &mut |chunk| {
+        formatter.push(chunk, sink)
+    })?;
+    formatter.finish_with(super::super::result_text::agent_result, sink)
+}
+
+fn read_session_text(
+    client: &Client,
+    conversation: &str,
+    event: u64,
+    sink: &mut dyn FnMut(&str) -> Result<()>,
+) -> Result<()> {
     let mut offset = 0;
     loop {
         let chunk = client.call(&Request::Session(
@@ -90,9 +177,9 @@ fn append_session_content(
                 offset,
             },
         ))?;
-        formatter.push(chunk["text"].as_str().unwrap_or_default(), sink)?;
+        sink(chunk["text"].as_str().unwrap_or_default())?;
         if chunk["done"] == true {
-            return formatter.finish_with(super::super::result_text::agent_result, sink);
+            return Ok(());
         }
         let next = chunk["next_offset"].as_u64().unwrap_or(0);
         crate::require(next > offset, "session content cursor did not advance")?;
@@ -270,6 +357,47 @@ mod tests {
     use serde_json::json;
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn conversation_loads_the_exact_prompt_and_orchestrator_exchange_for_selected_turn() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(crate::lean::daemon::socket(state.path())).unwrap();
+        let server = std::thread::spawn(move || {
+            for op in ["session_events", "session_content"] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(stream);
+                let request = crate::transport::read::<Value>(&mut reader)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(request["request"]["op"], op);
+                let data = if op == "session_events" {
+                    assert_eq!(request["request"]["turn"], "earlier");
+                    json!({"events":[{"seq":7,"created_ms":100,"kind":"agent","payload":{"type":"prompt","text":{"session_content":true}}}],"has_more":false,"questions":[{"request":"q1","question":"Which format?","answer":"Use **Markdown**","state":"answered","asked_ms":101,"answered_ms":102}]})
+                } else {
+                    assert_eq!(request["request"]["event"], 7);
+                    json!({"text":"Full original prompt 👩‍💻\nFinal line", "done":true})
+                };
+                crate::transport::write(reader.get_mut(), &json!({"data":data,"error":null}))
+                    .unwrap();
+            }
+        });
+        let mut task = json!({"turns":[{"turn_id":"earlier","role":"worker:uuid"},{"turn_id":"review","role":"reviewer:uuid"}]});
+        load_prompts(
+            &Client::at(state.path()),
+            "conversation",
+            "worker:t1",
+            &mut task,
+        )
+        .unwrap();
+        let entries = task["_conversation_prompts"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["text"], "Full original prompt 👩‍💻\nFinal line");
+        assert_eq!(entries[1]["sender"], "worker:t1");
+        assert_eq!(entries[1]["target"], ORCHESTRATOR);
+        assert_eq!(entries[2]["sender"], ORCHESTRATOR);
+        assert_eq!(entries[2]["text"], "Use **Markdown**");
+        server.join().unwrap();
+    }
 
     #[test]
     fn session_results_are_formatted_and_selected_turns_keep_their_identity() {

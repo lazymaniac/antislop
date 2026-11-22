@@ -74,7 +74,8 @@ impl ConfigEditor {
         let section = self.addition_section();
         let candidates = match section.as_str() {
             "providers" => kind_names::<ProviderKind>(),
-            "routing" => kind_names::<WorkKind>(),
+            "routing" => kind_names::<WorkKind>()
+                .map(|kinds| kinds.into_iter().filter(|kind| kind != "context").collect()),
             _ => Ok(vec![]),
         };
         let candidates = match candidates {
@@ -192,8 +193,8 @@ impl ConfigEditor {
         }
         match key.code {
             KeyCode::Esc => self.visible = false,
-            KeyCode::Left if control => self.select_section(false),
-            KeyCode::Right if control => self.select_section(true),
+            KeyCode::Left if key.modifiers == KeyModifiers::SHIFT => self.select_section(false),
+            KeyCode::Right if key.modifiers == KeyModifiers::SHIFT => self.select_section(true),
             KeyCode::Up | KeyCode::BackTab => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => {
                 self.selected = (self.selected + 1).min(self.fields.len() - 1)

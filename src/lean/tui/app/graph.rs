@@ -190,13 +190,7 @@ impl App {
             InspectorAction::Decisions => self.open_decision_inbox(),
             InspectorAction::Results(key) => {
                 self.open_details(key);
-                let previous = self.navigation.presentation().tab;
-                self.navigation
-                    .update_presentation(|presentation| presentation.tab = WorkbenchTab::Results);
-                if let Some(details) = &mut self.details {
-                    details.prepare_workbench_details(Some(previous), WorkbenchTab::Results);
-                }
-                self.schedule_output_document_fetch();
+                self.workbench_select_tab(WorkbenchTab::Results);
             }
             InspectorAction::Diff(key) => self.open_diff(&key),
             InspectorAction::Recovery(key) => self.open_unblock(Some(key)),

@@ -447,14 +447,23 @@ impl App {
             + if decisions > 0 { 6 } else { 0 };
         let preview_height =
             usize::from(area.height.saturating_sub(4)).saturating_sub(lines.len() + footer_rows);
-        lines.extend(inspector::role_content(
-            &self.view,
-            &selected,
-            task,
-            width,
-            preview_height,
-            theme,
-        ));
+        let message_row = lines.len();
+        let messages = matches!(
+            selected.as_str(),
+            ORCHESTRATOR | crate::lean::COMMENT_ORCHESTRATOR
+        );
+        if messages {
+            lines.resize(lines.len() + preview_height, Line::default());
+        } else {
+            lines.extend(inspector::role_content(
+                &self.view,
+                &selected,
+                task,
+                width,
+                preview_height,
+                theme,
+            ));
+        }
         for stage in &unit.stages {
             if let Some(agent) = self.view.agents.get(&stage.id.0) {
                 let problem = graph::health(&self.view, &stage.id.0) == graph::Health::Problem;
@@ -537,7 +546,7 @@ impl App {
             lines.push(Line::styled(theme.chrome("Changes · v"), theme.accent()));
         }
         if has_recovery {
-            hits.push((lines.len(), InspectorAction::Recovery(selected)));
+            hits.push((lines.len(), InspectorAction::Recovery(selected.clone())));
             lines.push(Line::styled(
                 theme.chrome("Recovery actions · u"),
                 theme.decision(),
@@ -577,6 +586,22 @@ impl App {
                 }),
         );
         frame.render_widget(Paragraph::new(lines).style(theme.text()), content);
+        if messages {
+            let height = preview_height.min(available.saturating_sub(message_row));
+            self.inspector_messages.draw(
+                frame,
+                Rect::new(
+                    content.x,
+                    content.y + message_row as u16,
+                    content.width,
+                    height as u16,
+                ),
+                &self.view,
+                &self.conversation,
+                &selected,
+                theme,
+            );
+        }
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {

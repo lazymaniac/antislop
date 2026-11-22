@@ -210,6 +210,7 @@ struct TaskFetch {
     history_id: String,
     selected_round: Option<u64>,
     checks_only: bool,
+    dialogue: bool,
     client: Client,
     updates: UpdateSender,
 }
@@ -223,6 +224,7 @@ struct RunFetch {
     request_id: u64,
     key: String,
     selected: Option<u64>,
+    dialogue: bool,
 }
 
 impl App {
@@ -325,10 +327,11 @@ impl App {
                 .and_then(|d| d.task_uuid.clone())
                 .unwrap_or_else(|| id.clone()),
             selected_round,
+            dialogue: self.navigation.presentation().tab == WorkbenchTab::Conversation,
             checks_only: self
                 .details
                 .as_ref()
-                .is_some_and(|details| details.on_tab(WorkbenchTab::Checks)),
+                .is_some_and(|details| details.shows_checks()),
             client: self.client.clone(),
             updates: self.updates.clone(),
         })
@@ -379,6 +382,7 @@ impl App {
         let selected = details.selected_round;
         let plan = self.view.plan.clone();
         let fetch = RunFetch {
+            dialogue: self.navigation.presentation().tab == WorkbenchTab::Conversation,
             client: self.client.clone(),
             updates: self.updates.clone(),
             conversation: self.conversation.clone(),
@@ -406,6 +410,7 @@ impl App {
     }
 
     pub fn open_details(&mut self, key: String) {
+        self.default_diff_request = None;
         if key != "conversation" {
             let work = crate::lean::tui::work_units::WorkUnits::new(&self.view);
             if let Some(unit) = work.for_stage(&key) {
@@ -435,17 +440,30 @@ impl App {
         }
         self.navigation.screen = Screen::Workbench;
         self.navigation.target = target;
-        if !target_initialized {
-            let delivery = self
+        let writer = key.starts_with("worker:")
+            && self
                 .view
                 .tasks
                 .iter()
                 .find(|task| key.split_once(':').is_some_and(|(_, id)| id == task.id))
                 .is_some_and(|task| task.change_kind.has_delivery());
-            let tab = super::super::super::workbench::default_tab(&key, delivery);
+        let changes = writer
+            && self
+                .diff_states
+                .get(&(self.conversation.clone(), key.clone()))
+                .is_some_and(DiffView::has_changes);
+        if !target_initialized {
+            let terminal_only = key != "conversation" && !changes;
+            let tab = super::super::super::workbench::default_tab(&key, changes);
             self.navigation.update_presentation(|presentation| {
                 presentation.tab = tab;
-                presentation.focus = NavigationFocus::WorkbenchContent;
+                presentation.terminal_only_default = terminal_only;
+                if terminal_only {
+                    presentation.split = false;
+                    presentation.focus = NavigationFocus::WorkbenchTerminal;
+                } else {
+                    presentation.focus = NavigationFocus::WorkbenchContent;
+                }
             });
         }
         // Opening a target closes its composer; restore a navigation pane instead
@@ -472,6 +490,14 @@ impl App {
         }
         if self.navigation.presentation().tab == WorkbenchTab::Results {
             self.schedule_output_document_fetch();
+        }
+        if !target_initialized && writer && !changes && self.view.plan.is_some() {
+            // Probe off-thread, leaving the diff closed while the task has no
+            // known file changes. A late reply must not replace a chosen tab.
+            self.load_diff(&key);
+            self.default_diff_request =
+                Some((self.conversation.clone(), key.clone(), self.diff_request_id));
+            self.diff = None;
         }
         self.fetch_task();
     }
@@ -595,7 +621,18 @@ fn run_task_fetch(fetch: TaskFetch) {
         &fetch.history_id,
         fetch.selected_round,
         fetch.checks_only,
-    );
+    )
+    .and_then(|mut snapshot| {
+        if fetch.dialogue {
+            inspection::load_prompts(
+                &fetch.client,
+                &fetch.conversation,
+                &fetch.key,
+                &mut snapshot.task,
+            )?;
+        }
+        Ok(snapshot)
+    });
     let update = task_fetch_update(fetch, result);
     let _ = update.0.send(update.1);
 }
@@ -633,7 +670,18 @@ fn run_run_fetch(fetch: RunFetch) {
         &fetch.conversation,
         &fetch.key,
         fetch.selected,
-    );
+    )
+    .and_then(|mut snapshot| {
+        if fetch.dialogue {
+            inspection::load_prompts(
+                &fetch.client,
+                &fetch.conversation,
+                &fetch.key,
+                &mut snapshot.task,
+            )?;
+        }
+        Ok(snapshot)
+    });
     let update = match result {
         Ok(task) => Update::Task {
             conversation: fetch.conversation,

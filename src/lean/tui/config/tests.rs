@@ -89,7 +89,7 @@ fn sections_navigate_without_changing_the_configuration_draft() {
     let mut editor = ConfigEditor::new(source, "project.toml".into()).unwrap();
     let initial = editor.selected;
     let section = editor.fields[initial].path[0].clone();
-    editor.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    editor.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert_ne!(editor.fields[editor.selected].path[0], section);
     assert_eq!(
         Config::from_toml(&editor.source().unwrap()).unwrap(),
@@ -168,4 +168,21 @@ fn document_patching_preserves_comments_and_reports_invalid_boolean_at_the_field
     editor.fields[index].input = InputBuffer::with_text("18446744073709551615");
     assert!(editor.source().is_none());
     assert!(editor.fields[index].error.is_some());
+}
+
+#[test]
+fn legacy_context_route_is_hidden_and_removed_when_saving_the_draft() {
+    let source = format!(
+        "{}\n# Legacy route\n[routing.context]\nexecutor = \"deleted-agent\"\nreviewer = \"deleted-reviewer\"\n",
+        include_str!("../../../../examples/antislop.toml")
+    );
+    let mut editor = ConfigEditor::new(&source, "antislop.toml".into()).unwrap();
+    assert!(!editor.fields.iter().any(|field| {
+        field
+            .path
+            .starts_with(&["routing".to_owned(), "context".to_owned()])
+    }));
+    let saved = editor.source().unwrap();
+    assert!(!saved.contains("[routing.context]"));
+    assert!(saved.contains("[routing.requirements]"));
 }

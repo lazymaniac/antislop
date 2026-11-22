@@ -248,7 +248,18 @@ fn pump_until(
 ) {
     let until = Instant::now() + Duration::from_secs(40);
     while !ready(app) {
-        assert!(Instant::now() < until, "timed out waiting for {label}");
+        assert!(
+            Instant::now() < until,
+            "timed out waiting for {label}; details={:?}",
+            app.details.as_ref().map(|details| (
+                &details.key,
+                &details.fetch_error,
+                details.fetched_round,
+                &details.available_rounds,
+                &details.task_uuid,
+                &details.fetched_plan
+            ))
+        );
         if let Ok(update) = updates.recv_timeout(Duration::from_millis(50)) {
             app.apply_update(update);
         }
@@ -351,7 +362,7 @@ fn open_reviewer_workbench(
         "same reviewer task round in fresh Workbench",
     );
     while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
-        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     }
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
@@ -465,7 +476,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     assert_eq!(app.details.as_ref().unwrap().key, "orchestrator");
     assert_eq!(app.input.text, "");
 
-    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     // The conversation tab is fed by the real daemon event/history response.
     assert_eq!(
         app.navigation.presentation().tab,
@@ -805,7 +816,7 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         WorkbenchTarget::Agent("reviewer:t1".into())
     );
     while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
-        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     }
     assert_eq!(
         app.navigation.presentation().tab,

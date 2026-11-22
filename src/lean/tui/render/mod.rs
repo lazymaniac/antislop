@@ -14,4 +14,4 @@ mod specialized_screens;
 pub(in crate::lean::tui) mod specialized_summary;
 mod transcript;
 pub(super) mod transcript_cache;
-mod transcript_cards;
+pub(super) mod transcript_cards;

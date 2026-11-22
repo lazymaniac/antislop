@@ -79,6 +79,7 @@ pub struct App {
     pub send_request_id: u64,
     pub comment_request_id: u64,
     pub diff_request_id: u64,
+    pub(super) default_diff_request: Option<(String, String, u64)>,
     pub task_request_id: u64,
     pub failed_send: Option<String>,
     pub(super) image_drafts: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
@@ -127,6 +128,7 @@ pub struct App {
     pub direction_input_area: Rect,
     pub(in crate::lean::tui) direction_choices: Vec<(Rect, super::render::direction::Action)>,
     pub inspector_hits: Vec<(Rect, super::work_units::InspectorAction)>,
+    pub(super) inspector_messages: super::message_inspector::MessageInspector,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
     /// The expanded card's content area as last drawn, for hit testing.
@@ -246,6 +248,7 @@ macro_rules! initial_app {
             send_request_id: 0,
             comment_request_id: 0,
             diff_request_id: 0,
+            default_diff_request: None,
             task_request_id: 0,
             failed_send: None,
             image_drafts: Default::default(),
@@ -278,6 +281,7 @@ macro_rules! initial_app {
             direction_input_area: Rect::default(),
             direction_choices: Vec::new(),
             inspector_hits: Vec::new(),
+            inspector_messages: Default::default(),
             graph_card_scroll: 0,
             graph_card_area: None,
             detail_states: Default::default(),

@@ -531,7 +531,7 @@ fn a_wide_help_box_wraps_a_long_description_under_its_column() {
 fn workbench_help_documents_navigation_and_native_key_ownership() {
     let help = Help::Details.lines_for_width(200).join("\n");
     for entry in [
-        "Ctrl+Left/Right",
+        "Shift+Left/Right",
         "Tab/Shift+Tab",
         "Ctrl+B",
         "Alt+Up/Down",
@@ -549,5 +549,5 @@ fn workbench_help_documents_navigation_and_native_key_ownership() {
         assert!(help.contains(entry), "missing {entry}");
     }
     assert!(!help.contains("1–4, Tab/Shift+Tab"));
-    assert!(help.contains("every other key goes to CLI"));
+    assert!(help.contains("other keys go to CLI"));
 }

@@ -27,8 +27,8 @@ pub enum Effort {
 #[serde(rename_all = "snake_case")]
 pub enum WorkKind {
     Orchestration, // Coordinates agents, task dependencies, and progress toward the overall goal.
-    Context, // Inspects project files to establish relevant context, contracts, and conventions.
-    Requirements, // Extracts requirements, acceptance criteria, and contradictions from the brief.
+    Context,       // Historical task records only; context gathering belongs to each active agent.
+    Requirements,  // Extracts requirements, acceptance criteria, and contradictions from the brief.
     Options, // Compares realistic alternatives against common criteria and selects an approach.
     Planning, // Breaks the goal into actionable tasks with dependencies and completion criteria.
     Architecture, // Designs how components and interfaces fit the existing project structure.

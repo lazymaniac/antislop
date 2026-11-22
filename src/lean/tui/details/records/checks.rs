@@ -35,12 +35,16 @@ fn append_checks(
 
 fn summary_record(stored: &Value, rows: &[CheckRow]) -> Rc<DetailRecord> {
     let settled = rows.iter().filter(|row| row.state == "settled").count();
+    let accepted = rows
+        .iter()
+        .filter(|row| row.status.as_deref() == Some("ok"))
+        .count();
     let issues = rows
         .iter()
         .filter(|row| matches!(row.status.as_deref(), Some("issue" | "blocked")))
         .count();
     let mut lines = vec![label(&format!(
-        "{settled}/{} checks settled{}",
+        "{settled}/{} checks settled{} · {accepted} accepted",
         rows.len(),
         issue_suffix(issues)
     ))];

@@ -40,6 +40,9 @@ impl Details {
         // content dispatches directly on the same typed tab as navigation.
         match self.workbench_tab {
             Some(tab) => footer_hint_for(&self.key, width, |width| match tab {
+                crate::lean::tui::WorkbenchTab::Summary if self.shows_checks() => {
+                    checks_hint(width)
+                }
                 crate::lean::tui::WorkbenchTab::Checks => checks_hint(width),
                 crate::lean::tui::WorkbenchTab::Comments => comments_hint(width),
                 crate::lean::tui::WorkbenchTab::Results => content_hint(width),
@@ -62,12 +65,12 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
 fn overview_hint(width: usize) -> &'static str {
     match width {
         90.. => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m dashboard · / search · c comment · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m dashboard · / search · c comment · Esc back"
         }
         65..=89 => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ scroll · gg/G top/live · m dashboard · / search · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ scroll · gg/G top/live · m dashboard · / search · Esc back"
         }
-        45..=64 => "Ctrl+←/→ tabs · ,/. rounds · gg/G top/live · m dashboard · Esc",
+        45..=64 => "Shift+←/→ tabs · ,/. rounds · gg/G top/live · m dashboard · Esc",
         _ => "gg/G · m info · Esc back",
     }
 }
@@ -75,9 +78,9 @@ fn overview_hint(width: usize) -> &'static str {
 fn checks_hint(width: usize) -> &'static str {
     match width {
         80.. => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ select check · c comment on check · / search · Ctrl+→ changes · ? help · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ select check · c comment on check · / search · Shift+→ changes · ? help · Esc back"
         }
-        45..=79 => "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ select · c comment · Esc",
+        45..=79 => "Shift+←/→ tabs · ,/. rounds · ↑/↓ select · c comment · Esc",
         _ => "c com · Esc back",
     }
 }
@@ -85,12 +88,12 @@ fn checks_hint(width: usize) -> &'static str {
 fn comments_hint(width: usize) -> &'static str {
     match width {
         95.. => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ select · / search · c comment · r resolve · o reopen · x delete · Ctrl+→ changes · ? help · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ select · / search · c comment · r resolve · o reopen · x delete · Shift+→ changes · ? help · Esc back"
         }
         65..=94 => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ select · / search · c add · r/o/x status · Ctrl+→ changes · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ select · / search · c add · r/o/x status · Shift+→ changes · Esc back"
         }
-        45..=64 => "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ select · c add · r/o/x · Esc",
+        45..=64 => "Shift+←/→ tabs · ,/. rounds · ↑/↓ select · c add · r/o/x · Esc",
         _ => "c com · Esc back",
     }
 }
@@ -98,10 +101,10 @@ fn comments_hint(width: usize) -> &'static str {
 fn content_hint(width: usize) -> &'static str {
     match width {
         90.. => {
-            "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · Ctrl+→ changes · Esc back"
+            "Shift+←/→ tabs · ,/. rounds · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · Shift+→ changes · Esc back"
         }
-        65..=89 => "Ctrl+←/→ tabs · ,/. rounds · ↑/↓ scroll · gg/G top/end · / search · Esc back",
-        45..=64 => "Ctrl+←/→ tabs · ,/. rounds · gg/G top/end · Esc",
+        65..=89 => "Shift+←/→ tabs · ,/. rounds · ↑/↓ scroll · gg/G top/end · / search · Esc back",
+        45..=64 => "Shift+←/→ tabs · ,/. rounds · gg/G top/end · Esc",
         _ => "gg/G · ↑/↓ · Esc back",
     }
 }

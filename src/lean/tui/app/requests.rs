@@ -62,7 +62,7 @@ impl App {
     }
 
     fn checks_are_stale(&self, details: &Details) -> bool {
-        details.on_tab(WorkbenchTab::Checks)
+        details.shows_checks()
             && details.fetched_checks
                 != details
                     .task_id()

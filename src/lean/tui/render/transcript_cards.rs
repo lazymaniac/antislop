@@ -176,7 +176,7 @@ fn message_rows(msg: &MessageEntry, found: bool, width: u16, theme: &Theme) -> V
     card(theme, message_card_props(msg, found, width, theme))
 }
 
-fn message_card_props<'a>(
+pub(in crate::lean::tui) fn message_card_props<'a>(
     msg: &'a MessageEntry,
     found: bool,
     width: u16,

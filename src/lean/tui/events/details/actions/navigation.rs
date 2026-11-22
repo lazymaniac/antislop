@@ -92,11 +92,11 @@ impl App {
             return false;
         };
         match key.code {
-            KeyCode::Down if details.on_tab(WorkbenchTab::Checks) => {
+            KeyCode::Down if details.shows_checks() => {
                 details.check = (details.check + 1).min(details.check_count().saturating_sub(1));
                 details.reveal_check = true;
             }
-            KeyCode::Up if details.on_tab(WorkbenchTab::Checks) => {
+            KeyCode::Up if details.shows_checks() => {
                 details.check = details.check.saturating_sub(1);
                 details.reveal_check = true;
             }
@@ -189,7 +189,7 @@ impl App {
         }
         details.follow = details.overview() && !details.show_info;
         details.scroll = usize::MAX;
-        if details.on_tab(WorkbenchTab::Checks) {
+        if details.shows_checks() {
             details.check = details.check_count().saturating_sub(1);
         }
         if details.on_tab(WorkbenchTab::Comments) {

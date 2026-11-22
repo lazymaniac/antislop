@@ -258,6 +258,8 @@ fn help_graph() -> &'static [&'static str] {
         "f                filters: relations, cards by state and provider",
         "z                fold / unfold a work card",
         "PgUp/PgDn, wheel scroll the graph (Shift+wheel sideways)",
+        "Inspector wheel / Shift+PgUp/PgDn  scroll full messages",
+        "Shift+Home/End   first / last message row in inspector",
         SELECTION_HELP,
         "Ctrl+D / Ctrl+U  half page down / up",
         "Ctrl+P           command palette",
@@ -274,7 +276,9 @@ fn help_graph() -> &'static [&'static str] {
 
 fn help_details() -> &'static [&'static str] {
     &[
-        "Ctrl+Left/Right  previous / next Workbench tab (available for this role)",
+        "1–9              select a Workbench tab",
+        "Left/Right, Shift+Left/Right  previous / next Workbench tab",
+        "Shift+Up/Down    previous / next agent from any Workbench pane",
         "Tab/Shift+Tab    sidebar / content / terminal focus",
         "Ctrl+B           show / hide the task and agent list",
         "z                zoom focused panel / restore split",
@@ -289,7 +293,7 @@ fn help_details() -> &'static [&'static str] {
         "Ctrl+R           composer: change recipient, including broadcast",
         "Ctrl+T           composer: queue / steer / interrupt the running turn",
         "Ctrl+]           leave native PTY input; return to Workbench navigation",
-        "PTY: Ctrl+]      return to navigation; every other key goes to CLI",
+        "PTY: Ctrl+]      navigation; Shift+Up/Down agents; other keys go to CLI",
         "Ctrl+W           switch worker / reviewer target",
         "h / r            plan history / retry native attachment",
         "↑/↓ PgUp/PgDn    scroll; on Comments select",
@@ -311,7 +315,7 @@ fn help_diff() -> &'static [&'static str] {
         "Ctrl+D / Ctrl+U  half page down / up",
         "[/] or ←/→       previous / next file",
         "Workbench: Tab   sidebar / content / terminal (Shift+Tab reverses)",
-        "Ctrl+Left/Right  previous / next Workbench tab",
+        "Shift+Left/Right  previous / next Workbench tab",
         "Ctrl+B / z       Workbench list / zoom focused panel",
         "Alt+Up/Down / p  resize split / pin terminal owner",
         ", / .            Workbench round; . on newest follows live",
@@ -350,7 +354,7 @@ fn help_picker() -> &'static [&'static str] {
         "Enter            confirm selected item",
         "Esc              close list (chat draft stays)",
         "Configuration editor",
-        "Ctrl+Left/Right  previous / next section",
+        "Shift+Left/Right  previous / next section",
         "Up / Down        previous / next field",
         "Tab              move between fields",
         "Enter            cycle a choice",
@@ -379,6 +383,6 @@ fn help_global() -> &'static [&'static str] {
         "Ctrl+Y           copy selected application text",
         "Ctrl+C           quit frontend; daemon work continues",
         "Editors keep their text-editing keys; Esc leaves the editor first",
-        "Native PTY owns all keys except Ctrl+]; leave it before shortcuts",
+        "Native PTY: Ctrl+]      navigation; Shift+Up/Down agents; other keys go to CLI",
     ]
 }

@@ -40,6 +40,14 @@ impl App {
         if self.expanded_card_key(key) {
             return true;
         }
+        if self
+            .selected_work_stage()
+            .as_deref()
+            .is_some_and(|key| self.inspector_messages.matches(&self.conversation, key))
+            && self.inspector_messages.key(key)
+        {
+            return true;
+        }
         let graph = self.graph_for_key();
         if let Some(handled) = self.graph_scroll_key(key, &graph) {
             return handled;

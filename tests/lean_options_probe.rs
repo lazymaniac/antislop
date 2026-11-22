@@ -14,6 +14,13 @@ use std::{
 };
 
 fn git(root: &Path, args: &[&str]) -> String {
+    String::from_utf8(git_bytes(root, args))
+        .unwrap()
+        .trim()
+        .to_owned()
+}
+
+fn git_bytes(root: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -27,7 +34,7 @@ fn git(root: &Path, args: &[&str]) -> String {
         .output()
         .unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    output.stdout
 }
 
 fn idle(core: &Core, conversation: &str) {
@@ -317,13 +324,27 @@ else:
             std::fs::read_to_string(project.join("mode.txt")).unwrap(),
             "7\n11\n"
         );
-        let integrated = support::session_worktree(&core, &project, &conversation.id);
+        let integrated = if unmerged {
+            // Cancellation may release the unchanged session checkout.
+            let branch = support::session_branch(&core, &conversation.id);
+            if let Some(worktree) = support::session_worktree_if_present(&project, &branch) {
+                assert_eq!(
+                    std::fs::read(worktree.join("mode.txt")).unwrap(),
+                    b"7\n11\n"
+                );
+            }
+            git_bytes(&project, &["show", &format!("{branch}:mode.txt")])
+        } else {
+            // local_commits=false leaves the applied delivery in the session checkout.
+            let worktree = support::session_worktree(&core, &project, &conversation.id);
+            std::fs::read(worktree.join("mode.txt")).unwrap()
+        };
         assert_eq!(
-            std::fs::read_to_string(integrated.join("mode.txt")).unwrap(),
+            integrated,
             if unmerged {
-                "7\n11\n"
+                b"7\n11\n".as_slice()
             } else {
-                "{\"records\":[7,11]}\n"
+                b"{\"records\":[7,11]}\n".as_slice()
             }
         );
     }

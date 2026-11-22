@@ -39,11 +39,6 @@ provider = "codex"
 model = "gpt-6-luna"
 effort = "high"
 
-# Every task kind has a dedicated reviewer assignment. Runtime creates separate
-# reviewer agents/sessions; a shared profile never means a shared reviewer agent.
-[routing.context]
-executor = "orchestrator"
-reviewer = "orchestrator"
 [routing.requirements]
 executor = "orchestrator"
 reviewer = "orchestrator"

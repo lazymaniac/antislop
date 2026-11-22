@@ -120,11 +120,6 @@ effort = "medium"
 # when such tasks run; they do not create tasks or impose the order listed here.
 # Work kind also selects the domain-specific reviewer checklist described below.
 
-# context: Read relevant code/docs and identify contracts, conventions and unknowns.
-# Reviewer checks: Review that claims come from files read and that important context is covered.
-[routing.context]
-executor = "reasoning"
-reviewer = "review"
 
 # requirements: Extract requirements, constraints and acceptance criteria from the request.
 # Reviewer checks: Review completeness, qualifiers and any conflicting requirements.
