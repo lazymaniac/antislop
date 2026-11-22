@@ -5,11 +5,12 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import tempfile
 import unittest
 import zlib
 import sys
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from resources import resources
 
 spec = importlib.util.spec_from_file_location(
     "reference_renders", Path(__file__).resolve().parents[1] / "scripts/reference_renders.py"
@@ -25,8 +26,7 @@ class ReferenceArchiveTest(unittest.TestCase):
         encoded = dict(format=archive.FORMAT, encoding="gzip+base64", decoded_format="legacy JSON", decoded_bytes=len(raw),
                        decoded_sha256=hashlib.sha256(raw).hexdigest(),
                        payload=[base64.b64encode(compressed[i:i+3]).decode() for i in range(0, len(compressed), 3)])
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with resources() as (root, _diagnostic, _env):
             source, result = root / "reference.json", root / "decoded.json"
             source.write_text(json.dumps(encoded))
             archive.decode(source, result)

@@ -15,7 +15,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,50 +26,22 @@ use std::{
 };
 
 struct Daemon {
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
 }
 
-/// Keeps every fixture, project, database, log, and raw measurement in the
-/// durable task-state run while exposing a short relative socket path to the
-/// TUI client (Unix domain socket paths have a small platform limit).
 struct RunLayout {
+    _directory: common::TestDir,
     root: PathBuf,
-    link: PathBuf,
-    relative: PathBuf,
 }
 
 impl RunLayout {
     fn new() -> Self {
-        let root = std::env::var_os("ANTISLOP_MESSAGE_SEQUENCE_RUN_DIR")
-            .map(PathBuf::from)
-            .expect("set ANTISLOP_MESSAGE_SEQUENCE_RUN_DIR to a fresh durable run directory");
-        std::fs::create_dir_all(&root).unwrap();
-        assert!(
-            std::fs::read_dir(&root).unwrap().next().is_none(),
-            "run directory must be fresh to preserve completed measurements"
-        );
-        let workspace = std::env::current_dir().unwrap();
-        let link = workspace
-            .join(".antislop/tmp")
-            .join(format!("message-sequence-{}", std::process::id()));
-        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-        if std::fs::symlink_metadata(&link).is_ok() {
-            std::fs::remove_file(&link).unwrap();
-        }
-        std::os::unix::fs::symlink(&root, &link).unwrap();
-        let relative = link.strip_prefix(&workspace).unwrap().to_path_buf();
+        let directory = common::tempdir();
         Self {
-            root,
-            link,
-            relative,
+            root: directory.path().into(),
+            _directory: directory,
         }
-    }
-}
-
-impl Drop for RunLayout {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.link);
     }
 }
 
@@ -86,6 +58,7 @@ impl Daemon {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .expect("start isolated test daemon");
         let daemon = Self {
             child,
@@ -103,11 +76,8 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
@@ -444,14 +414,14 @@ fn composer_broadcast_retries_by_operation_and_keeps_the_session_draft() {
     let project = run.root.join("project");
     std::fs::create_dir_all(&project).unwrap();
     common::initialize_git_project(&project);
-    let state = run.relative.join("runtime");
+    let state = run.root.join("runtime");
     let registry = run.root.join("registry");
     let core = Core::open(&state, Config::load(&config).unwrap()).unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     drop(core);
     let daemon = Daemon::start(&project, &config, &state, &registry);
     let _release_worker = common::ReleaseOnDrop(run.root.join("release-worker"));
-    let proxy_state = run.relative.join("proxy");
+    let proxy_state = run.root.join("proxy");
     let proxy = Proxy::start(&proxy_state, &state);
     let (mut app, updates) = App::test_app_with_client(proxy.client());
     app.open(conversation.clone());

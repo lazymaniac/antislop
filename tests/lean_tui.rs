@@ -34,72 +34,25 @@ use ratatui::{
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    mpsc,
-};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-struct TestTempDir {
-    relative: PathBuf,
-    absolute: PathBuf,
-}
-
-impl TestTempDir {
-    fn path(&self) -> &Path {
-        &self.absolute
-    }
-
-    fn relative_path(&self) -> &Path {
-        &self.relative
-    }
-}
-
-impl Drop for TestTempDir {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.relative).unwrap();
-    }
-}
-
-fn test_tempdir() -> TestTempDir {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    let path = Path::new(".antislop/tmp").join(format!(
-        "lean-tui-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&path).unwrap();
-    let absolute = std::env::current_dir().unwrap().join(&path);
-    TestTempDir {
-        relative: path,
-        absolute,
-    }
+fn test_tempdir() -> common::TestDir {
+    common::tempdir()
 }
 
 fn test_socket(state: &std::path::Path) -> std::path::PathBuf {
-    let socket = daemon_socket(state);
-    assert!(
-        socket.starts_with(".antislop/tmp"),
-        "test socket escaped the in-worktree fixture root: {}",
-        socket.display()
-    );
-    assert!(
-        socket.as_os_str().len() < 100,
-        "test socket exceeded the Unix socket path limit: {}",
-        socket.display()
-    );
-    socket
+    common::assert_test_socket(state, std::path::Path::new("."));
+    daemon_socket(state)
 }
 
 #[test]
-fn test_socket_is_project_local_and_removed_with_its_fixture() {
+fn test_socket_is_external_and_removed_with_its_fixture() {
     let socket;
     {
         let dir = test_tempdir();
-        socket = test_socket(dir.relative_path());
+        socket = test_socket(dir.path());
         let listener = UnixListener::bind(&socket).unwrap();
         assert!(socket.exists(), "the bound fixture socket must exist");
         eprintln!(
@@ -111,7 +64,7 @@ fn test_socket_is_project_local_and_removed_with_its_fixture() {
     }
     assert!(
         !socket.exists(),
-        "removing the in-project fixture must remove its socket"
+        "removing the external fixture must remove its socket"
     );
 }
 
@@ -983,7 +936,7 @@ fn modal_round_trip_preserves_unicode_draft_and_grapheme_editing() {
 #[test]
 fn app_fake_request_capture_through_app() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -1003,7 +956,7 @@ fn app_fake_request_capture_through_app() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     let pump_until = |app: &mut App, predicate: fn(&antislop::lean::tui::Update) -> bool| {
@@ -1141,7 +1094,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
     let dir = test_tempdir();
     let image = dir.path().join("wireframe.png");
     image::RgbImage::new(1, 1).save(&image).unwrap();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -1157,7 +1110,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
         writer.flush().unwrap();
     });
 
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("review this image");
     app.paste(&image.to_string_lossy());
@@ -1185,7 +1138,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
 #[test]
 fn agent_composer_sends_each_delivery_mode_to_the_selected_session() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -1214,7 +1167,7 @@ fn agent_composer_sends_each_delivery_mode_to_the_selected_session() {
         }
     });
 
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.conversation = "agent-conversation".into();
     app.view.plan = Some("plan-7".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -2135,7 +2088,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
 #[test]
 fn tui_isolated_fake_request_capture() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -2156,7 +2109,7 @@ fn tui_isolated_fake_request_capture() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
 
     // 1. Send
     let res = client.call(&Request::Conversation(
@@ -3881,7 +3834,7 @@ fn test_spatial_graph_rdm_relation_markers_and_visible_only_navigation() {
 #[test]
 fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retention() {
     let dir = test_tempdir();
-    let sock = test_socket(dir.relative_path());
+    let sock = test_socket(dir.path());
     let listener = UnixListener::bind(&sock).unwrap();
     let (tx, rx) = mpsc::channel();
 
@@ -3928,7 +3881,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     let load_list = |app: &mut App| {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -4269,7 +4222,7 @@ fn test_precise_comment_targets_and_labels() {
     // Commenting in PlanView while Details and an interview/decision question are present
     // must isolate PlanView input/paste and send comment_scoped without leaking round/run.
     let dir = test_tempdir();
-    let sock = test_socket(dir.relative_path());
+    let sock = test_socket(dir.path());
     let listener = UnixListener::bind(&sock).unwrap();
     let (tx, rx) = mpsc::channel();
     let _server = thread::spawn(move || {
@@ -4285,7 +4238,7 @@ fn test_precise_comment_targets_and_labels() {
             }
         }
     });
-    let (mut app, _rx_updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, _rx_updates) = App::test_app_with_client(Client::at(dir.path()));
     app.conversation = "c-plan".into();
     app.view.apply(&json!({
         "seq": 1,
@@ -5879,8 +5832,8 @@ fn project_switches_use_each_daemons_history_directory() {
     let second = test_tempdir();
     let mut app = App::test_app();
     app.projects = vec![
-        ProjectConn::new(first.path().into(), Client::at(first.relative_path())),
-        ProjectConn::new(second.path().into(), Client::at(second.relative_path())),
+        ProjectConn::new(first.path().into(), Client::at(first.path())),
+        ProjectConn::new(second.path().into(), Client::at(second.path())),
     ];
     app.load_history(first.path());
     app.open("first-conversation".into());
@@ -6055,7 +6008,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
 fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
     use antislop::lean::tui::config::ConfigEditor;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.config_editor = Some(
         ConfigEditor::new(
             include_str!("../examples/antislop.toml"),
@@ -6084,7 +6037,7 @@ fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
 #[test]
 fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (captured, requests) = mpsc::channel();
     let server = thread::spawn(move || {
         for _ in 0..3 {
@@ -6105,7 +6058,7 @@ fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
     });
 
     let conversation = "existing-session-42";
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.conversation = conversation.into();
     let kinds = [
@@ -6159,7 +6112,7 @@ fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
 #[test]
 fn configuration_load_and_save_use_live_daemon_requests() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (captured, requests) = mpsc::channel();
     let server = thread::spawn(move || {
         for save in [false, false, true] {
@@ -6179,7 +6132,7 @@ fn configuration_load_and_save_use_live_daemon_requests() {
             writeln!(stream, "{response}").unwrap();
         }
     });
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.input = InputBuffer::with_text("chat draft");
     app.run_workflow(antislop::lean::tui::Command::Config);
     assert_eq!(
@@ -6222,14 +6175,14 @@ mod config_editor_acceptance {
     use std::{
         collections::BTreeSet,
         path::Path,
-        process::{Child, Command, Stdio},
+        process::{Command, Stdio},
         time::Instant,
     };
 
     const SOURCE: &str = include_str!("../examples/antislop.toml");
 
     struct Daemon {
-        child: Child,
+        child: common::ChildGuard,
         client: Client,
     }
     impl Daemon {
@@ -6245,6 +6198,7 @@ mod config_editor_acceptance {
                 .stdout(Stdio::null())
                 .stderr(Stdio::inherit())
                 .spawn()
+                .map(common::ChildGuard::new)
                 .unwrap();
             let daemon = Self {
                 child,
@@ -6263,11 +6217,8 @@ mod config_editor_acceptance {
     }
     impl Drop for Daemon {
         fn drop(&mut self) {
-            let _ = self.client.call(&Request::Control(
-                antislop::lean::daemon::ControlRequest::ForceShutdown,
-            ));
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            common::stop_daemon(&self.client);
+            self.child.stop();
         }
     }
     fn wait(mut done: impl FnMut() -> bool) {
@@ -6403,7 +6354,7 @@ mod config_editor_acceptance {
             } else {
                 (&local, &global)
             };
-            let state = dir.relative_path().join("project/.antislop");
+            let state = dir.path().join("project/.antislop");
             let daemon = Daemon::start(&project, target, &state, &registry);
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
             app.run_workflow(antislop::lean::tui::Command::Config);
@@ -6595,7 +6546,7 @@ mod config_editor_acceptance {
         std::fs::create_dir(&project).unwrap();
         let path = project.join("antislop.toml");
         std::fs::write(&path, SOURCE).unwrap();
-        let state = dir.relative_path().join("project/.antislop");
+        let state = dir.path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
         app.run_workflow(antislop::lean::tui::Command::Config);
@@ -6779,7 +6730,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             edit(&mut initial, index, text, false);
         }
         std::fs::write(&path, initial.source().unwrap()).unwrap();
-        let state = dir.relative_path().join("project/.antislop");
+        let state = dir.path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let conversation = daemon
             .client
@@ -7115,7 +7066,7 @@ mod text_selection_acceptance {
 fn checks_retry_failed_fetch_on_next_empty_event_batch() {
     use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
@@ -7133,7 +7084,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
             .as_ref()
             .is_some_and(|notice| notice.contains('✗'))
     );
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut line = String::new();
@@ -7195,8 +7146,8 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
 fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     let server = thread::spawn(move || {
         for index in 0..3 {
             let (mut stream, _) = listener.accept().unwrap();
@@ -7427,7 +7378,7 @@ fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
 fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
     use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.view.plan = Some("p1".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
         id: "t1".into(),
@@ -8202,7 +8153,7 @@ fn open_cards(
 #[test]
 fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, requests) = mpsc::channel::<Value>();
 
@@ -8221,7 +8172,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     app.view.apply(&json!({
         "seq": 1,

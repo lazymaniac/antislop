@@ -18,10 +18,8 @@ fn turn_text_keeps_the_current_turn_and_gateway_completion_scope() {
     assert!(!footer.contains("`finish_turn`") && !footer.contains("`select`"));
 }
 
-fn test_tempdir() -> tempfile::TempDir {
-    let root = std::env::current_dir().unwrap().join(".antislop/tmp");
-    std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+fn test_tempdir() -> crate::test_resources::TestDir {
+    crate::test_resources::tempdir()
 }
 
 /// An OpenCode that lists one new session when asked and otherwise
@@ -292,7 +290,11 @@ fn cancelling_during_recognized_work_sends_no_readiness_reminder() {
 #[test]
 fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
     // SAFETY: fixture-only override, as in the launch tests.
-    unsafe { std::env::set_var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK", "1") };
+    assert_eq!(
+        std::env::var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK").as_deref(),
+        Ok("1"),
+        "run ./cargo.sh test"
+    );
     let dir = test_tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();

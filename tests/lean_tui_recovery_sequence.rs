@@ -15,21 +15,18 @@ use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Child, Command as ProcessCommand, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Command as ProcessCommand, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 
-static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
-
 struct Fixture {
     run: PathBuf,
-    short_state: PathBuf,
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
     conversation: String,
+    _directory: common::TestDir,
 }
 
 impl Fixture {
@@ -42,21 +39,8 @@ impl Fixture {
     }
 
     fn start_variant(hold_worker: bool, with_dependent: bool) -> Self {
-        let evidence_root = PathBuf::from(
-            std::env::var_os("ANTISLOP_TUI_RECOVERY_EVIDENCE")
-                .expect("ANTISLOP_TUI_RECOVERY_EVIDENCE must point into durable task-state"),
-        );
-        fs::create_dir_all(&evidence_root).unwrap();
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let run = evidence_root.join(format!(
-            "run-{stamp}-{}-{}",
-            std::process::id(),
-            NEXT_RUN.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&run).unwrap();
+        let directory = common::tempdir();
+        let run = directory.path().to_path_buf();
         let project = run.join("project");
         fs::create_dir(&project).unwrap();
         git(&project, &["init", "--quiet", "--initial-branch=main"]);
@@ -99,26 +83,12 @@ impl Fixture {
             .replace("local_options = true", "local_options = false");
         fs::write(&config, config_text).unwrap();
 
-        let short_root = Path::new(".antislop/tmp");
-        fs::create_dir_all(short_root).unwrap();
-        let short_runtime = short_root.join(format!(
-            "tui-recovery-{}-{}",
-            std::process::id(),
-            NEXT_RUN.fetch_add(1, Ordering::Relaxed)
-        ));
-        let durable_state = run.join("state");
-        fs::create_dir(&durable_state).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&durable_state, fs::Permissions::from_mode(0o700)).unwrap();
-            std::os::unix::fs::symlink(&run, &short_runtime).unwrap();
-        }
-        let short_state = short_runtime.join("state");
+        let state = run.join("state");
+        antislop::lean::daemon::private_directory(&state).unwrap();
         let registry = run.join("config-registry");
-        fs::create_dir(&registry).unwrap();
+        antislop::lean::daemon::private_directory(&registry).unwrap();
         let core = Core::open(
-            &durable_state,
+            &state,
             Config::load(&config).expect("fixture config parses"),
         )
         .expect("fixture Core opens");
@@ -165,7 +135,7 @@ impl Fixture {
                 "__core",
                 project.to_str().unwrap(),
                 config.to_str().unwrap(),
-                short_state.to_str().unwrap(),
+                state.to_str().unwrap(),
             ])
             .env("ANTISLOP_CONFIG_DIR", &registry)
             .env("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1")
@@ -178,8 +148,9 @@ impl Fixture {
             .stdout(Stdio::null())
             .stderr(Stdio::from(daemon_stderr))
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
-        let client = Client::at(&short_state);
+        let client = Client::at(&state);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -202,8 +173,8 @@ impl Fixture {
             thread::sleep(Duration::from_millis(20));
         }
         Self {
+            _directory: directory,
             run,
-            short_state,
             child,
             client,
             conversation,
@@ -229,14 +200,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(short_runtime) = self.short_state.parent() {
-            let _ = fs::remove_file(short_runtime);
-        }
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 

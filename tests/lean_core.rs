@@ -951,6 +951,7 @@ fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> Stri
 fn the_cli_talks_to_one_daemon_that_outlives_it() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1162,6 +1163,7 @@ fn a_rebuilt_frontend_with_changed_configuration_reconnects_to_running_work() {
 fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1204,6 +1206,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap()
     };
 
@@ -1341,6 +1344,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
 fn a_daemon_whose_state_is_deleted_leaves() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1403,6 +1407,7 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
         0,
     )
     .spawn()
+    .map(common::ChildGuard::new)
     .unwrap();
     core.store.set_turn_pid(&turn.id, orphan.id()).unwrap();
     drop(core);
@@ -1419,6 +1424,7 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
 fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1449,6 +1455,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
+        .map(common::ChildGuard::new)
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while !std::fs::read_to_string(dir.join("calls.log"))
@@ -1809,6 +1816,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         .stdout(std::process::Stdio::null())
         .stderr(std::fs::File::create(dir.join("daemon-test.log")).unwrap())
         .spawn()
+        .map(common::ChildGuard::new)
         .unwrap();
     let client = Client::at(&state);
     let identity = || client.call(&Request::Control(ControlRequest::Identity));

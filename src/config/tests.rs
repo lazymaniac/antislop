@@ -381,9 +381,7 @@ fn local_options_have_a_default_and_can_be_disabled() {
 
 #[test]
 fn load_and_resolve_preserve_file_error_context_and_role_selection() {
-    let root = crate::lean::paths::state_root().unwrap().join("tests");
-    std::fs::create_dir_all(&root).unwrap();
-    let fixture = tempfile::tempdir_in(root).unwrap();
+    let fixture = crate::test_resources::tempdir();
     let path = fixture.path().join("antislop.toml");
     std::fs::write(&path, include_str!("../../examples/antislop.toml")).unwrap();
     let loaded = Config::load(&path).unwrap();

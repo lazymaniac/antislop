@@ -14,15 +14,15 @@ use ratatui::{Terminal, backend::TestBackend};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
-    process::{Child, Command as ProcessCommand, Stdio},
+    process::{Command as ProcessCommand, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const SOURCE: &str = include_str!("../examples/antislop.toml");
 
 struct Daemon {
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
 }
 
@@ -39,6 +39,7 @@ impl Daemon {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(state);
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -62,36 +63,18 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
-struct RunDir(PathBuf);
-
+struct RunDir(common::TestDir);
 impl RunDir {
     fn new() -> Self {
-        let root = PathBuf::from(
-            std::env::var_os("ANTISLOP_TASK_STATE")
-                .expect("set ANTISLOP_TASK_STATE to the allocated durable task-state directory"),
-        );
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = root.join(format!(
-            "runs/tui-plan-consent-{}-{stamp}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        Self(path)
+        Self(common::tempdir())
     }
-
     fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
 }
 
@@ -475,7 +458,7 @@ fn plan_review_acceptance_is_tokened_and_keeps_tui_state_correlated() {
     }));
 
     assert!(run.path().starts_with(PathBuf::from(
-        std::env::var_os("ANTISLOP_TASK_STATE").unwrap()
+        std::env::var_os("ANTISLOP_TEST_ROOT").unwrap()
     )));
 }
 

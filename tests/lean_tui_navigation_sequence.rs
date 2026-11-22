@@ -14,25 +14,22 @@ use ratatui::{Terminal, backend::TestBackend};
 use std::io::{IsTerminal, Write};
 use std::{
     path::PathBuf,
-    process::{Child, Command as ProcessCommand, Stdio},
+    process::{Command as ProcessCommand, Stdio},
     time::{Duration, Instant},
 };
 
 struct NavigationFixture {
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
     project: PathBuf,
     state: PathBuf,
     cli: PathBuf,
-    _root: tempfile::TempDir,
+    _root: common::TestDir,
 }
 
 impl NavigationFixture {
     fn start() -> Self {
-        let root_guard = tempfile::Builder::new()
-            .prefix("anti-nav-")
-            .tempdir()
-            .unwrap();
+        let root_guard = common::tempdir();
         let root = root_guard.path().to_path_buf();
         let project = root.join("p");
         std::fs::create_dir_all(&project).unwrap();
@@ -74,6 +71,7 @@ impl NavigationFixture {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(&state);
         wait_for("fixture daemon identity", || {
@@ -92,10 +90,7 @@ impl NavigationFixture {
     }
 
     fn start_delivery(capture_dir: &std::path::Path) -> Self {
-        let root_guard = tempfile::Builder::new()
-            .prefix("anti-nav-delivery-")
-            .tempdir()
-            .unwrap();
+        let root_guard = common::tempdir();
         let root = root_guard.path();
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -207,6 +202,7 @@ print(json.dumps({"event":"result","result":{"conversation_id":"navigation-worke
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(&state);
         wait_for("delivery daemon identity", || {
@@ -227,11 +223,8 @@ print(json.dumps({"event":"result","result":{"conversation_id":"navigation-worke
 
 impl Drop for NavigationFixture {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 

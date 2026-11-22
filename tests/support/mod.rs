@@ -1,6 +1,14 @@
 //! Deterministic task protocol for CLI fixtures. Production planning and review stay enabled.
+mod fixture_paths {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/external.rs"
+    ));
+}
+
 #[allow(dead_code)]
 pub fn install_task_protocol(path: &std::path::Path) {
+    fixture_paths::external(path.parent().unwrap());
     let source = std::fs::read_to_string(path).unwrap();
     if source.contains("# TASK_FIXTURE_PROTOCOL") || !source.contains("prompt = sys.argv[-1]") {
         return;
@@ -158,6 +166,7 @@ pub fn confirm_scope_store(
 /// tests supply their own comparison and reviewer oracle instead.
 #[allow(dead_code)]
 pub fn install_task_options_protocol(path: &std::path::Path) {
+    fixture_paths::external(path.parent().unwrap());
     let source = std::fs::read_to_string(path).unwrap();
     let hook = r#"
 if _lr.search(r'^Task: Options for ', prompt, _lr.M):

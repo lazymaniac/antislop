@@ -43,3 +43,8 @@ pub fn hash(bytes: impl AsRef<[u8]>) -> String {
 pub fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/support/resources.rs"]
+mod test_resources;

@@ -16,13 +16,13 @@ use serde_json::Value;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    process::{Child, Command as ProcessCommand, Stdio},
+    process::{Command as ProcessCommand, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 struct Daemon {
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
 }
 
@@ -39,6 +39,7 @@ impl Daemon {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let daemon = Self {
             child,
@@ -56,11 +57,8 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
@@ -167,8 +165,7 @@ fn setup(team: Team, root: &Path) -> (String, Daemon, PathBuf, PathBuf, PathBuf)
         .replace("local_commits = true", "local_commits = false");
     let config_path = root.join("antislop.toml");
     std::fs::write(&config_path, &config_text).unwrap();
-    let workspace = std::env::current_dir().unwrap();
-    let state = project.strip_prefix(&workspace).unwrap().join(".antislop");
+    let state = project.join(".antislop");
     let config = Config::from_toml(&config_text).unwrap();
     assert!(
         config.policy.required_gates,

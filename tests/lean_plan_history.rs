@@ -60,7 +60,7 @@ fn test_config(codex: &Path, agy: &Path) -> Config {
 }
 
 struct DaemonGuard {
-    child: std::process::Child,
+    child: common::ChildGuard,
     client: Client,
 }
 
@@ -78,6 +78,7 @@ impl DaemonGuard {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(state);
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -100,11 +101,8 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        let _ = self.client.call(&Request::Control(
-            antislop::lean::daemon::ControlRequest::Shutdown,
-        ));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
@@ -115,7 +113,7 @@ impl Drop for DaemonGuard {
 // - Events, turns, reports and verdicts associated with correct plan_id.
 #[test]
 fn multiple_plans_with_repeating_labels_have_distinct_identities_and_event_scoping() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let (codex, agy) = fake_clis(dir.path());
@@ -235,7 +233,7 @@ fn multiple_plans_with_repeating_labels_have_distinct_identities_and_event_scopi
 // 2. Pagination of plans: offset, limit, total, has_more, active_plan_id.
 #[test]
 fn plan_pagination_and_active_plan_invariance() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let (codex, agy) = fake_clis(dir.path());
@@ -297,7 +295,7 @@ fn plan_pagination_and_active_plan_invariance() {
 // Keep messages, reports, verdicts, sessions and events available for manual archival.
 #[test]
 fn incompatible_legacy_database_is_rejected_without_changing_history() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let db_path = dir.path().join("legacy.db");
 
     // 1. Create a schema 3 database directly with SQLite
@@ -457,7 +455,7 @@ fn incompatible_legacy_database_is_rejected_without_changing_history() {
 // - Calling CommentScoped with foreign plan -> rejected.
 #[test]
 fn daemon_rejects_foreign_scope_requests() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project_a = dir.path().join("proj_a");
     let project_b = dir.path().join("proj_b");
     std::fs::create_dir_all(&project_a).unwrap();

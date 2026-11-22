@@ -6,11 +6,16 @@ use serde_json::Value;
 
 #[test]
 fn every_provider_launches_without_permission_flags_and_resumes_the_selected_session() {
-    // SAFETY: all launch tests use this fixture-only bridge-check override.
-    unsafe {
-        std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
-        std::env::set_var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK", "1");
-    };
+    for name in [
+        "ANTISLOP_SKIP_AGY_BRIDGE_CHECK",
+        "ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK",
+    ] {
+        assert_eq!(
+            std::env::var(name).as_deref(),
+            Ok("1"),
+            "run ./cargo.sh test"
+        );
+    }
     let gateway = Gateway::start().unwrap();
     for provider in [
         ProviderKind::Codex,
