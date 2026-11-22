@@ -370,7 +370,7 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
         .unwrap();
 
     let buffer = terminal.backend().buffer();
-    // Review that the selected item is rendered with REVERSED modifier
+    // Selection uses the shared filled surface, or reverse in monochrome.
     let mut found_reversed_selected = false;
     let last_item_label = &items[picker.selected].0;
     let last_word = last_item_label.split_whitespace().next().unwrap();
@@ -380,7 +380,9 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
         if row_chars.contains(last_word) {
             for x in 0..60 {
                 let cell = &buffer[(x, y)];
-                if cell.modifier.contains(Modifier::REVERSED) {
+                if cell.modifier.contains(Modifier::REVERSED)
+                    || cell.bg == crate::lean::tui::theme::ayu::SELECTION
+                {
                     found_reversed_selected = true;
                     break;
                 }
@@ -395,12 +397,46 @@ fn picker_at_60x12_keeps_selected_item_visible_with_compact_command_list() {
 }
 
 #[test]
-fn picker_layout_uses_a_72_column_scrollable_viewport_without_item_cap() {
+fn picker_layout_keeps_large_lists_compact_and_last_selection_visible() {
     let area = ratatui::layout::Rect::new(0, 0, 120, 40);
     let layout = super::picker_layout::PickerLayout::new(area, 1_000, 999, 1).unwrap();
     assert_eq!(layout.inner, 72);
-    assert!(layout.visible_rows > 12);
+    assert_eq!(layout.visible_rows, 8);
+    assert_eq!(layout.box_area.height, 12);
     assert_eq!(layout.start + layout.visible_rows, 1_000);
+}
+
+#[test]
+fn actions_palette_is_a_compact_flat_surface_in_color_and_monochrome() {
+    use ratatui::{Terminal, backend::TestBackend};
+    for color in [true, false] {
+        let theme = crate::lean::tui::theme::Theme::new(color, false);
+        let mut picker = Picker::new(Kind::Commands);
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        terminal
+            .draw(|frame| picker.draw_themed(frame, &View::default(), true, &theme))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let painted = buffer
+            .content
+            .iter()
+            .filter(|cell| cell.bg != ratatui::style::Color::Reset)
+            .count();
+        if color {
+            assert!(painted > 0 && painted < 160 * 15);
+        }
+        assert!(
+            buffer
+                .content
+                .iter()
+                .all(|cell| !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘" | "─" | "│"))
+        );
+        assert!(buffer.content.iter().any(|cell| if color {
+            cell.bg == crate::lean::tui::theme::ayu::SELECTION
+        } else {
+            cell.modifier.contains(Modifier::REVERSED)
+        }));
+    }
 }
 
 #[test]

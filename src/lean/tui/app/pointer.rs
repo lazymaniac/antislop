@@ -3,20 +3,6 @@ mod click;
 use super::super::input_owner::{InputKind, InputOwner};
 
 impl App {
-    pub(in crate::lean::tui) fn bar_height(area: Rect) -> u16 {
-        let _ = area;
-        1
-    }
-
-    pub(in crate::lean::tui) fn main_areas(area: Rect) -> [Rect; 3] {
-        Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(u16::from(area.height >= 6)),
-            Constraint::Length(Self::bar_height(area)),
-        ])
-        .areas(area)
-    }
-
     pub(in crate::lean::tui) fn mouse_scroll(&mut self, down: bool) {
         if self.scroll_help(down) {
             return;
@@ -126,18 +112,94 @@ impl App {
 
     fn mouse_inner(&mut self, mouse: event::MouseEvent) -> bool {
         self.sync_interview();
-        if self.handle_modal_mouse(mouse) {
+        let owner = self.input_owner(InputKind::Mouse);
+        if owner == InputOwner::Interview {
+            self.workbench_dragging = false;
+        }
+        let dock_uncovered = matches!(
+            owner,
+            InputOwner::Navigation
+                | InputOwner::Composer
+                | InputOwner::DetailsInput
+                | InputOwner::Interview
+        );
+        if !dock_uncovered && self.handle_modal_mouse(mouse) {
             self.workbench_dragging = false;
             return true;
         }
-        if self.navigation.focus == NavigationFocus::Composer
-            || self.details.as_ref().is_some_and(|details| details.editing)
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && dock_uncovered
+            && let Some((_, action)) = self
+                .direction_choices
+                .iter()
+                .find(|(rect, _)| rect.contains((mouse.column, mouse.row).into()))
+                .copied()
+        {
+            match action {
+                render::direction::Action::Answer(index) => {
+                    if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                        form.selected = index;
+                        form.visible = true;
+                    }
+                }
+                render::direction::Action::Review => {
+                    if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                        form.visible = true;
+                    }
+                }
+                render::direction::Action::Decisions => self.open_decision_inbox(),
+                render::direction::Action::Plan => self.run_workflow(Command::Plan),
+                render::direction::Action::Session(index) => {
+                    self.select_session_action(index);
+                }
+            }
+            return true;
+        }
+        if (self.interview_visible()
+            || self.direction_choices.iter().any(|(rect, action)| {
+                matches!(action, render::direction::Action::Review)
+                    && rect.contains((mouse.column, mouse.row).into())
+            }))
+            && dock_uncovered
+            && matches!(
+                mouse.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+        {
+            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                form.scroll_by(mouse.kind == MouseEventKind::ScrollDown, 3);
+            }
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && dock_uncovered
+            && (self.navigation.focus == NavigationFocus::Composer
+                || self.interview_visible()
+                || self.details.as_ref().is_some_and(|details| details.editing))
+            && let Some((_, code, modifiers)) = self
+                .chrome_keys
+                .iter()
+                .find(|(rect, _, _)| {
+                    rect.y == self.direction_area.bottom()
+                        && rect.contains((mouse.column, mouse.row).into())
+                })
+                .copied()
+        {
+            self.key(event::KeyEvent::new(code, modifiers));
+            return true;
+        }
+        if dock_uncovered
+            && (self.navigation.focus == NavigationFocus::Composer
+                || self.details.as_ref().is_some_and(|details| details.editing)
+                || self.interview_visible())
         {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && let Some((send, cancel)) = self.direction_actions
             {
                 if send.contains((mouse.column, mouse.row).into()) {
-                    if self.details.as_ref().is_some_and(|details| details.editing) {
+                    if self.interview_visible() {
+                        self.key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    } else if self.details.as_ref().is_some_and(|details| details.editing) {
                         self.submit_agent_message();
                     } else {
                         self.submit();
@@ -192,8 +254,8 @@ impl App {
             match mouse.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     let mut presentation = self.navigation.presentation();
-                    if super::super::workbench::resize_at(
-                        self.terminal_area,
+                    if super::super::workbench::resize_areas(
+                        self.workbench_areas,
                         &mut presentation,
                         mouse.row,
                     ) {
@@ -209,6 +271,17 @@ impl App {
                 }
                 _ => return true,
             }
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some((_, tab)) = self
+                .workbench_tabs
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                .copied()
+        {
+            self.focus_workbench_content();
+            self.workbench_select_tab(tab);
+            return true;
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && self
@@ -241,13 +314,7 @@ impl App {
                 .content
                 .contains((mouse.column, mouse.row).into())
         {
-            self.navigation.focus = NavigationFocus::WorkbenchContent;
-            self.navigation.update_presentation(|presentation| {
-                presentation.focus = NavigationFocus::WorkbenchContent;
-            });
-            if let Some(details) = &mut self.details {
-                details.native_focus = false;
-            }
+            self.focus_workbench_content();
             return false;
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -265,11 +332,36 @@ impl App {
                     self.workbench_areas.list.height,
                 );
             if let Some(row) = rows.get(row) {
+                self.focus_workbench_content();
                 self.open_work_card_or_stage(row);
+                self.focus_workbench_content();
+                let focus = if self.terminal_area.width < 90 {
+                    NavigationFocus::WorkbenchContent
+                } else {
+                    NavigationFocus::WorkbenchList
+                };
+                self.navigation.focus = focus;
+                self.navigation.update_presentation(|presentation| {
+                    presentation.focus = focus;
+                    if self.terminal_area.width < 90 {
+                        presentation.list_requested = false;
+                    }
+                });
             }
             return true;
         }
         false
+    }
+
+    fn focus_workbench_content(&mut self) {
+        self.navigation.focus = NavigationFocus::WorkbenchContent;
+        self.navigation.update_presentation(|presentation| {
+            presentation.focus = NavigationFocus::WorkbenchContent;
+            presentation.native_input = false;
+        });
+        if let Some(details) = &mut self.details {
+            details.native_focus = false;
+        }
     }
 
     fn handle_content_mouse(&mut self, mouse: event::MouseEvent) {

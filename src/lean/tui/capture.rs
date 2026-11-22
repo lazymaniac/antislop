@@ -1092,6 +1092,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             .expect("fixture question deserializes");
             let mut form = interview::Form::new(42, question);
             if id == "interview-scope" {
+                form.visible = false;
                 form.set_scope_summary(Some(
                     "TUI capture adapter: all renderer families and six terminal geometries.",
                 ));
@@ -1133,6 +1134,10 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.flow_editor = Some(FlowEditor::edit_task(&app.view, &app.view.tasks[0]));
         }
         "plan-view" => {
+            apply_fixture(app, "workbench-summary");
+            app.navigation.screen = Screen::Graph;
+            app.details = None;
+            app.view.session_branch = Some("feature/plan-review".into());
             app.view.plan = Some("p-fixture".into());
             app.view.plan_doc =
                 "# Plan\n\nImplement the requested change with verified acceptance criteria."
@@ -2239,6 +2244,9 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         .collect::<Vec<_>>()
         .join(" ");
     let rendered_text = rendered_text
+        // Scrollbars can fall between the wrapped lines of a status message.
+        // They are chrome, rather than words in its visibility marker.
+        .replace(['┃', '│', '#', '|'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -2379,9 +2387,17 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         && record["na_reason"].is_null()
     {
         assert!(
-            record["workbench_header"]
-                .as_str()
-                .is_some_and(|header| header.contains("Workbench /")),
+            record["workbench_header"].as_str().is_some_and(|header| {
+                if width >= 100 {
+                    header.contains("Workbench /")
+                } else {
+                    header.contains(if fixture.id == "new-session-composer" {
+                        "Message"
+                    } else {
+                        "Content"
+                    })
+                }
+            }),
             "{} did not render the Workbench D3 header",
             fixture.id
         );
@@ -2774,9 +2790,7 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "picker-history"
         | "picker-slash-commands"
         | "rigor-picker"
-        | "delete-confirmation" => {
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
-        }
+        | "delete-confirmation" => theme.selected(),
         "unblock" => theme.error(),
         "graph" => theme.panel(),
         "workbench"
@@ -2790,10 +2804,9 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "workbench-diff"
         | "session-native-pty" => theme.card(),
         "configuration" => theme.title(),
-        // History navigation is painted inside planview::graph::panel: the
-        // accent span inherits the focused card's background.
+        // History navigation uses the same flat canvas as the plan shell.
         "plan-history" if fixture.id == "plan-history-loading" => {
-            theme.card().patch(theme.accent())
+            theme.overlay().patch(theme.accent())
         }
         "plan-history" => theme.accent(),
         "comment-editor" => theme.accent(),

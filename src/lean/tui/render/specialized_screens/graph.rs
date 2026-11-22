@@ -1,5 +1,7 @@
 use super::super::super::*;
 
+mod inspector;
+
 impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let (inner, now_area, progress, inspector) = self.graph_areas(frame, area, theme);
@@ -318,18 +320,24 @@ impl App {
         let mut frame_inner = self.draw_graph_frame(frame, area, theme);
         let inspector = if (self.graph_inspector_visible && self.terminal_area.width >= 120
             || self.navigation.compact_secondary)
-            && area.width >= 50
+            && area.width >= 12
             && self.terminal_area.height >= 16
             && area.height >= 10
         {
-            let columns = Layout::horizontal([
-                Constraint::Min(1),
-                Constraint::Length(3),
-                Constraint::Length(36),
-            ])
-            .areas::<3>(frame_inner);
-            frame_inner = columns[0];
-            Some(columns[2])
+            if area.width < 90 {
+                let inspector = frame_inner;
+                frame_inner = Rect::default();
+                Some(inspector)
+            } else {
+                let columns = Layout::horizontal([
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                    Constraint::Length(36),
+                ])
+                .areas::<3>(frame_inner);
+                frame_inner = columns[0];
+                Some(columns[2])
+            }
         } else {
             None
         };
@@ -390,54 +398,23 @@ impl App {
                 .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
         });
         if let Some(task) = task {
-            for line in wrap(
-                &format!(
-                    "{}",
-                    view::task_goal(&task.kind, &task.title, &task.goal, task.summary.as_deref())
-                ),
-                width,
-            ) {
-                lines.push(Line::raw(line));
-            }
-            if let Some(meta) = self.view.task_meta.get(&task.id) {
-                for criterion in &meta.acceptance_criteria {
-                    for line in wrap(
-                        &format!("{} {}", theme.status_glyph(&task.status), criterion.text),
-                        width,
-                    ) {
-                        lines.push(Line::styled(line, theme.dim()));
-                    }
-                }
-            }
             lines.push(Line::styled(
-                format!(
-                    "{} {} round {}",
-                    selected.split(':').next().unwrap_or(&selected),
-                    theme.glyphs().dot,
-                    task.round
-                ),
+                if selected.starts_with("reviewer:") {
+                    taskinfo::reviewer_status(task)
+                } else {
+                    taskinfo::worker_status(task)
+                },
                 theme.dim(),
             ));
-            if self.view.task_bottleneck_count(&task.id) > 0 {
+            let downstream = self.view.task_bottleneck_count(&task.id);
+            if downstream > 0 {
                 lines.push(Line::styled(
                     format!(
-                        "Critical path {} {} downstream",
-                        theme.glyphs().dot,
-                        self.view.task_bottleneck_count(&task.id)
+                        "Critical path {} {downstream} downstream",
+                        theme.glyphs().dot
                     ),
                     theme.dim(),
                 ));
-            }
-            lines.push(Line::raw(""));
-            if let Some(reason) = &task.reason {
-                for line in wrap(&view::clean(reason), width) {
-                    lines.push(Line::styled(line, theme.error()));
-                }
-            }
-            if let Some(effect) = &task.effect {
-                for line in wrap(&view::clean(effect), width).into_iter().take(3) {
-                    lines.push(Line::raw(line));
-                }
             }
         }
         for stage in &unit.stages {
@@ -454,10 +431,34 @@ impl App {
             ));
         }
         lines.push(Line::raw(""));
+        let decisions = unit.decisions(&self.view);
+        let has_diff = task.is_some_and(|task| task.change_kind.has_delivery());
+        let has_recovery = task.is_some_and(|task| {
+            matches!(
+                task.status.as_str(),
+                "failed" | "needs_user" | "coordinating"
+            )
+        });
+        // Role content comes before activity and relation metadata. Reserve the
+        // action rows so even a long plan leaves the inspector usable.
+        let footer_rows = 2
+            + usize::from(has_diff)
+            + usize::from(has_recovery)
+            + if decisions > 0 { 6 } else { 0 };
+        let preview_height =
+            usize::from(area.height.saturating_sub(4)).saturating_sub(lines.len() + footer_rows);
+        lines.extend(inspector::role_content(
+            &self.view,
+            &selected,
+            task,
+            width,
+            preview_height,
+            theme,
+        ));
         for stage in &unit.stages {
             if let Some(agent) = self.view.agents.get(&stage.id.0) {
                 let problem = graph::health(&self.view, &stage.id.0) == graph::Health::Problem;
-                if stage.id.0 == selected || problem {
+                if (stage.id.0 == selected || problem) && !agent.activity.trim().is_empty() {
                     for line in wrap(
                         &format!("{}: {}", stage.label, view::clean(&agent.activity)),
                         width,
@@ -502,7 +503,6 @@ impl App {
             }
         }
         let action_start = lines.len();
-        let decisions = unit.decisions(&self.view);
         if decisions > 0 {
             lines.push(Line::raw(""));
             lines.push(Line::styled(
@@ -532,16 +532,11 @@ impl App {
             theme.chrome("Results & evidence · o"),
             theme.accent(),
         ));
-        if task.is_some_and(|task| task.change_kind.has_delivery()) {
+        if has_diff {
             hits.push((lines.len(), InspectorAction::Diff(selected.clone())));
             lines.push(Line::styled(theme.chrome("Changes · v"), theme.accent()));
         }
-        if task.is_some_and(|task| {
-            matches!(
-                task.status.as_str(),
-                "failed" | "needs_user" | "coordinating"
-            )
-        }) {
+        if has_recovery {
             hits.push((lines.len(), InspectorAction::Recovery(selected)));
             lines.push(Line::styled(
                 theme.chrome("Recovery actions · u"),

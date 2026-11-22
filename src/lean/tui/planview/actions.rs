@@ -205,12 +205,7 @@ impl PlanView {
             return action;
         }
         let pos = ratatui::layout::Position::new(col, row);
-        let in_tasks_pane = self.graph_area.width > 0
-            && col >= self.graph_area.x
-            && col < self.graph_area.right()
-            && row >= self.graph_area.y
-            && row < self.graph_area.bottom().saturating_add(7);
-        if in_tasks_pane {
+        if self.task_area.contains(pos) {
             self.graph_focused = true;
             if let Some((_, index)) = self.task_rects.iter().find(|(rect, _)| rect.contains(pos)) {
                 self.graph_selected = *index;

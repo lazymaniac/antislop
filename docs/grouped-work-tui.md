@@ -40,7 +40,7 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 | Workbench | 30-column task hierarchy, three-column gap, equal content/PTY shares |
 | Content | Filled panel with padded title and tabs; no nested diff toolbar or box outlines |
 | Native terminal | Raised header, dark `#0a1114` surface, quiet controls, visible attachment errors |
-| Direction | Full-width filled invitation; raised composer with dark input and mint Send action |
+| Direction | One full-width dock: invitation becomes an inline editor; questions and available actions expand above it |
 | Bottom chrome | One quiet keybar; mouse hit regions come from the rendered labels |
 
 The retained PNG design references are [Canvas](../work/visualizations/agent-layout-1.png)
@@ -50,6 +50,23 @@ their original generation path and current manual use are unconfirmed. See
 [the retention decision](api-and-reference-retention.md) for the evidence and
 conditions for reconsidering them.
 
+The top bar reads `> antislop <session branch>` on the left and the session
+status plus total work time on the right, in both Canvas and Workbench. Before
+the session creates a branch it uses the project's cached branch; an unavailable
+branch is shown as a dash. Long names are clipped on grapheme boundaries before
+the reserved status/time area. The clock unions recorded agent-turn intervals,
+so concurrent agents count once and idle gaps do not count. Replaying the
+existing event log restores the total after reopening or switching sessions;
+no database or protocol change is needed. Hours appear when the total reaches
+one hour. Workbench terminal owner, round, input mode and pin state remain on
+the Workbench title row.
+
+Hologram's timing-helper similarity notice compares `SessionTime::elapsed_ms`
+with `WorkUnit::elapsed_ms`. The latter adds member-agent durations for a work
+card; the session clock unions overlapping turn intervals, so reusing the card
+total would count parallel work more than once. Both reuse the existing clock
+formatter. The new projection state is reconstructed from existing events.
+
 Application colors match the reference tokens, including selected cards and
 diff additions/removals. Native CLI output retains its own colors and text.
 The exact 160×50 offsets, pane widths, split and backgrounds have a regression
@@ -57,16 +74,41 @@ test. The capture catalog also checks real diff-plus-PTY output, compact layouts
 pending decisions, unavailable history, errors, drafts and monochrome/ASCII modes.
 
 Reviewed 160×50 captures: [Canvas](images/tui-canvas.png),
-[Workbench](images/tui-workbench.png), [direction composer](images/tui-direction.png).
+[Workbench](images/tui-workbench.png), [direction input](images/tui-direction.png),
+[inline question](images/tui-question.png).
+The [scope preview](images/tui-scope.png) shows the unfocused confirmation at 80×24.
 These rasterize the real TestBackend cell buffers with a fixed monospace font;
 native PTY cells come from deterministic terminal fixtures.
 
-Historical validation of the visual correction on 2026-11-22 with the pinned
-Rust toolchain (these totals are not validation of subsequent changes):
+The direction editor occupies the bottom dock instead of a centered popup.
+Its keybar immediately follows the input surface. The same dock serves session
+and agent drafts, recipient/broadcast selection, queue/steer/interrupt, delivery
+errors and attachments. Questions expand above it without changing focus;
+selecting an answer never submits it. The original Form keyboard handler and
+scope cache still own answers and bounded scope scrolling. Custom answers use
+the dock input, with their own draft, while Esc restores the direction draft.
+Completion buttons call the existing session-action handler; CLI approvals
+retain the explicit decision inbox. No new request or automatic approval was
+introduced. Responsive footer height is included in Workbench geometry and
+separator dragging, so a focused native terminal stays visible when the dock grows.
+
+Scope confirmations show the actual scope summary in the unfocused preview,
+before any choice is made. The preview uses the same bounded scope renderer as
+the focused question: wheel scrolling reads it without moving the Canvas or
+taking keyboard focus, and clicking the scope focuses the answer controls.
+
+The dock review's Hologram API finding records local rectangles, hit targets and
+the footer-aware layout adapters. `Form::draw_inline` shares `draw_layout` with
+the original modal renderer; its name-similarity notice against diff file-list
+rendering is unrelated to that shared question renderer. The original form,
+scope cache, and session-action handler are reused rather than duplicated.
+
+Historical validation on 2026-11-22 with the pinned Rust toolchain
+(these totals do not validate the subsequent merge):
 
 - Formatting, `cargo.sh check`, clippy for all targets with warnings denied,
   and `git diff --check`.
-- Full library suite: 1,105 passed; seven opt-in tests ignored.
+- Full library suite: 1,109 passed; seven opt-in tests ignored.
 - `lean_core`: 27 passed; `lean_tui`: 116 passed.
 - Messaging: 21 passed; approvals: two; recovery: 20; workflow: three.
 - Real daemon sequences: navigation two passed (host clipboard test remains
@@ -115,3 +157,19 @@ numeric selection; callers inspecting active Workbench selection should read
 `navigation.presentation().tab`. Calling `Details::switch_tab` or standalone
 `Details::draw` selects the legacy API again. Modal keyboard, paste and pointer
 routing retain their existing precedence; this model does not grant PTY input.
+
+### Merge input ownership
+
+The direction dock uses the same derived `InputOwner` as keyboard, paste and
+PTY routing. Help and other modal owners consume pointer events before dock
+actions, sidebar tabs and native input. The interview owner delegates clicks
+and wheel events to its inline dock; an unfocused scope preview scrolls without
+changing Canvas focus. Dismissing Help restores the underlying role and draft.
+Workbench tab clicks leave native input, and separator dragging uses the rendered
+footer-aware areas. Sidebar hit testing reuses one set of projected rows.
+
+The merge regressions exercise Help → blocked tab click/wheel/paste → Escape →
+role tab click → terminal focus for worker and reviewer, and Help → blocked scope
+preview → Escape → scope wheel/click → keyboard choice without submission.
+The existing per-conversation query/draft, role content, completion, grapheme,
+small-terminal, ASCII/NO_COLOR and bounded Canvas regressions remain applicable.

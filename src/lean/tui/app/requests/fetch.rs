@@ -448,6 +448,18 @@ impl App {
                 presentation.focus = NavigationFocus::WorkbenchContent;
             });
         }
+        // Opening a target closes its composer; restore a navigation pane instead
+        // of routing subsequent keys into an editor that is no longer visible.
+        self.navigation.update_presentation(|presentation| {
+            if !matches!(
+                presentation.focus,
+                NavigationFocus::WorkbenchList
+                    | NavigationFocus::WorkbenchContent
+                    | NavigationFocus::WorkbenchTerminal
+            ) {
+                presentation.focus = NavigationFocus::WorkbenchContent;
+            }
+        });
         self.navigation.focus = self.navigation.presentation().focus;
         self.result_fetch.cancel_document_fetch();
         self.restore_details(&key);

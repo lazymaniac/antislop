@@ -148,6 +148,20 @@ pub fn areas(
     presentation: &WorkbenchPresentation,
     focus: NavigationFocus,
 ) -> WorkbenchAreas {
+    areas_with_footer(
+        viewport,
+        presentation,
+        focus,
+        if viewport.height >= 40 { 3 } else { 2 },
+    )
+}
+
+pub(in crate::lean::tui) fn areas_with_footer(
+    viewport: Rect,
+    presentation: &WorkbenchPresentation,
+    focus: NavigationFocus,
+    footer_height: u16,
+) -> WorkbenchAreas {
     if viewport.is_empty() {
         return WorkbenchAreas::default();
     }
@@ -163,12 +177,20 @@ pub fn areas(
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(if spacious { 4 } else { 2 }),
         Constraint::Min(0),
-        Constraint::Length(if spacious { 4 } else { 2 }),
+        Constraint::Length(footer_height),
     ])
     .areas(viewport.inner(margin));
     let wide_enough = viewport.width >= 120;
-    let list_visible = (wide_enough && presentation.list_visible)
-        || (presentation.list_requested && viewport.width >= 60);
+    let list_visible = (wide_enough && presentation.list_visible) || presentation.list_requested;
+    if presentation.list_requested && viewport.width < 90 {
+        return WorkbenchAreas {
+            list: body,
+            header,
+            footer,
+            list_visible: true,
+            ..Default::default()
+        };
+    }
     let (list, work) = if list_visible {
         let [list, _, work] = Layout::horizontal([
             Constraint::Length(LIST_WIDTH),
@@ -203,7 +225,7 @@ pub fn areas(
         } else {
             (work, Rect::default(), Rect::default())
         }
-    } else if viewport.height < 30 && focus == NavigationFocus::WorkbenchTerminal {
+    } else if focus == NavigationFocus::WorkbenchTerminal {
         (Rect::default(), Rect::default(), work)
     } else {
         (work, Rect::default(), Rect::default())
@@ -222,7 +244,18 @@ pub fn areas(
 
 /// Resize the PTY share from a pointer position, clamped to both 8-row minima.
 pub fn resize_at(viewport: Rect, presentation: &mut WorkbenchPresentation, row: u16) -> bool {
-    let current = areas(viewport, presentation, NavigationFocus::WorkbenchContent);
+    resize_areas(
+        areas(viewport, presentation, NavigationFocus::WorkbenchContent),
+        presentation,
+        row,
+    )
+}
+
+pub(in crate::lean::tui) fn resize_areas(
+    current: WorkbenchAreas,
+    presentation: &mut WorkbenchPresentation,
+    row: u16,
+) -> bool {
     if !current.split
         || current.content.height + current.separator.height + current.terminal.height == 0
     {
@@ -286,16 +319,8 @@ pub(super) fn tab_line(
         if index > 0 {
             spans.push(Span::styled("  ", theme.dim()));
         }
-        let label = match tab {
-            WorkbenchTab::Summary => "Summary",
-            WorkbenchTab::Conversation => "Conversation",
-            WorkbenchTab::Results => "Results",
-            WorkbenchTab::Checks => "Checks",
-            WorkbenchTab::Comments => "Comments",
-            WorkbenchTab::Diff => "Diff",
-        };
         spans.push(Span::styled(
-            label,
+            tab_label(tab),
             if tab == active {
                 theme.accent()
             } else {
@@ -304,6 +329,33 @@ pub(super) fn tab_line(
         ));
     }
     ratatui::text::Line::from(spans)
+}
+
+fn tab_label(tab: WorkbenchTab) -> &'static str {
+    match tab {
+        WorkbenchTab::Summary => "Summary",
+        WorkbenchTab::Conversation => "Conversation",
+        WorkbenchTab::Results => "Results",
+        WorkbenchTab::Checks => "Checks",
+        WorkbenchTab::Comments => "Comments",
+        WorkbenchTab::Diff => "Diff",
+    }
+}
+
+pub(super) fn tab_hits(area: Rect, key: &str, delivers: bool) -> Vec<(Rect, WorkbenchTab)> {
+    if area.is_empty() {
+        return Vec::new();
+    }
+    let mut x = area.x;
+    tabs_for(key, delivers)
+        .into_iter()
+        .filter_map(|tab| {
+            let width = tab_label(tab).len() as u16;
+            let hit = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
+            x = x.saturating_add(width + 2);
+            (!hit.is_empty()).then_some((hit, tab))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -352,7 +404,7 @@ mod tests {
         presentation.zoomed = true;
         let zoom = areas(viewport, &presentation, NavigationFocus::WorkbenchTerminal);
         assert!(zoom.content.is_empty());
-        assert_eq!(zoom.terminal.height, 30);
+        assert_eq!(zoom.terminal.height, 31);
         assert_eq!(presentation.terminal_percent, before);
     }
 

@@ -10,12 +10,51 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+struct FormRows {
+    lines: Vec<Line<'static>>,
+    selected: (usize, usize),
+    input: usize,
+    scope_insert: Option<usize>,
+    choices: Vec<(usize, usize)>,
+}
+
 impl Form {
     pub fn draw(&mut self, frame: &mut Frame, screen: Rect, theme: &Theme) {
-        let (area, block) = interview_box(screen, theme, self.scope_summary.is_some());
+        self.draw_layout(frame, screen, theme, false);
+    }
+
+    pub(in crate::lean::tui) fn draw_inline(
+        &mut self,
+        frame: &mut Frame,
+        screen: Rect,
+        theme: &Theme,
+    ) {
+        self.draw_layout(frame, screen, theme, true);
+    }
+
+    fn draw_layout(&mut self, frame: &mut Frame, screen: Rect, theme: &Theme, inline: bool) {
+        if screen.is_empty() {
+            return;
+        }
+        let (area, block) = if inline {
+            (
+                screen,
+                Block::default()
+                    .style(theme.card())
+                    .padding(ratatui::widgets::Padding::new(1, 1, 1, 0)),
+            )
+        } else {
+            interview_box(screen, theme, self.scope_summary.is_some())
+        };
         let inner_width = usize::from(area.width.saturating_sub(3).max(1));
         let custom = self.selected == self.question.options.len();
-        let (rows, selected_rows, input_row, scope_insert) = self.rows(inner_width, custom, theme);
+        let FormRows {
+            lines: rows,
+            selected: selected_rows,
+            input: input_row,
+            scope_insert,
+            choices,
+        } = self.rows(inner_width, custom, theme, inline);
         let has_scope = self.scope_summary.is_some();
         let scope_count = self.scope_cache.row_count(
             self.scope_revision,
@@ -24,7 +63,11 @@ impl Form {
             theme,
         );
         let row_count = rows.len().saturating_add(scope_count.saturating_sub(1));
-        let area = content_box(area, row_count);
+        let area = if inline {
+            area
+        } else {
+            content_box(area, row_count)
+        };
         let viewport = usize::from(area.height.saturating_sub(2).max(1));
         self.scroll_step = viewport.saturating_sub(1).max(1);
         let (cursor_col, cursor_row) = self.input.visual_cursor(inner_width);
@@ -44,9 +87,32 @@ impl Form {
         };
         let insertion = scope_insert.unwrap_or(0);
         let scroll = self.visible_scroll(target_start, target_end, viewport, row_count);
+        self.choice_areas.clear();
+        if inline {
+            for (index, (start, end)) in choices.into_iter().enumerate() {
+                let start = (start + scope_offset).max(scroll);
+                let end = (end + scope_offset + 1).min(scroll + viewport);
+                if start < end {
+                    self.choice_areas.push((
+                        Rect::new(
+                            area.x + 1,
+                            area.y + 1 + (start - scroll) as u16,
+                            area.width.saturating_sub(2),
+                            (end - start) as u16,
+                        ),
+                        index,
+                    ));
+                }
+            }
+        }
         let block = if row_count > viewport {
             block.title_bottom(format!(
-                " PgUp/PgDn / Mouse wheel | {}-{}/{} ",
+                " {} | {}-{}/{} ",
+                if inline && !self.visible {
+                    theme.chrome("Mouse wheel scroll · click scope to focus")
+                } else {
+                    "PgUp/PgDn / Mouse wheel".to_owned()
+                },
                 scroll + 1,
                 scroll.saturating_add(viewport).min(row_count),
                 row_count
@@ -69,21 +135,22 @@ impl Form {
             theme,
         );
         render_interview_rows(frame, area, visible, theme, block);
-        self.place_cursor(frame, area, custom, target_start, cursor_col);
+        if !inline {
+            self.place_cursor(frame, area, custom, target_start, cursor_col);
+        }
     }
 
-    fn rows(
-        &self,
-        width: usize,
-        custom: bool,
-        theme: &Theme,
-    ) -> (Vec<Line<'static>>, (usize, usize), usize, Option<usize>) {
+    fn rows(&self, width: usize, custom: bool, theme: &Theme, inline: bool) -> FormRows {
         let scope = self.scope_summary.is_some();
         let mut rows = question_rows(&self.question, scope, width, theme);
-        let option_selected = option_rows(
+        let (option_selected, mut choices) = option_rows(
             &mut rows,
             &self.question.options,
-            self.selected,
+            if inline && !self.visible {
+                usize::MAX
+            } else {
+                self.selected
+            },
             width,
             theme,
         );
@@ -92,17 +159,36 @@ impl Form {
         } else {
             option_selected
         };
-        let input_row = append_answer_rows(
-            &mut rows,
-            &self.input,
-            self.error.as_deref(),
-            custom,
-            width,
-            theme,
-        );
-        append_interview_footer(&mut rows, self.sending, theme);
+        let input_row = if inline {
+            let at = rows.len();
+            rows.push(Line::styled(
+                theme.chrome("Other / own answer · type below"),
+                if custom { theme.accent() } else { theme.dim() },
+            ));
+            at
+        } else {
+            let at = append_answer_rows(
+                &mut rows,
+                &self.input,
+                self.error.as_deref(),
+                custom,
+                width,
+                theme,
+            );
+            append_interview_footer(&mut rows, self.sending, theme);
+            at
+        };
         let scope_insert = scope.then_some(1);
-        (rows, selected, input_row, scope_insert)
+        if inline {
+            choices.push((input_row, input_row));
+        }
+        FormRows {
+            lines: rows,
+            selected,
+            input: input_row,
+            scope_insert,
+            choices,
+        }
     }
 
     fn visible_scroll(
@@ -711,16 +797,18 @@ fn option_rows(
     selected: usize,
     width: usize,
     theme: &Theme,
-) -> (usize, usize) {
+) -> ((usize, usize), Vec<(usize, usize)>) {
     let mut selected_rows = (rows.len(), rows.len());
+    let mut choices = Vec::new();
     for (index, option) in options.iter().enumerate() {
         let picked = selected == index;
         let label_rows = append_option(rows, option, index, picked, width, theme);
+        choices.push(label_rows);
         if picked {
             selected_rows = label_rows;
         }
     }
-    selected_rows
+    (selected_rows, choices)
 }
 
 fn append_option(

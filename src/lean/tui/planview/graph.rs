@@ -11,6 +11,11 @@ impl PlanView {
         theme: &Theme,
         read_only: bool,
     ) {
+        self.task_area = area;
+        if area.is_empty() {
+            self.graph_area = Rect::default();
+            return;
+        }
         let hints = if read_only {
             &["Tasks (v)", "arrows select", "Shift+↑/↓ pan"][..]
         } else {
@@ -20,7 +25,13 @@ impl PlanView {
         let block = panel(&format!(" {title} "), self.graph_focused, theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let detail_height = if inner.height >= 12 { 7 } else { 0 };
+        let detail_height = if inner.height >= 22 {
+            7
+        } else if inner.height >= 15 {
+            5
+        } else {
+            0
+        };
         let [viewport, details] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(detail_height)]).areas(inner);
         if viewport != self.graph_area {
@@ -28,6 +39,28 @@ impl PlanView {
         }
         self.graph_area = viewport;
         self.graph_selected = self.graph_selected.min(view.tasks.len().saturating_sub(1));
+        if viewport.height < 5 {
+            if let Some(task) = view.tasks.get(self.graph_selected) {
+                frame.render_widget(
+                    Paragraph::new(vec![
+                        Line::styled(
+                            theme.fit(
+                                &theme.clean(&format!("{}: {}", task.id, task.title)),
+                                usize::from(viewport.width),
+                            ),
+                            theme.text(),
+                        ),
+                        Line::styled(
+                            theme.chrome(super::super::taskinfo::worker_status(task).as_str()),
+                            theme.dim(),
+                        ),
+                    ]),
+                    viewport,
+                );
+                self.task_rects.push((viewport, self.graph_selected));
+            }
+            return;
+        }
         let graph = PlanGraph::new(&view.tasks, viewport.width);
         if let Some(node) = graph.nodes.get(self.graph_selected)
             && self.graph_reveal
@@ -240,13 +273,10 @@ fn reveal(offset: &mut u16, start: u16, size: u16, viewport: u16) {
 
 pub(super) fn panel(title: &str, focused: bool, theme: &Theme) -> Block<'static> {
     Block::default()
-        .borders(Borders::ALL)
-        .border_set(theme.borders())
-        .style(if focused {
-            theme.card()
-        } else {
-            theme.overlay()
-        })
-        .border_style(theme.separator(focused))
-        .title(theme.chrome(title))
+        .padding(ratatui::widgets::Padding::new(1, 1, 2, 1))
+        .style(theme.card())
+        .title(Line::styled(
+            theme.chrome(title),
+            if focused { theme.accent() } else { theme.dim() },
+        ))
 }

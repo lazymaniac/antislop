@@ -121,7 +121,11 @@ pub struct App {
     /// Whether the graph inspector is shown when the terminal meets its minimum size.
     pub graph_inspector_visible: bool,
     pub chrome_keys: Vec<(Rect, KeyCode, KeyModifiers)>,
+    pub(super) workbench_tabs: Vec<(Rect, WorkbenchTab)>,
     pub direction_actions: Option<(Rect, Rect)>,
+    pub direction_area: Rect,
+    pub direction_input_area: Rect,
+    pub(in crate::lean::tui) direction_choices: Vec<(Rect, super::render::direction::Action)>,
     pub inspector_hits: Vec<(Rect, super::work_units::InspectorAction)>,
     /// Lines the expanded card's Results tab is scrolled down.
     pub graph_card_scroll: usize,
@@ -268,7 +272,11 @@ macro_rules! initial_app {
             graph_tab: 0,
             graph_inspector_visible: true,
             chrome_keys: Vec::new(),
+            workbench_tabs: Vec::new(),
             direction_actions: None,
+            direction_area: Rect::default(),
+            direction_input_area: Rect::default(),
+            direction_choices: Vec::new(),
             inspector_hits: Vec::new(),
             graph_card_scroll: 0,
             graph_card_area: None,

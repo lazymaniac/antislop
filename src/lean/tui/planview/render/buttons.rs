@@ -15,7 +15,13 @@ impl PlanView {
         view: &View,
         theme: &Theme,
     ) {
-        let btn_cols = self.button_areas(bar_area);
+        let actions = Rect::new(
+            bar_area.x,
+            bar_area.y + u16::from(bar_area.height >= 3),
+            bar_area.width,
+            u16::from(!bar_area.is_empty()),
+        );
+        let btn_cols = self.button_areas(actions);
         let drafts = view.draft_plan_comments().len();
         let decidable = view.plan_proposed();
         let acceptable = decidable && view.open_plan_comments().is_empty();
@@ -25,6 +31,23 @@ impl PlanView {
             acceptable,
         };
         self.draw_button_group(frame, btn_cols, theme, state);
+        if bar_area.height > 1 {
+            let hints = fit_hint(
+                &[
+                    "v pane",
+                    "↑/↓ select",
+                    "c comment line",
+                    "Tab action",
+                    "Esc back",
+                ],
+                usize::from(bar_area.width),
+                true,
+            );
+            frame.render_widget(
+                Paragraph::new(theme.chrome(&hints)).style(theme.dim()),
+                Rect::new(bar_area.x, bar_area.bottom() - 1, bar_area.width, 1),
+            );
+        }
     }
 
     fn draw_button_group(
@@ -67,27 +90,26 @@ impl PlanView {
         let (label, short, tone) = self.button_label_tone(button, state);
         let active = self.button == button;
         let style = self.button_style(theme, tone, active);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_set(theme.borders())
-            .border_style(theme.separator(active));
-        let inner = block.inner(rect);
-        frame.render_widget(block, rect);
-        if inner.height > 0 && inner.width > 0 {
-            // A narrow button keeps its key and drops the words around it.
-            let room = usize::from(inner.width);
-            let label = if unicode_width::UnicodeWidthStr::width(label) <= room {
-                label
-            } else {
-                short
-            };
-            let text = theme.fit(label, room);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(text, style)))
-                    .alignment(ratatui::layout::Alignment::Center),
-                inner,
-            );
-        }
+        frame.render_widget(Block::default().style(style), rect);
+        let room = usize::from(rect.width.saturating_sub(2));
+        let label = if unicode_width::UnicodeWidthStr::width(label) <= room {
+            label
+        } else if unicode_width::UnicodeWidthStr::width(short) <= room {
+            short
+        } else {
+            match button {
+                BottomButton::Accept => "a",
+                BottomButton::Reject => "x",
+                BottomButton::CommentWholePlan => "C",
+                BottomButton::Review => "R",
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(theme.fit(label, room))
+                .style(style)
+                .alignment(ratatui::layout::Alignment::Center),
+            rect.inner(ratatui::layout::Margin::new(u16::from(rect.width >= 2), 0)),
+        );
     }
 
     /// The full label and the short one for a narrow button.
@@ -97,21 +119,13 @@ impl PlanView {
         state: ButtonState,
     ) -> (&'static str, &'static str, Tone) {
         match button {
-            BottomButton::Accept if state.acceptable => {
-                (" [ Accept (a) ] ", "Accept (a)", Tone::Done)
-            }
-            BottomButton::Accept => (" [ Accept: n/a ] ", "Accept n/a", Tone::Queued),
-            BottomButton::Reject if state.decidable => {
-                (" [ Reject (x) ] ", "Reject (x)", Tone::Failed)
-            }
-            BottomButton::Reject => (" [ Reject: decided ] ", "Decided", Tone::Queued),
-            BottomButton::CommentWholePlan => {
-                (" [ Comment plan (C) ] ", "Comment (C)", Tone::Active)
-            }
-            BottomButton::Review if state.drafts > 0 => {
-                (" [ Review: send (R) ] ", "Send (R)", Tone::Done)
-            }
-            BottomButton::Review => (" [ Review: no drafts ] ", "No drafts", Tone::Queued),
+            BottomButton::Accept if state.acceptable => ("a accept", "a accept", Tone::Done),
+            BottomButton::Accept => ("a accept", "a accept", Tone::Queued),
+            BottomButton::Reject if state.decidable => ("x reject", "x reject", Tone::Failed),
+            BottomButton::Reject => ("x reject", "x reject", Tone::Queued),
+            BottomButton::CommentWholePlan => ("C comment plan", "C comment", Tone::Active),
+            BottomButton::Review if state.drafts > 0 => ("R send review", "R review", Tone::Done),
+            BottomButton::Review => ("R no drafts", "R review", Tone::Queued),
         }
     }
 
@@ -124,9 +138,9 @@ impl PlanView {
             Tone::Queued => theme.dim(),
         };
         if active {
-            style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            theme.selected().patch(style).add_modifier(Modifier::BOLD)
         } else {
-            style
+            theme.card().patch(style)
         }
     }
 }

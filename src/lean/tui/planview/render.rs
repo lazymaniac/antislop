@@ -29,15 +29,15 @@ impl PlanView {
         self.doc_area = Rect::default();
         self.row_docs.clear();
         self.task_rects.clear();
+        self.task_area = Rect::default();
         self.button_rects = [Rect::default(); 4];
         frame.render_widget(Clear, area);
+        frame.render_widget(Block::default().style(theme.overlay()), area);
         if let Some(navigation) = history_navigation
             && (area.width < 14 || area.height < 8)
         {
             self.graph_area = Rect::default();
-            let block = graph::panel(" History ", true, theme);
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
+            let inner = area;
             let [status, document] =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
             self.draw_history_navigation(frame, status, navigation, theme);
@@ -68,17 +68,35 @@ impl PlanView {
             // than squeezing the description beside the graph.
             let side_by_side =
                 chunks[1].width >= 100 || (chunks[1].width >= 60 && chunks[1].height < 30);
-            let [description, tasks] = if side_by_side {
-                Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-                    .areas(chunks[1])
+            let [description, tasks] = if !side_by_side && chunks[1].height < 10 {
+                if self.graph_focused {
+                    [Rect::default(), chunks[1]]
+                } else {
+                    [chunks[1], Rect::default()]
+                }
+            } else if side_by_side {
+                let [description, _, tasks] = Layout::horizontal([
+                    Constraint::Percentage(40),
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                ])
+                .areas(chunks[1]);
+                [description, tasks]
             } else {
                 // A short description leaves the rest to the graph.
-                let lines = self.description_lines(view).len() as u16 + 2;
+                let lines = self
+                    .description_lines(view)
+                    .len()
+                    .saturating_add(3)
+                    .min(usize::from(u16::MAX)) as u16;
                 let height = lines.clamp(3, (chunks[1].height * 2 / 5).max(3));
                 Layout::vertical([Constraint::Length(height), Constraint::Min(1)]).areas(chunks[1])
             };
             let block = graph::panel(" Description (v) ", !self.graph_focused, theme);
-            let inner = block.inner(description);
+            let inner = block.inner(description).inner(ratatui::layout::Margin::new(
+                u16::from(description.width >= 24),
+                0,
+            ));
             frame.render_widget(block, description);
             self.draw_document(frame, inner, view, theme);
             self.draw_task_graph(frame, tasks, view, theme, history_navigation.is_some());
@@ -98,48 +116,41 @@ impl PlanView {
         theme: &Theme,
         history: bool,
     ) -> Option<[Rect; 3]> {
-        let block = graph::panel(
-            &format!(
-                " {} ({}){} ",
-                if history {
-                    "Plan History"
-                } else {
-                    "Plan Document"
-                },
-                self.plan_id,
-                if history {
-                    String::new()
-                } else {
-                    format!(" · rigor: {}", view.rigor_label())
-                }
-            ),
-            true,
-            theme,
+        let inner = crate::lean::tui::render::chrome::inset(area);
+        let heading = if history { "Plan History" } else { "Plan" };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(heading, theme.text().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    if history {
+                        String::new()
+                    } else {
+                        format!("  /  {}", view.rigor_label())
+                    },
+                    theme.dim(),
+                ),
+            ])),
+            Rect::new(inner.x, inner.y, inner.width, inner.height.min(1)),
         );
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.height < 4 || inner.width < 12 {
+        if inner.height < 6 || inner.width < 14 {
             return None;
         }
         let has_banner = !view.open_plan_comments().is_empty() || view.comment_activity().is_some();
-        let constraints = if has_banner {
-            [
-                Constraint::Length(3),
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ]
-        } else {
-            [
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ]
-        };
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(inner);
-        Some([chunks[0], chunks[1], chunks[2]])
+        let header_height = if inner.height >= 20 { 2 } else { 1 };
+        let body = Rect::new(
+            inner.x,
+            inner.y + header_height,
+            inner.width,
+            inner.height - header_height,
+        );
+        let [banner, _, content, footer] = Layout::vertical([
+            Constraint::Length(if has_banner { 3 } else { 1 }),
+            Constraint::Length(u16::from(inner.height >= 16)),
+            Constraint::Min(1),
+            Constraint::Length(if inner.height >= 12 { 3 } else { 2 }),
+        ])
+        .areas(body);
+        Some([banner, content, footer])
     }
 
     fn draw_banner(
@@ -185,7 +196,7 @@ impl PlanView {
         let notes = self.comment_notes(theme, drafts, sent);
         vec![
             Line::styled(
-                format!(" {}", clean(&status)),
+                theme.fit(&theme.clean(&status), usize::from(width)),
                 theme.accent().add_modifier(Modifier::BOLD),
             ),
             Line::from(notes),
@@ -194,11 +205,10 @@ impl PlanView {
                     " {}",
                     theme.chrome(&fit_hint(
                         &[
-                            "↑/↓ move",
-                            "c comment line",
-                            "R send drafts for review",
+                            "R review drafts",
                             "D delete draft",
-                            "Esc close",
+                            "r resolve",
+                            "o retry/reopen",
                         ],
                         usize::from(width.saturating_sub(1)),
                         true,
@@ -213,24 +223,20 @@ impl PlanView {
         let mut notes = Vec::new();
         if drafts > 0 {
             notes.push(Span::styled(
-                theme.chrome(&format!(" ✎ {drafts} draft comment(s) ")),
+                format!("{drafts} draft comment(s)"),
                 theme.accent(),
-            ));
-            notes.push(Span::styled(
-                theme.chrome("— R sends them for review · "),
-                theme.dim(),
             ));
         }
         if sent > 0 {
+            if drafts > 0 {
+                notes.push(Span::styled(theme.chrome(" · "), theme.dim()));
+            }
             notes.push(Span::styled(
-                theme.chrome(&format!(" ⚠ {sent} unresolved comment(s) on this plan ")),
+                format!("{sent} unresolved comment(s)"),
                 theme.warning(),
             ));
-            notes.push(Span::styled(
-                theme.chrome("— r resolve · o retry/reopen"),
-                theme.dim(),
-            ));
         }
+
         notes
     }
 
@@ -240,43 +246,31 @@ impl PlanView {
             .iter()
             .filter(|task| task.status == "approved")
             .count();
-        let tasks = format!(" Tasks: {completed}/{} completed ", view.tasks.len());
-        let hints = if history {
-            &[
-                "v switch pane",
-                "arrows navigate",
-                "Shift+arrows pan graph",
-                "read only",
-                "Esc close",
-            ][..]
+        let state = if history {
+            "read only"
+        } else if view.plan_proposed() {
+            "review before execution"
         } else {
-            &[
-                "v switch pane",
-                "arrows navigate",
-                "Shift+arrows pan graph",
-                "c comment",
-                "Esc close",
-            ][..]
+            "execution progress"
         };
-        Line::from(vec![
-            Span::styled(tasks.clone(), theme.accent()),
-            Span::styled(
-                format!(
-                    "{} {}",
-                    theme.glyphs().dot,
-                    theme.chrome(&fit_hint(
-                        hints,
-                        usize::from(width).saturating_sub(tasks.len() + 2),
-                        true
-                    ))
-                ),
-                theme.dim(),
+        Line::styled(
+            theme.fit(
+                &theme.chrome(&format!(
+                    "{completed}/{} tasks completed · {state}",
+                    view.tasks.len()
+                )),
+                usize::from(width),
             ),
-        ])
+            theme.dim(),
+        )
     }
 
     fn draw_document(&mut self, frame: &mut Frame, doc_rect: Rect, view: &View, theme: &Theme) {
         self.doc_area = doc_rect;
+        if doc_rect.is_empty() {
+            self.row_docs.clear();
+            return;
+        }
         let doc_lines = self.description_lines(view);
         let max_cursor = doc_lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max_cursor);
@@ -317,11 +311,31 @@ impl PlanView {
     ) {
         frame.render_widget(
             Paragraph::new(vec![
-                Line::styled(navigation.to_owned(), theme.accent()),
-                Line::styled("[ older  ] newer  v switch pane", theme.dim()),
-                Line::styled("arrows navigate  PgUp/PgDn scroll  Esc close", theme.dim()),
+                Line::styled(
+                    theme.fit(&theme.clean(navigation), usize::from(area.width)),
+                    theme.accent(),
+                ),
+                Line::styled(
+                    theme.chrome(&fit_hint(
+                        &[
+                            "[ older",
+                            "] newer",
+                            "v pane",
+                            "arrows navigate",
+                            "Esc close",
+                        ],
+                        usize::from(area.width),
+                        true,
+                    )),
+                    theme.dim(),
+                ),
             ]),
-            area,
+            Rect::new(
+                area.x,
+                area.bottom().saturating_sub(2).max(area.y),
+                area.width,
+                area.height.min(2),
+            ),
         );
     }
 }

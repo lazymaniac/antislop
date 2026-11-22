@@ -53,7 +53,7 @@ impl PlanGraph {
         let mut tops = vec![1usize; tasks.len()];
         for level in 1..tops.len() {
             tops[level] = tops[level - 1]
-                .saturating_add(counts[level - 1].div_ceil(columns).saturating_mul(9));
+                .saturating_add(counts[level - 1].div_ceil(columns).saturating_mul(7));
         }
         let mut slots = vec![0usize; tasks.len()];
         let nodes: Vec<_> = levels
@@ -67,12 +67,12 @@ impl PlanGraph {
                 let row_width = row_count * (usize::from(card_width) + 4) - 4;
                 let left = usize::from(viewport_width).saturating_sub(row_width) / 2;
                 let x = left.saturating_add(column * (usize::from(card_width) + 4));
-                let y = tops[level].saturating_add(row.saturating_mul(9));
+                let y = tops[level].saturating_add(row.saturating_mul(7));
                 Rect::new(
                     x.min(usize::from(u16::MAX - card_width)) as u16,
-                    y.min(usize::from(u16::MAX - 6)) as u16,
+                    y.min(usize::from(u16::MAX - 5)) as u16,
                     card_width,
-                    6,
+                    5,
                 )
             })
             .collect();
@@ -154,35 +154,17 @@ impl PlanGraph {
                 );
             }
         }
-        let border = theme.separator(selected);
-        let horizontal = theme
-            .glyphs()
-            .horizontal
-            .repeat(usize::from(rect.width.saturating_sub(2)));
-        let corners = if theme.ascii {
-            ["+", "+", "+", "+"]
-        } else {
-            ["┌", "┐", "└", "┘"]
-        };
-        canvas.text(
-            rect.x,
-            rect.y,
-            &format!("{}{horizontal}{}", corners[0], corners[1]),
-            border,
-        );
-        canvas.text(
-            rect.x,
-            rect.bottom() - 1,
-            &format!("{}{horizontal}{}", corners[2], corners[3]),
-            border,
-        );
-        for y in rect.y + 1..rect.bottom() - 1 {
-            canvas.text(rect.x, y, theme.glyphs().vertical, border);
-            canvas.text(rect.right() - 1, y, theme.glyphs().vertical, border);
+        if selected {
+            canvas.text(rect.x, rect.y + 1, theme.glyphs().bar, theme.accent());
         }
         let width = usize::from(rect.width.saturating_sub(4));
         let header = format!("{} {}", theme.status_glyph(&task.status), task.id);
-        let style = theme.status(&task.status);
+        let fill = if selected {
+            theme.focus_surface()
+        } else {
+            theme.card()
+        };
+        let style = fill.patch(theme.status(&task.status));
         canvas.text(
             rect.x + 2,
             rect.y + 1,
@@ -198,7 +180,7 @@ impl PlanGraph {
                 rect.x + 2,
                 rect.y + 2 + row as u16,
                 &theme.fit(text, width),
-                theme.text(),
+                fill.patch(theme.text()),
             );
         }
         canvas.text(

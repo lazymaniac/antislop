@@ -2,7 +2,7 @@
 use super::super::*;
 use unicode_width::UnicodeWidthStr;
 
-pub(super) fn inset(area: Rect) -> Rect {
+pub(in crate::lean::tui) fn inset(area: Rect) -> Rect {
     area.inner(ratatui::layout::Margin::new(
         if area.width >= 100 {
             2
@@ -13,36 +13,59 @@ pub(super) fn inset(area: Rect) -> Rect {
     ))
 }
 
-pub(super) fn brand(frame: &mut Frame, area: Rect, project: &str, status: &str, theme: &Theme) {
+pub(super) fn brand(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Option<Rect> {
     if area.is_empty() {
-        return;
+        return None;
     }
-    let project = std::path::Path::new(project)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(project);
+    let branch = app
+        .view
+        .session_branch
+        .as_deref()
+        .or_else(|| {
+            app.projects
+                .get(app.active_project)
+                .and_then(|project| project.branch.as_deref())
+        })
+        .map(|branch| theme.clean(branch))
+        .unwrap_or_else(|| theme.chrome("—"));
+    let state = if app.view.paused {
+        "paused"
+    } else if app.view.idle {
+        "ready"
+    } else {
+        "running"
+    };
+    let status = theme.chrome(&format!(
+        "{state} · {}",
+        super::super::flow_editor::format_clock_mm_ss(
+            app.view
+                .session_time
+                .elapsed_ms(crate::lean::store::now_ms())
+        )
+    ));
+    let width = status.width() as u16;
+    let right = (area.width >= width.saturating_add(13))
+        .then(|| Rect::new(area.right() - width, area.y, width, 1));
+    let left_width = right.map_or(area.width, |right| right.x.saturating_sub(area.x + 2));
     let spans = vec![
-        Span::styled(
-            format!("{} ", if theme.ascii { ">" } else { "›" }),
-            theme.accent(),
-        ),
+        Span::styled("> ", theme.accent()),
         Span::styled("antislop", theme.text()),
         Span::styled(
-            format!("    {} / session", theme.clean(project)),
+            format!(
+                "  {}",
+                theme.fit(&branch, usize::from(left_width.saturating_sub(12)))
+            ),
             theme.dim(),
         ),
     ];
     frame.render_widget(
         Paragraph::new(Line::from(spans)),
-        Rect::new(area.x, area.y, area.width, 1),
+        Rect::new(area.x, area.y, left_width, 1),
     );
-    if area.width >= 80 {
-        let width = (status.width() as u16).min(area.width / 3);
-        frame.render_widget(
-            Paragraph::new(theme.fit(status, usize::from(width))).style(theme.accent()),
-            Rect::new(area.right() - width, area.y, width, 1),
-        );
+    if let Some(right) = right {
+        frame.render_widget(Paragraph::new(status).style(theme.accent()), right);
     }
+    right
 }
 
 pub(super) fn direction(frame: &mut Frame, area: Rect, target: &str, theme: &Theme) {
@@ -96,4 +119,28 @@ pub(super) fn keybar(
         app.chrome_keys.push((hit, *code, *modifiers));
         x = x.saturating_add(width + 4);
     }
+}
+
+/// Keep live and historical plans in the same application shell as Canvas.
+pub(super) fn branded_area(app: &App, frame: &mut Frame, theme: &Theme) -> Rect {
+    let screen = frame.area();
+    let body = inset(screen);
+    let height = if body.height >= 25 {
+        2
+    } else {
+        u16::from(body.height >= 10)
+    };
+    brand(
+        frame,
+        Rect::new(body.x, body.y, body.width, height),
+        app,
+        theme,
+    );
+    let top = body.y + height;
+    Rect::new(
+        screen.x,
+        top,
+        screen.width,
+        screen.bottom().saturating_sub(top),
+    )
 }

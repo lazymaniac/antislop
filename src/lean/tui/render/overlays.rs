@@ -40,6 +40,9 @@ fn draw_selection(app: &mut App, frame: &mut Frame) {
 }
 
 fn draw_interview(app: &mut App, frame: &mut Frame, theme: &Theme) {
+    if !app.direction_area.is_empty() {
+        return;
+    }
     if app.editor.is_some()
         || app.help.is_some()
         || app.picker.is_some()

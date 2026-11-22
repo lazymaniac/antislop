@@ -127,10 +127,16 @@ fn actual_draw_mode_child() {
             );
         }
         if size == (100, 30) {
-            assert_eq!(buffer[(0, 0)].symbol(), if theme.ascii { "+" } else { "┌" });
+            assert_eq!(buffer[(0, 0)].symbol(), " ");
             assert_eq!(
-                buffer[(0, 0)].fg,
-                theme.separator(true).fg.unwrap_or(Color::Reset)
+                buffer[(0, 0)].bg,
+                theme.overlay().bg.unwrap_or(Color::Reset)
+            );
+            assert!(text(&buffer).contains("> antislop"));
+            let document = plan.plan_view.as_ref().unwrap().doc_area;
+            assert_eq!(
+                buffer[(document.x, document.y)].bg,
+                theme.selected().bg.unwrap_or(Color::Reset)
             );
         }
         let mut config = app();

@@ -19,6 +19,7 @@ mod header;
 mod model;
 mod presentation;
 mod projection;
+mod session_time;
 pub(super) use goals::task_goal;
 pub use header::*;
 pub use model::*;
@@ -206,6 +207,7 @@ pub struct View {
     /// When the currently displayed session phase began.
     pub(super) workflow_sent_at: Option<i64>,
     pub session_branch: Option<String>,
+    pub(super) session_time: session_time::SessionTime,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
     /// Full proposed scope attached to the pending transition decision.
     pub scope_confirmation_summary: Option<String>,
@@ -328,6 +330,7 @@ impl View {
     }
 
     pub fn apply(&mut self, event: &Value) {
+        self.session_time.observe(event);
         projection::apply(self, event);
     }
 
@@ -1572,6 +1575,67 @@ mod tests {
             [4, 2],
             "legacy reviewer addresses keep their role-specific meaning"
         );
+    }
+
+    #[test]
+    fn session_time_unions_parallel_turns_and_replays_without_idle_gaps_or_duplicates() {
+        let timeline = [
+            ("a", "turn_started", 1_000, 1_000, 0),
+            ("b", "turn_started", 2_000, 3_000, 2_000),
+            ("a", "turn_finished", 4_000, 5_000, 4_000),
+            ("b", "turn_finished", 7_000, 19_000, 6_000),
+            ("c", "turn_started", 20_000, 21_000, 7_000),
+            ("c", "turn_finished", 23_000, 99_000, 9_000),
+        ];
+        let mut live = View::default();
+        let mut replay = View::default();
+        for (index, (turn, kind, timestamp, now, expected)) in timeline.into_iter().enumerate() {
+            let mut recorded = event(
+                index as u64 + 1,
+                Some(turn),
+                kind,
+                json!({"role": format!("worker:{turn}"), "status":"done"}),
+            );
+            recorded["created_ms"] = json!(timestamp);
+            live.apply(&recorded);
+            assert_eq!(live.session_time.elapsed_ms(now), expected);
+            replay.apply(&recorded);
+            // Repeated delivery must not reopen a finished interval or count it twice.
+            live.apply(&recorded);
+            assert_eq!(live.session_time.elapsed_ms(now), expected);
+        }
+        assert_eq!(replay.session_time.elapsed_ms(999_000), 9_000);
+        let mut stale = event(1, Some("a"), "turn_started", json!({"role":"worker:a"}));
+        stale["created_ms"] = json!(1_000);
+        live.apply(&stale);
+        assert_eq!(live.session_time.elapsed_ms(999_000), 9_000);
+        assert_eq!(View::default().session_time.elapsed_ms(999_000), 0);
+    }
+
+    #[test]
+    fn session_time_ignores_unknown_starts_and_clamps_backwards_timestamps() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            Some("unknown"),
+            "turn_started",
+            json!({"role":"orchestrator"}),
+        ));
+        for (seq, turn, kind, timestamp) in [
+            (2, "unknown", "turn_finished", 5_000),
+            (3, "known", "turn_started", 10_000),
+            (4, "known", "turn_finished", 9_000),
+        ] {
+            let mut recorded = event(
+                seq,
+                Some(turn),
+                kind,
+                json!({"role":"orchestrator", "status":"interrupted"}),
+            );
+            recorded["created_ms"] = json!(timestamp);
+            view.apply(&recorded);
+        }
+        assert_eq!(view.session_time.elapsed_ms(99_000), 0);
     }
 
     #[test]

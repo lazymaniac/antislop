@@ -6,12 +6,13 @@ mod picker;
 mod picker_layout;
 
 use super::view::{View, agent_name, truncate};
+#[cfg(test)]
+use ratatui::style::Modifier;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Clear, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 

@@ -343,7 +343,10 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
 
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.input_shown, LARGE_PASTE_BYTES - 9);
+    assert_eq!(
+        app.input_shown,
+        LARGE_PASTE_BYTES - usize::from(app.direction_input_area.height - 1)
+    );
     let cursor = terminal.get_cursor_position().unwrap();
     assert_eq!(cursor.y, 10);
     assert_eq!(terminal.backend().buffer()[(3, cursor.y)].symbol(), "f");
@@ -1952,7 +1955,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_compact.contains("decisions"));
+    assert!(text_compact.contains("enter send"));
 
     // 11x4 (below minimum 12x5)
     let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
@@ -5654,6 +5657,11 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         idle: false,
         observer: false,
     });
+    // Manual plans now open for review; dismiss that input owner before
+    // exercising Workbench keys and the task-fetch lifecycle.
+    assert!(app.plan_view.is_some());
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.plan_view.is_none());
     app.open_details("worker:t1".into());
     let issued = app.task_request_id;
     assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(1));

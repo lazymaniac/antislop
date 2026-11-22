@@ -11,12 +11,14 @@ pub(super) fn draw_secondary_or_main(app: &mut App, frame: &mut Frame, theme: &T
 }
 
 fn draw_plan(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
-    let Some(plan) = &mut app.plan_view else {
+    if app.plan_view.is_none() {
         return false;
-    };
+    }
+    let area = super::chrome::branded_area(app, frame, theme);
+    let plan = app.plan_view.as_mut().unwrap();
     // PlanView::draw and its presentation helpers remain pending ownership transfer
     // to tui-specialized-screens; this coordinator only dispatches and syncs viewport state.
-    plan.draw(frame, frame.area(), &app.view, theme);
+    plan.draw(frame, area, &app.view, theme);
     app.text_area = Some(Rect::new(
         plan.doc_area.x.saturating_add(planview::GUTTER as u16),
         plan.doc_area.y,
@@ -46,7 +48,12 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     );
     let historical_terminal = historical_workbench_terminal(app.details.as_ref(), &terminal_owner);
     let historical_diff = app.historical_diff_selected();
-    let areas = super::super::workbench::areas(frame.area(), &presentation, app.navigation.focus);
+    let areas = super::super::workbench::areas_with_footer(
+        frame.area(),
+        &presentation,
+        app.navigation.focus,
+        super::direction::footer_height(app, frame.area()),
+    );
     app.workbench_areas = areas;
     draw_workbench_chrome(
         frame,
@@ -110,6 +117,7 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             );
         }
         if let Some(details) = &app.details {
+            app.workbench_tabs = super::super::workbench::tab_hits(tabs, &details.key, true);
             frame.render_widget(
                 super::super::workbench::tab_line(&details.key, true, WorkbenchTab::Diff, theme),
                 Rect::new(tabs.x, tabs.y, tabs.width, 1),
@@ -130,14 +138,27 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
         .is_some_and(|details| details.key == "conversation")
         && presentation.tab == WorkbenchTab::Conversation
     {
-        app.draw_chat(frame, areas.content, theme);
+        let [tabs, chat] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(areas.content);
+        frame.render_widget(
+            super::super::workbench::tab_line("conversation", false, presentation.tab, theme),
+            tabs,
+        );
+        app.workbench_tabs = super::super::workbench::tab_hits(tabs, "conversation", false);
+        app.draw_chat(frame, chat, theme);
     } else if let Some(details) = &mut app.details {
+        let content = areas.content.inner(ratatui::layout::Margin::new(
+            u16::from(areas.content.width >= 80) * 2,
+            u16::from(areas.content.height >= 10),
+        ));
+        let delivers = details
+            .task_id()
+            .and_then(|id| app.view.tasks.iter().find(|task| task.id == id))
+            .is_some_and(|task| task.change_kind.has_delivery());
+        app.workbench_tabs = super::super::workbench::tab_hits(content, &details.key, delivers);
         details.draw_workbench_at(
             frame,
-            areas.content.inner(ratatui::layout::Margin::new(
-                u16::from(areas.content.width >= 80) * 2,
-                u16::from(areas.content.height >= 10),
-            )),
+            content,
             Rect::default(),
             &app.view,
             presentation.tab,
@@ -190,31 +211,73 @@ fn draw_workbench_chrome(
     } else {
         "preview"
     };
-    super::chrome::brand(
-        frame,
-        areas.header,
-        &app.project,
-        &theme.chrome(&format!(
-            "● {role} {state} · round {}{}",
-            terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
-            if presentation.pinned {
-                " · pinned"
-            } else {
-                " · following"
-            }
-        )),
-        theme,
-    );
+    super::chrome::brand(frame, areas.header, app, theme);
+    let context = theme.chrome(&format!(
+        "{role} {state} · round {} · {}",
+        terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
+        if presentation.pinned {
+            "pinned"
+        } else {
+            "following"
+        },
+    ));
     let task = app
         .details
         .as_ref()
         .and_then(|details| details.task_id())
         .and_then(|id| app.view.tasks.iter().find(|task| task.id == id));
     let title = task.map_or("Session", |task| task.title.as_str());
+    let pane = match app.navigation.focus {
+        NavigationFocus::WorkbenchList => "Agents",
+        NavigationFocus::WorkbenchTerminal => "Terminal",
+        NavigationFocus::Composer => "Message",
+        _ => "Content",
+    };
     let y = areas.header.y + if areas.header.height >= 4 { 2 } else { 1 };
+    let context_width = if areas.header.width >= 80 {
+        (unicode_width::UnicodeWidthStr::width(context.as_str()) as u16).min(areas.header.width / 2)
+    } else {
+        0
+    };
+    let title_width = areas
+        .header
+        .width
+        .saturating_sub(context_width + u16::from(context_width > 0) * 6 + 18);
+    let heading = if areas.header.width < 80 {
+        format!("{pane} · {}", theme.clean(title))
+    } else {
+        format!("{pane} · Workbench / {}", theme.clean(title))
+    };
     frame.render_widget(
-        Paragraph::new(format!("Workbench / {}", theme.clean(title))).style(theme.text()),
-        Rect::new(areas.header.x, y, areas.header.width, 1),
+        Paragraph::new(theme.fit(&theme.chrome(&heading), usize::from(title_width)))
+            .style(theme.text()),
+        Rect::new(areas.header.x, y, title_width, 1),
+    );
+    if context_width > 0 {
+        frame.render_widget(
+            Paragraph::new(theme.fit(&context, usize::from(context_width))).style(theme.dim()),
+            Rect::new(
+                areas.header.right() - context_width - 21,
+                y,
+                context_width,
+                1,
+            ),
+        );
+    }
+    super::chrome::keybar(
+        app,
+        frame,
+        Rect::new(
+            areas.header.right().saturating_sub(18).max(areas.header.x),
+            y,
+            areas.header.width.min(18),
+            1,
+        ),
+        &[
+            ("Tasks", KeyCode::Char('b'), KeyModifiers::CONTROL),
+            ("Pane", KeyCode::Tab, KeyModifiers::NONE),
+        ],
+        theme,
     );
     let direction = Rect::new(
         areas.footer.x,
@@ -222,39 +285,32 @@ fn draw_workbench_chrome(
         areas.footer.width,
         areas.footer.height.saturating_sub(1),
     );
-    super::chrome::direction(
-        frame,
-        direction,
-        if matches!(app.navigation.target, WorkbenchTarget::Session) {
-            "session"
-        } else {
-            "task"
-        },
-        theme,
-    );
-    app.chrome_keys
-        .push((direction, KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.direction_area = direction;
     let footer = Rect::new(
         areas.footer.x,
         areas.footer.bottom().saturating_sub(1),
         areas.footer.width,
         1,
     );
-    super::chrome::keybar(
-        app,
-        frame,
-        footer,
-        &[
-            ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
-            ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
-            ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
-            ("z expand", KeyCode::Char('z'), KeyModifiers::NONE),
-            ("esc back", KeyCode::Esc, KeyModifiers::NONE),
-            ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
-            ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
-        ],
-        theme,
-    );
+    if !super::direction::keybar(app, frame, footer, theme) {
+        super::chrome::keybar(
+            app,
+            frame,
+            footer,
+            &[
+                ("ctrl ← tabs", KeyCode::Left, KeyModifiers::CONTROL),
+                ("ctrl →", KeyCode::Right, KeyModifiers::CONTROL),
+                ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
+                ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
+                ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
+                ("z expand", KeyCode::Char('z'), KeyModifiers::NONE),
+                ("esc back", KeyCode::Esc, KeyModifiers::NONE),
+                ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
+                ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
+            ],
+            theme,
+        );
+    }
     if !areas.separator.is_empty() {
         frame.render_widget(
             Paragraph::new(if theme.ascii { "..." } else { "⋯" })
@@ -435,15 +491,10 @@ fn draw_workbench_list(
 }
 
 impl App {
-    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect, _bar_height: u16, theme: &Theme) {
-        let footer = Rect::new(
-            footer.x + u16::from(footer.width >= 40) * 2,
-            footer.y,
-            footer
-                .width
-                .saturating_sub(u16::from(footer.width >= 40) * 4),
-            1,
-        );
+    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect, theme: &Theme) {
+        if super::direction::keybar(self, frame, footer, theme) {
+            return;
+        }
         let pause = if self.view.paused {
             "space continue"
         } else {
@@ -454,6 +505,15 @@ impl App {
             frame,
             footer,
             &[
+                (
+                    if self.navigation.compact_secondary {
+                        "canvas"
+                    } else {
+                        "inspector"
+                    },
+                    KeyCode::Char('b'),
+                    KeyModifiers::CONTROL,
+                ),
                 ("↑ ↓ focus", KeyCode::Down, KeyModifiers::NONE),
                 ("enter inspect", KeyCode::Enter, KeyModifiers::NONE),
                 ("d decisions", KeyCode::Char('d'), KeyModifiers::NONE),
@@ -468,36 +528,21 @@ impl App {
 
     pub(super) fn draw_main(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
-        let bar_height = Self::bar_height(area);
-        let [body, _, footer] = Self::main_areas(area);
+        let body = super::chrome::inset(area);
         self.chat_area = body;
-        let body = super::chrome::inset(body);
         let spacious = body.height >= 25;
-        let [identity, canvas, invitation] = Layout::vertical([
+        let [identity, canvas, dock] = Layout::vertical([
             Constraint::Length(if spacious {
                 2
             } else {
                 u16::from(body.height >= 10)
             }),
             Constraint::Min(1),
-            Constraint::Length(if spacious { 3 } else { 2 }),
+            Constraint::Length(super::direction::footer_height(self, area)),
         ])
         .areas(body);
         let pending = self.view.approvals.len() + usize::from(self.view.user_decision);
-        let status = if self.view.paused {
-            "paused".to_owned()
-        } else if self.view.idle {
-            "ready".to_owned()
-        } else {
-            theme.chrome("● running")
-        };
-        super::chrome::brand(
-            frame,
-            identity,
-            &self.project,
-            &theme.chrome(&format!("{status}  ·  Canvas")),
-            theme,
-        );
+        let status_area = super::chrome::brand(frame, identity, self, theme);
         if pending > 0 && identity.height > 1 && identity.width >= 60 {
             frame.render_widget(
                 Paragraph::new(theme.chrome(&format!("{pending} decision(s) · d")))
@@ -506,17 +551,10 @@ impl App {
             );
         }
         self.draw_graph(frame, canvas, theme);
-        if identity.width >= 80 && !identity.is_empty() {
-            let status = format!("{status}  ·  Canvas");
-            let width = (unicode_width::UnicodeWidthStr::width(status.as_str()) as u16)
-                .min(identity.width / 3);
-            self.now_area = Some(Rect::new(identity.right() - width, identity.y, width, 1));
-        }
+        self.now_area = status_area;
 
-        super::chrome::direction(frame, invitation, "session", theme);
-        self.chrome_keys
-            .push((invitation, KeyCode::Char('k'), KeyModifiers::CONTROL));
-
-        self.draw_footer(frame, footer, bar_height, theme);
+        self.direction_area = Rect::new(dock.x, dock.y, dock.width, dock.height.saturating_sub(1));
+        let footer = Rect::new(dock.x, dock.bottom().saturating_sub(1), dock.width, 1);
+        self.draw_footer(frame, footer, theme);
     }
 }

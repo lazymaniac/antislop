@@ -1633,6 +1633,201 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
 }
 
 #[test]
+fn reopening_a_workbench_target_does_not_restore_a_closed_composer_focus() {
+    let mut app = test_app();
+    app.view.tasks.push(view::TaskRow {
+        id: "t1".into(),
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    app.key(key_ctrl('k'));
+    assert!(app.details.as_ref().unwrap().editing);
+    app.open_details("reviewer:t1".into());
+    app.open_details("worker:t1".into());
+    assert!(!app.details.as_ref().unwrap().editing);
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    app.key(key_press(KeyCode::Tab));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+}
+
+#[test]
+fn rendered_workbench_tabs_are_clickable_and_leave_native_input() {
+    for target in ["conversation", "worker:t1", "reviewer:t1"] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            change_kind: crate::lean::tasks::ChangeKind::Code,
+            ..Default::default()
+        });
+        app.open_details(target.into());
+        let _native = app.bind_native_input_for_test();
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        for tab in workbench::tabs_for(target, target != "conversation") {
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let (hit, _) = app
+                .workbench_tabs
+                .iter()
+                .find(|(_, value)| *value == tab)
+                .unwrap();
+            let hit = *hit;
+            app.navigation
+                .update_presentation(|state| state.native_input = true);
+            app.mouse(event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: hit.x,
+                row: hit.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(app.navigation.presentation().tab, tab, "{target}");
+            assert!(!app.navigation.presentation().native_input, "{target}");
+            assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+        }
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.key(key_press(KeyCode::Char('t')));
+        assert!(app.native_focused());
+        let content = app.workbench_areas.content;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: content.x + content.width / 2,
+            row: content.y + content.height / 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(!app.native_focused());
+        app.key(key_press(KeyCode::Tab));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    }
+}
+
+#[test]
+fn compact_workbench_tab_navigation_reveals_content_and_names_the_focused_pane() {
+    let mut app = test_app();
+    app.open_details("conversation".into());
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    app.key(key_press(KeyCode::Tab));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.workbench_areas.content.is_empty());
+    assert!(terminal_text(&terminal).contains("Terminal"));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    assert!(!app.workbench_areas.content.is_empty());
+    assert!(terminal_text(&terminal).contains("Content"));
+    assert!(
+        !app.workbench_tabs.is_empty(),
+        "session history retains its tab strip"
+    );
+}
+
+#[test]
+fn phone_controls_open_inspector_and_full_width_session_tasks() {
+    for width in [40, 68, 80] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Phone task".into(),
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let hit = app
+            .chrome_keys
+            .iter()
+            .find(|(_, code, modifiers)| {
+                *code == KeyCode::Char('b') && *modifiers == KeyModifiers::CONTROL
+            })
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(
+            terminal_text(&terminal).contains("SELECTED WORK"),
+            "width {width}"
+        );
+        app.open_details("conversation".into());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let hit = app
+            .chrome_keys
+            .iter()
+            .find(|(_, code, modifiers)| {
+                *code == KeyCode::Char('b') && *modifiers == KeyModifiers::CONTROL
+            })
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.workbench_areas.list_visible);
+        assert!(app.workbench_areas.content.is_empty());
+        assert!(terminal_text(&terminal).contains("Phone task"));
+        app.key(key_press(KeyCode::Down));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchList);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.workbench_areas.list_visible);
+        app.key(key_press(KeyCode::Enter));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.workbench_areas.list_visible);
+        assert!(!app.workbench_areas.content.is_empty());
+    }
+}
+
+#[test]
+fn proposed_plan_opens_for_review_and_keeps_a_persistent_entry_after_dismissal() {
+    for editing in [false, true] {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
+        if editing {
+            app.key(key_ctrl('k'));
+        }
+        app.apply_update(Update::Events {
+            conversation: app.conversation.clone(), generation: app.generation,
+            events: vec![serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","revision_token":"r1","document":"# Reviewable plan","tasks":[{"id":"t1","title":"Phone task","change_kind":"none"}]}})],
+            idle: true, observer: false,
+        });
+        assert_eq!(app.plan_view.is_some(), !editing);
+        if !editing {
+            app.key(key_press(KeyCode::Esc));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(terminal_text(&terminal).contains("Review plan"));
+        let hit = app
+            .direction_choices
+            .iter()
+            .find(|(_, action)| matches!(action, render::direction::Action::Plan))
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.plan_view.is_some());
+        assert!(terminal_text(&terminal).contains("a accept"));
+        assert_eq!(app.input.text, "Unsent draft 👩‍💻");
+    }
+}
+
+#[test]
 fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_target() {
     let mut app = test_app();
     app.terminal_area = Rect::new(0, 0, 160, 50);
@@ -2519,8 +2714,8 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("session"));
-    assert!(text.contains("Canvas"));
+    assert!(text.contains("> antislop"));
+    assert!(text.contains("00:00"));
     assert!(text.contains("ctrl k"));
 
     // Switch to Focus::Graph
@@ -2532,8 +2727,8 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("session"));
-    assert!(text.contains("Canvas"));
+    assert!(text.contains("> antislop"));
+    assert!(text.contains("00:00"));
     assert!(text.contains("ctrl k"));
 }
 
@@ -2555,7 +2750,7 @@ fn ac_resp_02_app_draw_main_wide_split_at_120_cols() {
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
     assert!(!text.contains("[Session]"));
     assert!(!text.contains("(Ctrl+T session)"));
-    assert!(text.contains("test"));
+    assert!(text.contains("ready"));
     assert!(text.contains("antislop"));
     assert!(!text.contains("See the whole plan."), "{text}");
     assert!(!text.contains("Dependencies on the left"), "{text}");
@@ -2600,7 +2795,10 @@ fn app_draw_transcript_empty_state() {
     assert!(text.contains("No messages in this conversation"));
 }
 
-fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+fn rendered_editor_viewport(app: &App, buffer: &ratatui::buffer::Buffer, comment: bool) -> Rect {
+    if !comment {
+        return app.direction_input_area;
+    }
     let title = if comment { "comment on" } else { "Give" };
     let top = (buffer.area.top()..buffer.area.bottom())
         .find(|&y| {
@@ -2620,26 +2818,6 @@ fn rendered_editor_viewport(buffer: &ratatui::buffer::Buffer, comment: bool) -> 
                     .collect::<String>()
             )
         });
-    if !comment && buffer.area.width >= 60 && buffer.area.height >= 20 {
-        let left = (buffer.area.left()..buffer.area.right())
-            .find(|&x| buffer[(x, top)].symbol() == "G")
-            .unwrap();
-        let bottom = (top + 1..buffer.area.bottom())
-            .find(|&y| {
-                (buffer.area.left()..buffer.area.right())
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("Send instruction")
-            })
-            .unwrap();
-        let width = buffer
-            .area
-            .width
-            .saturating_sub(4)
-            .min(84)
-            .saturating_sub(4);
-        return Rect::new(left, top + 4, width, bottom.saturating_sub(top + 5));
-    }
     let left = (buffer.area.left()..buffer.area.right())
         .find(|&x| matches!(buffer[(x, top)].symbol(), "╭" | "┌" | "+"))
         .expect("left frame corner");
@@ -2677,7 +2855,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                     app.input.text.clone()
                 };
                 terminal.draw(|frame| app.draw(frame)).unwrap();
-                let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                let viewport = rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
                 assert!(viewport.contains(terminal.get_cursor_position().unwrap()));
                 assert_eq!(
                     if comment {
@@ -2694,7 +2872,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                 input: InputBuffer::default(),
             });
             terminal.draw(|frame| app.draw(frame)).unwrap();
-            let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+            let viewport = rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
             for text in [
                 "a".repeat(usize::from(viewport.width - 1)),
                 "b".repeat(usize::from(viewport.width)),
@@ -2720,7 +2898,8 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                         app.key(event::KeyEvent::new(key, KeyModifiers::NONE));
                     }
                     terminal.draw(|frame| app.draw(frame)).unwrap();
-                    let viewport = rendered_editor_viewport(terminal.backend().buffer(), comment);
+                    let viewport =
+                        rendered_editor_viewport(&app, terminal.backend().buffer(), comment);
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert!(
                         viewport.contains(cursor),
@@ -2743,7 +2922,7 @@ fn ac_edit_exact_width_chat_and_comment_cursor_stays_inside_inner_viewport() {
                         matches!(
                             terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol(),
                             "│" | "|"
-                        ) || (!comment && width >= 60 && height >= 20),
+                        ) || !comment,
                         "right border {:?}, comment={comment}, viewport={viewport:?}, cursor={cursor:?}",
                         terminal.backend().buffer()[(viewport.right(), cursor.y)].symbol()
                     );
@@ -2786,7 +2965,9 @@ fn ac_resp_app_draw_picker_visible_and_reversed_at_60x12() {
         let row: String = (0..60).map(|x| buffer[(x, y)].symbol()).collect();
         if row.contains(last_word) {
             for x in 0..60 {
-                if buffer[(x, y)].modifier.contains(Modifier::REVERSED) {
+                if buffer[(x, y)].modifier.contains(Modifier::REVERSED)
+                    || buffer[(x, y)].bg == theme::ayu::SELECTION
+                {
                     found_reversed = true;
                     break;
                 }
@@ -3028,6 +3209,14 @@ fn the_plan_opens_from_every_panel_and_rejecting_asks_for_a_reason() {
     app.input.insert_char('x');
     app.key(key_ctrl('l'));
     assert!(app.plan_view.is_some());
+    assert_eq!(app.input.text, "x");
+
+    app.view.session_branch = Some("feature/plan-ui".into());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal_text(&terminal);
+    assert!(text.contains("> antislop") && text.contains("feature/plan-ui"));
+    assert!(text.contains("C comment plan") && text.contains("Esc back"));
     assert_eq!(app.input.text, "x");
 
     app.handle_plan_action(PlanAction::Reject);
@@ -3319,7 +3508,6 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         "Planning must use this scope."
     );
 
-    app.run_workflow(Command::InterviewQuestion);
     let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let screen: String = terminal
@@ -3335,6 +3523,10 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
     assert!(screen.contains("rejectedrecords."));
     assert!(screen.contains("Doyouconfirmthisscope"));
     assert!(screen.contains("planningcanbegin?"));
+    assert!(
+        !app.interview_visible(),
+        "the scope is visible before focusing or choosing an answer"
+    );
 
     // The scope decision spans both panels with margins and starts at the
     // beginning of a long summary. The wheel must scroll the modal only.
@@ -3347,6 +3539,56 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
         app.view.after += 1;
         app.sync_interview();
+        app.interview_forms
+            .get_mut(&app.conversation)
+            .unwrap()
+            .visible = false;
+        terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let preview = || {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(preview().contains("REQ000"));
+        let area = app
+            .direction_choices
+            .iter()
+            .find(|(_, action)| matches!(action, render::direction::Action::Review))
+            .unwrap()
+            .0;
+        let offset_before_review = app.offset;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let scrolled: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!scrolled.contains("REQ000"));
+        assert!(
+            !app.interview_visible(),
+            "reading scope does not steal keyboard focus"
+        );
+        assert_eq!(app.offset, offset_before_review);
+        assert_eq!(app.input.text, "chat draft");
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
         app.run_workflow(Command::InterviewQuestion);
         app.interview_forms
             .get_mut(&app.conversation)
@@ -3368,32 +3610,15 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         assert!(initial.contains("PgUp/PgDn / Mouse wheel"));
         assert!(initial.contains("👩‍💻"));
         assert!(initial.contains("e\u{301}"));
-        let buffer = terminal.backend().buffer();
-        let title_row = (0..height)
-            .find(|&y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("Question · choose an answer")
-            })
-            .unwrap();
-        let left = (0..width)
-            .find(|&x| buffer[(x, title_row)].symbol() == "┌")
-            .unwrap();
-        let right = (0..width)
-            .rfind(|&x| buffer[(x, title_row)].symbol() == "┐")
-            .unwrap();
-        let bottom = (title_row..height)
-            .find(|&y| buffer[(left, y)].symbol() == "└")
-            .unwrap();
+        let left = app.direction_area.x;
+        let right = app.direction_area.right() - 1;
+        let title_row = app.direction_area.y;
+        let bottom = app.direction_input_area.y - 1;
         assert!(left > 0 && right < width - 1, "side margins stay visible");
-        assert!(
-            title_row > 0 && bottom < height - 1,
-            "vertical margins stay visible"
-        );
+        assert!(title_row > 0 && bottom < height - 1);
         assert!(
             right - left > width * 3 / 4,
-            "scope modal spans both panels"
+            "question extension spans the dock"
         );
         let offset = app.offset;
         let chat_scroll = app.scroll;
@@ -3445,7 +3670,13 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         assert!(screen(&terminal).contains("REQ000"));
         app.key(key_press(KeyCode::Down));
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert!(screen(&terminal).contains("Request changes"));
+        assert!(
+            screen(&terminal).contains("Request changes"),
+            "selected={} visible={} {}",
+            app.interview_forms[&app.conversation].selected,
+            app.interview_visible(),
+            screen(&terminal)
+        );
         assert_eq!(app.interview_forms[&app.conversation].selected, 1);
         app.interview_forms
             .get_mut(&app.conversation)
@@ -3670,6 +3901,81 @@ fn workbench_completion_key_marks_the_selected_action_as_pending_for_this_sessio
 }
 
 #[test]
+fn completion_actions_expire_when_work_continues_and_return_for_the_next_completion() {
+    use crate::lean::daemon::{SessionActionKind, SessionActionResult};
+    for workbench in [false, true] {
+        for resumed_by in ["acknowledgement", "replay", "failure"] {
+            let mut app = test_app();
+            if workbench {
+                app.open_details("conversation".into());
+            }
+            app.input = InputBuffer::with_text("Retained draft 👩‍💻");
+            let completed = |seq| serde_json::json!({"seq":seq,"kind":"session_completed","payload":{"summary":"Retained result","branch":"feature/result"}});
+            app.view.apply(&completed(1));
+            let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+            let previous = workbench_summary::project(&app.view, "conversation");
+            match resumed_by {
+                "acknowledgement" => {
+                    app.view.set_session_action_result(
+                        SessionActionKind::ContinueWork,
+                        SessionActionResult::Queued { message: 0 },
+                    );
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                    assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+                    app.apply_update(Update::SessionAction {
+                        conversation: app.conversation.clone(),
+                        action: SessionActionKind::ContinueWork,
+                        result: SessionActionResult::Queued { message: 7 },
+                    });
+                }
+                "replay" => {
+                    app.view.apply(&serde_json::json!({"seq":2,"kind":"message","payload":{"author":"user","text":"Continue work in this session","seq":7}}));
+                    app.view.apply(&serde_json::json!({"seq":3,"turn_id":"continued","kind":"turn_started","payload":{"role":"orchestrator"}}));
+                    app.view.apply(&serde_json::json!({"seq":4,"turn_id":"continued","kind":"turn_finished","payload":{"role":"orchestrator","status":"done"}}));
+                }
+                _ => app.apply_update(Update::SessionAction {
+                    conversation: app.conversation.clone(),
+                    action: SessionActionKind::ContinueWork,
+                    result: SessionActionResult::Failed {
+                        details: "socket disconnected".into(),
+                    },
+                }),
+            }
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            if resumed_by == "failure" {
+                assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+                assert!(terminal_text(&terminal).contains("socket disconnected"));
+                continue;
+            }
+            assert!(
+                !terminal_text(&terminal).contains("AVAILABLE ACTIONS"),
+                "{resumed_by}"
+            );
+            assert!(
+                !app.select_session_action(2),
+                "historical actions cannot be resubmitted"
+            );
+            assert!(!workbench_summary::unchanged(
+                &previous,
+                &app.view,
+                "conversation"
+            ));
+            assert!(matches!(
+                workbench_summary::project(&app.view, "conversation"),
+                workbench_summary::Summary::Empty
+            ));
+            assert!(app.view.cards.iter().any(|card| matches!(card, TranscriptCard::Completion { summary, .. } if summary == "Retained result")));
+            assert_eq!(app.input.text, "Retained draft 👩‍💻");
+            app.view.apply(&completed(5));
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(terminal_text(&terminal).contains("AVAILABLE ACTIONS"));
+        }
+    }
+}
+
+#[test]
 fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
     let mut app = test_app();
     app.view.apply(&serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p","tasks":[{"id":"t1","title":"Work","change_kind":"none"}]}}));
@@ -3810,7 +4116,7 @@ fn footer_has_one_keybar_row_and_help_preserves_the_draft() {
         .find(|(_, code, _)| *code == KeyCode::F(1))
         .unwrap()
         .0;
-    assert_eq!(hit.y, 49);
+    assert_eq!(hit.y, 48);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: hit.x,
@@ -3843,7 +4149,7 @@ fn footer_clicks_use_rendered_hit_areas_after_unicode_project_names() {
             .find(|(_, code, _)| *code == KeyCode::Char('d'))
             .unwrap()
             .0;
-        assert_eq!(hit.y, height - 1);
+        assert_eq!(hit.y, height - 1 - u16::from(height >= 30));
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: hit.x,
@@ -4694,4 +5000,237 @@ fn sidebar_scroll_click_and_refresh_preserve_stage_order() {
     app.open_details("orchestrator".into());
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(!terminal_text(&terminal).contains("Changed title"));
+}
+
+#[test]
+fn graph_inspector_prioritizes_each_selected_roles_content_and_preserves_actions() {
+    use crate::lean::tui::view::{AUDITOR, PLAN_REVIEWER};
+    use crate::lean::tui::work_units::InspectorAction;
+    for (width, height) in [(160, 40), (160, 24), (80, 24)] {
+        let mut app = test_app();
+        app.graph_inspector_visible = true;
+        app.navigation.compact_secondary = width < 120;
+        app.input = InputBuffer::with_text("Unsent 👩‍💻 é draft");
+        app.view.plan_doc = "Published plan".into();
+        app.view.plan_preview = Some("Proposed migration plan\n".repeat(100));
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Migration".into(),
+            goal: "Keep persisted data".into(),
+            status: "approved".into(),
+            round: 2,
+            effect: Some("Worker migrated the schema".into()),
+            effect_cut: Some(true),
+            summary: Some("Migration delivered".into()),
+            reviewer_summary: Some("Reviewer checked data integrity".into()),
+            obligations: Some(serde_json::json!({"total":2,"ok":2,"missing":0})),
+            ..Default::default()
+        });
+        for key in [
+            crate::lean::PLANNER,
+            PLAN_REVIEWER,
+            AUDITOR,
+            "worker:t1",
+            "reviewer:t1",
+        ] {
+            app.view.agents.insert(key.into(), view::Agent::default());
+        }
+        app.view
+            .reviews
+            .insert(PLAN_REVIEWER.into(), vec!["Plan verdict: approved".into()]);
+        app.view
+            .reviews
+            .insert(AUDITOR.into(), vec!["Audit verdict: complete".into()]);
+        for (index, (sender, target, text)) in [
+            ("You", ORCHESTRATOR, "Obsolete exchange"),
+            (ORCHESTRATOR, "You", "Earlier response"),
+            ("You", ORCHESTRATOR, "Current question"),
+            ("t1/reviewer", ORCHESTRATOR, "Newest reply 👩‍💻 é"),
+            ("t1", "planner", "Unrelated private mail"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            app.view.messages.push(view::MessageEntry {
+                id: index.to_string(),
+                sent_at: None,
+                sender: sender.into(),
+                target: target.into(),
+                text: text.into(),
+                state: "delivered".into(),
+                kind: "agent".into(),
+            });
+        }
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        for (key, heading, text) in [
+            (ORCHESTRATOR, "Recent messages", "Newest reply"),
+            (
+                crate::lean::PLANNER,
+                "Latest submitted plan",
+                "Proposed migration plan",
+            ),
+            (PLAN_REVIEWER, "Latest review", "Plan verdict: approved"),
+            (AUDITOR, "Latest review", "Audit verdict: complete"),
+            ("worker:t1", "Worker result", "effect: [fragment]"),
+            (
+                "reviewer:t1",
+                "Review result",
+                "Reviewer checked data integrity",
+            ),
+        ] {
+            app.select_work_stage(key.into());
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let (hit, _) = app
+                .inspector_hits
+                .iter()
+                .find(|(_, action)| matches!(action, InspectorAction::Results(role) if role == key))
+                .expect("the selected stage retains its results action");
+            let buffer = terminal.backend().buffer();
+            let inspector = buffer
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row[usize::from(hit.x)..usize::from(hit.right())]
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                inspector.contains(heading),
+                "{key} {width}x{height}: {inspector}"
+            );
+            assert!(
+                inspector.contains(text),
+                "{key} {width}x{height}: {inspector}"
+            );
+            assert!(inspector.contains("Results & evidence"), "{inspector}");
+            assert!(!inspector.contains("Unrelated private mail"));
+            assert!(!inspector.contains("Obsolete exchange"));
+            if key == ORCHESTRATOR && height == 40 {
+                assert!(
+                    inspector.contains("Current question")
+                        && inspector.contains("Earlier response")
+                );
+                assert!(inspector.find("Newest reply") < inspector.find("Current question"));
+            }
+            if key == crate::lean::PLANNER {
+                assert!(!inspector.contains("Published plan"));
+            }
+            assert_eq!(app.input.text, "Unsent 👩‍💻 é draft");
+        }
+    }
+}
+
+#[test]
+fn merged_dock_and_role_tabs_keep_modal_pointer_ownership() {
+    for target in ["worker:t1", "reviewer:t1"] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            change_kind: crate::lean::tasks::ChangeKind::Code,
+            ..Default::default()
+        });
+        app.input = InputBuffer::with_text("Retained 👩‍💻 é");
+        app.open_details(target.into());
+        let _native = app.bind_native_input_for_test();
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let tab = app.workbench_tabs[1];
+        app.navigation
+            .update_presentation(|state| state.native_input = true);
+        app.show_help(Help::Chat);
+        let navigation = app.navigation.clone();
+        app.workbench_dragging = true;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            app.mouse(event::MouseEvent {
+                kind,
+                column: tab.0.x,
+                row: tab.0.y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        app.paste("blocked");
+        assert_eq!(app.navigation, navigation);
+        assert!(!app.workbench_dragging);
+        assert!(app.native_input_blocked());
+        assert_eq!(app.input.text, "Retained 👩‍💻 é");
+        app.key(key_press(KeyCode::Esc));
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: tab.0.x,
+            row: tab.0.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.navigation.presentation().tab, tab.1);
+        assert_eq!(app.details.as_ref().unwrap().key, target);
+        assert!(!app.native_focused());
+        app.key(key_press(KeyCode::Tab));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+        assert_eq!(app.input.text, "Retained 👩‍💻 é");
+    }
+}
+
+#[test]
+fn merged_scope_dock_scroll_and_click_resume_after_help() {
+    let mut app = test_app();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((
+        1,
+        crate::lean::interview::Question {
+            id: "merge-scope".into(),
+            context: "Scope".into(),
+            question: "Confirm?".into(),
+            options: vec![crate::lean::interview::Choice {
+                label: "Confirm".into(),
+                description: "Proceed".into(),
+            }],
+        },
+    ));
+    app.view.scope_confirmation_summary = Some(
+        (0..80)
+            .map(|index| format!("REQ{index:03} 👩‍💻 é\n"))
+            .collect(),
+    );
+    app.input = InputBuffer::with_text("session draft 👩‍💻 é");
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let hit = app
+        .direction_choices
+        .iter()
+        .find(|(_, action)| matches!(action, render::direction::Action::Review))
+        .unwrap()
+        .0;
+    let pointer = |kind| event::MouseEvent {
+        kind,
+        column: hit.x + 1,
+        row: hit.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.show_help(Help::Chat);
+    app.mouse(pointer(MouseEventKind::Down(MouseButton::Left)));
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    app.paste("blocked");
+    assert!(!app.interview_visible());
+    app.key(key_press(KeyCode::Esc));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(terminal_text(&terminal).contains("REQ000"));
+    let offset = app.offset;
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!terminal_text(&terminal).contains("REQ000"));
+    assert!(!app.interview_visible());
+    app.mouse(pointer(MouseEventKind::Down(MouseButton::Left)));
+    assert!(app.interview_visible());
+    app.workbench_dragging = true;
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    assert!(!app.workbench_dragging);
+    app.key(key_press(KeyCode::Down));
+    assert!(!app.interview_forms[&app.conversation].sending);
+    assert_eq!(app.offset, offset);
+    assert_eq!(app.input.text, "session draft 👩‍💻 é");
 }

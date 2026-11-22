@@ -77,12 +77,32 @@ comments, recovery actions, draft, and native terminal.
 
 At 160×50 the Canvas inspector is 36 columns and the Workbench sidebar is 30
 columns, with equal content and PTY shares. Below 120 columns secondary panes
-hide until requested with Ctrl+B. Below 30 rows Tab switches content and terminal
+hide until requested with Ctrl+B, the Canvas **inspector** control, or the Workbench
+**Tasks** control. Below 90 columns these panels use the full width; selecting a
+task or pressing Enter returns to its content. Workbench tab labels are clickable,
+and **Pane** cycles focus with the current pane named in the heading.
+Below 30 rows Tab switches content and terminal
 instead of splitting. Layout preferences survive resizing. New decisions update
 badges; open full questions and approvals with `d` or the inspector. Ctrl+P keeps
 plan acceptance/rejection/revision, task editing/addition/splitting/holding/retirement,
 dependency linking, direct execution, rigor, recovery, approval mode, takeover,
 configuration and completion actions available.
+
+A proposed plan opens for review on Canvas when no editor, dialog or native
+terminal owns input. After dismissal, **Review plan** remains above the direction
+bar and opens the same plan with its comment, review and acceptance controls.
+Ctrl+P uses a compact, borderless list; typing filters all available actions.
+
+The top bar shows `> antislop <branch>` and the session's status and total work
+time. The clock counts overlapping agent turns once, excludes idle gaps, and
+restores its total from recorded events when the TUI is reopened.
+
+Ctrl+K turns the bottom direction bar into an inline editor. It grows for
+multiline text; Enter sends and Esc restores navigation while keeping the draft.
+Questions and available session actions appear above it. Click an answer to
+select it, then Enter to submit; choose Other to type in the same bottom input.
+Long scope questions retain PgUp/PgDn and wheel scrolling. New questions never
+take keyboard focus from an editor or native terminal.
 
 Configuration uses Ctrl+Left/Right sections, Up/Down fields, Enter choices,
 Ctrl+N/Ctrl+D add/delete, Ctrl+S validate/apply and Ctrl+R refresh while retaining

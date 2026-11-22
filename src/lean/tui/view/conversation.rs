@@ -3,6 +3,35 @@ mod progress;
 use progress::{is_running, progress_line};
 
 impl View {
+    /// Completion actions belong to the finished work, not its continued session.
+    /// Derive this from retained history so reconnecting restores the same state.
+    pub(in crate::lean::tui) fn active_completion(&self) -> Option<&TranscriptCard> {
+        use crate::lean::daemon::{SessionActionKind, SessionActionResult};
+        for card in self.cards.iter().rev() {
+            match card {
+                TranscriptCard::Message(message)
+                    if message.kind == "user"
+                        && matches!(message.state.as_str(), "sent" | "delivered" | "answered") =>
+                {
+                    return None;
+                }
+                TranscriptCard::Completion { actions, .. } => {
+                    let continued = actions.iter().any(|action| {
+                        action.kind == SessionActionKind::ContinueWork
+                            && match &action.result {
+                                Some(SessionActionResult::Queued { message }) => *message > 0,
+                                Some(SessionActionResult::Succeeded { .. }) => true,
+                                _ => false,
+                            }
+                    });
+                    return (!continued).then_some(card);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub fn comment_state(&self, id: u64) -> &str {
         match self.comments.get(&id) {
             Some(comment) if comment.status != "open" => &comment.status,
