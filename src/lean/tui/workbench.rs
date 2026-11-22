@@ -158,8 +158,16 @@ pub(in crate::lean::tui) fn areas_with_footer(
     ])
     .areas(viewport.inner(margin));
     let wide_enough = viewport.width >= 120;
-    let list_visible = (wide_enough && presentation.list_visible)
-        || (presentation.list_requested && viewport.width >= 60);
+    let list_visible = (wide_enough && presentation.list_visible) || presentation.list_requested;
+    if presentation.list_requested && viewport.width < 90 {
+        return WorkbenchAreas {
+            list: body,
+            header,
+            footer,
+            list_visible: true,
+            ..Default::default()
+        };
+    }
     let (list, work) = if list_visible {
         let [list, _, work] = Layout::horizontal([
             Constraint::Length(LIST_WIDTH),
@@ -288,16 +296,8 @@ pub(super) fn tab_line(
         if index > 0 {
             spans.push(Span::styled("  ", theme.dim()));
         }
-        let label = match tab {
-            WorkbenchTab::Summary => "Summary",
-            WorkbenchTab::Conversation => "Conversation",
-            WorkbenchTab::Results => "Results",
-            WorkbenchTab::Checks => "Checks",
-            WorkbenchTab::Comments => "Comments",
-            WorkbenchTab::Diff => "Diff",
-        };
         spans.push(Span::styled(
-            label,
+            tab_label(tab),
             if tab == active {
                 theme.accent()
             } else {
@@ -306,6 +306,33 @@ pub(super) fn tab_line(
         ));
     }
     ratatui::text::Line::from(spans)
+}
+
+fn tab_label(tab: WorkbenchTab) -> &'static str {
+    match tab {
+        WorkbenchTab::Summary => "Summary",
+        WorkbenchTab::Conversation => "Conversation",
+        WorkbenchTab::Results => "Results",
+        WorkbenchTab::Checks => "Checks",
+        WorkbenchTab::Comments => "Comments",
+        WorkbenchTab::Diff => "Diff",
+    }
+}
+
+pub(super) fn tab_hits(area: Rect, key: &str, delivers: bool) -> Vec<(Rect, WorkbenchTab)> {
+    if area.is_empty() {
+        return Vec::new();
+    }
+    let mut x = area.x;
+    tabs_for(key, delivers)
+        .into_iter()
+        .filter_map(|tab| {
+            let width = tab_label(tab).len() as u16;
+            let hit = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
+            x = x.saturating_add(width + 2);
+            (!hit.is_empty()).then_some((hit, tab))
+        })
+        .collect()
 }
 
 #[cfg(test)]

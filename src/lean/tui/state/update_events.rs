@@ -130,6 +130,12 @@ impl App {
         if saw_manual_plan && self.view.plan_proposed() && !self.view.tasks.is_empty() {
             let plan = self.view.plan.clone().unwrap_or_else(|| "plan".into());
             self.notice = Some(format!("Plan {plan} is ready · Ctrl+L review"));
+            if !self.native_input_blocked()
+                && !self.native_focused()
+                && self.navigation.screen == Screen::Graph
+            {
+                self.run_workflow(Command::Plan);
+            }
         }
     }
 }

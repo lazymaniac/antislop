@@ -122,6 +122,7 @@ pub struct App {
     /// Whether the graph inspector is shown when the terminal meets its minimum size.
     pub graph_inspector_visible: bool,
     pub chrome_keys: Vec<(Rect, KeyCode, KeyModifiers)>,
+    pub(super) workbench_tabs: Vec<(Rect, WorkbenchTab)>,
     pub direction_actions: Option<(Rect, Rect)>,
     pub direction_area: Rect,
     pub direction_input_area: Rect,
@@ -271,6 +272,7 @@ macro_rules! initial_app {
             graph_tab: 0,
             graph_inspector_visible: true,
             chrome_keys: Vec::new(),
+            workbench_tabs: Vec::new(),
             direction_actions: None,
             direction_area: Rect::default(),
             direction_input_area: Rect::default(),

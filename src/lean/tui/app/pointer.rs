@@ -145,6 +145,7 @@ impl App {
                     }
                 }
                 render::direction::Action::Decisions => self.open_decision_inbox(),
+                render::direction::Action::Plan => self.run_workflow(Command::Plan),
                 render::direction::Action::Session(index) => {
                     self.select_session_action(index);
                 }
@@ -280,6 +281,17 @@ impl App {
             }
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some((_, tab)) = self
+                .workbench_tabs
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                .copied()
+        {
+            self.focus_workbench_content();
+            self.workbench_select_tab(tab);
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && self
                 .workbench_areas
                 .separator
@@ -310,13 +322,7 @@ impl App {
                 .content
                 .contains((mouse.column, mouse.row).into())
         {
-            self.navigation.focus = NavigationFocus::WorkbenchContent;
-            self.navigation.update_presentation(|presentation| {
-                presentation.focus = NavigationFocus::WorkbenchContent;
-            });
-            if let Some(details) = &mut self.details {
-                details.native_focus = false;
-            }
+            self.focus_workbench_content();
             return false;
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -333,11 +339,36 @@ impl App {
                     self.workbench_areas.list.height,
                 );
             if let Some(row) = super::super::workbench::sidebar(&self.view).get(row) {
+                self.focus_workbench_content();
                 self.open_work_card_or_stage(row);
+                self.focus_workbench_content();
+                let focus = if self.terminal_area.width < 90 {
+                    NavigationFocus::WorkbenchContent
+                } else {
+                    NavigationFocus::WorkbenchList
+                };
+                self.navigation.focus = focus;
+                self.navigation.update_presentation(|presentation| {
+                    presentation.focus = focus;
+                    if self.terminal_area.width < 90 {
+                        presentation.list_requested = false;
+                    }
+                });
             }
             return true;
         }
         false
+    }
+
+    fn focus_workbench_content(&mut self) {
+        self.navigation.focus = NavigationFocus::WorkbenchContent;
+        self.navigation.update_presentation(|presentation| {
+            presentation.focus = NavigationFocus::WorkbenchContent;
+            presentation.native_input = false;
+        });
+        if let Some(details) = &mut self.details {
+            details.native_focus = false;
+        }
     }
 
     fn handle_content_mouse(&mut self, mouse: event::MouseEvent) {

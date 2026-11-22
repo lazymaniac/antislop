@@ -643,9 +643,9 @@ fn append_visible_items(
         let padding = layout.inner.saturating_sub(label.width());
         let line = format!("{label}{}", " ".repeat(padding));
         let style = if index == selected {
-            Style::default().add_modifier(Modifier::REVERSED)
+            theme.selected()
         } else {
-            Style::default()
+            theme.text()
         };
         lines.push(Line::styled(line, style));
     }
@@ -653,9 +653,7 @@ fn append_visible_items(
 
 fn picker_title(kind: Kind, width: u16) -> &'static str {
     match kind {
-        Kind::Commands if width >= 42 => " commands · Enter run · Esc close ",
-        Kind::Commands if width >= 20 => " commands · Esc ",
-        Kind::Commands => " commands ",
+        Kind::Commands => "Actions",
         Kind::Agents if width >= 45 => " find agent · Enter select · Esc close ",
         Kind::Agents if width >= 20 => " agents · Esc ",
         Kind::Agents => " agents ",
@@ -690,14 +688,24 @@ fn draw_picker(
     theme: &Theme,
 ) {
     frame.render_widget(Clear, area);
+    frame.render_widget(Block::default().style(theme.card()), area);
     frame.render_widget(
-        Paragraph::new(lines).style(theme.panel()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_set(theme.borders())
-                .border_style(theme.separator(false))
-                .title(title),
+        Paragraph::new(theme.fit(title.trim(), usize::from(area.width.saturating_sub(2))))
+            .style(theme.accent()),
+        Rect::new(
+            area.x + u16::from(area.width > 1),
+            area.y,
+            area.width.saturating_sub(2),
+            area.height.min(1),
         ),
-        area,
+    );
+    frame.render_widget(
+        Paragraph::new(lines).style(theme.card()),
+        Rect::new(
+            area.x + u16::from(area.width > 1),
+            area.y.saturating_add(1),
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(1),
+        ),
     );
 }

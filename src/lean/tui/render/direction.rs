@@ -6,6 +6,7 @@ pub(in crate::lean::tui) enum Action {
     Answer(usize),
     Review,
     Decisions,
+    Plan,
     Session(usize),
 }
 
@@ -34,6 +35,8 @@ fn extension_height(app: &App, viewport: Rect) -> u16 {
         preferred.min((viewport.height / 2).max(1))
     } else if !app.view.approvals.is_empty() {
         2
+    } else if app.view.plan_proposed() {
+        1
     } else if completion(app).is_some() && viewport.height >= 24 {
         4.min(viewport.height / 3)
     } else {
@@ -306,6 +309,8 @@ fn draw_extension(app: &mut App, frame: &mut Frame, area: Rect, theme: &Theme) {
             theme.chrome("Review available actions · d"),
             Some(Action::Decisions),
         ));
+    } else if app.view.plan_proposed() {
+        choices.push((theme.chrome("Review plan · Ctrl+L"), Some(Action::Plan)));
     } else if let Some(actions) = completion(app) {
         choices.push(("AVAILABLE ACTIONS".to_owned(), None));
         choices.extend(actions.iter().enumerate().map(|(index, action)| {

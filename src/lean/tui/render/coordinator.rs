@@ -11,6 +11,7 @@ impl App {
         self.now_click_targets.clear();
         self.inspector_hits.clear();
         self.chrome_keys.clear();
+        self.workbench_tabs.clear();
         self.direction_actions = None;
         self.direction_area = Rect::default();
         self.direction_input_area = Rect::default();
@@ -507,7 +508,7 @@ mod tests {
         assert_eq!(buffer[(122, 3)].bg, crate::lean::tui::theme::ayu::PANEL);
         assert_eq!(buffer[(121, 3)].bg, crate::lean::tui::theme::ayu::BG);
         assert_eq!(buffer[(2, 46)].bg, crate::lean::tui::theme::ayu::PANEL);
-        assert_eq!(buffer[(2, 48)].symbol(), "↑");
+        assert_eq!(buffer[(2, 48)].symbol(), "i");
         assert!(
             app.chrome_keys
                 .iter()

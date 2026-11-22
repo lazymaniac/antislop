@@ -2246,6 +2246,9 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         .collect::<Vec<_>>()
         .join(" ");
     let rendered_text = rendered_text
+        // Scrollbars can fall between the wrapped lines of a status message.
+        // They are chrome, rather than words in its visibility marker.
+        .replace(['┃', '│', '#', '|'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -2386,9 +2389,17 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         && record["na_reason"].is_null()
     {
         assert!(
-            record["workbench_header"]
-                .as_str()
-                .is_some_and(|header| header.contains("Workbench /")),
+            record["workbench_header"].as_str().is_some_and(|header| {
+                if width >= 100 {
+                    header.contains("Workbench /")
+                } else {
+                    header.contains(if fixture.id == "new-session-composer" {
+                        "Message"
+                    } else {
+                        "Content"
+                    })
+                }
+            }),
             "{} did not render the Workbench D3 header",
             fixture.id
         );
@@ -2781,9 +2792,7 @@ fn expected_surface_style(fixture: Fixture, theme: &Theme) -> ratatui::style::St
         | "picker-history"
         | "picker-slash-commands"
         | "rigor-picker"
-        | "delete-confirmation" => {
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
-        }
+        | "delete-confirmation" => theme.selected(),
         "unblock" => theme.error(),
         "graph" => theme.panel(),
         "workbench"

@@ -168,6 +168,64 @@ mod tests {
     use crate::lean::tui::{Update, update_channel};
     use std::sync::mpsc;
 
+    /// Run inside a PTY and send Ctrl+Right, Tab, Shift+Tab, Ctrl+Left,
+    /// Ctrl+K, Esc, Tab, waiting for each STEP before sending the next key.
+    #[test]
+    #[ignore = "requires a controlling PTY and real terminal input"]
+    fn real_terminal_workbench_navigation() {
+        use crate::lean::tui::{NavigationFocus, WorkbenchTab};
+        use std::io::Write;
+        let mut app = App::test_app();
+        app.open_details("orchestrator".into());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        crossterm::terminal::enable_raw_mode().unwrap();
+        struct RawMode;
+        impl Drop for RawMode {
+            fn drop(&mut self) {
+                let _ = crossterm::terminal::disable_raw_mode();
+            }
+        }
+        let _raw = RawMode;
+        let states = [
+            (
+                WorkbenchTab::Conversation,
+                NavigationFocus::WorkbenchContent,
+            ),
+            (
+                WorkbenchTab::Conversation,
+                NavigationFocus::WorkbenchTerminal,
+            ),
+            (
+                WorkbenchTab::Conversation,
+                NavigationFocus::WorkbenchContent,
+            ),
+            (WorkbenchTab::Summary, NavigationFocus::WorkbenchContent),
+            (WorkbenchTab::Summary, NavigationFocus::Composer),
+            (WorkbenchTab::Summary, NavigationFocus::WorkbenchContent),
+            (WorkbenchTab::Summary, NavigationFocus::WorkbenchTerminal),
+        ];
+        println!("READY");
+        std::io::stdout().flush().unwrap();
+        for (index, (tab, focus)) in states.into_iter().enumerate() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "input missing at step {index}"
+                );
+                assert!(handle_events(&mut app).unwrap());
+                if (app.navigation.presentation().tab, app.navigation.focus) == (tab, focus) {
+                    break;
+                }
+            }
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            println!("STEP {index}");
+            std::io::stdout().flush().unwrap();
+        }
+    }
+
     #[test]
     fn ui_drains_replacement_queue_without_blocking_on_its_sender() {
         let (sender, receiver) = update_channel(1);

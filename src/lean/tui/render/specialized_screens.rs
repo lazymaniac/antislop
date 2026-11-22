@@ -115,6 +115,7 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             );
         }
         if let Some(details) = &app.details {
+            app.workbench_tabs = super::super::workbench::tab_hits(tabs, &details.key, true);
             frame.render_widget(
                 super::super::workbench::tab_line(&details.key, true, WorkbenchTab::Diff, theme),
                 Rect::new(tabs.x, tabs.y, tabs.width, 1),
@@ -135,14 +136,27 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
         .is_some_and(|details| details.key == "conversation")
         && presentation.tab == WorkbenchTab::Conversation
     {
-        app.draw_chat(frame, areas.content, theme);
+        let [tabs, chat] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(areas.content);
+        frame.render_widget(
+            super::super::workbench::tab_line("conversation", false, presentation.tab, theme),
+            tabs,
+        );
+        app.workbench_tabs = super::super::workbench::tab_hits(tabs, "conversation", false);
+        app.draw_chat(frame, chat, theme);
     } else if let Some(details) = &mut app.details {
+        let content = areas.content.inner(ratatui::layout::Margin::new(
+            u16::from(areas.content.width >= 80) * 2,
+            u16::from(areas.content.height >= 10),
+        ));
+        let delivers = details
+            .task_id()
+            .and_then(|id| app.view.tasks.iter().find(|task| task.id == id))
+            .is_some_and(|task| task.change_kind.has_delivery());
+        app.workbench_tabs = super::super::workbench::tab_hits(content, &details.key, delivers);
         details.draw_workbench_at(
             frame,
-            areas.content.inner(ratatui::layout::Margin::new(
-                u16::from(areas.content.width >= 80) * 2,
-                u16::from(areas.content.height >= 10),
-            )),
+            content,
             Rect::default(),
             &app.view,
             presentation.tab,
@@ -211,6 +225,12 @@ fn draw_workbench_chrome(
         .and_then(|details| details.task_id())
         .and_then(|id| app.view.tasks.iter().find(|task| task.id == id));
     let title = task.map_or("Session", |task| task.title.as_str());
+    let pane = match app.navigation.focus {
+        NavigationFocus::WorkbenchList => "Agents",
+        NavigationFocus::WorkbenchTerminal => "Terminal",
+        NavigationFocus::Composer => "Message",
+        _ => "Content",
+    };
     let y = areas.header.y + if areas.header.height >= 4 { 2 } else { 1 };
     let context_width = if areas.header.width >= 80 {
         (unicode_width::UnicodeWidthStr::width(context.as_str()) as u16).min(areas.header.width / 2)
@@ -220,21 +240,43 @@ fn draw_workbench_chrome(
     let title_width = areas
         .header
         .width
-        .saturating_sub(context_width + u16::from(context_width > 0) * 3);
+        .saturating_sub(context_width + u16::from(context_width > 0) * 6 + 18);
+    let heading = if areas.header.width < 80 {
+        format!("{pane} · {}", theme.clean(title))
+    } else {
+        format!("{pane} · Workbench / {}", theme.clean(title))
+    };
     frame.render_widget(
-        Paragraph::new(theme.fit(
-            &format!("Workbench / {}", theme.clean(title)),
-            usize::from(title_width),
-        ))
-        .style(theme.text()),
+        Paragraph::new(theme.fit(&theme.chrome(&heading), usize::from(title_width)))
+            .style(theme.text()),
         Rect::new(areas.header.x, y, title_width, 1),
     );
     if context_width > 0 {
         frame.render_widget(
             Paragraph::new(theme.fit(&context, usize::from(context_width))).style(theme.dim()),
-            Rect::new(areas.header.right() - context_width, y, context_width, 1),
+            Rect::new(
+                areas.header.right() - context_width - 21,
+                y,
+                context_width,
+                1,
+            ),
         );
     }
+    super::chrome::keybar(
+        app,
+        frame,
+        Rect::new(
+            areas.header.right().saturating_sub(18).max(areas.header.x),
+            y,
+            areas.header.width.min(18),
+            1,
+        ),
+        &[
+            ("Tasks", KeyCode::Char('b'), KeyModifiers::CONTROL),
+            ("Pane", KeyCode::Tab, KeyModifiers::NONE),
+        ],
+        theme,
+    );
     let direction = Rect::new(
         areas.footer.x,
         areas.footer.y,
@@ -254,6 +296,8 @@ fn draw_workbench_chrome(
             frame,
             footer,
             &[
+                ("ctrl ← tabs", KeyCode::Left, KeyModifiers::CONTROL),
+                ("ctrl →", KeyCode::Right, KeyModifiers::CONTROL),
                 ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
                 ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
                 ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
@@ -456,6 +500,15 @@ impl App {
             frame,
             footer,
             &[
+                (
+                    if self.navigation.compact_secondary {
+                        "canvas"
+                    } else {
+                        "inspector"
+                    },
+                    KeyCode::Char('b'),
+                    KeyModifiers::CONTROL,
+                ),
                 ("↑ ↓ focus", KeyCode::Down, KeyModifiers::NONE),
                 ("enter inspect", KeyCode::Enter, KeyModifiers::NONE),
                 ("d decisions", KeyCode::Char('d'), KeyModifiers::NONE),

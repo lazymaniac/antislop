@@ -1622,6 +1622,201 @@ fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
 }
 
 #[test]
+fn reopening_a_workbench_target_does_not_restore_a_closed_composer_focus() {
+    let mut app = test_app();
+    app.view.tasks.push(view::TaskRow {
+        id: "t1".into(),
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    app.key(key_ctrl('k'));
+    assert!(app.details.as_ref().unwrap().editing);
+    app.open_details("reviewer:t1".into());
+    app.open_details("worker:t1".into());
+    assert!(!app.details.as_ref().unwrap().editing);
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    app.key(key_press(KeyCode::Tab));
+    assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+}
+
+#[test]
+fn rendered_workbench_tabs_are_clickable_and_leave_native_input() {
+    for target in ["conversation", "worker:t1", "reviewer:t1"] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            change_kind: crate::lean::tasks::ChangeKind::Code,
+            ..Default::default()
+        });
+        app.open_details(target.into());
+        let _native = app.bind_native_input_for_test();
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        for tab in workbench::tabs_for(target, target != "conversation") {
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let (hit, _) = app
+                .workbench_tabs
+                .iter()
+                .find(|(_, value)| *value == tab)
+                .unwrap();
+            let hit = *hit;
+            app.navigation
+                .update_presentation(|state| state.native_input = true);
+            app.mouse(event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: hit.x,
+                row: hit.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(app.navigation.presentation().tab, tab, "{target}");
+            assert!(!app.navigation.presentation().native_input, "{target}");
+            assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
+        }
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.key(key_press(KeyCode::Char('t')));
+        assert!(app.native_focused());
+        let content = app.workbench_areas.content;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: content.x + content.width / 2,
+            row: content.y + content.height / 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(!app.native_focused());
+        app.key(key_press(KeyCode::Tab));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+    }
+}
+
+#[test]
+fn compact_workbench_tab_navigation_reveals_content_and_names_the_focused_pane() {
+    let mut app = test_app();
+    app.open_details("conversation".into());
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    app.key(key_press(KeyCode::Tab));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.workbench_areas.content.is_empty());
+    assert!(terminal_text(&terminal).contains("Terminal"));
+    app.key(event::KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        app.navigation.presentation().tab,
+        WorkbenchTab::Conversation
+    );
+    assert!(!app.workbench_areas.content.is_empty());
+    assert!(terminal_text(&terminal).contains("Content"));
+    assert!(
+        !app.workbench_tabs.is_empty(),
+        "session history retains its tab strip"
+    );
+}
+
+#[test]
+fn phone_controls_open_inspector_and_full_width_session_tasks() {
+    for width in [40, 68, 80] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Phone task".into(),
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let hit = app
+            .chrome_keys
+            .iter()
+            .find(|(_, code, modifiers)| {
+                *code == KeyCode::Char('b') && *modifiers == KeyModifiers::CONTROL
+            })
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(
+            terminal_text(&terminal).contains("SELECTED WORK"),
+            "width {width}"
+        );
+        app.open_details("conversation".into());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let hit = app
+            .chrome_keys
+            .iter()
+            .find(|(_, code, modifiers)| {
+                *code == KeyCode::Char('b') && *modifiers == KeyModifiers::CONTROL
+            })
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.workbench_areas.list_visible);
+        assert!(app.workbench_areas.content.is_empty());
+        assert!(terminal_text(&terminal).contains("Phone task"));
+        app.key(key_press(KeyCode::Down));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchList);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.workbench_areas.list_visible);
+        app.key(key_press(KeyCode::Enter));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.workbench_areas.list_visible);
+        assert!(!app.workbench_areas.content.is_empty());
+    }
+}
+
+#[test]
+fn proposed_plan_opens_for_review_and_keeps_a_persistent_entry_after_dismissal() {
+    for editing in [false, true] {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
+        if editing {
+            app.key(key_ctrl('k'));
+        }
+        app.apply_update(Update::Events {
+            conversation: app.conversation.clone(), generation: app.generation,
+            events: vec![serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","revision_token":"r1","document":"# Reviewable plan","tasks":[{"id":"t1","title":"Phone task","change_kind":"none"}]}})],
+            idle: true, observer: false,
+        });
+        assert_eq!(app.plan_view.is_some(), !editing);
+        if !editing {
+            app.key(key_press(KeyCode::Esc));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(terminal_text(&terminal).contains("Review plan"));
+        let hit = app
+            .direction_choices
+            .iter()
+            .find(|(_, action)| matches!(action, render::direction::Action::Plan))
+            .unwrap()
+            .0;
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(app.plan_view.is_some());
+        assert!(terminal_text(&terminal).contains("Accept"));
+        assert_eq!(app.input.text, "Unsent draft 👩‍💻");
+    }
+}
+
+#[test]
 fn workbench_navigation_keeps_role_tab_round_focus_and_split_preferences_per_target() {
     let mut app = test_app();
     app.terminal_area = Rect::new(0, 0, 160, 50);
@@ -2759,7 +2954,9 @@ fn ac_resp_app_draw_picker_visible_and_reversed_at_60x12() {
         let row: String = (0..60).map(|x| buffer[(x, y)].symbol()).collect();
         if row.contains(last_word) {
             for x in 0..60 {
-                if buffer[(x, y)].modifier.contains(Modifier::REVERSED) {
+                if buffer[(x, y)].modifier.contains(Modifier::REVERSED)
+                    || buffer[(x, y)].bg == theme::ayu::SELECTION
+                {
                     found_reversed = true;
                     break;
                 }

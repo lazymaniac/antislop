@@ -318,18 +318,24 @@ impl App {
         let mut frame_inner = self.draw_graph_frame(frame, area, theme);
         let inspector = if (self.graph_inspector_visible && self.terminal_area.width >= 120
             || self.navigation.compact_secondary)
-            && area.width >= 50
+            && area.width >= 12
             && self.terminal_area.height >= 16
             && area.height >= 10
         {
-            let columns = Layout::horizontal([
-                Constraint::Min(1),
-                Constraint::Length(3),
-                Constraint::Length(36),
-            ])
-            .areas::<3>(frame_inner);
-            frame_inner = columns[0];
-            Some(columns[2])
+            if area.width < 90 {
+                let inspector = frame_inner;
+                frame_inner = Rect::default();
+                Some(inspector)
+            } else {
+                let columns = Layout::horizontal([
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                    Constraint::Length(36),
+                ])
+                .areas::<3>(frame_inner);
+                frame_inner = columns[0];
+                Some(columns[2])
+            }
         } else {
             None
         };

@@ -2490,7 +2490,7 @@ src
      draw(app,frame,theme) ~159 > extension_height,areas,draw_extension,editing,direction,question,raised,Theme.{fit,clean,dim},chrome,accent,visual_text_lines
      footer_height(app,viewport):u16 > interview_visible,question,editing,extension_height
      keybar(app,frame,area,theme):bool > editing
-     Action(E{Answer,Review,Decisions,Session})
+     Action(E{Answer,Review,Decisions,Plan,Session})
      - completion
     overlays
      editor
@@ -2588,7 +2588,8 @@ src
     - VisibleGrapheme: document_position,contains
    shell
     run(options,client):Result<()> > initialize,from_environment,enable_capture,run_loop,store,disable_capture
-    - Rendering,apply_pending,{advance,draw}_frame,copy_clipboard,handle_events
+    - Rendering,RawMode,apply_pending,{advance,draw}_frame,copy_clipboard,handle_events
+    - RawMode: drop
    state
     update_delivery
      - clear_comment_failure,preserve_background_comment,receipt_is_delivered,pending_delivery_error
@@ -2597,7 +2598,7 @@ src
     update_records
      - {save,apply_saved}_config
    state.rs
-    App(C{native_views,workbench_sessions,workbench_sessions_{request_id,inflight,pending,after,fetch_after},conversations_request_id,conversation_deletions,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,result_fetch,focus,navigation,navigation_revision,send_navigation,selected,relations,offset,details,diff,plan_view,editor,picker,rigor_recommendations_shown,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_send,image_drafts,send_{images,operation_keys},failed_comment,{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_{states,projects},graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,inspector_visible},chrome_keys,direction_{actions,area,input_area,choices},inspector_hits,graph_card_{scroll,area},{detail,diff}_states,details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,workbench_{areas,dragging},graph_viewport,unblock,recovery_consent,approval,approval_hidden,decision_inbox,approval_submissions,graph_filters,flow_editor,graph_link_source,projects,active_project,new_conversation_request_id,deleted_conversations})
+    App(C{native_views,workbench_sessions,workbench_sessions_{request_id,inflight,pending,after,fetch_after},conversations_request_id,conversation_deletions,plan_history,graph_layout_cache,transcript_layout,text_{selection,area,origin},pending_clipboard,config_{editor,drafts},agent_drafts,client,project,conversation,generation,stop_poller,tick,view,interview_forms,input,input_{shown,width},editor_width,scroll,found,notice,updates,result_fetch,focus,navigation,navigation_revision,send_navigation,selected,relations,offset,details,diff,plan_view,editor,picker,rigor_recommendations_shown,help,help_scroll,terminal_area,history,history_{path,index,draft,draft_cursor,draft_preferred_col,item_cursors},sending,sending_comment,pending_{send,comment},{send,comment,diff,task}_request_id,failed_send,image_drafts,send_{images,operation_keys},failed_comment,{conversation,comment}_drafts,{comment,send}_operations,observer,comment_draft_cursors,conversation_{states,projects},graph_{scope,visibility_exception,revealed,collapsed,grouping,expanded},animate_graph,graph_{anim,anim_anchor,tab,inspector_visible},chrome_keys,workbench_tabs,direction_{actions,area,input_area,choices},inspector_hits,graph_card_{scroll,area},{detail,diff}_states,details_{scroll_memory,query_memory},{graph,now}_area,now_click_targets,phase_action_{area,command},chat_area,workbench_{areas,dragging},graph_viewport,unblock,recovery_consent,approval,approval_hidden,decision_inbox,approval_submissions,graph_filters,flow_editor,graph_link_source,projects,active_project,new_conversation_request_id,deleted_conversations})
      open_unblock(named) > agent_key,audit_retryable,auditor,targets_orchestrator,orchestrator,unblock_task,Unblock.new
      unblock_choice(state,choice) > open_unblock_note,start_unblock_recovery
      run_workflow(command) ~40 > open_{interview_answer,plan_history,current_plan},reject_plan,resume_plan,request_cancel,set_paused,open_{config,unblock},show_pending_approvals,take_control,new_conversation,{open_conversation,open_projects}_picker,apply_rigor_team,rigor,open_flow_{edit,add_dependent,split},toggle_flow_hold,open_{flow_retire,live_steer},accept_plan,trigger_direct_execute,toggle_flow_link
@@ -2657,7 +2658,7 @@ src
      schedule_output_document_fetch() ~66 > cancel_document_fetch,ResultFetchRequest,ResultFetchIdentity
      fetch_task() > prepare_task_fetch,fetch_run,run_task_fetch
      fetch_run() > {prepare,run}_run_fetch
-     open_details(key) ~58 > WorkUnits.new,remember_workbench,update_presentation,has_delivery,default_tab,presentation,restore_details,resolve_details_task,load_diff,schedule_output_document_fetch,fetch_task
+     open_details(key) ~70 > WorkUnits.new,remember_workbench,update_presentation,has_delivery,default_tab,presentation,restore_details,resolve_details_task,load_diff,schedule_output_document_fetch,fetch_task
      fetch_workbench_sessions()
      remember_workbench()
      request(request,done)
@@ -2682,6 +2683,7 @@ src
      toggle_focus() > cycle_work_stage,set_focus
      route_graph(key):bool > graph_{command,key}
      key_inner(key):bool ~116 > route_native_or_history,sync_{approval,rigor_recommendation},route_{overlays,decision_inbox},show_help,route_{screen,selection_and_config,exit,interview},{details,chat}_key,route_{workbench_navigation,navigation_escape,frontend_shortcut,global_shortcut,base_layout}
+     workbench_select_tab(next):bool > open_diff
      paste(text) > paste_native_or_overlay,sync_interview,paste_{form,details},chat_paste_enabled,attach_dropped_images,paste_picker_editor_or_chat
      add_image_attachment(path) > image_type
      comment_key(conversation,plan,target):String
@@ -2746,8 +2748,8 @@ src
      test_app_with_client_and_updates(client,updates):App
      - named_unblock_task,prepare_recovery_consent,reset_input_cursor,launch_chat_send,comment_operation_id,
        prepare_comment_send,comment_context,restore_conversation_draft,initialize_new_conversation,
-       clear_conversation_overlays,reset_conversation_{navigation,requests,delivery},over_graph,
-       handle_{workbench_mouse,content_mouse,native_mouse,modal_mouse},update_selection_context,modal_blocks_mouse,
+       clear_conversation_overlays,reset_conversation_{navigation,requests,delivery},over_graph,handle_workbench_mouse,
+       focus_workbench_content,handle_{content_mouse,native_mouse,modal_mouse},update_selection_context,modal_blocks_mouse,
        click_{graph_filters,unblock},task_fetch_identity,mark_task_fetch,latest_round_for_key,{checks_are,session_is}_stale,
        latest_round,open_comment_editor,config_save_guard,
        details_{jump_key,resume_round,retry_native,start_composer,toggle_info,native_focus_key,route_action,fetch_current_task},
@@ -3037,14 +3039,15 @@ src
      card_key(key):String > for_stage
    workbench
     areas(viewport,presentation,focus):WorkbenchAreas > areas_with_footer
-    areas_with_footer(viewport,presentation,focus,footer_height):WorkbenchAreas ~72 > areas,WorkbenchAreas
+    areas_with_footer(viewport,presentation,focus,footer_height):WorkbenchAreas ~80 > areas,WorkbenchAreas
     context(target,presentation):WorkbenchContext > WorkbenchContext
     default_tab(key,delivers_changes):WorkbenchTab
     neighbour_tab(key,delivers_changes,current,direction):WorkbenchTab > tabs_for
     resize_areas(current,presentation,row):bool
     resize_at(viewport,presentation,row):bool > resize_areas,areas
     sidebar(view):Vec<SidebarRow> > WorkUnits.new,SidebarRow
-    tab_line(key,delivers,active,theme):ratatui::text::Line<'static> > tabs_for
+    tab_hits(area,key,delivers):Vec<(Rect,WorkbenchTab)> > tabs_for,len,tab_label
+    tab_line(key,delivers,active,theme):ratatui::text::Line<'static> > tabs_for,tab_label
     tabs_for(key,delivers_changes):Vec<WorkbenchTab>
     visible_start(view,target,height):usize > sidebar
     SidebarRow(C{key,label,stage})
@@ -3266,6 +3269,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{emit,block}
-· 170,074 LOC · input 1,558,363 · output 48,614 tokens · state d04fc84bc1c9 · targets AGENTS.md
+· 170,587 LOC · input 1,563,379 · output 48,669 tokens · state addbffc9476a · targets AGENTS.md
 ```
 <!-- hologram:end -->

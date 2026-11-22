@@ -160,6 +160,13 @@ impl App {
         {
             if key.code == KeyCode::Enter {
                 self.navigation.focus = NavigationFocus::WorkbenchContent;
+                let compact = self.terminal_area.width < 90;
+                self.navigation.update_presentation(|presentation| {
+                    presentation.focus = NavigationFocus::WorkbenchContent;
+                    if compact {
+                        presentation.list_requested = false;
+                    }
+                });
                 return true;
             }
             let rows = super::super::workbench::sidebar(&self.view);
@@ -183,6 +190,12 @@ impl App {
             };
             self.open_work_card_or_stage(&rows[next]);
             self.navigation.focus = NavigationFocus::WorkbenchList;
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = NavigationFocus::WorkbenchList;
+                if self.terminal_area.width < 90 {
+                    presentation.list_requested = true;
+                }
+            });
             return true;
         }
         if alt
@@ -235,6 +248,16 @@ impl App {
                     presentation.list_visible = !presentation.list_visible;
                 }
             });
+            if compact {
+                self.navigation.focus = if self.navigation.presentation().list_requested {
+                    NavigationFocus::WorkbenchList
+                } else {
+                    NavigationFocus::WorkbenchContent
+                };
+                let focus = self.navigation.focus;
+                self.navigation
+                    .update_presentation(|presentation| presentation.focus = focus);
+            }
             return true;
         }
         if control && matches!(key.code, KeyCode::Left | KeyCode::Right) {
@@ -295,8 +318,12 @@ impl App {
             self.navigation.focus =
                 panes[(at + if backwards { panes.len() - 1 } else { 1 }) % panes.len()];
             let focus = self.navigation.focus;
-            self.navigation
-                .update_presentation(|presentation| presentation.focus = focus);
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = focus;
+                if focus != NavigationFocus::WorkbenchList && self.terminal_area.width < 90 {
+                    presentation.list_requested = false;
+                }
+            });
             if focus == NavigationFocus::WorkbenchTerminal {
                 self.fetch_workbench_sessions();
             }
@@ -317,8 +344,7 @@ impl App {
     }
 
     fn workbench_change_tab(&mut self, direction: isize) -> bool {
-        self.remember_workbench();
-        let Some(details) = &mut self.details else {
+        let Some(details) = &self.details else {
             return false;
         };
         let delivery = details
@@ -328,6 +354,22 @@ impl App {
         let current = self.navigation.presentation().tab;
         let next =
             super::super::workbench::neighbour_tab(&details.key, delivery, current, direction);
+        self.workbench_select_tab(next)
+    }
+
+    pub(in crate::lean::tui) fn workbench_select_tab(&mut self, next: WorkbenchTab) -> bool {
+        self.remember_workbench();
+        if !self.workbench_areas.header.is_empty() && self.workbench_areas.content.is_empty() {
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
+            self.navigation.update_presentation(|presentation| {
+                presentation.focus = NavigationFocus::WorkbenchContent;
+                presentation.list_requested = false;
+            });
+        }
+        let current = self.navigation.presentation().tab;
+        let Some(details) = &mut self.details else {
+            return false;
+        };
         self.navigation
             .update_presentation(|presentation| presentation.tab = next);
         details.prepare_workbench_details(Some(current), next);
@@ -632,6 +674,18 @@ impl App {
     fn route_navigation_escape(&mut self, key: KeyEvent) -> bool {
         if key.code != KeyCode::Esc {
             return false;
+        }
+        if self.navigation.screen == Screen::Workbench
+            && self.terminal_area.width < 90
+            && self.navigation.presentation().list_requested
+            && !self.native_input_blocked()
+        {
+            self.navigation.focus = NavigationFocus::WorkbenchContent;
+            self.navigation.update_presentation(|presentation| {
+                presentation.list_requested = false;
+                presentation.focus = NavigationFocus::WorkbenchContent;
+            });
+            return true;
         }
         if self.navigation.presentation().zoomed {
             self.navigation.zoom(false);
