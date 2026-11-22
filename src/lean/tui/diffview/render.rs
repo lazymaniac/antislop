@@ -28,6 +28,45 @@ impl DiffView {
         self.draw_body(frame, body, view, theme);
     }
 
+    /// The Workbench owns the title, tabs and global keybar.
+    pub(in crate::lean::tui) fn paint_content(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        theme: &Theme,
+    ) {
+        if !area.is_empty() {
+            self.draw_body(frame, area, view, theme);
+        }
+    }
+
+    pub(in crate::lean::tui) fn workbench_labels(&self, theme: &Theme) -> (String, String) {
+        let (added, removed) = self
+            .files()
+            .iter()
+            .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed));
+        let metadata = format!(
+            "{}{}{}",
+            self.range,
+            if self.truncated { " · truncated" } else { "" },
+            self.reviewer.as_ref().map_or_else(String::new, |reviewer| {
+                format!(
+                    " · reviewer: {}{}",
+                    reviewer.provider,
+                    reviewer
+                        .model
+                        .as_ref()
+                        .map_or_else(String::new, |model| format!(" ({model})"))
+                )
+            }),
+        );
+        (
+            theme.chrome(&format!("+{added} / −{removed}")),
+            theme.chrome(&metadata),
+        )
+    }
+
     fn draw_body(&mut self, frame: &mut Frame, body: Rect, view: &View, theme: &Theme) {
         if !draw_placeholder(frame, body, &self.files, theme) {
             return;

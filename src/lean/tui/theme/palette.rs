@@ -96,13 +96,14 @@ impl Theme {
     }
 
     pub fn accent(&self) -> Style {
-        self.pick(fg(ayu::CYAN), Style::default())
-            .add_modifier(Modifier::BOLD)
+        self.pick(fg(ayu::CYAN), Style::default().add_modifier(Modifier::BOLD))
     }
 
     pub fn title(&self) -> Style {
-        self.pick(fg(ayu::TITLE), Style::default())
-            .add_modifier(Modifier::BOLD)
+        self.pick(
+            fg(ayu::TITLE),
+            Style::default().add_modifier(Modifier::BOLD),
+        )
     }
 
     /// Header and footer bars.
@@ -113,6 +114,10 @@ impl Theme {
     /// Full-panel overlays (details, palette, dialogs).
     pub fn overlay(&self) -> Style {
         self.pick(card_style(ayu::BG, ayu::FG), Style::default())
+    }
+
+    pub fn terminal(&self) -> Style {
+        self.pick(card_style(ayu::TERMINAL, ayu::FG), Style::default())
     }
 
     pub fn card(&self) -> Style {
@@ -134,7 +139,6 @@ impl Theme {
             card_style(ayu::SELECTION, ayu::FG),
             Style::default().add_modifier(Modifier::REVERSED),
         )
-        .add_modifier(Modifier::BOLD)
     }
 
     /// The title row of an open graph card: a lit strip above its tabs.
@@ -163,7 +167,7 @@ impl Theme {
     /// The primary phase action above the composer: a filled, bold button.
     pub fn button(&self) -> Style {
         self.pick(
-            card_style(ayu::GOLD, ayu::BG),
+            card_style(ayu::CYAN, ayu::BG),
             Style::default().add_modifier(Modifier::REVERSED),
         )
         .add_modifier(Modifier::BOLD)

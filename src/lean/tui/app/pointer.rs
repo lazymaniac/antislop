@@ -1,16 +1,10 @@
 use super::super::*;
 mod click;
-mod header;
 
 impl App {
     pub(in crate::lean::tui) fn bar_height(area: Rect) -> u16 {
-        if area.height <= 5 {
-            1
-        } else if area.width >= SIDE_BY_SIDE_BREAKPOINT && area.height >= 30 {
-            3
-        } else {
-            2
-        }
+        let _ = area;
+        1
     }
 
     pub(in crate::lean::tui) fn main_areas(area: Rect) -> [Rect; 3] {
@@ -133,6 +127,38 @@ impl App {
         if self.navigation.focus == NavigationFocus::Composer
             || self.details.as_ref().is_some_and(|details| details.editing)
         {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && let Some((send, cancel)) = self.direction_actions
+            {
+                if send.contains((mouse.column, mouse.row).into()) {
+                    if self.details.as_ref().is_some_and(|details| details.editing) {
+                        self.submit_agent_message();
+                    } else {
+                        self.submit();
+                    }
+                } else if cancel.contains((mouse.column, mouse.row).into()) {
+                    self.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                }
+            }
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && (!self.selection_blocked() || self.native_focused())
+            && let Some((_, code, modifiers)) = self
+                .chrome_keys
+                .iter()
+                .find(|(area, _, _)| area.contains((mouse.column, mouse.row).into()))
+                .copied()
+        {
+            if self.native_focused() {
+                self.navigation
+                    .update_presentation(|presentation| presentation.native_input = false);
+                self.navigation.focus = NavigationFocus::WorkbenchContent;
+                if let Some(details) = &mut self.details {
+                    details.native_focus = false;
+                }
+            }
+            self.key(event::KeyEvent::new(code, modifiers));
             return true;
         }
         if self.handle_workbench_mouse(mouse) {

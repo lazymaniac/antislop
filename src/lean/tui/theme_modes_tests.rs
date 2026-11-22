@@ -297,7 +297,14 @@ fn actual_draw_mode_child() {
         .position(|cell| cell.symbol() == "Z")
         .expect("code text");
     let code = &buffer.content[cell];
-    assert_eq!(code.fg, theme.ok().fg.unwrap_or(Color::Reset));
+    assert_eq!(
+        code.fg,
+        if theme.color {
+            theme::ayu::DIFF_ADD
+        } else {
+            Color::Reset
+        }
+    );
     assert_eq!(buffer.content[cell - 1].symbol(), theme.glyphs().vertical);
     assert_eq!(theme.clean(DOCUMENT), DOCUMENT);
     for color in [Color::Red, Color::Indexed(201), Color::Rgb(2, 3, 4)] {

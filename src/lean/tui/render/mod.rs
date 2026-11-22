@@ -1,4 +1,5 @@
 mod chat;
+mod chrome;
 mod composer;
 mod coordinator;
 mod direction;

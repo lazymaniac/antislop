@@ -10,6 +10,8 @@ impl App {
         self.phase_action_command = None;
         self.now_click_targets.clear();
         self.inspector_hits.clear();
+        self.chrome_keys.clear();
+        self.direction_actions = None;
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
@@ -253,7 +255,7 @@ mod tests {
                 );
                 assert!(graph_area.right() <= width);
                 assert!(
-                    graph_area.right() >= width.saturating_sub(if width >= 120 { 39 } else { 3 })
+                    graph_area.right() >= width.saturating_sub(if width >= 120 { 44 } else { 3 })
                 );
             }
         }
@@ -329,5 +331,61 @@ mod tests {
             })
             .collect::<String>();
         assert!(!rendered.contains("Enter, Ctrl+S"));
+    }
+
+    #[test]
+    fn approved_reference_spacing_and_surfaces_at_160_by_50() {
+        let theme = Theme::new(true, false);
+        let mut app = App::test_app();
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        terminal
+            .draw(|frame| app.draw_with_theme(frame, &theme))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, 1)].symbol(), "›");
+        assert_eq!(buffer[(2, 1)].fg, crate::lean::tui::theme::ayu::CYAN);
+        assert_eq!(buffer[(2, 3)].symbol(), "S");
+        assert_eq!(buffer[(122, 6)].bg, crate::lean::tui::theme::ayu::PANEL);
+        assert_eq!(buffer[(121, 6)].bg, crate::lean::tui::theme::ayu::BG);
+        assert_eq!(buffer[(2, 44)].bg, crate::lean::tui::theme::ayu::PANEL);
+        assert_eq!(buffer[(2, 49)].symbol(), "↑");
+        assert!(
+            app.chrome_keys
+                .iter()
+                .any(|(rect, key, mods)| rect.height == 3
+                    && *key == KeyCode::Char('k')
+                    && mods.contains(KeyModifiers::CONTROL))
+        );
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            title: "Create PR".into(),
+            change_kind: crate::lean::tasks::ChangeKind::Code,
+            ..Default::default()
+        });
+        app.open_details("worker:t1".into());
+        terminal
+            .draw(|frame| app.draw_with_theme(frame, &theme))
+            .unwrap();
+        let areas = app.workbench_areas;
+        assert_eq!(areas.list.width, 30);
+        assert_eq!(areas.content.x, 35);
+        assert_eq!(areas.content.height.abs_diff(areas.terminal.height), 1);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(areas.content.x, areas.content.y)].bg,
+            crate::lean::tui::theme::ayu::PANEL
+        );
+        assert_eq!(
+            buffer[(areas.content.x - 1, areas.content.y)].bg,
+            crate::lean::tui::theme::ayu::BG
+        );
+        assert_eq!(
+            buffer[(areas.terminal.x, areas.terminal.y)].bg,
+            crate::lean::tui::theme::ayu::RAISED
+        );
+        assert_eq!(
+            buffer[(areas.terminal.x, areas.terminal.y + 3)].bg,
+            crate::lean::tui::theme::ayu::TERMINAL
+        );
     }
 }

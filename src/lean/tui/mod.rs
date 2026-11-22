@@ -118,23 +118,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 #[cfg(test)]
+use view::SIDE_BY_SIDE_BREAKPOINT;
+#[cfg(test)]
 use view::dim;
-use view::{
-    ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, draw_min_term_guard, target_name,
-    truncate, wrap,
-};
-
-/// Whether to draw in ASCII: asked for with `ANTISLOP_ASCII`, or the
-/// locale is not UTF-8.
-/// Shrinks `area` by one cell on every side so content sits centred with a margin.
-/// Tiny areas are returned unchanged.
-fn padded(area: Rect) -> Rect {
-    if area.width > 4 && area.height > 4 {
-        Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
-    } else {
-        area
-    }
-}
+use view::{ORCHESTRATOR, PanelFocus, View, draw_min_term_guard, target_name, truncate, wrap};
 
 /// Bound a centered panel while preserving the full viewport on small terminals.
 fn panel_area(area: Rect, max_width: u16) -> Rect {

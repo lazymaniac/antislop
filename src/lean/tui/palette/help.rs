@@ -90,15 +90,19 @@ fn draw_help_box(frame: &mut Frame, area: Rect, width: u16, lines: Vec<String>, 
         .collect::<Vec<_>>();
     let title = help_title(width, max_scroll > 0);
     frame.render_widget(Clear, box_area);
+    frame.render_widget(Block::default().style(theme.card()), box_area);
     frame.render_widget(
-        Paragraph::new(shown).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_set(theme.borders())
-                .border_style(Style::default())
-                .title(title),
+        Paragraph::new(theme.chrome(title)).style(theme.title()),
+        Rect::new(
+            box_area.x + 1,
+            box_area.y,
+            box_area.width.saturating_sub(2),
+            1,
         ),
-        box_area,
+    );
+    frame.render_widget(
+        Paragraph::new(shown).style(theme.text()),
+        box_area.inner(ratatui::layout::Margin::new(1, 1)),
     );
 }
 

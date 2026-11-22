@@ -316,35 +316,36 @@ impl App {
         Option<Rect>,
     ) {
         let mut frame_inner = self.draw_graph_frame(frame, area, theme);
-        let inspector = if (self.graph_inspector_visible && area.width >= 120
+        let inspector = if (self.graph_inspector_visible && self.terminal_area.width >= 120
             || self.navigation.compact_secondary)
             && area.width >= 50
+            && self.terminal_area.height >= 16
             && area.height >= 10
         {
-            let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(36)])
-                .areas::<2>(frame_inner);
+            let columns = Layout::horizontal([
+                Constraint::Min(1),
+                Constraint::Length(3),
+                Constraint::Length(36),
+            ])
+            .areas::<3>(frame_inner);
             frame_inner = columns[0];
-            Some(columns[1])
+            Some(columns[2])
         } else {
             None
         };
-        if self.phase_action_area.is_none()
-            && self.phase_action().is_some()
-            && frame_inner.height >= 6
-        {
-            let [banner, rest] =
-                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame_inner);
-            self.draw_phase_action(frame, banner, theme);
-            frame_inner = rest;
-        }
-        let max_rows = if frame_inner.height / 2 >= 3 {
-            usize::from((frame_inner.height / 2).saturating_sub(2).min(6))
-        } else {
-            0
-        };
-        let progress = self.view.now_click_rows(max_rows);
-        let (graph_area, now_area) = graph_progress_areas(frame_inner, progress.len());
-        let inner = padded(graph_area);
+        let progress = self.view.now_click_rows(1);
+        let graph_area = frame_inner;
+        let now_area = None;
+        let inner = Rect::new(
+            graph_area.x,
+            graph_area.y,
+            graph_area.width,
+            if graph_area.height > 1 {
+                graph_area.height - 1
+            } else {
+                graph_area.height
+            },
+        );
         if self
             .graph_viewport
             .is_some_and(|viewport| viewport != (inner.width, inner.height))
@@ -373,27 +374,13 @@ impl App {
         let selected = self
             .selected_work_stage()
             .unwrap_or_else(|| unit.active_stage(&self.view).id.0.clone());
-        let width = usize::from(area.width.saturating_sub(2));
+        let width = usize::from(area.width.saturating_sub(4));
         let mut lines = vec![
-            Line::styled(theme.chrome("INSPECTOR · SELECTED WORK"), theme.dim()),
+            Line::styled(theme.chrome("SELECTED WORK"), theme.dim()),
             Line::raw(unit.title.clone()),
             Line::raw(""),
         ];
         let mut hits = Vec::new();
-        for stage in &unit.stages {
-            let state = graph::health(&self.view, &stage.id.0);
-            let style = if stage.id.0 == selected {
-                theme.selected()
-            } else {
-                theme.dim()
-            };
-            hits.push((lines.len(), InspectorAction::Stage(stage.id.0.clone())));
-            lines.push(Line::styled(
-                format!("{} {}", theme.status_glyph(state.name()), stage.label),
-                style,
-            ));
-        }
-        lines.push(Line::raw(""));
         let active_task = selected
             .split_once(':')
             .and_then(|(_, id)| self.view.tasks.iter().find(|task| task.id == id));
@@ -405,7 +392,7 @@ impl App {
         if let Some(task) = task {
             for line in wrap(
                 &format!(
-                    "Goal: {}",
+                    "{}",
                     view::task_goal(&task.kind, &task.title, &task.goal, task.summary.as_deref())
                 ),
                 width,
@@ -423,9 +410,25 @@ impl App {
                 }
             }
             lines.push(Line::styled(
-                format!("{} {} round {}", selected, theme.glyphs().dot, task.round),
+                format!(
+                    "{} {} round {}",
+                    selected.split(':').next().unwrap_or(&selected),
+                    theme.glyphs().dot,
+                    task.round
+                ),
                 theme.dim(),
             ));
+            if self.view.task_bottleneck_count(&task.id) > 0 {
+                lines.push(Line::styled(
+                    format!(
+                        "Critical path {} {} downstream",
+                        theme.glyphs().dot,
+                        self.view.task_bottleneck_count(&task.id)
+                    ),
+                    theme.dim(),
+                ));
+            }
+            lines.push(Line::raw(""));
             if let Some(reason) = &task.reason {
                 for line in wrap(&view::clean(reason), width) {
                     lines.push(Line::styled(line, theme.error()));
@@ -437,6 +440,20 @@ impl App {
                 }
             }
         }
+        for stage in &unit.stages {
+            let state = graph::health(&self.view, &stage.id.0);
+            let style = if stage.id.0 == selected {
+                theme.selected()
+            } else {
+                theme.dim()
+            };
+            hits.push((lines.len(), InspectorAction::Stage(stage.id.0.clone())));
+            lines.push(Line::styled(
+                format!("{} {}", theme.status_glyph(state.name()), stage.label),
+                style,
+            ));
+        }
+        lines.push(Line::raw(""));
         for stage in &unit.stages {
             if let Some(agent) = self.view.agents.get(&stage.id.0) {
                 let problem = graph::health(&self.view, &stage.id.0) == graph::Health::Problem;
@@ -487,6 +504,23 @@ impl App {
         let action_start = lines.len();
         let decisions = unit.decisions(&self.view);
         if decisions > 0 {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                theme.chrome("◇ YOUR DECISION"),
+                theme.decision(),
+            ));
+            if let Some(approval) = self.view.approvals.iter().find(|approval| {
+                unit.stages
+                    .iter()
+                    .any(|stage| stage.id.0 == self.view.agent_key(&approval.role))
+            }) {
+                for line in wrap(&view::clean(&approval.summary), width)
+                    .into_iter()
+                    .take(3)
+                {
+                    lines.push(Line::styled(line, theme.text()));
+                }
+            }
             hits.push((lines.len(), InspectorAction::Decisions));
             lines.push(Line::styled(
                 theme.chrome(&format!("{decisions} pending decision(s) · d open")),
@@ -519,10 +553,10 @@ impl App {
             theme.dim(),
         ));
         let content = Rect::new(
-            area.x + 1,
-            area.y + 1,
-            area.width.saturating_sub(2),
-            area.height.saturating_sub(2),
+            area.x + 2,
+            area.y + 2,
+            area.width.saturating_sub(4),
+            area.height.saturating_sub(4),
         );
         let available = usize::from(content.height);
         if lines.len() > available {
@@ -551,18 +585,25 @@ impl App {
     }
 
     fn draw_graph_frame(&self, frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {
+        if self.graph_link_source.is_none()
+            && !self.graph_scope.is_filtered()
+            && self.graph_grouping == graph::GroupingMode::Dependency
+            && self.relations == Relations::default()
+        {
+            return area;
+        }
         let fill = theme.overlay();
         let title = if let Some(src) = &self.graph_link_source {
             truncate(
                 &format!(" 🔗 LINKING FROM {src} (Enter/l: toggle edge, Esc: cancel) "),
-                usize::from(area.width.saturating_sub(2)),
+                usize::from(area.width.saturating_sub(4)),
             )
         } else {
             graph_title(
                 &self.relations.name(),
                 self.graph_scope.is_filtered(),
                 self.graph_grouping.name(),
-                area.width.saturating_sub(2),
+                area.width.saturating_sub(4),
             )
         };
         let title = theme.chrome(&title);
@@ -930,16 +971,6 @@ fn graph_title(relations: &str, filtered: bool, grouping: &str, width: u16) -> S
     .into_iter()
     .find(|title| unicode_width::UnicodeWidthStr::width(title.as_str()) <= usize::from(width))
     .unwrap_or_else(|| " Canvas ".into())
-}
-
-fn graph_progress_areas(area: Rect, progress_lines: usize) -> (Rect, Option<Rect>) {
-    let height = (progress_lines.min(6) as u16 + 2).min(area.height / 2);
-    if height < 3 {
-        return (area, None);
-    }
-    let [graph, now] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(area);
-    (graph, Some(now))
 }
 
 fn reveal_axis(offset: &mut u16, start: u16, size: u16, viewport: u16, margin: u16) {

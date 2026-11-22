@@ -118,17 +118,17 @@ const GEOMETRIES: &[Geometry] = &[
     },
     Geometry {
         id: "diff-below-width",
-        width: 89,
+        width: 95,
         height: 30,
     },
     Geometry {
         id: "diff-at-width",
-        width: 90,
+        width: 96,
         height: 30,
     },
     Geometry {
         id: "diff-above-width",
-        width: 91,
+        width: 97,
         height: 30,
     },
 ];
@@ -848,7 +848,12 @@ fn apply_fixture(app: &mut App, id: &str) {
         "graph-waiting" | "graph-error" => {
             apply_fixture(app, "graph-ordinary");
             app.selected = "worker:t1".into();
-            let task = app.view.tasks.first_mut().expect("graph task");
+            let task = app
+                .view
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == "t1")
+                .expect("graph task");
             task.status = if id == "graph-waiting" {
                 "waiting"
             } else {
@@ -863,6 +868,9 @@ fn apply_fixture(app: &mut App, id: &str) {
                 }
                 .into(),
             );
+            if let Some(agent) = app.view.agents.get_mut("worker:t1") {
+                agent.running = false;
+            }
         }
         "session-completion" => {
             apply_fixture(app, "shell-session-empty");
@@ -979,6 +987,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             if id == "new-session-composer" {
                 app.navigation.target = WorkbenchTarget::Session;
                 let mut details = Details::new("orchestrator".into());
+                details.conversation = app.conversation.clone();
                 details.editing = true;
                 let composer_key = details.composer_key();
                 details.drafts.borrow_mut().insert(
@@ -1001,6 +1010,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.target = WorkbenchTarget::Agent("worker:t1".into());
             app.navigation.focus = NavigationFocus::Composer;
             let mut details = Details::new("worker:t1".into());
+            details.conversation = app.conversation.clone();
             details.editing = true;
             let mode = match id {
                 "composer-steer" => crate::lean::store::Delivery::Steer,
@@ -1048,6 +1058,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.screen = Screen::Workbench;
             app.navigation.target = WorkbenchTarget::Agent("worker:t4".into());
             let mut details = Details::new("worker:t4".into());
+            details.conversation = app.conversation.clone();
             details.task = Some(
                 json!({"id":"t4","title":"Integrate reviewed change","goal":"Preserve and integrate the approved output","status":"needs_user","round":1,"change_kind":"code","reason":"Manual changes overlap with the reviewed worker branch"}),
             );
@@ -1066,6 +1077,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation.screen = Screen::Workbench;
             app.navigation.target = WorkbenchTarget::Agent("worker:t4".into());
             let mut details = Details::new("worker:t4".into());
+            details.conversation = app.conversation.clone();
             details.task = Some(
                 json!({"id":"t4","title":"Integrate reviewed change","goal":"Preserve and integrate the approved output","status":"approved","round":1,"change_kind":"code","integration":{"outcome":"integrated","source":"task_branch","detail":"Reviewed branch merged into the session"}}),
             );
@@ -1243,6 +1255,7 @@ fn apply_fixture(app: &mut App, id: &str) {
             app.navigation
                 .update_presentation(|presentation| presentation.split = true);
             let mut details = Details::new("orchestrator".into());
+            details.conversation = app.conversation.clone();
             details.native_areas[0] = Rect::new(25, 2, 50, 10);
             details.editing = false;
             app.details = Some(details);
@@ -1501,6 +1514,21 @@ fn apply_fixture(app: &mut App, id: &str) {
 
 /// Sets the actual Details tab as the input handler does, including role policy.
 fn apply_workbench_fixture(app: &mut App, id: &str) {
+    if id == "workbench-tab-diff" {
+        apply_fixture(app, "native-pty");
+        if let Some(mut native) = app
+            .native_views
+            .remove(&format!("{}:orchestrator", app.conversation))
+        {
+            native_view::bind_capture_owner(&mut native, "capture-session:1");
+            app.native_views
+                .insert(format!("{}:worker:t1", app.conversation), native);
+        }
+        for session in &mut app.workbench_sessions {
+            session.role = "worker:t1".into();
+        }
+        app.navigation.focus = NavigationFocus::WorkbenchContent;
+    }
     let tab = match id {
         "workbench-tab-conversation" | "conversation-no-history" => WorkbenchTab::Conversation,
         "workbench-tab-results" | "results-empty" | "results-waiting" | "results-error" => {
@@ -1526,12 +1554,17 @@ fn apply_workbench_fixture(app: &mut App, id: &str) {
     app.navigation.target = WorkbenchTarget::Agent(key.into());
     app.navigation.update_presentation(|presentation| {
         presentation.tab = tab;
-        presentation.split = false;
+        presentation.split = id == "workbench-tab-diff";
     });
     let mut details = Details::new(key.into());
+    details.conversation = app.conversation.clone();
     details.task = Some(
         json!({"id":"t1","title":"Prepare implementation","status":"working","round":1,"spec":spec}),
     );
+    if id == "workbench-tab-diff" {
+        details.native_areas[0] = Rect::new(35, 26, 120, 16);
+        app.view.tasks[0].round = 1;
+    }
     details.prepare_workbench_details(None, tab);
     match id {
         "workbench-tab-conversation" => app.view.messages.push(MessageEntry {
@@ -1660,12 +1693,14 @@ fn additional_state_reached(app: &App, fixture: Fixture) -> bool {
         "graph-waiting" => app
             .view
             .tasks
-            .first()
+            .iter()
+            .find(|task| task.id == "t1")
             .is_some_and(|task| task.status == "waiting" && task.reason.is_some()),
         "graph-error" => app
             .view
             .tasks
-            .first()
+            .iter()
+            .find(|task| task.id == "t1")
             .is_some_and(|task| task.status == "failed" && task.reason.is_some()),
         "session-completion" => {
             matches!(workbench_summary::project(&app.view, "conversation"), workbench_summary::Summary::Completion(completion) if completion.actions.len() == 3 && completion.branch.as_deref() == Some("feature/capture"))
@@ -1815,7 +1850,7 @@ fn state_marker(id: &str, geometry: Geometry) -> Option<&'static str> {
         "plan-history-empty" => "No plan records are retained",
         "plan-history-loading" => "loading",
         "plan-history-error" => "Fixture history read failed",
-        "summary-empty" => "worker:t1",
+        "summary-empty" => "worker",
         "shell-session-empty" => "Session",
         "workbench-tab-conversation" => "Capture dialogue t1",
         "conversation-no-history" => "No retained conversation history",
@@ -1939,6 +1974,9 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
     } = geometry;
     let mut app = App::test_app();
     apply_fixture(&mut app, fixture.id);
+    if let Some(details) = &mut app.details {
+        details.conversation = app.conversation.clone();
+    }
     let native_fixture_state = app
         .native_views
         .values()
@@ -1950,11 +1988,21 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         .draw(|frame| app.draw(frame))
         .expect("App::draw succeeds");
     let buffer = terminal.backend().buffer();
+    let header_area = app.workbench_areas.header;
     let workbench_header = buffer
         .content
         .iter()
-        .take(usize::from(width))
-        .map(|cell| cell.symbol())
+        .enumerate()
+        .filter(|(index, _)| {
+            header_area.contains(
+                (
+                    (*index % usize::from(width)) as u16,
+                    (*index / usize::from(width)) as u16,
+                )
+                    .into(),
+            )
+        })
+        .map(|(_, cell)| cell.symbol())
         .collect::<String>();
     let cells = buffer
         .content
@@ -1993,7 +2041,7 @@ fn capture(fixture: Fixture, geometry: Geometry) -> Value {
         && app.details.is_some()
         && !app.workbench_areas.header.is_empty()
         && !app.workbench_areas.content.is_empty()
-        && workbench_header.contains("Summary");
+        && workbench_header.contains("antislop");
     let reached_view = match fixture.id {
         "graph-ordinary" | "graph-empty" | "graph-compact" => {
             app.navigation.screen == Screen::Graph
@@ -2263,7 +2311,7 @@ fn text_has_inspector(cells: &[Value]) -> bool {
         .iter()
         .filter_map(|cell| cell["text"].as_str())
         .collect::<String>()
-        .contains("INSPECTOR")
+        .contains("SELECTED WORK")
 }
 
 fn agent_selected(app: &App, key: &str) -> bool {
@@ -2339,7 +2387,7 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         assert!(
             record["workbench_header"]
                 .as_str()
-                .is_some_and(|header| header.contains("Summary")),
+                .is_some_and(|header| header.contains("Workbench /")),
             "{} did not render the Workbench D3 header",
             fixture.id
         );
@@ -2446,12 +2494,13 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         }
         "diff-below-width" | "diff-at-width" | "diff-above-width" => {
             assert_eq!(
-                panels["workbench_content"]["width"], width,
+                panels["workbench_content"]["width"],
+                width.saturating_sub(2),
                 "diff threshold sample records the real content panel width"
             );
             assert_eq!(
                 panels["diff_file_list_rendered"],
-                width >= 90,
+                geometry_id != "diff-below-width",
                 "diff file-list threshold must be reached by the loaded real diff panel"
             );
         }
@@ -2518,7 +2567,15 @@ fn assert_capture_contract(record: &Value, fixture: Fixture, geometry: Geometry)
         "workbench-tab-results" => assert_eq!(record["active_tab"], "Results"),
         "workbench-tab-checks" => assert_eq!(record["active_tab"], "Checks"),
         "workbench-tab-comments" => assert_eq!(record["active_tab"], "Comments"),
-        "workbench-tab-diff" => assert_eq!(record["active_tab"], "Diff"),
+        "workbench-tab-diff" => {
+            assert_eq!(record["active_tab"], "Diff");
+            if height >= 30 {
+                assert!(
+                    text.contains("Please inspect"),
+                    "split diff must retain its live PTY"
+                );
+            }
+        }
         "cli-approval" => assert!(
             text.contains("Decisions") || record["na_reason"].is_string(),
             "CLI approval card not reached"

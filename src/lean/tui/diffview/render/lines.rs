@@ -121,10 +121,18 @@ fn file_title(
     } else {
         format!(" {}", file.path)
     };
-    Line::styled(
+    surface_row(
         theme.fit(&title, width),
-        Style::default().add_modifier(Modifier::BOLD),
+        width,
+        theme.raised().patch(theme.text()),
     )
+}
+
+fn surface_row(mut text: String, width: usize, style: Style) -> Line<'static> {
+    if style.bg.is_some() {
+        text.push_str(&" ".repeat(width.saturating_sub(text.width())));
+    }
+    Line::styled(text, style)
 }
 
 fn append_comments<'a>(
@@ -170,7 +178,11 @@ fn comment_target(target: &str, line: &DiffLine) -> Option<String> {
 fn diff_line(line: &DiffLine, selected: bool, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let (sign, style) = diff_style(&line.kind, theme);
     let style = if selected {
-        style.add_modifier(Modifier::REVERSED)
+        style.add_modifier(if theme.color {
+            Modifier::UNDERLINED
+        } else {
+            Modifier::REVERSED
+        })
     } else {
         style
     };
@@ -178,8 +190,9 @@ fn diff_line(line: &DiffLine, selected: bool, width: usize, theme: &Theme) -> Ve
     let room = width.saturating_sub(indent);
     if room < 8 {
         // Too narrow to wrap under the gutter: cut the line as before.
-        return vec![Line::styled(
+        return vec![surface_row(
             theme.fit(&format!("{first}{text}"), width),
+            width,
             style,
         )];
     }
@@ -193,7 +206,7 @@ fn diff_line(line: &DiffLine, selected: bool, width: usize, theme: &Theme) -> Ve
         .enumerate()
         .map(|(index, chunk)| {
             let prefix = if index == 0 { &first } else { &continuation };
-            Line::styled(format!("{prefix}{chunk}"), style)
+            surface_row(format!("{prefix}{chunk}"), width, style)
         })
         .collect()
 }
@@ -219,8 +232,22 @@ fn wrap_graphemes(text: &str, width: usize) -> Vec<String> {
 
 fn diff_style(kind: &str, theme: &Theme) -> (&'static str, Style) {
     match kind {
-        "add" => ("+", theme.ok()),
-        "del" => ("-", theme.err()),
+        "add" => (
+            "+",
+            theme.style(
+                Style::default()
+                    .fg(crate::lean::tui::theme::ayu::DIFF_ADD)
+                    .bg(crate::lean::tui::theme::ayu::DIFF_ADD_BG),
+            ),
+        ),
+        "del" => (
+            "-",
+            theme.style(
+                Style::default()
+                    .fg(crate::lean::tui::theme::ayu::DIFF_REMOVE)
+                    .bg(crate::lean::tui::theme::ayu::DIFF_REMOVE_BG),
+            ),
+        ),
         "hunk" => (
             "",
             theme.style(Style::default().fg(crate::lean::tui::theme::ayu::BLUE)),

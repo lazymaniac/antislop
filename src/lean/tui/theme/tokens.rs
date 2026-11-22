@@ -135,6 +135,12 @@ pub struct Theme {
 pub mod ayu {
     use ratatui::style::Color;
 
+    pub const DIFF_ADD: Color = Color::Rgb(0xB9, 0xE4, 0xCE);
+    pub const DIFF_ADD_BG: Color = Color::Rgb(0x20, 0x37, 0x2F);
+    pub const DIFF_REMOVE: Color = Color::Rgb(0xE0, 0xB8, 0xBB);
+    pub const DIFF_REMOVE_BG: Color = Color::Rgb(0x35, 0x27, 0x2A);
+    pub const TERMINAL: Color = Color::Rgb(0x0A, 0x11, 0x14);
+    pub const ROUTE: Color = Color::Rgb(0x36, 0x50, 0x58);
     pub const BG: Color = Color::Rgb(0x10, 0x16, 0x19);
     pub const PANEL: Color = Color::Rgb(0x19, 0x22, 0x26);
     pub const LINE: Color = Color::Rgb(0x19, 0x22, 0x26);

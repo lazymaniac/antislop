@@ -8,7 +8,7 @@ pub(super) fn draw(
     node: &Node,
     unit: &WorkUnit,
     selected: bool,
-    critical: bool,
+    _critical: bool,
     theme: &Theme,
 ) {
     let fill = if selected {
@@ -37,7 +37,17 @@ pub(super) fn draw(
     let width = usize::from(node.width.saturating_sub(4));
     let health = unit.health(view);
     let stage = unit.active_stage(view);
-    let state = format!("{} {}", theme.status_glyph(health.name()), health.name());
+    let kind = unit
+        .task
+        .as_deref()
+        .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+        .map(|task| task.kind.as_str());
+    let label = if health == Health::Working {
+        kind.filter(|kind| !kind.is_empty()).unwrap_or("working")
+    } else {
+        health.name()
+    };
+    let state = format!("{} {}", theme.status_glyph(health.name()), label);
     let elapsed = super::super::flow_editor::format_clock_mm_ss(unit.elapsed_ms(view));
     let state_width = width.saturating_sub(elapsed.width() + 1);
     canvas.text(
@@ -57,28 +67,9 @@ pub(super) fn draw(
     if node.height > 3 {
         canvas.text(
             node.x + 2,
-            node.y + 2,
+            node.y + if node.height > 4 { 3 } else { 2 },
             &theme.fit(&clean(&unit.title), width),
-            fill.patch(if critical {
-                theme.decision()
-            } else {
-                theme.text()
-            }),
-        );
-    }
-    if critical && node.height > 4 {
-        let downstream = unit
-            .task
-            .as_deref()
-            .map_or(0, |task| view.task_bottleneck_count(task));
-        canvas.text(
-            node.x + 2,
-            node.y + 3,
-            &theme.fit(
-                &theme.chrome(&format!("critical path · {downstream} downstream")),
-                width,
-            ),
-            fill.patch(theme.decision()),
+            fill.patch(theme.text()),
         );
     }
     if node.collapsed || node.height <= 4 {
@@ -96,6 +87,11 @@ pub(super) fn draw(
                 .get(&stage.id.0)
                 .map(|agent| agent.activity.as_str())
                 .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    (unit.card == ORCHESTRATOR)
+                        .then_some(view.activity.as_deref())
+                        .flatten()
+                })
                 .or_else(|| {
                     unit.task
                         .as_deref()
@@ -115,25 +111,31 @@ pub(super) fn draw(
         &theme.fit(&clean(activity), width),
         fill.patch(theme.dim()),
     );
-    let stages = unit
-        .stages
-        .iter()
-        .map(|stage| {
-            let health = health::health(view, &stage.id.0);
-            format!(
-                "{} {}",
-                theme.status_glyph(health.name()),
-                stage.label.to_lowercase()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("  ");
-    canvas.text(
-        node.x + 2,
-        node.y + 6,
-        &theme.fit(&stages, width),
-        fill.patch(theme.accent()),
-    );
+    let mut x = node.x + 2;
+    for stage in &unit.stages {
+        let health = health::health(view, &stage.id.0);
+        let label = format!(
+            "{} {}  ",
+            if health == Health::Working {
+                if theme.ascii { ">" } else { "›" }
+            } else {
+                theme.status_glyph(health.name())
+            },
+            stage.label.to_lowercase()
+        );
+        let remaining = node.right().saturating_sub(x + 2);
+        if remaining == 0 {
+            break;
+        }
+        let shown = theme.fit(&label, usize::from(remaining));
+        let style = if matches!(health, Health::Done | Health::Working) {
+            theme.accent()
+        } else {
+            theme.dim()
+        };
+        canvas.text(x, node.y + 6, &shown, fill.patch(style));
+        x += shown.width() as u16;
+    }
     let decisions = unit.decisions(view);
     if decisions > 0 {
         canvas.text(

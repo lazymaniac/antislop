@@ -1,4 +1,5 @@
 use super::super::*;
+use ratatui::layout::Alignment;
 
 mod graph;
 
@@ -50,22 +51,68 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     draw_workbench_chrome(
         frame,
         areas,
-        &app.navigation.target,
+        app,
         &presentation,
         &terminal_owner,
         terminal_round,
         theme,
     );
     if areas.list_visible {
-        draw_workbench_list(frame, areas.list, &app.view, &app.navigation.target, theme);
+        draw_workbench_list(
+            frame,
+            areas.list,
+            &app.view,
+            &app.navigation.target,
+            &terminal_owner,
+            theme,
+        );
     }
     if let Some(diff) = &mut app.diff {
-        let [tabs, content] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(areas.content);
+        let panel = areas.content.inner(ratatui::layout::Margin::new(
+            u16::from(areas.content.width >= 80) * 2,
+            u16::from(areas.content.height >= 10),
+        ));
+        let [heading, tabs, content] = Layout::vertical([
+            Constraint::Length(if panel.height >= 16 { 2 } else { 0 }),
+            Constraint::Length(if panel.height >= 12 { 2 } else { 1 }),
+            Constraint::Min(0),
+        ])
+        .areas(panel);
+        let task = app
+            .details
+            .as_ref()
+            .and_then(|details| details.task_id())
+            .and_then(|id| app.view.tasks.iter().find(|task| task.id == id));
+        let title = task.map_or("Changes", |task| task.title.as_str());
+        let mut label = vec![Span::styled(theme.clean(title), theme.text())];
+        if let Some(branch) = &app.view.session_branch {
+            label.push(Span::styled(
+                format!("    {}", theme.clean(branch)),
+                theme.dim(),
+            ));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(label)),
+            Rect::new(heading.x, heading.y, heading.width, 1),
+        );
+        let (counts, metadata) = diff.workbench_labels(theme);
+        let counts_width = unicode_width::UnicodeWidthStr::width(counts.as_str()) as u16;
+        if heading.width >= counts_width + 24 {
+            frame.render_widget(
+                Paragraph::new(counts).style(theme.accent()),
+                Rect::new(heading.right() - counts_width, heading.y, counts_width, 1),
+            );
+        }
+        if tabs.height > 1 {
+            frame.render_widget(
+                Paragraph::new(metadata).style(theme.dim()),
+                Rect::new(tabs.x, tabs.y + 1, tabs.width, 1),
+            );
+        }
         if let Some(details) = &app.details {
             frame.render_widget(
                 super::super::workbench::tab_line(&details.key, true, WorkbenchTab::Diff, theme),
-                tabs,
+                Rect::new(tabs.x, tabs.y, tabs.width, 1),
             );
         }
         if historical_diff {
@@ -75,7 +122,7 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
                 content,
             );
         } else {
-            diff.paint_with_theme(frame, content, &app.view, theme);
+            diff.paint_content(frame, content, &app.view, theme);
         }
     } else if app
         .details
@@ -87,7 +134,10 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     } else if let Some(details) = &mut app.details {
         details.draw_workbench_at(
             frame,
-            areas.content,
+            areas.content.inner(ratatui::layout::Margin::new(
+                u16::from(areas.content.width >= 80) * 2,
+                u16::from(areas.content.height >= 10),
+            )),
             Rect::default(),
             &app.view,
             presentation.tab,
@@ -113,7 +163,12 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
     if let Some(notice) = &app.notice {
         frame.render_widget(
             Paragraph::new(theme.clean(notice)).style(theme.warning()),
-            areas.footer,
+            Rect::new(
+                areas.footer.x,
+                areas.footer.bottom().saturating_sub(1),
+                areas.footer.width,
+                1,
+            ),
         );
     }
     app.sync_native_views();
@@ -123,69 +178,92 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
 fn draw_workbench_chrome(
     frame: &mut Frame,
     areas: super::super::workbench::WorkbenchAreas,
-    target: &WorkbenchTarget,
+    app: &mut App,
     presentation: &WorkbenchPresentation,
     terminal_owner: &str,
     terminal_round: Option<u64>,
     theme: &Theme,
 ) {
-    let sep = theme.glyphs().dot;
-    let context = super::super::workbench::context(target, presentation);
-    let identity = match &context.target {
-        WorkbenchTarget::Session => "Session".to_owned(),
-        WorkbenchTarget::Agent(key) => key.clone(),
-    };
-    let tab = match presentation.tab {
-        WorkbenchTab::Summary => "Summary",
-        WorkbenchTab::Conversation => "Conversation",
-        WorkbenchTab::Results => "Results",
-        WorkbenchTab::Checks => "Checks",
-        WorkbenchTab::Comments => "Comments",
-        WorkbenchTab::Diff => "Diff",
-    };
-    frame.render_widget(
-        Paragraph::new(format!(
-            " {} antislop / {identity} {sep} {tab} {sep} CLI {terminal_owner} {sep} r{} {sep} {}{}",
-            theme.glyphs().arrow_right,
-            terminal_round.map_or_else(|| theme.chrome("—"), |round| round.to_string()),
-            if presentation.native_input {
-                "native input"
-            } else {
-                "preview"
-            },
-            if presentation.pinned {
-                theme.chrome(" · pinned")
-            } else {
-                theme.chrome(" · following")
-            }
-        ))
-        .style(theme.bar()),
-        areas.header,
-    );
-    let split_hint = if areas.split {
-        "Ctrl+K direction · Tab panes · Space pause/continue · Ctrl+X cancel · Ctrl+P actions · Alt+↑/↓ resize · z zoom · Ctrl+B list"
+    let role = terminal_owner.split(':').next().unwrap_or(terminal_owner);
+    let state = if presentation.native_input {
+        "native input"
     } else {
-        "Ctrl+K direction · Tab panes · Space pause/continue · Ctrl+X cancel · Ctrl+P actions · Ctrl+B list · Esc back"
+        "preview"
     };
+    super::chrome::brand(
+        frame,
+        areas.header,
+        &app.project,
+        &theme.chrome(&format!(
+            "● {role} {state} · round {}{}",
+            terminal_round.map_or_else(|| "—".into(), |round| round.to_string()),
+            if presentation.pinned {
+                " · pinned"
+            } else {
+                " · following"
+            }
+        )),
+        theme,
+    );
+    let task = app
+        .details
+        .as_ref()
+        .and_then(|details| details.task_id())
+        .and_then(|id| app.view.tasks.iter().find(|task| task.id == id));
+    let title = task.map_or("Session", |task| task.title.as_str());
+    let y = areas.header.y + if areas.header.height >= 4 { 2 } else { 1 };
     frame.render_widget(
-        Paragraph::new(theme.chrome(split_hint)).style(theme.bar()),
-        areas.footer,
+        Paragraph::new(format!("Workbench / {}", theme.clean(title))).style(theme.text()),
+        Rect::new(areas.header.x, y, areas.header.width, 1),
+    );
+    let direction = Rect::new(
+        areas.footer.x,
+        areas.footer.y,
+        areas.footer.width,
+        areas.footer.height.saturating_sub(1),
+    );
+    super::chrome::direction(
+        frame,
+        direction,
+        if matches!(app.navigation.target, WorkbenchTarget::Session) {
+            "session"
+        } else {
+            "task"
+        },
+        theme,
+    );
+    app.chrome_keys
+        .push((direction, KeyCode::Char('k'), KeyModifiers::CONTROL));
+    let footer = Rect::new(
+        areas.footer.x,
+        areas.footer.bottom().saturating_sub(1),
+        areas.footer.width,
+        1,
+    );
+    super::chrome::keybar(
+        app,
+        frame,
+        footer,
+        &[
+            ("tab panes", KeyCode::Tab, KeyModifiers::NONE),
+            ("t terminal", KeyCode::Char('t'), KeyModifiers::NONE),
+            ("p pin", KeyCode::Char('p'), KeyModifiers::NONE),
+            ("z expand", KeyCode::Char('z'), KeyModifiers::NONE),
+            ("esc back", KeyCode::Esc, KeyModifiers::NONE),
+            ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
+            ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
+        ],
+        theme,
     );
     if !areas.separator.is_empty() {
         frame.render_widget(
-            Paragraph::new(if theme.ascii { "-" } else { "─" }),
+            Paragraph::new(if theme.ascii { "..." } else { "⋯" })
+                .alignment(Alignment::Center)
+                .style(theme.faint()),
             areas.separator,
         );
     }
-    if areas.list_visible {
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .border_set(theme.borders())
-                .border_style(theme.faint()),
-            areas.list,
-        );
-    }
+    frame.render_widget(Block::default().style(theme.card()), areas.content);
 }
 
 fn workbench_terminal_round(
@@ -265,6 +343,7 @@ fn draw_workbench_list(
     area: Rect,
     view: &View,
     target: &WorkbenchTarget,
+    owner: &str,
     theme: &Theme,
 ) {
     let rows = super::super::workbench::sidebar(view);
@@ -273,67 +352,114 @@ fn draw_workbench_list(
         WorkbenchTarget::Session => "conversation",
         WorkbenchTarget::Agent(key) => key,
     };
+    let work = super::super::work_units::WorkUnits::new(view);
+    let selected_unit = work.for_stage(selected);
     for (index, row) in rows
         .iter()
         .skip(start)
         .take(usize::from(area.height))
         .enumerate()
     {
-        let style = if row.stage && row.key == selected {
-            theme.selected()
-        } else if row.stage {
+        let row_area = Rect::new(area.x, area.y + index as u16, area.width, 1);
+        let current = row.key == selected;
+        let group_selected = !row.stage
+            && !row.label.is_empty()
+            && work
+                .for_stage(&row.key)
+                .zip(selected_unit)
+                .is_some_and(|(a, b)| a.id == b.id);
+        let style = if group_selected {
+            theme.selected().patch(if row.label.starts_with(' ') {
+                theme.dim()
+            } else {
+                theme.text()
+            })
+        } else if current && row.stage {
+            theme.accent()
+        } else if row.stage || row.label.starts_with(' ') || row.key == "conversation" {
             theme.dim()
         } else {
             theme.text()
         };
         let label = if row.stage {
             let health = crate::lean::tui::graph::health(view, &row.key);
-            format!(
+            let status = if row.key == owner
+                && view.agents.get(&row.key).is_some_and(|agent| agent.running)
+            {
+                "live PTY"
+            } else {
+                health.name()
+            };
+            let left = format!(
                 "  {} {}",
                 theme.status_glyph(health.name()),
                 row.label.trim_start()
-            )
+            );
+            let gap = usize::from(area.width.saturating_sub(1)).saturating_sub(
+                unicode_width::UnicodeWidthStr::width(left.as_str()) + status.len(),
+            );
+            format!("{left}{}{status}", " ".repeat(gap.max(1)))
         } else {
             row.label.clone()
         };
         frame.render_widget(
-            Paragraph::new(theme.fit(
-                &theme.clean(&label),
-                usize::from(area.width.saturating_sub(1)),
-            ))
-            .style(style),
-            Rect::new(
-                area.x,
-                area.y + index as u16,
-                area.width.saturating_sub(1),
-                1,
-            ),
+            Paragraph::new(theme.fit(&theme.clean(&label), usize::from(area.width))).style(style),
+            row_area,
+        );
+    }
+    if rows.len().saturating_sub(start) + 5 < usize::from(area.height) {
+        let task = owner.split_once(':').and_then(|(_, id)| {
+            view.tasks
+                .iter()
+                .find(|task| task.id == id || task.uuid.as_deref() == Some(id))
+        });
+        let title = task.map_or("Session", |task| task.title.as_str());
+        let role = owner.split(':').next().unwrap_or(owner);
+        frame.render_widget(
+            Paragraph::new("TERMINAL FOLLOWS").style(theme.dim()),
+            Rect::new(area.x, area.bottom() - 4, area.width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(theme.fit(&format!("{title} / {role}"), usize::from(area.width)))
+                .style(theme.text()),
+            Rect::new(area.x, area.bottom() - 3, area.width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(theme.chrome("p · pin this terminal")).style(theme.dim()),
+            Rect::new(area.x, area.bottom() - 1, area.width, 1),
         );
     }
 }
 
 impl App {
-    fn draw_footer(&self, frame: &mut Frame, footer: Rect, bar_height: u16, theme: &Theme) {
-        frame.render_widget(Block::default().style(theme.bar()), footer);
-        let text_area = Rect::new(footer.x, footer.y + (bar_height - 1) / 2, footer.width, 1);
-        let content_width = footer.width.saturating_sub(4);
-        let [status, help] =
-            Layout::horizontal([Constraint::Length(content_width), Constraint::Length(4)])
-                .areas(text_area);
-        let line = self.header_line_themed(content_width, theme);
-        // A taller bar makes its buttons taller too: each is filled on the
-        // rows around its label.
-        let buttons = button_rows(&line);
-        for y in footer.y..footer.y + bar_height {
-            if y != status.y {
-                let row = Rect::new(status.x, y, status.width, 1);
-                frame.render_widget(Paragraph::new(buttons.clone()).style(theme.bar()), row);
-            }
-        }
-        frame.render_widget(Paragraph::new(line).style(theme.bar()), status);
-        frame.render_widget(
-            Paragraph::new(Span::styled(" [?]", theme.title())).style(theme.bar()),
-            help,
+    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect, _bar_height: u16, theme: &Theme) {
+        let footer = Rect::new(
+            footer.x + u16::from(footer.width >= 40) * 2,
+            footer.y,
+            footer
+                .width
+                .saturating_sub(u16::from(footer.width >= 40) * 4),
+            1,
+        );
+        let pause = if self.view.paused {
+            "space continue"
+        } else {
+            "space pause"
+        };
+        super::chrome::keybar(
+            self,
+            frame,
+            footer,
+            &[
+                ("↑ ↓ focus", KeyCode::Down, KeyModifiers::NONE),
+                ("enter inspect", KeyCode::Enter, KeyModifiers::NONE),
+                ("d decisions", KeyCode::Char('d'), KeyModifiers::NONE),
+                (pause, KeyCode::Char(' '), KeyModifiers::NONE),
+                ("h history", KeyCode::Char('h'), KeyModifiers::NONE),
+                ("ctrl p actions", KeyCode::Char('p'), KeyModifiers::CONTROL),
+                ("F1 help", KeyCode::F(1), KeyModifiers::NONE),
+            ],
+            theme,
         );
     }
 
@@ -342,49 +468,68 @@ impl App {
         let bar_height = Self::bar_height(area);
         let [body, _, footer] = Self::main_areas(area);
         self.chat_area = body;
-        let [identity, canvas, invitation] = Layout::vertical([
-            Constraint::Length(u16::from(body.height >= 10)),
+        let body = super::chrome::inset(body);
+        let spacious = body.height >= 25;
+        let [identity, heading, canvas, invitation] = Layout::vertical([
+            Constraint::Length(if spacious {
+                2
+            } else {
+                u16::from(body.height >= 10)
+            }),
+            Constraint::Length(if spacious { 3 } else { 0 }),
             Constraint::Min(1),
-            Constraint::Length(2),
+            Constraint::Length(if spacious { 3 } else { 2 }),
         ])
         .areas(body);
-        let pending = self.view.approvals.len()
-            + usize::from(
-                self.view.interview_question.is_some()
-                    && (self.view.user_decision
-                        || self.view.workflow_phase.as_deref() == Some("interview")),
-            );
-        frame.render_widget(
-            Paragraph::new(format!(
-                " {} antislop   {} / {}   Canvas   {pending} decisions",
-                theme.glyphs().arrow_right,
-                theme.fit(&theme.clean(&self.project), 26),
-                theme.fit(&theme.clean(&self.conversation), 22)
-            ))
-            .style(theme.text()),
+        let pending = self.view.approvals.len() + usize::from(self.view.user_decision);
+        let status = if self.view.paused {
+            "paused".to_owned()
+        } else if self.view.idle {
+            "ready".to_owned()
+        } else {
+            theme.chrome("● running")
+        };
+        super::chrome::brand(
+            frame,
             identity,
+            &self.project,
+            &theme.chrome(&format!("{status}  ·  Canvas")),
+            theme,
         );
+        if !heading.is_empty() {
+            frame.render_widget(
+                Paragraph::new("See the whole plan.").style(theme.text()),
+                Rect::new(heading.x, heading.y, heading.width, 1),
+            );
+            if heading.height > 1 {
+                frame.render_widget(
+                    Paragraph::new(
+                        theme.chrome("Dependencies on the left · selected work on the right"),
+                    )
+                    .style(theme.dim()),
+                    Rect::new(heading.x, heading.y + 1, heading.width, 1),
+                );
+            }
+            if pending > 0 && heading.width >= 60 {
+                frame.render_widget(
+                    Paragraph::new(theme.chrome(&format!("{pending} decision(s) · d")))
+                        .style(theme.decision()),
+                    Rect::new(heading.right().saturating_sub(22), heading.y, 22, 1),
+                );
+            }
+        }
         self.draw_graph(frame, canvas, theme);
-        frame.render_widget(
-            Paragraph::new(theme.chrome(
-                "  Ctrl+K  Give direction, change scope, ask a question…
-  Arrows select · Enter Workbench · Tab stages · d decisions · h history · Space pause",
-            ))
-            .style(theme.card()),
-            invitation,
-        );
+        if identity.width >= 80 && !identity.is_empty() {
+            let status = format!("{status}  ·  Canvas");
+            let width = (unicode_width::UnicodeWidthStr::width(status.as_str()) as u16)
+                .min(identity.width / 3);
+            self.now_area = Some(Rect::new(identity.right() - width, identity.y, width, 1));
+        }
+
+        super::chrome::direction(frame, invitation, "session", theme);
+        self.chrome_keys
+            .push((invitation, KeyCode::Char('k'), KeyModifiers::CONTROL));
 
         self.draw_footer(frame, footer, bar_height, theme);
     }
-}
-
-/// The bar line with every label blanked, keeping only the buttons' fill.
-fn button_rows(line: &Line<'static>) -> Line<'static> {
-    let spans = line.spans.iter().map(|span| {
-        let width = unicode_width::UnicodeWidthStr::width(span.content.as_ref());
-        let button = span.content.starts_with('[') && span.content.ends_with(']');
-        let style = if button { span.style } else { Style::default() };
-        Span::styled(" ".repeat(width), style)
-    });
-    Line::from(spans.collect::<Vec<_>>())
 }
