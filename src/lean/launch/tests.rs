@@ -5,7 +5,7 @@ use crate::lean::mcp::Gateway;
 use serde_json::Value;
 
 #[test]
-fn every_provider_launches_without_permission_flags_and_resumes_the_selected_session() {
+fn connected_providers_launch_without_permission_flags_and_resume_the_selected_session() {
     for name in [
         "ANTISLOP_SKIP_AGY_BRIDGE_CHECK",
         "ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK",
@@ -83,6 +83,7 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
             "{provider:?}: {args:?}"
         );
         match provider {
+            ProviderKind::Pi => unreachable!("Pi launch has separate extension tests"),
             ProviderKind::Codex => {
                 assert!(args.iter().any(|v| v == "--no-daemon"));
                 assert_eq!(
@@ -150,6 +151,7 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
             .join(" ");
         assert!(!args.contains("saved-session"));
         match provider {
+            ProviderKind::Pi => unreachable!("Pi launch has separate extension tests"),
             ProviderKind::Claude | ProviderKind::Codex => {
                 assert!(args.contains(fresh_gateway.url()));
                 assert!(!args.contains(gateway.url()));

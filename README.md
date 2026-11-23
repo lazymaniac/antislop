@@ -1,7 +1,7 @@
 # antislop
 
 A local team of AI agents that works on your project through the CLIs you
-already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI, OpenCode). You talk to an
+already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI, OpenCode, Pi). You talk to an
 orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
 worker and checked by its own reviewer, and approved changes land on your
 branch.
@@ -38,6 +38,109 @@ antislop           # opens the TUI
 pick models, efforts and which CLI does which kind of work (see
 [examples/antislop.toml](examples/antislop.toml)). A plan never starts while a
 CLI it needs cannot be launched: the refusal names the profiles that would.
+
+## Pi and Unsloth
+
+Install and configure [Pi](https://github.com/earendil-works/pi) yourself,
+including its runtime, provider credentials or local backend and available models.
+The inspected Pi 1.5.2 package requires Node.js >=22.19.0.
+For the wrapper, also install [Unsloth](https://github.com/unslothai/unsloth),
+configure its server and download the model yourself. Both executables must be on
+PATH (or use an executable path in `command`). antislop installs neither tools nor
+models and does not edit their configuration. The adapter was exercised with Pi
+API 1.5.2; it requires the extension API `registerMcpServer`. Other versions and
+arbitrary wrappers are not guaranteed compatible.
+
+Check your standalone tools first:
+
+```sh
+pi
+unsloth start pi --model unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL --context-length 200000 --reasoning auto
+```
+
+Add these tables to a copy of [examples/antislop.toml](examples/antislop.toml).
+They are fragments; retain its schema, policy and complete routing tables:
+
+```toml
+[providers.pi]
+binary = "pi"
+
+[profiles.pi_direct]
+provider = "pi"
+# Omit model to use Pi's configured default; otherwise use an installed model ID.
+# model = "provider/model-id"
+effort = "high"
+
+[profiles.pi_unsloth]
+provider = "pi"
+command = ["unsloth", "start", "pi", "--model", "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL", "--context-length", "200000", "--reasoning", "auto"]
+effort = "high"
+```
+
+The wrapper is a command of a **Pi profile**, not a separate provider. Array
+entries are individual argv tokens, without shell interpretation. A profile
+`command` replaces the provider command and provider arguments; only that
+profile's `args` are appended. The wrapper example already supplies `--model`:
+do not add a second one in `args` or a different profile `model`. Multiple model
+arguments or conflicting values fail. antislop preserves the configured prefix
+and adds its own extension and session arguments. Use `start pi` as shown.
+
+For direct Pi, profile `model` adds `--model` and `effort` accepts `low`, `medium`,
+`high` or `xhigh`, passed as Pi `--thinking`. For models Pi marks as non-reasoning,
+Pi uses `off`; antislop accepts this and records the effective level in its launch
+status. Model support depends on your backend.
+Omitting `model` leaves model selection to the CLI. `effort` is required by the
+configuration schema. Unsloth `--reasoning auto` is a separate backend setting; it does not set Pi thinking. The wrapper example
+uses `effort = "high"` as an explicit, independent Pi setting, adding
+`--thinking high`; this addition is not part of the original shell command and is
+not equivalent to `--reasoning auto`. If an Unsloth server is already running,
+the observed launcher warns that it cannot send `--reasoning auto` to that server: configure
+the server yourself rather than assuming this flag changed it. The Pi API checks
+the Unsloth provider and repository ID, but cannot independently attest the GGUF
+quantization or effective inference settings. The exact command above has been
+exercised for turns, cancellation and JSONL resume; this is not a guarantee for
+all model/backend combinations.
+
+Save the tables in `antislop.toml`; reopening with `antislop --config antislop.toml`
+loads them. In the TUI configuration, Pi is available in the provider choices;
+Ctrl+S validates/applies and Ctrl+R reloads. Assign profile names to existing
+routes, for example change `[routing.implementation]` to
+`executor = "pi_unsloth"`, `reviewer = "pi_direct"`. Either profile can also serve
+planning or review through the corresponding routes. To orchestrate with Pi,
+set `[orchestrator].profile = "pi_direct"` and
+`[routing.orchestration].executor = "pi_direct"` together. Reviewer sessions stay
+separate even when they use the same profile.
+
+`antislop doctor` and plan preflight check that the configured Pi or wrapper
+executable is available. The native session then verifies the extension, actual
+session settings and authenticated Gateway connection before submitting a prompt;
+adapter and backend failures retain their raw diagnostic. `init` can discover `pi`
+on PATH, but does not auto-create the Unsloth wrapper profile. Executable discovery
+alone does not establish backend readiness.
+
+Pi runs in the assigned working directory through the native PTY. antislop
+supplies its extension and per-launch authenticated MCP Gateway without a global
+Pi MCP configuration. Keep runtime-controlled session, mode, thinking and MCP
+flags out of `command`/`args` (including `--session`, `--resume`, `--continue`,
+`--no-session`, `--mode`, `--print`, `--thinking`, `--no-mcp` and `--`); use profile
+fields for model/thinking. The launcher rejects reserved tokens explicitly.
+
+Your wrapper's own session configuration (backend, context length, reasoning,
+credentials and defaults) remains your responsibility; repeat required launch
+settings in each wrapper profile. This is separate from antislop conversation
+history. Pi JSONL files live under the task runtime's `pi/sessions` outside the
+checkout, within the durable state root described below. Compatible processes
+are reused across turns; restarting resumes the recorded JSONL path. Missing,
+corrupt or unsupported history fails explicitly instead of silently starting an
+empty session. Cancellation waits for Pi to confirm idle before another turn.
+
+For failures, first read the raw CLI error and terminal tail in Workbench. Check
+PATH, standalone startup, backend/authentication and model availability. Adapter
+errors identify missing `registerMcpServer`, actual cwd/model/thinking mismatches,
+invalid resume history or MCP transport failure; `[pi_configuration]` identifies
+configuration failures. Keep the durable state and session file when diagnosing
+resume problems. A successful executable/version check alone does not establish
+a working Gateway or inference backend.
 
 ## Use
 

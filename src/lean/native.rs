@@ -50,6 +50,7 @@ pub struct Session {
     pub(crate) spec: agent::Spec,
     signature: String,
     gateway: mcp::Gateway,
+    pi: Option<launch::providers::pi::PiLaunchState>,
     pub(crate) terminal: Mutex<terminal::Session>,
     screen: Arc<Mutex<State>>,
     /// The CLI's own session identifier, once known.
@@ -58,6 +59,8 @@ pub struct Session {
     stop: AtomicBool,
     executing: AtomicBool,
     primed: AtomicBool,
+    /// Completed Pi turn whose idle state must be confirmed before another prompt.
+    finished_pi_turn: Mutex<Option<String>>,
     /// The CLI died or never connected before any prompt was typed into it,
     /// so the turn did nothing and can be started again without loss.
     startup_failed: AtomicBool,
@@ -67,12 +70,11 @@ pub struct Session {
 
 /// What is typed into the CLI: the prompt and how to hand the answer back. The
 /// shape of the result for the agent's role is the tool's own schema.
-fn turn_text(turn: &str, prompt: &str, result_instructions: &str) -> String {
+fn turn_text(turn: &str, prompt: &str, result_instructions: &str, server: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
-         result tool of the MCP server `{}`, with turn = \"{turn}\". \
+         result tool of the MCP server `{server}`, with turn = \"{turn}\". \
          {result_instructions} Never finish only in terminal prose.",
-        mcp::SERVER,
     )
 }
 
@@ -115,7 +117,11 @@ pub(crate) fn recover(store: &store::Store, state: &Path) -> Result<()> {
             .collect::<std::result::Result<Vec<_>, _>>()?
     };
     for (pid, started, provider) in rows {
-        agent::reap(pid, started, &provider);
+        // Pi may be a fork/wait or exec wrapper. Its runtime ownership marker
+        // below is authoritative; a command substring such as "pi" is not.
+        if provider != "pi" {
+            agent::reap(pid, started, &provider);
+        }
         store
             .db()
             .execute("DELETE FROM native_processes WHERE pid=?1", [pid])?;

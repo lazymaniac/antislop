@@ -318,6 +318,7 @@ fn should_retry(
         !tasks::needs_user_action(&error.to_string())
             && ![
                 "[unexpected_dialog]",
+                crate::lean::launch::providers::pi::CONFIGURATION_ERROR,
                 "unknown option",
                 "unknown flag",
                 "unrecognized option",

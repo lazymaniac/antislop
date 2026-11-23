@@ -27,7 +27,25 @@ impl Tracker {
         if approval_open {
             return false;
         }
-        match classify(provider, screen) {
+        self.observe_state(classify(provider, screen), paused)
+    }
+
+    /// The adapter's generation proves work occurred even when it completed
+    /// between two screen polls. Pi's editor glyphs are not readiness signals.
+    pub(super) fn observe_pi(&mut self, idle: bool, paused: bool) -> bool {
+        self.saw_work = true;
+        self.observe_state(
+            if idle {
+                ScreenState::Ready
+            } else {
+                ScreenState::Working
+            },
+            paused,
+        )
+    }
+
+    fn observe_state(&mut self, state: ScreenState, paused: bool) -> bool {
+        match state {
             ScreenState::Working => {
                 self.saw_work = true;
                 self.reminded = false;
@@ -70,12 +88,14 @@ fn is_ready_prompt(provider: ProviderKind, line: &str) -> bool {
         ProviderKind::Claude | ProviderKind::Agy | ProviderKind::Opencode => line == "❯",
         ProviderKind::Codex => line == "›",
         ProviderKind::Gemini => line == ">",
+        ProviderKind::Pi => false,
     }
 }
 
 fn is_work_signal(provider: ProviderKind, line: &str) -> bool {
     let text_signal = is_status_label(provider, line);
     let animation = match provider {
+        ProviderKind::Pi => false,
         ProviderKind::Claude => {
             // Claude uses ⏺ and ⎿ to prefix both active tool calls and their
             // completed output. Only explicit status text or actual spinners
@@ -111,7 +131,7 @@ fn is_status_label(provider: ProviderKind, line: &str) -> bool {
         ProviderKind::Agy => &["✻ ", "✶ ", "✢ ", "⏺ "],
         ProviderKind::Codex => &["• ", "◦ "],
         ProviderKind::Gemini => &["✦ ", "✧ "],
-        ProviderKind::Opencode => &[],
+        ProviderKind::Opencode | ProviderKind::Pi => &[],
     };
     const LABELS: &[&str] = &[
         "thinking",
@@ -149,6 +169,16 @@ mod tests {
             "gemini" => ProviderKind::Gemini,
             _ => ProviderKind::Opencode,
         }
+    }
+
+    #[test]
+    fn pi_adapter_idle_is_reminded_once_and_pause_preserves_it() {
+        let mut tracker = Tracker::default();
+        assert!(!tracker.observe_pi(true, true));
+        assert!(tracker.observe_pi(true, false));
+        assert!(!tracker.observe_pi(true, false));
+        assert!(!tracker.observe_pi(false, false));
+        assert!(tracker.observe_pi(true, false));
     }
 
     #[test]

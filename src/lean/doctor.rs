@@ -194,12 +194,13 @@ pub fn report(
 }
 
 /// The CLIs `init` looks for, in the order it prefers them as workers.
-const KNOWN: [(&str, ProviderKind); 5] = [
+const KNOWN: [(&str, ProviderKind); 6] = [
     ("codex", ProviderKind::Codex),
     ("claude", ProviderKind::Claude),
     ("gemini", ProviderKind::Gemini),
     ("agy", ProviderKind::Agy),
     ("opencode", ProviderKind::Opencode),
+    ("pi", ProviderKind::Pi),
 ];
 
 /// A configuration that sends work to `worker` and reviews to `reviewer`,
@@ -350,7 +351,12 @@ mod tests {
 
     #[test]
     fn the_initial_configuration_routes_work_and_review_to_the_cli_found() {
-        for (worker, reviewer) in [("codex", "claude"), ("claude", "claude"), ("gemini", "agy")] {
+        for (worker, reviewer) in [
+            ("codex", "claude"),
+            ("claude", "claude"),
+            ("gemini", "agy"),
+            ("pi", "pi"),
+        ] {
             let config = Config::from_toml(&initial_config(worker, reviewer).unwrap()).unwrap();
             let implementation = config
                 .resolve(WorkKind::Implementation, RoleKind::Executor)
@@ -362,5 +368,32 @@ mod tests {
             assert_eq!(super::super::agent::name(review.provider), reviewer);
             assert_eq!(config.providers.len(), 1 + usize::from(worker != reviewer));
         }
+    }
+    #[test]
+    fn pi_direct_and_wrapper_profiles_pass_launch_preflight() {
+        let mut config = Config::from_toml(&initial_config("pi", "pi").unwrap()).unwrap();
+        config.providers.get_mut(&ProviderKind::Pi).unwrap().binary = "sh".into();
+        assert!(profile_command(&config, "orchestrator").is_ok());
+        assert!(preflight(&config).is_ok());
+        config.providers.get_mut(&ProviderKind::Pi).unwrap().command =
+            Some(crate::config::CommandLine(vec![
+                "sh".into(),
+                "launch".into(),
+                "pi".into(),
+            ]));
+        assert!(profile_command(&config, "orchestrator").is_ok());
+        assert!(launch_problems(&config, [WorkKind::Implementation]).is_empty());
+        assert!(preflight(&config).is_ok());
+        config.providers.get_mut(&ProviderKind::Pi).unwrap().command =
+            Some(crate::config::CommandLine(vec![
+                "antislop-no-such-pi-wrapper".into(),
+            ]));
+        let error = preflight(&config).unwrap_err().to_string();
+        assert!(error.contains("antislop-no-such-pi-wrapper"), "{error}");
+        assert!(
+            error.contains("not an executable file or on PATH"),
+            "{error}"
+        );
+        assert!(KNOWN.contains(&("pi", ProviderKind::Pi)));
     }
 }

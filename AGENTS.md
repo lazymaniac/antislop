@@ -95,7 +95,7 @@ src
    Policy(C{local_commits})
    Profile(C{provider,binary,args,command,model,effort})
    ProviderConfig(C{binary,args,command})
-   ProviderKind(E{Agy,Codex,Claude,Gemini,Opencode})
+   ProviderKind(E{Agy,Codex,Claude,Gemini,Opencode,Pi})
     native_effort(effort):Option<&'static str>
    RoleKind(E{Executor,Reviewer,Orchestrator,Planner})
    RoleRouting(C{executor,reviewer})
@@ -792,12 +792,27 @@ src
      system_settings_path():PathBuf
      = URL_ENV="ANTISLOP_MCP_URL"
     mod
-     command(spec,gateway):Result<Launch> > base_command,configure
-     - configure_{claude,codex,opencode,agy,gemini}
+     command(spec,gateway):Result<Launch> > base_command,configure_{claude,codex,opencode,agy,gemini},pi.prepare
     opencode
      opencode(command,spec,gateway):Result<()> > read_config,install_{agent,gateway},append_resume_model
+    pi
+     prepare(command,spec,gateway):Result<(String,PiLaunchState)> ~66 > validate_args,argument_model,private_directory,session_path,url,token,PiLaunchState
+     validate_args(args):Result<()> > require
+     PiLaunchState(C{status,expected,pending,submitted})
+      submitted_turn_idle():Result<Option<bool>> > status,invalid
+      track_submission(turn):Result<()> > status,invalid
+      request_idle(turn,abort):Result<()> > invalid,require
+      idle_confirmed():Result<bool> > status,as_str
+      alias():&str > as_str
+      check_transport(screen):Result<()> > invalid
+      poll():Result<bool> > status
+      - read_status
+     = CONFIGURATION_ERROR="[pi_configuration]"
+     - unsloth_model,validate_resume
+    pi.ts
+     antislop(pi) ~85 > publish,inspect
   launch.rs
-   Launch(C{command,session})
+   Launch(C{command,session,pi})
   mail
    lock_cancellable(lock,cancel):Option<MutexGuard<'a,()>>
   mcp
@@ -1091,14 +1106,15 @@ src
       finish,{is,is_solid}_rule
    readiness
     Tracker(C{saw_work,reminded})
-     observe(provider,screen,approval_open,paused):bool > classify
+     observe(provider,screen,approval_open,paused):bool > observe_state,classify
+     observe_pi(idle,paused):bool > observe_state
     - ScreenState,is_{ready_prompt,work_signal},has_braille_spinner,is_status_label
    registry/history_view
     restore_view_directory(core,context):Result<()> > turn_scope,invalid,task_by_id,plan_conversation,task_path_component,worktree_directory,queue_worktree_cleanup
    registry.rs
     - recorded_round,validate_profile,restored_agent_spec
    session
-    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,while_open,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
+    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,token,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,while_open,require,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
                remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
@@ -1115,10 +1131,10 @@ src
     retire_role(conversation,role):Result<()> > store
     retire_conversation(conversation):Result<bool> > store
     shutdown():Result<()> > store
-    prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> ~55 > task_by_id,Core.operation,session_signature,store,invalid
+    prepare_scoped(core,conversation,role,spec,scope):Result<Arc<Session>> ~64 > task_by_id,Core.operation,session_signature,get,invalid,store
     get(conversation,role):Result<Option<Arc<Session>>>
     claimed():Vec<String>
-   Session(C{conversation,core,spec,signature,gateway,terminal,screen,identity,started_ms,stop,executing,primed,startup_failed,touched,approver})
+   Session(C{conversation,core,spec,signature,gateway,pi,terminal,screen,identity,started_ms,stop,executing,primed,finished_pi_turn,startup_failed,touched,approver})
    = EXECUTION_FAILED,SCREEN_LINES=12,APPROVAL_LINES=40
    - turn_text
   paths
@@ -3189,6 +3205,8 @@ work/visualizations
     tests
    launch
     tests
+    providers/pi
+     tests:*spec
    mcp
     tests
     dispatch
@@ -3296,6 +3314,8 @@ work/visualizations
    fixture_cli:*interactive
    inspector_stream:*message
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
+   pi_extension.mjs:*pi,ctx,request
+   pi_sdk.mjs
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    replay_cleanup.py:*RelayConnections,identity,restore_listener,stop_daemon,cleanup_replay
    resources.py:*RetainResources,external,resources,process
@@ -3303,6 +3323,6 @@ work/visualizations
    run_test.py:*main
    task_cli.py:*_fixture_{tool,emit,block,contract}
    wrapping_stream
-· 178,880 LOC · input 1,652,441 · output 48,778 tokens · state 8b9eee9c4dc4 · targets AGENTS.md
+· 180,789 LOC · input 1,670,855 · output 49,017 tokens · state f0a24b7c3458 · targets AGENTS.md
 ```
 <!-- hologram:end -->

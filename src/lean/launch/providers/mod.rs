@@ -13,6 +13,7 @@ mod codex;
 mod common;
 pub(crate) mod gemini;
 mod opencode;
+pub(crate) mod pi;
 use common::runtime_args;
 
 const TOKEN_ENV: &str = "ANTISLOP_MCP_TOKEN";
@@ -28,8 +29,26 @@ const PARENT_SESSION_ENV: [&str; 7] = [
 
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     let mut command = base_command(spec);
-    let session = configure(&mut command, spec, gateway)?;
-    Ok(Launch { command, session })
+    let session = match spec.provider {
+        ProviderKind::Claude => configure_claude(&mut command, spec, gateway)?,
+        ProviderKind::Codex => configure_codex(&mut command, spec, gateway)?,
+        ProviderKind::Opencode => configure_opencode(&mut command, spec, gateway)?,
+        ProviderKind::Agy => configure_agy(&mut command, spec, gateway)?,
+        ProviderKind::Gemini => configure_gemini(&mut command, spec, gateway)?,
+        ProviderKind::Pi => {
+            let (session, pi) = pi::prepare(&mut command, spec, gateway)?;
+            return Ok(Launch {
+                command,
+                session: Some(session),
+                pi: Some(pi),
+            });
+        }
+    };
+    Ok(Launch {
+        command,
+        session,
+        pi: None,
+    })
 }
 
 fn base_command(spec: &Spec) -> CommandBuilder {
@@ -37,20 +56,6 @@ fn base_command(spec: &Spec) -> CommandBuilder {
     command.cwd(&spec.cwd);
     command.env("TERM", "xterm-256color");
     command
-}
-
-fn configure(
-    command: &mut CommandBuilder,
-    spec: &Spec,
-    gateway: &Gateway,
-) -> Result<Option<String>> {
-    match spec.provider {
-        ProviderKind::Claude => configure_claude(command, spec, gateway),
-        ProviderKind::Codex => configure_codex(command, spec, gateway),
-        ProviderKind::Opencode => configure_opencode(command, spec, gateway),
-        ProviderKind::Agy => configure_agy(command, spec, gateway),
-        ProviderKind::Gemini => configure_gemini(command, spec, gateway),
-    }
 }
 
 fn configure_claude(

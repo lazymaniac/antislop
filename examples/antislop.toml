@@ -1,6 +1,6 @@
 # Example: Codex orchestrates; Antigravity (agy) works and reviews.
 # Copy to your project as antislop.toml and adjust binaries and models.
-# Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
+# Supported CLIs: codex, agy, claude, gemini, opencode, pi. Each task kind names a worker profile
 # and a reviewer profile; every reviewer gets its own session.
 schema_version = 5
 
@@ -29,7 +29,7 @@ binary = "agy"
 # command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
 # Set profile model = "omlx/YOUR_MODEL" to pin the OpenCode model per turn.
 
-# Profiles select the provider, optional model and reasoning effort.
+# Profiles select the provider, optional model and required reasoning effort.
 # A profile is reusable settings, not a running agent or a workflow stage.
 # Names such as reasoning and execution are arbitrary: [routing.*] chooses
 # profiles for each work kind; [orchestrator].profile selects the conversation
@@ -61,6 +61,24 @@ binary = "agy"
 provider = "codex"
 # model = "gpt-6.1-sol"
 effort = "high"
+
+# Pi alternatives: uncomment these tables and route existing executor/reviewer
+# entries to pi_direct or pi_unsloth. Keep all required routing tables below.
+# See README.md, "Pi and Unsloth", for setup and the current preflight refusal.
+# [providers.pi]
+# binary = "pi"
+#
+# [profiles.pi_direct]
+# provider = "pi"
+# effort = "high"
+# Set model to an installed Pi model ID, or omit it for the CLI default.
+#
+# [profiles.pi_unsloth]
+# provider = "pi"
+# command = ["unsloth", "start", "pi", "--model", "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL", "--context-length", "200000", "--reasoning", "auto"]
+# effort = "high"
+# No extra model. Required effort adds Pi --thinking high independently of
+# wrapper --reasoning auto; it is not part of the original shell command.
 
 # reasoning: worker settings for understanding and deciding: context gathering,
 # requirements, comparing options, planning, architecture, dependencies,

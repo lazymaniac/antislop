@@ -186,3 +186,41 @@ fn legacy_context_route_is_hidden_and_removed_when_saving_the_draft() {
     assert!(!saved.contains("[routing.context]"));
     assert!(saved.contains("[routing.requirements]"));
 }
+
+#[test]
+fn pi_selection_and_wrapper_command_survive_editor_save_and_reload() {
+    use crate::config::{ProviderKind, RoleKind, WorkKind};
+    assert!(kind_names::<ProviderKind>().unwrap().contains(&"pi".into()));
+    let source = include_str!("../../../../examples/antislop.toml");
+    let mut editor = ConfigEditor::new(source, "antislop.toml".into()).unwrap();
+    editor.selected = editor
+        .fields
+        .iter()
+        .position(|field| field.path[0] == "providers")
+        .unwrap();
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    let (_, choices, index) = editor.adding.as_mut().unwrap();
+    *index = choices.iter().position(|choice| choice == "pi").unwrap();
+    editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for field in &mut editor.fields {
+        if field.path == ["profiles", "orchestrator", "provider"] {
+            assert!(field.choices.contains(&"pi".into()));
+            field.input = InputBuffer::with_text("pi");
+        }
+        if field.path == ["providers", "pi", "command"] {
+            field.input = InputBuffer::with_text(r#"["unsloth","launch","pi"]"#);
+        }
+        if field.path == ["providers", "pi", "args"] {
+            field.input = InputBuffer::with_text(r#"["--custom","zażółć 👩‍💻"]"#);
+        }
+    }
+    let saved = editor.source().unwrap();
+    let mut reloaded = ConfigEditor::new(&saved, "antislop.toml".into()).unwrap();
+    let config = Config::from_toml(&reloaded.source().unwrap()).unwrap();
+    let resolved = config
+        .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+        .unwrap();
+    assert_eq!(resolved.provider, ProviderKind::Pi);
+    assert_eq!(resolved.binary, std::path::PathBuf::from("unsloth"));
+    assert_eq!(resolved.args, ["launch", "pi", "--custom", "zażółć 👩‍💻"]);
+}

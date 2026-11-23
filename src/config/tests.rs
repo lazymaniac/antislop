@@ -54,6 +54,7 @@ fn effort_levels_reach_the_cli() {
             ProviderKind::Claude,
             ProviderKind::Opencode,
             ProviderKind::Gemini,
+            ProviderKind::Pi,
         ] {
             let mut config = config.clone();
             let provider_config = config.providers[&ProviderKind::Codex].clone();
@@ -138,7 +139,7 @@ fn command_resolution_preserves_precedence_and_argument_order() {
         command: None,
     };
     let mut profile = Profile {
-        provider: ProviderKind::Codex,
+        provider: ProviderKind::Pi,
         binary: None,
         args: vec!["profile-arg".into()],
         command: None,
@@ -198,7 +199,16 @@ fn a_route_to_a_missing_profile_is_rejected() {
 #[test]
 fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    let shared = config.profiles["execution"].clone();
+    let mut shared = config.profiles["execution"].clone();
+    shared.provider = ProviderKind::Pi;
+    config.providers.insert(
+        ProviderKind::Pi,
+        ProviderConfig {
+            binary: "pi".into(),
+            args: vec![],
+            command: None,
+        },
+    );
     config.profiles = BTreeMap::from([("shared".into(), shared)]);
     config.orchestrator.profile = "shared".into();
     for route in config.routing.values_mut() {
@@ -215,6 +225,7 @@ fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
         for role in [worker_role, RoleKind::Reviewer] {
             let resolved = config.resolve(kind, role).unwrap();
             assert_eq!(resolved.profile, "shared");
+            assert_eq!(resolved.provider, ProviderKind::Pi);
             assert_eq!(resolved.work_kind, kind);
             assert_eq!(resolved.role, role);
         }
@@ -343,6 +354,16 @@ fn the_planner_resolves_the_planning_executor_and_nothing_else() {
         .unwrap();
     assert_eq!(planner.profile, "execution");
     assert_eq!(planner.role, RoleKind::Planner);
+    let provider = config.providers[&ProviderKind::Codex].clone();
+    config.providers.insert(ProviderKind::Pi, provider);
+    config.profiles.get_mut("execution").unwrap().provider = ProviderKind::Pi;
+    assert_eq!(
+        config
+            .resolve(WorkKind::Planning, RoleKind::Planner)
+            .unwrap()
+            .provider,
+        ProviderKind::Pi
+    );
     for kind in [WorkKind::Orchestration, WorkKind::Implementation] {
         assert!(config.resolve(kind, RoleKind::Planner).is_err());
     }
@@ -453,4 +474,75 @@ fn legacy_context_route_is_removed_before_validation_and_serialization() {
             .resolve(WorkKind::Requirements, RoleKind::Executor)
             .is_ok()
     );
+}
+
+#[test]
+fn pi_commands_round_trip_without_reinterpreting_wrapper_tokens() {
+    let example = include_str!("../../examples/antislop.toml").replace("codex", "pi");
+    for (command, binary, prefix) in [
+        (r#""pi""#, "pi", vec![]),
+        (r#""unsloth start pi""#, "unsloth", vec!["start", "pi"]),
+        (
+            r#"["unsloth", "launch", "pi"]"#,
+            "unsloth",
+            vec!["launch", "pi"],
+        ),
+    ] {
+        let source = example
+            .replacen(
+                "binary = \"pi\"",
+                &format!("command = {command}\nargs = [\"--custom\", \"wartość ze spacjami 👩‍💻\"]"),
+                1,
+            )
+            .replace(
+                "[profiles.orchestrator]",
+                "[profiles.orchestrator]\nargs = [\"profile-tail\"]\nmodel = \"provider/model\"",
+            );
+        let config = Config::from_toml(&source).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pi.toml");
+        std::fs::write(&path, &source).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        let saved = serde_json::to_value(&config).unwrap();
+        let loaded: Config = serde_json::from_value(saved).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(config, loaded);
+        let resolved = loaded
+            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+            .unwrap();
+        assert_eq!(resolved.provider, ProviderKind::Pi);
+        assert_eq!(resolved.binary, PathBuf::from(binary));
+        let mut expected = prefix;
+        expected.extend(["--custom", "wartość ze spacjami 👩‍💻", "profile-tail"]);
+        assert_eq!(resolved.args, expected);
+        assert_eq!(resolved.model.as_deref(), Some("provider/model"));
+    }
+}
+
+#[test]
+fn pi_invalid_settings_keep_existing_configuration_diagnostics() {
+    let example = include_str!("../../examples/antislop.toml").replace("codex", "pi");
+    for (before, after, expected) in [
+        (
+            "binary = \"pi\"",
+            "command = []",
+            "command tokens must be nonempty",
+        ),
+        (
+            "effort = \"high\"",
+            "effort = \"secret-value\"",
+            "allowed values",
+        ),
+        (
+            "[profiles.orchestrator]",
+            "[profiles.orchestrator]\nmodel = \"\"",
+            "model must be nonempty",
+        ),
+    ] {
+        let error = Config::from_toml(&example.replace(before, after))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(!error.contains("secret-value"), "{error}");
+    }
 }

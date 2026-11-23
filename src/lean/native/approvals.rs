@@ -102,6 +102,7 @@ pub(crate) fn detect(provider: ProviderKind, screen: &str) -> Option<Approval> {
         ProviderKind::Opencode => opencode(&lines),
         ProviderKind::Agy => agy(&lines),
         ProviderKind::Gemini => gemini(&lines),
+        ProviderKind::Pi => None,
     }
 }
 
