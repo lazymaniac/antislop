@@ -3,6 +3,7 @@ use crate::lean::*;
 /// What an agent that writes plans answered: its words and the plan it
 /// submitted, if any.
 pub(in crate::lean) struct PlanAnswer<'a> {
+    pub(in crate::lean) keep: &'a [String],
     pub(in crate::lean) conversation: &'a str,
     pub(in crate::lean) project: &'a Path,
     pub(in crate::lean) config: &'a Config,
@@ -29,6 +30,7 @@ impl Core {
                 answer.project,
                 answer.text,
                 PlanProposal {
+                    keep: answer.keep,
                     scope: answer.scope.as_deref(),
                     config: answer.config,
                     specs: &specs,

@@ -108,12 +108,17 @@ impl Core {
                 .add_message(context.conversation, PLANNER_BLOCKER, &text)?;
             return Ok(());
         }
+        let keep = plan
+            .as_ref()
+            .map(|(_, keep)| keep.clone())
+            .unwrap_or_default();
         let plan = self.planner_submitted_plan(context.conversation, plan);
         record_planner_result(&self.store, context.conversation, plan.is_ok())?;
         self.store
             .add_message(context.conversation, ORCHESTRATOR, &text)?;
         self.handle_plan_answer(
             PlanAnswer {
+                keep: &keep,
                 scope: match crate::lean::turn_result::TurnResult::decode(answer) {
                     crate::lean::turn_result::TurnResult::Plan { scope, .. } => scope,
                     _ => None,

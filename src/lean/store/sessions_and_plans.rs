@@ -4,6 +4,8 @@ use super::*;
 pub(in crate::lean::store) mod carry;
 #[path = "sessions_and_plans/recovery.rs"]
 mod recovery;
+#[path = "sessions_and_plans/retained.rs"]
+mod retained;
 
 impl Store {
     /// The last user message a successful turn of `role` answered.

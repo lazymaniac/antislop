@@ -197,6 +197,7 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let PlanProposal {
+            keep,
             config,
             specs,
             scope,
@@ -209,7 +210,7 @@ impl Core {
             else {
                 return Ok(());
             };
-            let plan = self.prepare_plan(conversation, &specs, scope)?;
+            let plan = self.prepare_plan(conversation, &specs, scope, keep)?;
             (specs, plan)
         };
         self.complete_proposal(ProposalPublication {

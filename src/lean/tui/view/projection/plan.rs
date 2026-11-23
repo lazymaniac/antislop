@@ -44,13 +44,26 @@ pub(super) fn proposed_tasks(payload: &Value) -> Vec<TaskRow> {
         .flatten()
         .map(|task| {
             let id = task["id"].as_str().unwrap_or_default();
-            proposed_task(task, &payload["parallel"][id])
+            let mut row = proposed_task(task, &payload["parallel"][id]);
+            if let Some(kept) = payload["retained_tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|kept| kept["id"] == id)
+            {
+                row.status = "approved".into();
+                row.round = kept["round"].as_u64().unwrap_or_default();
+                row.uuid = kept["source"].as_str().map(str::to_owned);
+                row.activity.clear();
+            }
+            row
         })
         .collect()
 }
 
 pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
     TaskMeta {
+        retained: false,
         deferred: task["deferred"].as_bool().unwrap_or(false),
         integration_batch: task["integration_batch"].as_bool().unwrap_or(false),
         outputs: strings(&task["outputs"]),
@@ -69,7 +82,13 @@ pub(super) fn proposed_task_meta(payload: &Value) -> HashMap<String, TaskMeta> {
         .flatten()
         .filter_map(|task| {
             let id = clean_line(task["id"].as_str()?);
-            Some((id, extract_task_meta(task)))
+            let mut meta = extract_task_meta(task);
+            meta.retained = payload["retained_tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|kept| kept["id"] == id);
+            Some((id, meta))
         })
         .collect()
 }
@@ -213,6 +232,9 @@ pub(super) fn on_plan_rejected(
         if task.status == "proposed" {
             task.status = "cancelled".into();
         }
+    }
+    for meta in view.task_meta.values_mut() {
+        meta.retained = false;
     }
     let reason = text("reason");
     view.cards.push(TranscriptCard::System {

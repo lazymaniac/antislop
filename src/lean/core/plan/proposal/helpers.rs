@@ -13,6 +13,7 @@ impl Core {
         conversation: &str,
         specs: &[TaskContract],
         scope: Option<&str>,
+        keep: &[String],
     ) -> Result<PreparedPlan> {
         let inherited = self
             .store
@@ -49,6 +50,7 @@ impl Core {
         };
         let (tasks, id) = self.persist_proposed_tasks(conversation, specs)?;
         self.store.bind_plan_scope(conversation, &id, &scope_id)?;
+        self.store.retain_plan_tasks(conversation, &id, keep)?;
         Ok(PreparedPlan {
             id,
             tasks,
@@ -123,6 +125,7 @@ impl Core {
         };
         let mut payload =
             plan_event_payload(&document, plan, &specs, review, waiting, revision_token)?;
+        payload["retained_tasks"] = self.store.retained_plan_preview(conversation, &plan.id)?;
         payload["base_revision"] = json!(self.store.plan_revision(&plan.id)?);
         payload["scope"] = json!(scope);
         payload["previous_scope"] = json!(previous);
@@ -204,7 +207,12 @@ mod tests {
         )
         .unwrap();
         let original = core
-            .prepare_plan(&conversation, &specs, Some("Fix the contained behavior"))
+            .prepare_plan(
+                &conversation,
+                &specs,
+                Some("Fix the contained behavior"),
+                &[],
+            )
             .unwrap();
         let authored_id = original
             .tasks
@@ -272,5 +280,144 @@ mod tests {
                 .any(|event| event.kind == "plan_rejected" || event.kind == "turn_started")
         );
         assert!(core.is_idle(&conversation));
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use crate::lean::tasks::PlannedTask;
+
+    #[test]
+    fn planner_keep_preserves_completed_work_in_preview_and_after_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        crate::lean::git::ok(&project, &["init", "-q"]).unwrap();
+        std::fs::write(project.join("input.txt"), "Original behavior").unwrap();
+        crate::lean::git::commit_all(&project, crate::lean::git::CommitPurpose::TestFixture)
+            .unwrap();
+        let revision = crate::lean::git::head(&project).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(project.to_str().unwrap())
+            .unwrap()
+            .id;
+        let planned: Vec<PlannedTask> = serde_json::from_value(json!([
+            {"id":"map","title":"Map","goal":"Inspect inputs","kind":"context","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Inputs documented"}]},
+            {"id":"build","title":"Build","goal":"Implement behavior","kind":"implementation","change_kind":"code","depends_on":["map"],"acceptance_criteria":[{"id":"C1","text":"Behavior verified"}]}
+        ])).unwrap();
+        let first = crate::lean::core::plan::proposal::checked_team_plan(
+            &tasks::planned_graph(planned).unwrap(),
+            &config,
+            tasks::Team::SmallChange,
+        )
+        .unwrap();
+        let old = core
+            .prepare_plan(&conversation, &first, Some("Original scope"), &[])
+            .unwrap();
+        core.store.queue_plan(&conversation, &old.id).unwrap();
+        for mut task in core.store.plan(&old.id).unwrap() {
+            task.status = status::APPROVED.into();
+            task.round = 2;
+            task.report = Some(format!("Accepted result of {}", task.spec["id"]));
+            task.verdict = Some(json!({"approved":true,"summary":"Verified"}));
+            task.feedback = Some(json!({"round":2,"effect":"Completed work"}));
+            core.store.update_task(&task).unwrap();
+            core.store
+                .db()
+                .execute(
+                    "INSERT INTO task_source_revisions VALUES(?1,?2,?3)",
+                    rusqlite::params![task.id, task.input_generation, revision],
+                )
+                .unwrap();
+            core.store
+                .test_completion(&task, task.report.as_deref().unwrap());
+        }
+        std::fs::write(
+            project.join("input.txt"),
+            "Changes integrated by a successor task",
+        )
+        .unwrap();
+        crate::lean::git::commit_all(&project, crate::lean::git::CommitPurpose::TestFixture)
+            .unwrap();
+        // A real replan extends the scope after earlier tasks have changed files.
+        // Historical completions need not describe the current whole project.
+        let keep = vec!["map".into(), "build".into()];
+        let added = serde_json::from_value(json!([{"id":"next","title":"Next","goal":"Extend behavior","kind":"implementation","change_kind":"code","depends_on":["build"],"acceptance_criteria":[{"id":"C1","text":"Extension verified"}]}])).unwrap();
+        let graph = core.submitted_graph(&conversation, added, &keep).unwrap();
+        let specs = core
+            .checked_candidate_plan(&conversation, &graph, tasks::Team::SmallChange, &[])
+            .unwrap();
+        assert!(!specs.iter().any(|spec| spec.id == "build-options"));
+        let next = core
+            .prepare_plan(&conversation, &specs, Some("Expanded scope"), &keep)
+            .unwrap();
+        let review: Verdict = serde_json::from_value(json!({"approved":true})).unwrap();
+        core.publish_plan(&conversation, "Extend behavior", None, &next, &Ok(review))
+            .unwrap();
+        let proposal = core
+            .store
+            .events_since(&conversation, 0, 1000)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "plan_proposed")
+            .unwrap();
+        let mut view = crate::lean::tui::view::View::default();
+        view.apply(&serde_json::to_value(&proposal).unwrap());
+        assert!(view.plan_proposed());
+        for name in &keep {
+            let row = view.tasks.iter().find(|t| &t.id == name).unwrap();
+            assert_eq!((row.status.as_str(), row.round), ("approved", 2));
+        }
+        // Late events from the old plan cannot replace the new proposal's rows.
+        view.apply(&json!({"kind":"task","plan_id":old.id,"payload":{"id":"map","task":"old","status":"queued","round":0}}));
+        assert_eq!(
+            view.tasks.iter().find(|t| t.id == "map").unwrap().status,
+            "approved"
+        );
+        assert!(view.plan_proposed());
+        assert!(
+            core.store
+                .plan(&next.id)
+                .unwrap()
+                .iter()
+                .all(|t| t.status == status::PROPOSED)
+        );
+
+        core.store.queue_plan(&conversation, &next.id).unwrap();
+        let old_tasks = core.store.plan(&old.id).unwrap();
+        for task in core.store.plan(&next.id).unwrap() {
+            let name = task.spec["id"].as_str().unwrap();
+            if keep.iter().any(|id| id == name) {
+                let source = old_tasks.iter().find(|t| t.spec["id"] == name).unwrap();
+                assert_eq!(task.status, status::APPROVED);
+                assert_eq!(task.round, source.round);
+                assert_eq!(task.report, source.report);
+                assert_eq!(task.verdict, source.verdict);
+                assert_eq!(
+                    core.store.completed_task_output(&task).unwrap(),
+                    core.store.completed_task_output(source).unwrap()
+                );
+            } else {
+                assert_eq!(task.status, status::QUEUED, "{name}");
+            }
+            view.apply(&json!({"kind":"task","plan_id":next.id,"payload":{"id":name,"task":task.id,"status":task.status,"round":task.round}}));
+        }
+        assert!(!view.plan_proposed());
+        let mut replay = crate::lean::tui::view::View::default();
+        replay.apply(&serde_json::to_value(&proposal).unwrap());
+        assert!(replay.plan_proposed());
+        assert_eq!(
+            replay
+                .tasks
+                .iter()
+                .filter(|t| t.status == "approved")
+                .count(),
+            2
+        );
     }
 }

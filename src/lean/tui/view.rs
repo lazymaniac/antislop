@@ -185,6 +185,8 @@ pub struct PendingApproval {
 /// Extra contract metadata per task id used by the Flow Editor and Graph UI.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TaskMeta {
+    /// Approved historical result displayed while the replacement plan awaits consent.
+    pub retained: bool,
     pub deferred: bool,
     pub integration_batch: bool,
     pub outputs: Vec<String>,

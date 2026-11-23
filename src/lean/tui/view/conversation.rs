@@ -79,7 +79,14 @@ impl View {
 
     pub fn plan_proposed(&self) -> bool {
         self.pending_scope_revision
-            || (!self.tasks.is_empty() && self.tasks.iter().all(|task| task.status == "proposed"))
+            || (!self.tasks.is_empty()
+                && self.tasks.iter().all(|task| {
+                    task.status == "proposed"
+                        || self
+                            .task_meta
+                            .get(&task.id)
+                            .is_some_and(|meta| meta.retained)
+                }))
     }
 
     /// Where the conversation is: the graph only makes sense once work runs.

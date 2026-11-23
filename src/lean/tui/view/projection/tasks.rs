@@ -7,6 +7,9 @@ pub(super) fn on_task(view: &mut View, payload: &Value) {
     let Some(index) = index else {
         return;
     };
+    if let Some(meta) = view.task_meta.get_mut(&id) {
+        meta.retained = false;
+    }
     let task_uuid = payload["task"].as_str().unwrap_or_default().to_owned();
     view.check_events += 1;
     view.task_check_events.insert(id.clone(), view.check_events);

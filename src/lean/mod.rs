@@ -259,6 +259,7 @@ fn wake_locked(core: &Arc<Core>, conversation: &str) {
 
 /// Who runs a turn, where, and with what access.
 struct PlanProposal<'a> {
+    keep: &'a [String],
     scope: Option<&'a str>,
     config: &'a Config,
     specs: &'a [TaskContract],

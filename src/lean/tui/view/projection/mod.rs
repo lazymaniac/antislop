@@ -103,7 +103,13 @@ fn graph_task(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
 fn graph_updated(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
     graph::on_graph_updated(view, payload);
 }
-fn task(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {
+fn task(view: &mut View, event: &Value, payload: &Value, _: String, _: &str) {
+    if event["plan_id"]
+        .as_str()
+        .is_some_and(|plan| Some(plan) != view.plan.as_deref())
+    {
+        return;
+    }
     tasks::on_task(view, payload);
 }
 fn integration(view: &mut View, _: &Value, payload: &Value, _: String, _: &str) {

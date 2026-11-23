@@ -266,7 +266,7 @@ src
     orchestrator_turn
      context
       answer
-       finish(core,context,answer,cancel):Result<()> ~50 > TurnResult.decode,submitted_graph,audit_response_error,remediation_requested,add_message,submitted_plan,record_answer_progress,finish_interview,handle_plan_answer
+       finish(core,context,answer,cancel):Result<()> ~69 > TurnResult.decode,submitted_graph,audit_response_error,remediation_requested,add_message,submitted_plan,record_answer_progress,finish_interview,PlanAnswer
        - AuditGap
        - AuditGap: reason
       comments
@@ -303,7 +303,7 @@ src
      includes_comment(asked):bool
    plan
     answer
-     PlanAnswer(C{conversation,project,config,text,scope,plan,addressed,is_comment,answered,upto})
+     PlanAnswer(C{keep,conversation,project,config,text,scope,plan,addressed,is_comment,answered,upto})
     helpers
      finalize_plan(specs):Vec<TaskContract> > finalize_team_plan
      finalize_team_plan(specs,team):Vec<TaskContract>
@@ -956,8 +956,8 @@ src
     review_plan(&Arc<Self>,conversation,project,plan,specs,_config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,plan_scope_context,team_guidance,dependency_note,review,append_team_guidance
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
-    prepare_plan(conversation,specs,scope):Result<PreparedPlan> ~42 > flatten,plan_scope_id,scope_documents_current,create_scope,workflow,persist_proposed_tasks,bind_plan_scope,PreparedPlan,last_orchestration_answered
-    publish_plan(&Arc<Self>,conversation,text,addressed,plan,review):Result<()> ~58 > PreparedPlan,resolve_plan_comments,plan_revision_token,flatten,accepted_plan,plan_event_payload
+    prepare_plan(conversation,specs,scope,keep):Result<PreparedPlan> ~43 > flatten,plan_scope_id,scope_documents_current,create_scope,workflow,persist_proposed_tasks,bind_plan_scope,retain_plan_tasks,PreparedPlan,last_orchestration_answered
+    publish_plan(&Arc<Self>,conversation,text,addressed,plan,review):Result<()> ~59 > PreparedPlan,resolve_plan_comments,plan_revision_token,accepted_plan,plan_event_payload,retained_plan_preview
     checked_candidate_plan(conversation,specs,team,redo):Result<Vec<TaskContract>> > approved_task_history,as_str,checked_team_plan_preserving,config_snapshot
     propose(&Arc<Self>,conversation,project,text,proposal,addressed,cancel):Result<()> > graph,prepare_{proposal,plan},complete_proposal,ProposalPublication
     upstream(plan_id,spec):Result<String> > dependency_inputs
@@ -1255,15 +1255,17 @@ src
    sessions_and_plans
     carry
      apply(tx,prepared):Result<Option<String>> > carry_{plan_tasks,notice}
-     capture(tx,conversation,plan):Result<Capture> ~161 > rows,one,Capture,source_plan,query_values,scope,task_token,as_str,decode_row,ProjectedProducer,dependency_origin,flatten
+     capture(tx,conversation,plan):Result<Capture> ~166 > rows,one,Capture,source_plan,query_values,scope,task_token,decode_row,valid_sources,ProjectedProducer,dependency_origin,flatten
      execute(tx,sql,params):rusqlite::Result<usize>
      one(tx,sql,params,f):rusqlite::Result<T>
-     Capture(C{project,source_scope,targets,sources,tokens,dependencies,origins,scopes,revisions,workflow})
+     result_turn(tx,task):Result<Option<String>> > one
+     Capture(C{project,source_scope,targets,sources,tokens,dependencies,origins,scopes,revisions,workflow,retained})
+      retained_preview():Value
       compare_sources():Result<Prepared<'_>> ~53 > Prepared,snapshot_outputs,input_snapshot,ok
      Prepared(C{captured,changes,snapshots,revisions})
       validate_sources():Result<()> > ok,input_snapshot
      Work(C{rows,spec_{decodes,cells},feedback_{decodes,cells},statements,{producer,dependency}_lookups,{vm,fullscan}_steps,sorts,comparisons,snapshots})
-     - {Task,Snapshot}Inputs,result_turn,options_owner_current,same_contract,carry
+     - {Task,Snapshot}Inputs,options_owner_current,same_contract,carry
     recovery
      close_open_approvals(tx):Result<()>
      insert_proposed_tasks(tx,conversation,plan_id,specs,now):Result<Vec<Task>> > insert_proposed_task
@@ -1271,6 +1273,8 @@ src
      running_orchestrators(tx):Result<Vec<String>>
      unfinished_plans(tx):Result<Vec<(String,String)>>
      - interrupted_report,proposed_task
+    retained
+     valid_sources(tx,targets,sources):Result<BTreeSet<String>> ~55 > as_str,approval,authored_contract,dependency_result,result_identity
    setup_and_conversations/schema
     initialize_base_tables(transaction):Result<()>
     initialize_plan_tables(transaction):Result<()>
@@ -1477,6 +1481,8 @@ src
     update_session_identity(tx,turn,session):Result<()>
     last_turn_for_roles(conversation,roles):Result<Option<Turn>> > db
     mark_tasks_interrupted(tx):Result<()> > unfinished_task_rows,mark_task_interrupted
+    retain_plan_tasks(conversation,plan,keep):Result<()> > db,approval
+    retained_plan_preview(conversation,plan):Result<Value> > db,carry.capture
     last_answered(conversation,role):Result<u64> > db
     last_orchestration_answered(conversation):Result<u64> > last_answered
     forget_task_sessions(task):Result<()> > db
@@ -2996,7 +3002,7 @@ src
      tasks
       on_check(view,event,payload,key,turn) > as_str
       on_integration(view,payload) > clean_line,bound,event_text,as_str,report_integration,update_integration_row
-      on_task(view,payload) ~40 > clean_line,as_str,update_task_row,report_task_{reason,selection},feedback_is_current
+      on_task(view,payload) ~43 > clean_line,as_str,update_task_row,report_task_{reason,selection},feedback_is_current
       on_task_recovery(view,payload) > clean_line,event_text,bound,update_recovery_row
       - TaskProgress,update_task_identity,clear_finished_activity,update_task_feedback,apply_recovery_outcome
     session_time
@@ -3012,7 +3018,7 @@ src
     PanelFocus(E{Chat,Graph})
     PendingApproval(C{request,role,provider,summary,orchestrator,options})
     ProgressEntry(C{text,agent})
-    TaskMeta(C{deferred,integration_batch,outputs,acceptance_criteria,result_inputs,quality_gate,options_for})
+    TaskMeta(C{retained,deferred,integration_batch,outputs,acceptance_criteria,result_inputs,quality_gate,options_for})
     TaskRow(C{id,uuid,title,summary,reviewer_summary,section,kind,goal,depends_on,parallel_with,change_kind,focus,risks,status,round,activity,reason,revision_token,effect,effect_cut,obligations,integration})
     TranscriptCard(E{Message,Plan,System,Comment,Completion})
      sent_at():Option<i64>
@@ -3297,6 +3303,6 @@ work/visualizations
    run_test.py:*main
    task_cli.py:*_fixture_{tool,emit,block,contract}
    wrapping_stream
-· 178,327 LOC · input 1,646,531 · output 48,670 tokens · state 1d8a046bd18a · targets AGENTS.md
+· 178,880 LOC · input 1,652,441 · output 48,778 tokens · state 8b9eee9c4dc4 · targets AGENTS.md
 ```
 <!-- hologram:end -->

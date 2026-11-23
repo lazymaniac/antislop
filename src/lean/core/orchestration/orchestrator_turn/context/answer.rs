@@ -47,6 +47,10 @@ pub(super) fn finish(
         crate::lean::turn_result::TurnResult::Plan { scope, .. } => scope.clone(),
         _ => None,
     };
+    let keep = match &result {
+        crate::lean::turn_result::TurnResult::Plan { keep, .. } => keep.clone(),
+        _ => Vec::new(),
+    };
     let addressed = result.addressed().map(<[u64]>::to_vec);
     let text = result.text();
     let (plan, awaiting_decision) = submitted_plan(core, context, result, submitted)?;
@@ -54,7 +58,22 @@ pub(super) fn finish(
     core.store
         .add_message(context.conversation, ORCHESTRATOR, &text)?;
     finish_interview(core, context, cancel)?;
-    handle_plan_answer(core, context, text, plan, addressed, scope, cancel)
+    core.handle_plan_answer(
+        PlanAnswer {
+            keep: &keep,
+            scope,
+            conversation: context.conversation,
+            project: &context.project,
+            config: &context.config,
+            text: &text,
+            plan,
+            addressed: addressed.as_deref(),
+            is_comment: context.is_comment,
+            answered: context.answered,
+            upto: context.upto,
+        },
+        cancel,
+    )
 }
 
 /// A successful revision/replan request is the orchestrator's supported route
@@ -232,32 +251,6 @@ fn finish_interview(
         core.store.finish_interview(context.conversation)?;
     }
     Ok(())
-}
-
-fn handle_plan_answer(
-    core: &Arc<Core>,
-    context: &OrchestrationContext<'_>,
-    text: String,
-    plan: Option<Result<Vec<TaskContract>>>,
-    addressed: Option<Vec<u64>>,
-    scope: Option<String>,
-    cancel: &AtomicBool,
-) -> Result<()> {
-    core.handle_plan_answer(
-        PlanAnswer {
-            scope,
-            conversation: context.conversation,
-            project: &context.project,
-            config: &context.config,
-            text: &text,
-            plan,
-            addressed: addressed.as_deref(),
-            is_comment: context.is_comment,
-            answered: context.answered,
-            upto: context.upto,
-        },
-        cancel,
-    )
 }
 
 #[cfg(test)]

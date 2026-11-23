@@ -157,3 +157,105 @@ fn reuse_requires_a_revision_of_the_current_generation() {
         }
     }
 }
+
+#[test]
+fn explicit_keep_revalidates_the_approved_result_and_its_authored_dependencies() {
+    for change in [
+        "none",
+        "contract",
+        "generation",
+        "round",
+        "stale",
+        "result",
+        "dependency",
+        "unkept-dependency",
+    ] {
+        let (dir, store, conversation, _, tasks) = fixture_for(true);
+        store.queue_plan(&conversation, &tasks[0].plan_id).unwrap();
+        let mut sources = store.plan(&tasks[0].plan_id).unwrap();
+        for source in &mut sources {
+            source.status = "approved".into();
+            source.round = 1;
+            source.report = Some(format!("Accepted {}", source.spec["id"]));
+            source.verdict = Some(json!({"approved":true}));
+            store.update_task(source).unwrap();
+            store.test_completion(source, source.report.as_deref().unwrap());
+        }
+        let specs: Vec<_> = sources.iter().map(|t| t.spec.clone()).collect();
+        let next = store.add_plan(&conversation, &specs).unwrap();
+        let scope = store.create_scope(&conversation, "Expanded scope").unwrap();
+        store
+            .bind_plan_scope(&conversation, &next[0].plan_id, &scope.id)
+            .unwrap();
+        let keep = if change == "unkept-dependency" {
+            vec!["b".into()]
+        } else {
+            vec!["a".into(), "b".into()]
+        };
+        store
+            .retain_plan_tasks(&conversation, &next[0].plan_id, &keep)
+            .unwrap();
+        match change {
+            "contract" | "dependency" => {
+                let target = &next[usize::from(change == "contract")];
+                let mut spec = target.spec.clone();
+                spec["goal"] = "Different behavior".into();
+                store
+                    .db()
+                    .execute(
+                        "UPDATE tasks SET spec=?2 WHERE id=?1",
+                        params![target.id, spec.to_string()],
+                    )
+                    .unwrap();
+            }
+            "generation" => {
+                store
+                    .db()
+                    .execute(
+                        "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
+                        [&sources[0].id],
+                    )
+                    .unwrap();
+            }
+            "round" => {
+                sources[0].round += 1;
+                store.update_task(&sources[0]).unwrap();
+            }
+            "stale" => {
+                sources[0].status = "stale".into();
+                store.update_task(&sources[0]).unwrap();
+            }
+            "result" => store.test_completion(&sources[0], "Replacement result"),
+            _ => {}
+        }
+        // Retention survives daemon restart, but never promotes an altered result.
+        drop(store);
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let preview = store
+            .retained_plan_preview(&conversation, &next[0].plan_id)
+            .unwrap();
+        let expected = if change == "none" {
+            2
+        } else if change == "contract" {
+            1
+        } else {
+            0
+        };
+        assert_eq!(preview.as_array().unwrap().len(), expected, "{change}");
+        store.queue_plan(&conversation, &next[0].plan_id).unwrap();
+        let activated = store.plan(&next[0].plan_id).unwrap();
+        assert_eq!(
+            activated.iter().filter(|t| t.status == "approved").count(),
+            expected,
+            "{change}"
+        );
+        for task in activated.iter().filter(|t| t.status == "queued") {
+            assert!(task.report.is_some(), "retained checkpoint: {change}");
+            assert_eq!(
+                task.feedback.as_ref().unwrap()["resume_role"],
+                "reviewer",
+                "{change}"
+            );
+        }
+    }
+}

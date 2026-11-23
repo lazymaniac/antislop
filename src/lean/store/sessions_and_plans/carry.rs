@@ -1,7 +1,7 @@
 //! Approved work a new plan keeps instead of repeating.
 use super::*;
 
-type Row = (String, Value, Option<Value>);
+pub(super) type Row = (String, Value, Option<Value>);
 type Records = Vec<Vec<rusqlite::types::Value>>;
 
 #[derive(PartialEq)]
@@ -40,6 +40,7 @@ pub(super) struct Capture {
     scopes: BTreeMap<String, bool>,
     revisions: BTreeMap<String, Option<String>>,
     workflow: Records,
+    retained: BTreeSet<String>,
 }
 
 /// Capture only demanded producers and the plan-local dependencies they read.
@@ -70,6 +71,7 @@ pub(super) fn capture(
         origins: BTreeMap::new(),
         scopes: BTreeMap::new(),
         revisions: BTreeMap::new(),
+        retained: BTreeSet::new(),
         workflow: query_values(
             tx,
             "SELECT w.*,h.revision,a.plan_id FROM session_workflow w JOIN plan_heads h ON h.plan_id=?2 LEFT JOIN plan_activations a ON a.plan_id=h.plan_id WHERE w.conversation_id=?1",
@@ -77,18 +79,21 @@ pub(super) fn capture(
         )?,
     };
     let target_scope = scope(tx, plan)?;
-    for (id, spec, _) in &captured.targets {
+    for (id, spec, feedback) in &captured.targets {
         captured.tokens.insert(id.clone(), task_token(tx, id)?);
         if captured.source_scope.is_none() {
             continue;
         }
         let name = spec["id"].as_str().unwrap_or_default();
         if !captured.sources.contains_key(name) {
+            let pinned = feedback
+                .as_ref()
+                .and_then(|f| f["kept_approval"]["source"].as_str());
             let sql = format!(
-                "SELECT id,spec,feedback FROM tasks WHERE conversation_id=?1 AND CASE WHEN json_valid(spec) THEN json_extract(spec,'$.id') END=?2 AND plan_id<>?3 AND {ELIGIBLE} ORDER BY created_ms DESC,rowid DESC LIMIT 1"
+                "SELECT id,spec,feedback FROM tasks WHERE conversation_id=?1 AND CASE WHEN json_valid(spec) THEN json_extract(spec,'$.id') END=?2 AND plan_id<>?3 AND {ELIGIBLE} AND (?4 IS NULL OR id=?4) ORDER BY created_ms DESC,rowid DESC LIMIT 1"
             );
             let source: Option<(String, String, Option<String>)> =
-                one(tx, &sql, params![conversation, name, plan], |r| {
+                one(tx, &sql, params![conversation, name, plan, pinned], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })
                 .optional()?;
@@ -97,6 +102,7 @@ pub(super) fn capture(
             }
         }
     }
+    captured.retained = super::retained::valid_sources(tx, &captured.targets, &captured.sources)?;
     let projected_producers = captured
         .sources
         .iter()
@@ -351,7 +357,7 @@ fn task_token(tx: &rusqlite::Transaction<'_>, task: &str) -> Result<TaskInputs> 
     })
 }
 
-fn result_turn(tx: &rusqlite::Transaction<'_>, task: &str) -> Result<Option<String>> {
+pub(super) fn result_turn(tx: &rusqlite::Transaction<'_>, task: &str) -> Result<Option<String>> {
     Ok(one(
         tx,
         "SELECT coalesce((SELECT r.turn_id FROM agent_results r JOIN turn_scopes s ON s.turn_id=r.turn_id JOIN turn_inputs x ON x.turn_id=r.turn_id JOIN turns u ON u.id=r.turn_id WHERE s.task_id=?1 AND x.generation=coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0) AND u.role='worker:'||?1 AND json_extract(r.result,'$.type')='completed' ORDER BY s.round DESC,u.started_ms DESC LIMIT 1),(SELECT result_turn FROM task_resume_results WHERE task_id=?1 AND generation=coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)))",
@@ -376,6 +382,12 @@ pub(super) struct Prepared<'a> {
 }
 
 impl Capture {
+    pub(super) fn retained_preview(&self) -> Value {
+        Value::Array(self.targets.iter().filter(|row| self.retained.contains(&row.0)).map(|row| {
+            let pin = &row.2.as_ref().unwrap()["kept_approval"];
+            serde_json::json!({"id":row.1["id"],"task":row.0,"source":pin["source"],"round":pin["round"]})
+        }).collect())
+    }
     /// Git runs with neither a Store guard nor a SQLite transaction alive.
     pub(super) fn compare_sources(&self) -> Result<Prepared<'_>> {
         let project = std::path::Path::new(&self.project);
@@ -521,8 +533,11 @@ fn carry_plan_tasks(
             .is_some_and(|paths| paths.is_empty());
         let unchanged_dependencies = captured.dependencies[&old.0];
         let unchanged_scope = captured.scopes[&old.0];
-        let compatible =
-            unchanged_contract && unchanged_sources && unchanged_dependencies && unchanged_scope;
+        let compatible = captured.retained.contains(id)
+            || (unchanged_contract
+                && unchanged_sources
+                && unchanged_dependencies
+                && unchanged_scope);
         if !compatible {
             let fields = spec
                 .as_object()
@@ -706,6 +721,7 @@ fn carry(
         |r| r.get(0),
     )?;
     let mut feedback = feedback.clone().unwrap_or_else(|| serde_json::json!({}));
+    feedback.as_object_mut().unwrap().remove("kept_approval");
     // A result kept twice still names the task that produced it.
     if feedback["carried_from"].as_str().is_none() {
         feedback["carried_from"] = source.as_str().into();
