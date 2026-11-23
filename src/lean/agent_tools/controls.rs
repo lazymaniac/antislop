@@ -157,6 +157,7 @@ impl Core {
             _ => Vec::new(),
         };
         let _graph = self.locks.graph();
+        self.ensure_replacement_plan_allowed(conversation)?;
         let selected_by_user = self.store.user_selected_team(conversation)?;
         let saved_origin = self.store.team_origin(conversation)?;
         let (submitted_team, explicit_team) = match args["team"].as_str() {

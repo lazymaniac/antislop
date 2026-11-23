@@ -76,6 +76,19 @@ impl Core {
             if team == tasks::Team::Feature
                 && tasks::validate_feature_pipeline(&current, &Default::default()).is_err()
             {
+                if accepted {
+                    self.store.select_team(conversation, team, reason)?;
+                    self.store.add_message(
+                        conversation,
+                        RUNTIME,
+                        &format!(
+                            "The user selected feature rigor: {reason}. Upgrade the accepted plan {} with revise_plan, adding the missing specialist contracts and dependencies for remaining work. Preserve approved work and checkpoints; do not create a replacement draft with request_replan or submit_plan. Include scope only if requirements change.",
+                            plan.plan_id
+                        ),
+                    )?;
+                    return Ok(true);
+                }
+                self.ensure_replacement_plan_allowed(conversation)?;
                 self.store.select_team(conversation, team, reason)?;
                 drop(_graph);
                 self.request_replan(conversation, &format!("Upgrade to the full feature pipeline: {reason}. Preserve approved work and checkpoints; author the missing specialist contracts and dependencies for remaining work."))?;
@@ -1670,6 +1683,24 @@ mod tests {
                 .all(|task| task.status != status::PROPOSED && task.status != status::CANCELLED)
         );
         assert_eq!(core.store.accepted_plan(&conversation).unwrap(), Some(plan));
+        assert_eq!(
+            core.store.team(&conversation).unwrap(),
+            tasks::Team::Feature
+        );
+        assert!(
+            core.store
+                .messages_by(&conversation, REPLAN, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.store
+                .messages_by(&conversation, RUNTIME, 0)
+                .unwrap()
+                .iter()
+                .any(|message| message.text.contains("Upgrade the accepted plan")
+                    && message.text.contains("revise_plan"))
+        );
         assert!(
             core.store
                 .events_since(&conversation, 0, 1000)

@@ -145,6 +145,17 @@ fn is_review_kind(kind: WorkKind) -> bool {
 }
 
 impl Core {
+    /// Call under the graph lock, which also serializes plan starts.
+    pub(in crate::lean) fn ensure_replacement_plan_allowed(
+        &self,
+        conversation: &str,
+    ) -> Result<()> {
+        require(
+            !self.activity.plan_running(conversation),
+            "a plan is already running; use revise_plan on the accepted plan with changed/added contracts, explicit retire entries and replacements for unfinished work. Include the complete scope when requirements change; the reviewed scope revision holds affected tasks until user acceptance. Do not assign proposed replacement contracts through worker answers",
+        )
+    }
+
     pub(in crate::lean) fn checked_candidate_plan(
         &self,
         conversation: &str,
@@ -233,6 +244,7 @@ impl Core {
         specs: &[TaskContract],
         _config: &Config,
     ) -> Result<Option<Vec<TaskContract>>> {
+        self.ensure_replacement_plan_allowed(conversation)?;
         helpers::record_addressed_comments(&self.store, conversation, addressed)?;
         match self.checked_candidate_plan(conversation, specs, self.store.team(conversation)?, &[])
         {

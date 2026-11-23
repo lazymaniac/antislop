@@ -297,6 +297,8 @@ impl Core {
         conversation: &str,
         reason: &str,
     ) -> Result<serde_json::Value> {
+        let _graph = self.locks.graph();
+        self.ensure_replacement_plan_allowed(conversation)?;
         require(
             !self.store.latest_plan(conversation)?.is_empty(),
             "there is no plan to replace; the planner drafts the first one itself",

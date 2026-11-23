@@ -80,6 +80,12 @@ impl Core {
         plan: &PreparedPlan,
         review: &std::result::Result<Verdict, String>,
     ) -> Result<()> {
+        // Review runs outside the graph lock. An accepted plan may have
+        // started since this draft was prepared; never publish it over workers.
+        if let Err(error) = self.ensure_replacement_plan_allowed(conversation) {
+            self.cancel_proposed_plan(&plan.id)?;
+            return Err(error);
+        }
         // Rigor can change while review is running. The authored plan remains
         // the same; publish its current generated checks instead of old rows.
         let tasks = self.store.plan(&plan.id)?;
@@ -184,6 +190,156 @@ pub(super) fn record_addressed_comments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_plan_rejects_replacement_tools_and_late_publication_without_changing_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .db()
+            .execute(
+                "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1",
+                [&conversation],
+            )
+            .unwrap();
+        core.store
+            .select_team(&conversation, tasks::Team::NoQualityGates, "Report only")
+            .unwrap();
+        let task = json!({"id":"analysis","title":"Analysis","goal":"Inspect the accepted scope","kind":"analysis","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Report the observed behavior"}]});
+        let specs = vec![serde_json::from_value::<TaskContract>(task.clone()).unwrap()];
+        let accepted = core
+            .prepare_plan(&conversation, &specs, Some("Accepted scope"), &[])
+            .unwrap();
+        core.store.queue_plan(&conversation, &accepted.id).unwrap();
+        let mut worker = core.store.plan(&accepted.id).unwrap().remove(0);
+        worker.status = status::WORKING.into();
+        worker.round = 2;
+        worker.report = Some("Preserved investigation".into());
+        core.store.update_task(&worker).unwrap();
+
+        // A draft can have entered review before execution starts.
+        let mut writer = specs[0].clone();
+        writer.kind = WorkKind::Implementation;
+        writer.change_kind = tasks::ChangeKind::Code;
+        let draft = core
+            .prepare_plan(
+                &conversation,
+                &[writer],
+                Some("Expanded backend scope"),
+                &[],
+            )
+            .unwrap();
+        let running = Arc::new(AtomicBool::new(false));
+        core.activity
+            .plans
+            .lock()
+            .unwrap()
+            .insert(conversation.clone(), running.clone());
+        let turn = core
+            .store
+            .start_turn(
+                &conversation,
+                ORCHESTRATOR,
+                "fixture",
+                0,
+                Some(&accepted.id),
+            )
+            .unwrap();
+        for (tool, args) in [
+            ("request_replan", json!({"reason":"Add backend ownership"})),
+            (
+                "submit_plan",
+                json!({"document":"Expanded scope","tasks":[task]}),
+            ),
+        ] {
+            let error = core
+                .agent_tool(&conversation, ORCHESTRATOR, &turn.id, tool, &args)
+                .unwrap_err();
+            assert!(error.to_string().contains("revise_plan"), "{tool}: {error}");
+        }
+        let error = core
+            .propose(
+                &conversation,
+                dir.path(),
+                "Expanded scope",
+                PlanProposal {
+                    keep: &[],
+                    config: &config,
+                    specs: &specs,
+                    scope: None,
+                },
+                None,
+                &AtomicBool::new(false),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("revise_plan"), "{error}");
+        assert!(
+            core.select_rigor(&conversation, tasks::Team::Feature, "Add specialists")
+                .unwrap_err()
+                .to_string()
+                .contains("revise_plan")
+        );
+        assert_eq!(
+            core.store.team(&conversation).unwrap(),
+            tasks::Team::NoQualityGates
+        );
+        let review = serde_json::from_value(json!({"approved":true})).unwrap();
+        let error = core
+            .publish_plan(&conversation, "Expanded scope", None, &draft, &Ok(review))
+            .unwrap_err();
+        assert!(error.to_string().contains("revise_plan"), "{error}");
+        assert!(
+            core.store
+                .plan(&draft.id)
+                .unwrap()
+                .iter()
+                .all(|t| t.status == status::CANCELLED)
+        );
+        assert_eq!(
+            core.store.accepted_plan(&conversation).unwrap(),
+            Some(accepted.id)
+        );
+        let unchanged = core.store.task_by_id(&worker.id).unwrap().unwrap();
+        assert_eq!(unchanged.spec, worker.spec);
+        assert_eq!(unchanged.status, worker.status);
+        assert_eq!(unchanged.round, worker.round);
+        assert_eq!(unchanged.report, worker.report);
+        assert!(!running.load(Ordering::SeqCst));
+        assert!(
+            core.store
+                .latest_role_result(&conversation, ORCHESTRATOR)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            core.store
+                .messages_by(&conversation, REPLAN, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !core
+                .store
+                .events_since(&conversation, 0, 1000)
+                .unwrap()
+                .iter()
+                .any(|e| e.kind == "plan_proposed")
+        );
+
+        core.activity.plans.lock().unwrap().remove(&conversation);
+        assert_eq!(
+            core.request_replan(&conversation, "Add backend ownership")
+                .unwrap()["state"],
+            "requested"
+        );
+    }
 
     #[test]
     fn publication_uses_the_new_rigor_when_selection_changes_during_review() {

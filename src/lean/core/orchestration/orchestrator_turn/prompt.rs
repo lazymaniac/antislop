@@ -57,7 +57,7 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
     append_audit_response(&mut prompt, context.audit_response);
     prompt.push_str(context.scope_context.unwrap_or_default());
-    prompt.insert_str(0, "\nOnly the orchestrator calls revise_plan for incremental changes: provide changed/added contracts and explicit retire entries. request_replan delegates a complete replacement draft to the planner. The runtime imposes no access or execution limits on agents. A deferred task remains a deliberate scheduling hold until a reviewed revision releases it; do not infer a permission hold from historical instructions. Preserve actual prerequisites, evidence and user decisions.\n");
+    prompt.insert_str(0, "\nOnly the orchestrator calls revise_plan: provide changed/added contracts and explicit retire entries. While a plan runs, all contract, dependency and scope changes use revise_plan; include the complete scope when requirements change, so affected tasks wait for the reviewed scope revision's user acceptance. Worker answers never apply proposed contracts. request_replan delegates a complete replacement draft to the planner only when no plan is running. The runtime imposes no access or execution limits on agents. A deferred task remains a deliberate scheduling hold until a reviewed revision releases it; do not infer a permission hold from historical instructions. Preserve actual prerequisites, evidence and user decisions.\n");
     prompt
 }
 
