@@ -42,6 +42,12 @@ fn profile_command(config: &Config, name: &str) -> std::result::Result<PathBuf, 
             binary.display()
         )
     })?;
+    if profile.provider == ProviderKind::Pi {
+        return Err(format!(
+            "profile `{name}`: Pi connection not implemented; executable `{}` found, but executable/version checks do not establish Pi adapter or backend readiness",
+            resolved.display()
+        ));
+    }
     if profile.provider == ProviderKind::Agy {
         super::launch::agy_ready().map_err(|error| format!("profile `{name}`: {error}"))?;
     }
@@ -194,12 +200,13 @@ pub fn report(
 }
 
 /// The CLIs `init` looks for, in the order it prefers them as workers.
-const KNOWN: [(&str, ProviderKind); 5] = [
+const KNOWN: [(&str, ProviderKind); 6] = [
     ("codex", ProviderKind::Codex),
     ("claude", ProviderKind::Claude),
     ("gemini", ProviderKind::Gemini),
     ("agy", ProviderKind::Agy),
     ("opencode", ProviderKind::Opencode),
+    ("pi", ProviderKind::Pi),
 ];
 
 /// A configuration that sends work to `worker` and reviews to `reviewer`,
@@ -350,7 +357,12 @@ mod tests {
 
     #[test]
     fn the_initial_configuration_routes_work_and_review_to_the_cli_found() {
-        for (worker, reviewer) in [("codex", "claude"), ("claude", "claude"), ("gemini", "agy")] {
+        for (worker, reviewer) in [
+            ("codex", "claude"),
+            ("claude", "claude"),
+            ("gemini", "agy"),
+            ("pi", "pi"),
+        ] {
             let config = Config::from_toml(&initial_config(worker, reviewer).unwrap()).unwrap();
             let implementation = config
                 .resolve(WorkKind::Implementation, RoleKind::Executor)
@@ -362,5 +374,30 @@ mod tests {
             assert_eq!(super::super::agent::name(review.provider), reviewer);
             assert_eq!(config.providers.len(), 1 + usize::from(worker != reviewer));
         }
+    }
+    #[test]
+    fn pi_diagnostics_do_not_mistake_a_wrapper_for_a_ready_adapter() {
+        let mut config = Config::from_toml(&initial_config("pi", "pi").unwrap()).unwrap();
+        config.providers.get_mut(&ProviderKind::Pi).unwrap().command =
+            Some(crate::config::CommandLine(vec![
+                "sh".into(),
+                "launch".into(),
+                "pi".into(),
+            ]));
+        let error = profile_command(&config, "orchestrator").unwrap_err();
+        assert!(
+            error.contains("profile `orchestrator`: Pi connection not implemented"),
+            "{error}"
+        );
+        assert!(error.contains("executable/version checks"), "{error}");
+        let problems = launch_problems(&config, [WorkKind::Implementation]);
+        assert!(!problems.is_empty());
+        assert!(
+            problems
+                .iter()
+                .all(|problem| problem.contains("Pi connection not implemented"))
+        );
+        assert!(preflight(&config).is_err());
+        assert!(KNOWN.contains(&("pi", ProviderKind::Pi)));
     }
 }

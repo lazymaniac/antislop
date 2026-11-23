@@ -5,7 +5,7 @@ use crate::lean::mcp::Gateway;
 use serde_json::Value;
 
 #[test]
-fn every_provider_launches_without_permission_flags_and_resumes_the_selected_session() {
+fn connected_providers_launch_without_permission_flags_and_resume_the_selected_session() {
     for name in [
         "ANTISLOP_SKIP_AGY_BRIDGE_CHECK",
         "ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK",
@@ -83,6 +83,7 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
             "{provider:?}: {args:?}"
         );
         match provider {
+            ProviderKind::Pi => unreachable!("Pi launch is tested separately as unsupported"),
             ProviderKind::Codex => {
                 assert!(args.iter().any(|v| v == "--no-daemon"));
                 assert_eq!(
@@ -150,6 +151,7 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
             .join(" ");
         assert!(!args.contains("saved-session"));
         match provider {
+            ProviderKind::Pi => unreachable!("Pi launch is tested separately as unsupported"),
             ProviderKind::Claude | ProviderKind::Codex => {
                 assert!(args.contains(fresh_gateway.url()));
                 assert!(!args.contains(gateway.url()));
@@ -176,5 +178,35 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
                 assert_eq!(config["mcp"]["antislop"]["url"], fresh_gateway.url());
             }
         }
+    }
+}
+
+#[test]
+fn pi_without_connection_is_refused_before_any_cli_can_launch() {
+    let directory = tempfile::tempdir().unwrap();
+    let gateway = Gateway::start().unwrap();
+    for (binary, args) in [
+        ("pi", vec![]),
+        ("unsloth", vec!["launch".into(), "pi".into()]),
+    ] {
+        let spec = Spec {
+            provider: ProviderKind::Pi,
+            binary: binary.into(),
+            args,
+            model: None,
+            effort: Some("high".into()),
+            cwd: directory.path().into(),
+            runtime: directory.path().join("runtime"),
+            add_dirs: vec![],
+            resume: None,
+        };
+        let error = command(&spec, &gateway)
+            .err()
+            .expect("Pi must fail explicitly");
+        assert!(
+            error.to_string().contains("Pi connection not implemented"),
+            "{error}"
+        );
+        assert!(!spec.runtime.exists());
     }
 }

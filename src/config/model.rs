@@ -12,6 +12,7 @@ pub enum ProviderKind {
     Claude,
     Gemini,
     Opencode,
+    Pi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -62,12 +63,14 @@ impl ProviderKind {
     /// by the provider. Gemini has no native effort flag.
     pub fn native_effort(self, effort: Effort) -> Option<&'static str> {
         match self {
-            Self::Codex | Self::Agy | Self::Claude | Self::Opencode => Some(match effort {
-                Effort::Low => "low",
-                Effort::Medium => "medium",
-                Effort::High => "high",
-                Effort::Xhigh => "xhigh",
-            }),
+            Self::Codex | Self::Agy | Self::Claude | Self::Opencode | Self::Pi => {
+                Some(match effort {
+                    Effort::Low => "low",
+                    Effort::Medium => "medium",
+                    Effort::High => "high",
+                    Effort::Xhigh => "xhigh",
+                })
+            }
             Self::Gemini => None,
         }
     }

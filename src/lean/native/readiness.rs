@@ -70,12 +70,14 @@ fn is_ready_prompt(provider: ProviderKind, line: &str) -> bool {
         ProviderKind::Claude | ProviderKind::Agy | ProviderKind::Opencode => line == "❯",
         ProviderKind::Codex => line == "›",
         ProviderKind::Gemini => line == ">",
+        ProviderKind::Pi => false,
     }
 }
 
 fn is_work_signal(provider: ProviderKind, line: &str) -> bool {
     let text_signal = is_status_label(provider, line);
     let animation = match provider {
+        ProviderKind::Pi => false,
         ProviderKind::Claude => {
             // Claude uses ⏺ and ⎿ to prefix both active tool calls and their
             // completed output. Only explicit status text or actual spinners
@@ -111,7 +113,7 @@ fn is_status_label(provider: ProviderKind, line: &str) -> bool {
         ProviderKind::Agy => &["✻ ", "✶ ", "✢ ", "⏺ "],
         ProviderKind::Codex => &["• ", "◦ "],
         ProviderKind::Gemini => &["✦ ", "✧ "],
-        ProviderKind::Opencode => &[],
+        ProviderKind::Opencode | ProviderKind::Pi => &[],
     };
     const LABELS: &[&str] = &[
         "thinking",

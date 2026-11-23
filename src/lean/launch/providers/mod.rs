@@ -50,6 +50,7 @@ fn configure(
         ProviderKind::Opencode => configure_opencode(command, spec, gateway),
         ProviderKind::Agy => configure_agy(command, spec, gateway),
         ProviderKind::Gemini => configure_gemini(command, spec, gateway),
+        ProviderKind::Pi => Err(Error::Invalid("Pi connection not implemented".into())),
     }
 }
 

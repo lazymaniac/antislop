@@ -120,6 +120,7 @@ pub fn name(provider: ProviderKind) -> &'static str {
         ProviderKind::Claude => "claude",
         ProviderKind::Gemini => "gemini",
         ProviderKind::Opencode => "opencode",
+        ProviderKind::Pi => "pi",
     }
 }
 
