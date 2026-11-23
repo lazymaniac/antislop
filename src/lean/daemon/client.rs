@@ -118,14 +118,18 @@ impl Client {
 
     fn call_once(&self, request: &Request) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)?;
-        let wait = match request {
+        let timeout = match request {
+            // Accepting/resuming can prepare and revalidate retained Git inputs.
+            // A local read timeout cannot cancel that operation: it only loses
+            // its result and invites another acceptance while it is still running.
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Resume { .. }) => None,
             Request::History(crate::lean::daemon::HistoryRequest::Events { wait_ms, .. })
             | Request::History(crate::lean::daemon::HistoryRequest::EventsPaged {
                 wait_ms, ..
-            }) => Duration::from_millis(*wait_ms).min(LONGEST_WAIT),
-            _ => Duration::ZERO,
+            }) => Some(Duration::from_millis(*wait_ms).min(LONGEST_WAIT) + Duration::from_secs(10)),
+            _ => Some(Duration::from_secs(10)),
         };
-        stream.set_read_timeout(Some(wait + Duration::from_secs(10)))?;
+        stream.set_read_timeout(timeout)?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         crate::transport::write(
             &mut stream,
@@ -425,6 +429,80 @@ mod tests {
             assert!(
                 matches!(error, Error::Io(ref e) if e.raw_os_error() == Some(expected)),
                 "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn slow_plan_acceptance_waits_for_the_definitive_reply() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(super::super::socket(state.path())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let request: Value = crate::transport::read(&mut reader).unwrap().unwrap();
+            assert_eq!(request["request"]["op"], "resume");
+            assert_eq!(request["request"]["operation_id"], "accept-once");
+            // Preparing retained Git inputs can outlast the ordinary RPC timeout.
+            std::thread::sleep(Duration::from_secs(11));
+            crate::transport::write(
+                reader.get_mut(),
+                &Response {
+                    data: Some(json!(20)),
+                    error: None,
+                },
+            )
+        });
+        let result = Client::at(state.path()).call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Resume {
+                conversation: "conversation".into(),
+                operation_id: Some("accept-once".into()),
+                plan: "reviewed-plan".into(),
+                revision_token: Some("reviewed-revision".into()),
+            },
+        ));
+        let delivered = server.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "acceptance lost its definitive reply: {result:?}"
+        );
+        assert_eq!(result.unwrap(), json!(20));
+        delivered.unwrap();
+    }
+
+    #[test]
+    fn plan_acceptance_reports_rejection_or_disconnect_without_retrying() {
+        for rejection in [Some("plan start cancelled"), None] {
+            let state = tempfile::tempdir().unwrap();
+            let listener = UnixListener::bind(super::super::socket(state.path())).unwrap();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let request: Value = crate::transport::read(&mut reader).unwrap().unwrap();
+                assert_eq!(request["request"]["op"], "resume");
+                if let Some(error) = rejection {
+                    crate::transport::write(
+                        reader.get_mut(),
+                        &Response {
+                            data: None,
+                            error: Some(error.into()),
+                        },
+                    )
+                    .unwrap();
+                }
+            });
+            let result = Client::at(state.path()).call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::Resume {
+                    conversation: "conversation".into(),
+                    operation_id: None,
+                    plan: "reviewed-plan".into(),
+                    revision_token: None,
+                },
+            ));
+            server.join().unwrap();
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                rejection.unwrap_or(DISCONNECTED)
             );
         }
     }

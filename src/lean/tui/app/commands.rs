@@ -293,6 +293,7 @@ impl App {
         }
         let revision_token = self.view.plan_revision_token.clone();
         self.plan_view = None;
+        self.notice = Some("Accepting plan…".into());
         self.send_command(Some("plan accepted"), |conversation| {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
                 conversation,
