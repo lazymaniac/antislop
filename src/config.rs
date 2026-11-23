@@ -6,7 +6,7 @@ mod resolution;
 pub use model::*;
 
 /// Only configuration format accepted by this build.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 #[cfg(test)]
 #[path = "config/tests.rs"]
 mod tests;

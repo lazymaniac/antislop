@@ -143,7 +143,7 @@ and the others watch until they take control from the palette.
    deliverables, not permissions.
 3. Independent plan review checks coverage and dependencies. You accept the checked
    plan before it runs; rejected plans are corrected and reviewed again.
-4. Code tasks get dedicated local options and any configured quality gates.
+4. Code tasks get local Options and quality gates defined by the selected rigor.
    Workers deliver changes from isolated worktrees; independent tasks run concurrently.
 5. Dedicated reviewers inspect results and evidence and may run checks. Corrections
    continue as needed. Missing progress produces a notice rather than a hidden stop limit.
@@ -159,6 +159,30 @@ requirements extraction, ledger browser or ledger approval step.
 This version uses runtime database schema 17. Older databases are rejected without
 modification or migration. Stop the daemon, archive the project runtime directory
 containing `core.db`, and restart both client and daemon to create fresh state.
+
+## Feature rigor and configuration
+
+For code-producing work, `feature` runs Research and impact Analysis in parallel.
+Dependencies consumes Research; Architecture consumes Analysis and Dependencies;
+Test Design consumes Analysis. Each implementation writer consumes Architecture,
+Test Design and its actual producers, then gets its own Options selection and review.
+Focused implementation tests stay with the writer.
+
+The runtime always adds six final checks: Refactoring, then parallel Static Analysis,
+Testing, Security and Performance, then Integration. Final Delivery reconciles the
+requirements, observed results, usage and limitations after all deliverables and checks.
+Every specialist runs and receives independent review. When an area does not apply,
+it reports a brief evidence-based N/A. This adds no Writing stage or requirements interview.
+
+Configuration now requires `schema_version = 5`. Remove `policy.required_gates` and
+`policy.local_options`; the selected rigor alone defines gates and Options.
+`policy.local_commits` is unchanged. Existing configurations fail with migration
+instructions and are never rewritten automatically. Keep routes for the specialist
+kinds as shown in `examples/antislop.toml`.
+
+Accepted older graphs remain unchanged on restart. Selecting Feature for an existing
+graph queues a reviewed replan when its specialist stages are missing, preserving
+approved results and retained checkpoints.
 
 ## Build and test
 

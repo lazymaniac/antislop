@@ -38,7 +38,7 @@ fn extended_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
-            "Rigor: feature · full ceremony (plan review + quality gates + audit)".into(),
+            "Rigor: feature · specialists + Options + full quality pipeline + Delivery".into(),
             Action::Run(Command::SelectTeam(Team::Feature)),
         ),
         (
@@ -177,7 +177,7 @@ fn slash_command_items(view: &View) -> Vec<(String, Action)> {
             Action::Run(Command::SelectTeam(Team::SmallChange)),
         ),
         (
-            "/feature · full rigor (plan review + quality gates + final audit)".into(),
+            "/feature · specialists + full quality pipeline + Delivery".into(),
             Action::Run(Command::SelectTeam(Team::Feature)),
         ),
         (

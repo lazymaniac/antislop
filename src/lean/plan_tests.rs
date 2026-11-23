@@ -16,76 +16,24 @@ fn task_role_recognizes_only_explicit_worker_and_reviewer_addresses() {
 }
 
 #[test]
-fn finalization_leaves_out_options_when_local_options_are_off() {
-    let writer: TaskContract = serde_json::from_value(json!({
-        "id": "writer", "title": "Implement change", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Preserve behavior",
-        "change_kind": "code", "kind": "implementation",
-        "reviewer": {"summary": "Check change"}}))
-    .unwrap();
-    for required_gates in [false, true] {
-        let with = finalize_plan(vec![writer.clone()], required_gates, true);
-        let without = finalize_plan(with.clone(), required_gates, false);
-        assert!(without.iter().all(|spec| spec.kind != WorkKind::Options));
-        assert!(without.iter().all(|spec| spec.options_for.is_none()));
-        let ids: Vec<_> = without.iter().map(|spec| &spec.id).collect();
-        assert!(
-            without
-                .iter()
-                .flat_map(|spec| &spec.depends_on)
-                .all(|dependency| ids.contains(&dependency))
-        );
-        tasks::validate(&without).unwrap();
-        assert_eq!(
-            without,
-            finalize_plan(without.clone(), required_gates, false)
-        );
-    }
-}
-
-#[test]
-fn finalization_adds_options_with_and_without_required_gates() {
-    let writer: TaskContract = serde_json::from_value(json!({
-        "id": "writer", "title": "Implement change", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "Preserve behavior",
-        "change_kind": "code", "kind": "implementation",
-        "reviewer": {"summary": "Check change"}}))
-    .unwrap();
-    for required_gates in [false, true] {
-        let input = vec![writer.clone()];
-        let specs = finalize_plan(input.clone(), required_gates, true);
-        assert_eq!(specs, finalize_plan(input, required_gates, true));
-        assert_eq!(specs, finalize_plan(specs.clone(), required_gates, true));
-        if required_gates {
-            assert!(tasks::missing_quality_agents(&specs).is_empty());
-            assert!(
-                specs
-                    .iter()
-                    .filter(|spec| spec.change_kind.has_delivery())
-                    .count()
-                    > 1
-            );
-        } else {
-            assert_eq!(specs.len(), 2);
-            assert!(!tasks::missing_quality_agents(&specs).is_empty());
-        }
-        for writer in specs
+fn finalization_derives_options_and_gates_from_rigor() {
+    let writer: TaskContract = serde_json::from_value(json!({"id":"writer","title":"Write","goal":"Deliver behavior","kind":"implementation","change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Behavior works"}]})).unwrap();
+    for team in [
+        tasks::Team::Feature,
+        tasks::Team::SmallChange,
+        tasks::Team::Refactoring,
+        tasks::Team::SecurityFix,
+        tasks::Team::NoQualityGates,
+    ] {
+        let plan = finalize_team_plan(vec![writer.clone()], team);
+        assert_eq!(plan.iter().any(|t| t.options_for.is_some()), team.options());
+        let kinds = plan
             .iter()
-            .filter(|spec| spec.change_kind.has_delivery() && !spec.quality_gate)
-        {
-            assert!(writer.depends_on.iter().any(|id| {
-                specs.iter().any(|spec| {
-                    spec.id == *id
-                        && spec.kind == WorkKind::Options
-                        && !spec.change_kind.has_delivery()
-                })
-            }));
-        }
-        for gate in specs.iter().filter(|spec| spec.quality_gate) {
-            assert!(!gate.depends_on.iter().any(|id| {
-                specs
-                    .iter()
-                    .any(|spec| spec.id == *id && spec.options_for.as_deref() == Some(&gate.id))
-            }));
-        }
+            .filter(|t| t.quality_gate)
+            .map(|t| t.kind)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(kinds, team.gates().iter().copied().collect());
+        assert_eq!(plan, finalize_team_plan(plan.clone(), team));
     }
 }
 
@@ -93,9 +41,8 @@ fn finalization_adds_options_with_and_without_required_gates() {
 fn code_review_selection_accepts_only_report_only_review_tasks() {
     use crate::lean::core::plan::proposal::checked_team_plan;
 
-    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    config.policy.required_gates = true;
-    config.policy.local_options = true;
+    let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+
     let analysis: TaskContract = serde_json::from_value(json!({
         "id":"review", "title":"Review target", "goal":"Inspect target and report verified findings without edits.",
         "change_kind":"none", "kind":"analysis",
@@ -157,9 +104,8 @@ fn code_review_selection_accepts_only_report_only_review_tasks() {
 fn no_quality_gates_preserves_requested_dependencies_without_gates_options_or_audit_task() {
     use crate::lean::core::plan::proposal::checked_team_plan;
 
-    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    config.policy.required_gates = true;
-    config.policy.local_options = true;
+    let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+
     let parse = |value| serde_json::from_value::<TaskContract>(value).unwrap();
     let first = parse(json!({
         "id":"first", "title":"Implement parser", "goal":"Add parser behavior",
@@ -172,8 +118,7 @@ fn no_quality_gates_preserves_requested_dependencies_without_gates_options_or_au
         "acceptance_criteria":[{"id":"C1","text":"Tests cover parser behavior"}]
     }));
 
-    for required_gates in [false, true] {
-        config.policy.required_gates = required_gates;
+    {
         let plan = checked_team_plan(
             &[first.clone(), second.clone()],
             &config,
@@ -190,7 +135,7 @@ fn no_quality_gates_preserves_requested_dependencies_without_gates_options_or_au
         assert_eq!(
             plan.iter().filter(|task| task.quality_gate).count(),
             0,
-            "global required_gates={required_gates} must not add a quality pipeline"
+            "the selected rigor must not add a quality pipeline"
         );
         assert!(plan.iter().all(|task| task.kind != WorkKind::Options));
         assert_eq!(
@@ -242,8 +187,6 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
             .into_iter()
             .map(|spec| serde_json::from_value(spec).unwrap())
             .collect(),
-        false,
-        true,
     );
     let values: Vec<_> = specs
         .iter()
@@ -421,7 +364,7 @@ fn the_owner_goal_reaches_its_generated_options_task() {
         "change_kind": "code", "kind": "implementation", }))
     .unwrap();
     let options_goal = |writer: &TaskContract| {
-        finalize_plan(vec![writer.clone()], false, true)
+        finalize_plan(vec![writer.clone()])
             .into_iter()
             .find(|spec| spec.options_for.is_some())
             .unwrap()
@@ -430,7 +373,7 @@ fn the_owner_goal_reaches_its_generated_options_task() {
     assert!(!options_goal(&writer).contains("source compatible"));
     assert!(options_goal(&writer).contains("read_task_contract"));
     writer.goal = "Do a different thing entirely".into();
-    let revised = finalize_plan(vec![writer.clone()], false, true);
+    let revised = finalize_plan(vec![writer.clone()]);
     let owner = revised.iter().find(|task| task.id == writer.id).unwrap();
     assert_eq!(owner.goal, writer.goal);
     assert!(!options_goal(&writer).contains("different thing"));
@@ -450,8 +393,8 @@ fn explicit_quality_checks_precede_the_final_task_after_finalization() {
         {"id":"t13", "title":"Summarize", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Summarize checked results", "change_kind": "none", "kind":"analysis", "depends_on":["integration"]}
     ]);
     let tasks = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
-    for required_gates in [false, true] {
-        let finalized = finalize_plan(tasks.clone(), required_gates, true);
+    {
+        let finalized = tasks::with_options(tasks::with_required_agents(tasks.clone()));
         tasks::validate(&finalized).unwrap();
         let position = |id: &str| finalized.iter().position(|task| task.id == id).unwrap();
         assert!(position("t12") < position("quality"));
@@ -479,7 +422,7 @@ fn explicit_quality_checks_precede_the_final_task_after_finalization() {
         }
         assert_eq!(
             finalized,
-            finalize_plan(finalized.clone(), required_gates, true)
+            tasks::with_options(tasks::with_required_agents(finalized.clone()))
         );
     }
 }
@@ -489,7 +432,7 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
     assert!(
         tasks::Team::SmallChange
             .summary()
-            .contains("options: when local options are enabled")
+            .contains("options: before each eligible code writer")
     );
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer",
@@ -500,7 +443,7 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
     }))
     .unwrap();
 
-    let finalized = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::SmallChange);
+    let finalized = finalize_team_plan(vec![writer.clone()], tasks::Team::SmallChange);
     tasks::validate(&finalized).unwrap();
 
     let gates: Vec<_> = finalized
@@ -562,8 +505,7 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
         );
     }
 
-    let options_disabled =
-        finalize_team_plan(vec![writer.clone()], true, false, tasks::Team::SmallChange);
+    let options_disabled = finalize_team_plan(vec![writer.clone()], tasks::Team::SecurityFix);
     tasks::validate(&options_disabled).unwrap();
     assert!(
         options_disabled
@@ -583,12 +525,12 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
         })
     }));
 
-    let gates_disabled = finalize_team_plan(vec![writer], false, true, tasks::Team::SmallChange);
+    let gates_disabled = finalize_team_plan(vec![writer], tasks::Team::NoQualityGates);
     assert!(gates_disabled.iter().all(|task| !task.quality_gate));
     assert!(
         gates_disabled
             .iter()
-            .any(|task| task.kind == WorkKind::Options)
+            .all(|task| task.kind != WorkKind::Options)
     );
 }
 
@@ -603,7 +545,7 @@ fn small_change_adds_no_options_for_tasks_without_code_changes() {
     }))
     .unwrap();
 
-    let finalized = finalize_team_plan(vec![artifact], true, true, tasks::Team::SmallChange);
+    let finalized = finalize_team_plan(vec![artifact], tasks::Team::SmallChange);
     tasks::validate(&finalized).unwrap();
     assert!(finalized.iter().all(|task| task.kind != WorkKind::Options));
     assert!(finalized.iter().all(|task| !task.quality_gate));
@@ -622,8 +564,8 @@ fn small_change_revision_rebuilds_feature_gates_from_the_selected_team() {
 
     // Revisions finalize the merged baseline again. A baseline may already
     // contain generated feature gates, which must be replaced by this team's.
-    let baseline = finalize_team_plan(vec![writer], true, true, tasks::Team::Feature);
-    let revised = finalize_team_plan(baseline, true, true, tasks::Team::SmallChange);
+    let baseline = finalize_team_plan(vec![writer], tasks::Team::Feature);
+    let revised = finalize_team_plan(baseline, tasks::Team::SmallChange);
     tasks::validate(&revised).unwrap();
 
     let gates: Vec<_> = revised
@@ -646,8 +588,8 @@ fn small_change_report_checkpoint_preserves_producer_and_check_order() {
         {"id":"report","title":"Report","goal":"Report delivered changes and validation","kind":"analysis","change_kind":"none","depends_on":["integration-gate"],"acceptance_criteria":[{"id":"C1","text":"Report the combined result"}]}
     ])).unwrap();
     for initial_team in [tasks::Team::Feature, tasks::Team::SmallChange] {
-        let baseline = finalize_team_plan(authored.clone(), true, false, initial_team);
-        let plan = finalize_team_plan(baseline, true, false, tasks::Team::SmallChange);
+        let baseline = finalize_team_plan(authored.clone(), initial_team);
+        let plan = finalize_team_plan(baseline, tasks::Team::SmallChange);
         tasks::validate(&plan).unwrap();
         let report = plan.iter().find(|task| task.id == "report").unwrap();
         assert_eq!(report.depends_on, ["static-analyzer", "review-testing"]);
@@ -656,7 +598,7 @@ fn small_change_report_checkpoint_preserves_producer_and_check_order() {
             assert!(gate.depends_on.contains(&"writer".to_owned()));
         }
         assert_eq!(
-            finalize_team_plan(plan.clone(), true, false, tasks::Team::SmallChange),
+            finalize_team_plan(plan.clone(), tasks::Team::SmallChange),
             plan
         );
     }
@@ -670,14 +612,18 @@ fn a_retargeted_checkpoint_uses_reserved_gate_ids_before_a_code_consumer() {
         {"id":"writer","title":"Producer","goal":"Implement storage","kind":"implementation","change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Storage behavior is delivered"}]},
         {"id":"consumer","title":"Consumer","goal":"Use validated storage","kind":"implementation","change_kind":"code","depends_on":["integration-gate"],"acceptance_criteria":[{"id":"C1","text":"Use the checked storage interface"}]}
     ])).unwrap();
-    let plan = finalize_team_plan(authored, true, false, tasks::Team::SmallChange);
+    let plan = finalize_team_plan(authored, tasks::Team::SmallChange);
     tasks::validate(&plan).unwrap();
     let consumer = plan.iter().find(|task| task.id == "consumer").unwrap();
     assert_eq!(
         consumer.depends_on,
-        ["static-analyzer-2", "review-testing-2"]
+        ["static-analyzer-2", "review-testing-2", "consumer-options"]
     );
-    for id in &consumer.depends_on {
+    for id in consumer
+        .depends_on
+        .iter()
+        .filter(|id| id.as_str() != "consumer-options")
+    {
         let gate = plan.iter().find(|task| task.id == *id).unwrap();
         assert!(gate.quality_gate);
         assert!(gate.depends_on.contains(&"writer".to_owned()));
@@ -695,9 +641,8 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
         {"id":"t15", "title":"Close", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Close delivery", "change_kind": "none", "kind":"analysis", "depends_on":["t14","integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
-    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    config.policy.required_gates = true;
-    let finalized = crate::lean::core::plan::proposal::checked_plan(&specs, &config).unwrap();
+
+    let finalized = tasks::with_options(tasks::with_required_agents(specs));
     tasks::validate(&finalized).unwrap();
     let task = |id: &str| finalized.iter().find(|task| task.id == id).unwrap();
     assert!(
@@ -725,13 +670,7 @@ fn generated_gates_can_be_prerequisites_of_authored_tasks() {
     }
     assert_eq!(
         finalized,
-        crate::lean::core::plan::proposal::checked_plan(&finalized, &config).unwrap()
-    );
-    config.policy.required_gates = false;
-    assert!(
-        crate::lean::core::plan::proposal::checked_plan(&specs, &config)
-            .unwrap_err()
-            .contains("unknown task")
+        tasks::with_options(tasks::with_required_agents(finalized.clone()))
     );
 }
 
@@ -758,10 +697,8 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
         {"id":"final-report", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checks", "change_kind": "none", "kind":"analysis", "depends_on":["integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
-    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
-    config.policy.required_gates = true;
-    config.policy.local_options = true;
-    let final_plan = crate::lean::core::plan::proposal::checked_plan(&specs, &config).unwrap();
+
+    let final_plan = tasks::with_options(tasks::with_required_agents(specs));
     tasks::validate(&final_plan).unwrap();
     let task = |id: &str| final_plan.iter().find(|task| task.id == id).unwrap();
     assert!(
@@ -787,7 +724,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
     );
     assert_eq!(
         final_plan,
-        crate::lean::core::plan::proposal::checked_plan(&final_plan, &config).unwrap()
+        tasks::with_options(tasks::with_required_agents(final_plan.clone()))
     );
 }
 
@@ -796,7 +733,8 @@ fn a_gate_alias_cannot_hide_a_self_dependency() {
     let submitted = json!([
         {"id":"tests", "title":"Test", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["review-testing"]}
     ]);
-    let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
+    let authored = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
+    let error = tasks::order_graph(tasks::with_required_agents(authored)).unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");
 }
 
@@ -814,7 +752,7 @@ fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
             .is_none(),
         "legacy contracts retain their serialized form"
     );
-    let graph = finalize_plan(vec![writer, diagnostic], true, true);
+    let graph = finalize_plan(vec![writer, diagnostic]);
     tasks::validate(&graph).unwrap();
     for task in &graph {
         if task.id == "diagnose" {
@@ -823,7 +761,7 @@ fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
             assert!(task.deferred, "{} must stay held", task.id);
         }
     }
-    assert_eq!(finalize_plan(graph.clone(), true, true), graph);
+    assert_eq!(finalize_plan(graph.clone()), graph);
     let restored: Vec<TaskContract> =
         serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
     assert_eq!(restored, graph, "holds survive persistence and restart");
@@ -836,9 +774,9 @@ fn a_team_runs_only_its_own_gates_and_options() {
         "change_kind": "code", "kind": "implementation",
         "reviewer": {"summary": "Check change"}}))
     .unwrap();
-    let feature = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::Feature);
-    assert_eq!(feature, finalize_plan(vec![writer.clone()], true, true));
-    let small = finalize_team_plan(vec![writer.clone()], true, true, tasks::Team::SmallChange);
+    let feature = finalize_team_plan(vec![writer.clone()], tasks::Team::Feature);
+    assert_eq!(feature, finalize_plan(vec![writer.clone()]));
+    let small = finalize_team_plan(vec![writer.clone()], tasks::Team::SmallChange);
     let gates: Vec<_> = small
         .iter()
         .filter(|spec| spec.quality_gate)
@@ -880,13 +818,10 @@ fn a_team_runs_only_its_own_gates_and_options() {
     tasks::validate(&small).unwrap();
     assert_eq!(
         small,
-        finalize_team_plan(small.clone(), true, true, tasks::Team::SmallChange)
+        finalize_team_plan(small.clone(), tasks::Team::SmallChange)
     );
     // Switching back to feature restores the full gate pipeline.
-    assert_eq!(
-        finalize_team_plan(small, true, true, tasks::Team::Feature),
-        feature
-    );
+    assert_eq!(finalize_team_plan(small, tasks::Team::Feature), feature);
 
     let misfit = tasks::Team::Research
         .misfit(std::slice::from_ref(&writer))
@@ -917,7 +852,7 @@ fn code_review_team_round_trips_and_adds_no_code_gates_or_options() {
         "acceptance_criteria": [{"id": "C1", "text": "The change is implemented"}]
     }))
     .unwrap();
-    let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+    let plan = finalize_team_plan(vec![writer.clone()], team);
     assert_eq!(plan, vec![writer]);
     assert!(
         plan.iter()
@@ -981,7 +916,7 @@ fn context_scout_is_not_predefined_or_required_and_legacy_context_tasks_round_tr
     }))
     .unwrap();
     for team in tasks::Team::ALL {
-        let plan = finalize_team_plan(vec![writer.clone()], true, true, team);
+        let plan = finalize_team_plan(vec![writer.clone()], team);
         tasks::validate(&plan).unwrap();
         assert!(plan.iter().all(|task| task.kind != WorkKind::Context));
         let gates: Vec<_> = plan

@@ -501,57 +501,6 @@ fn plan_review_does_not_require_a_context_scout_for_code_changes() {
 }
 
 #[test]
-fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open_edited(
-        dir.path(),
-        WRITING_PLAN,
-        "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
-        &[("required_gates = true", "required_gates = false")],
-    );
-    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    core.send(&conversation, "change a.rs").unwrap();
-    wait_until("plan reviewer started", || {
-        std::fs::read_to_string(dir.path().join("prompts.jsonl"))
-            .is_ok_and(|log| log.contains("You review a plan"))
-    });
-    core.cancel(&conversation);
-    wait_until("graph inspection cancelled", || core.is_idle(&conversation));
-    let notices = events(&core, &conversation, "notice");
-    assert!(
-        notices.iter().any(|n| n["text"]
-            .as_str()
-            .unwrap()
-            .contains("required_gates is off")),
-        "{notices:?}"
-    );
-    // With the gates on, there is no such notice.
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        WRITING_PLAN,
-        "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
-    );
-    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    core.send(&conversation, "change a.rs").unwrap();
-    wait_until("plan reviewer started", || {
-        std::fs::read_to_string(dir.path().join("prompts.jsonl"))
-            .is_ok_and(|log| log.contains("You review a plan"))
-    });
-    core.cancel(&conversation);
-    wait_until("graph inspection cancelled", || core.is_idle(&conversation));
-    assert!(
-        events(&core, &conversation, "notice")
-            .iter()
-            .all(|n| !n["text"].as_str().unwrap().contains("required_gates"))
-    );
-}
-
-#[test]
 fn a_dependent_gets_the_summary_of_its_dependency_not_its_report() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(

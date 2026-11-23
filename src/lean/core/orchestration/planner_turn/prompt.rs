@@ -13,8 +13,6 @@ pub(super) struct PlannerPrompt<'a> {
     /// The approved tasks of the plan that ran, which a new plan may keep.
     pub(super) keepable: Option<&'a str>,
     pub(super) scope_context: Option<&'a str>,
-    pub(super) required_gates: bool,
-    pub(super) local_options: bool,
 }
 
 /// The requirements always lead, so a resumed session drafts from the current
@@ -49,16 +47,19 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         .team_guidance
         .map(|guidance| guidance.team)
         .unwrap_or_default();
+    if context.team_guidance.is_none() && team == tasks::Team::Feature {
+        prompt.push_str(tasks::FEATURE_PLANNING_RULES);
+    }
     let gate_ids: Vec<_> = tasks::PREDEFINED_AGENT_POOL
         .iter()
-        .filter(|agent| context.required_gates && team.gates().contains(&agent.kind))
+        .filter(|agent| team.gates().contains(&agent.kind))
         .map(|agent| agent.id)
         .collect();
     let policy = format!(
         "\n- team: {}\n- generated_gate_ids: {}\n- generated_options: {}",
         team.name(),
         gate_ids.join(", "),
-        context.local_options && team.options()
+        team.options()
     );
     prompt.push_str(&format!("\nEffective runtime policy for the current team (trusted runtime data): {policy}\nOnly these gate ids are generated for this team. Reports depend on their actual producers and required checks. If choosing a different team is permitted, derive its gates from the team catalog; never assume feature gates exist for another team.\n"));
     if let Some(contracts) = context.replaced {
@@ -81,7 +82,7 @@ mod tests {
     #[test]
     fn effective_policy_lists_only_the_gates_and_options_the_team_will_generate() {
         for team in tasks::Team::ALL {
-            for enabled in [true, false] {
+            {
                 let guidance = TeamGuidance {
                     team,
                     origin: crate::lean::store::TeamOrigin::User,
@@ -96,19 +97,14 @@ mod tests {
                     replaced: None,
                     keepable: None,
                     scope_context: None,
-                    required_gates: enabled,
-                    local_options: enabled,
                 });
                 let expected: Vec<_> = tasks::PREDEFINED_AGENT_POOL
                     .iter()
-                    .filter(|agent| enabled && team.gates().contains(&agent.kind))
+                    .filter(|agent| team.gates().contains(&agent.kind))
                     .map(|agent| agent.id)
                     .collect();
                 assert!(prompt.contains(&format!("- generated_gate_ids: {}", expected.join(", "))));
-                assert!(prompt.contains(&format!(
-                    "- generated_options: {}",
-                    enabled && team.options()
-                )));
+                assert!(prompt.contains(&format!("- generated_options: {}", team.options())));
                 assert!(!prompt.contains("```json"));
             }
         }
@@ -137,8 +133,6 @@ mod tests {
                             "Approved storage work and retained checkpoints remain available.",
                         ),
                         scope_context: None,
-                        required_gates: true,
-                        local_options: true,
                     });
                     assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
                     assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
@@ -180,8 +174,6 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
-            required_gates: true,
-            local_options: true,
         });
         assert!(prompt.contains("Trusted team policy:"));
         assert!(prompt.contains("Preserve it across plan changes"));
@@ -208,8 +200,6 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
-            required_gates: true,
-            local_options: true,
         });
         assert!(prompt.contains("current working-tree diff only when the request clearly asks"));
         assert!(prompt.contains("If no target or diff can be inferred"));
@@ -234,12 +224,10 @@ mod tests {
             replaced: None,
             keepable: None,
             scope_context: None,
-            required_gates: true,
-            local_options: true,
         });
         assert!(prompt.contains("Selected rigor: `no-quality-gates`"));
         assert!(prompt.contains("real dependency edges"));
-        assert!(prompt.contains("ignores global required-gates and local-options policy"));
+        assert!(prompt.contains("selected rigor defines this behavior"));
         assert!(prompt.contains("Do not add another integration task or a final quality audit"));
     }
 }

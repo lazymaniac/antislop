@@ -187,9 +187,7 @@ print(json.dumps({{"event": "result", "result": {{"conversation_id": session, "s
     (codex, agy)
 }
 
-/// These tests follow one writing task through its agents, so the required
-/// quality gates a real plan gets are switched off;
-/// `required_gates_join_plans_that_write` switches them back on.
+/// Provider configuration for writer lifecycle fixtures. Rigor selects the pipeline.
 fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -204,7 +202,6 @@ fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> C
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
     )
-    .replace("required_gates = true", "required_gates = false")
     .replace("local_commits = true", "local_commits = false");
     Config::from_toml(&change(text)).unwrap()
 }
@@ -526,9 +523,7 @@ fn required_gates_join_plans_that_write() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis(dir.path());
-    let config = config_with(&codex, &agy, |text| {
-        text.replace("required_gates = false", "required_gates = true")
-    });
+    let config = config_with(&codex, &agy, |text| text);
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
@@ -616,9 +611,7 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
     // Read-only audits have no diff to inspect; this reviewer simply approves.
     let script = std::fs::read_to_string(&agy).unwrap();
     std::fs::write(&agy, script.replace("\"git diff\" in prompt", "True")).unwrap();
-    let config = config_with(&codex, &agy, |text| {
-        text.replace("required_gates = false", "required_gates = true")
-    });
+    let config = config_with(&codex, &agy, |text| text);
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = run_plan(&core, &project);
 
@@ -917,8 +910,8 @@ fn writer_completion_updates_dependents_before_releasing_its_checkout() {
         format!("{}{}{}", &codex_script[..start], plan, &codex_script[end..]),
     )
     .unwrap();
-    let mut config = config(&codex, &agy);
-    config.policy.local_options = false;
+    let config = config(&codex, &agy);
+
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
     core.send(&conversation.id, "add a greeting").unwrap();
@@ -2272,8 +2265,7 @@ fn writers_without_path_scopes_run_concurrently_in_separate_worktrees() {
             "open(\"hello-\" + task_id + \".txt\", \"w\")",
         );
     std::fs::write(&agy, script).unwrap();
-    let mut config = config(&codex, &agy);
-    config.policy.local_options = false;
+    let config = config(&codex, &agy);
 
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = run_plan(&core, &project);

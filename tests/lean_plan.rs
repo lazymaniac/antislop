@@ -933,8 +933,8 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
         &format!("plan = json.loads({:?})\nif \"The plan finished. Results of each task follow.\" in prompt and \"Address each new user comment\" not in prompt:",plan.to_string())
     );
     std::fs::write(&codex, source).unwrap();
-    let mut config = config(&codex, &agy);
-    config.policy.required_gates = true;
+    let config = config(&codex, &agy);
+
     let core = Core::open(&dir.path().join("state"), config).unwrap();
     let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(

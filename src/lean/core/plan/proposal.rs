@@ -17,14 +17,6 @@ struct ProposalPublication<'a> {
     cancel: &'a AtomicBool,
 }
 
-#[cfg(test)]
-pub(in crate::lean) fn checked_plan(
-    specs: &[TaskContract],
-    config: &Config,
-) -> std::result::Result<Vec<TaskContract>, String> {
-    checked_team_plan(specs, config, tasks::Team::Feature)
-}
-
 /// The plan the runtime runs: `specs` with its options and quality gates, if
 /// it fits the policy and `team`, and every task can be carried out as written. The
 /// error is what the planner must change; `submit_plan` returns it at once.
@@ -32,6 +24,15 @@ pub(in crate::lean) fn checked_team_plan(
     specs: &[TaskContract],
     config: &Config,
     team: tasks::Team,
+) -> std::result::Result<Vec<TaskContract>, String> {
+    checked_team_plan_preserving(specs, config, team, &Default::default())
+}
+
+fn checked_team_plan_preserving(
+    specs: &[TaskContract],
+    _config: &Config,
+    team: tasks::Team,
+    preserved: &std::collections::BTreeSet<String>,
 ) -> std::result::Result<Vec<TaskContract>, String> {
     let mut authored = specs.to_vec();
     if team == tasks::Team::CodeReview {
@@ -50,12 +51,25 @@ pub(in crate::lean) fn checked_team_plan(
     if let Some(misfit) = team.misfit(specs) {
         return Err(misfit);
     }
-    let mut specs = finalize_team_plan(
-        specs.to_vec(),
-        config.policy.required_gates,
-        config.policy.local_options,
-        team,
-    );
+    let mut specs = finalize_team_plan(specs.to_vec(), team);
+    // A kept contract is immutable. Newly generated Options serve remaining writers.
+    for task in &mut specs {
+        if preserved.contains(&task.id)
+            && let Some(original) = authored.iter().find(|old| old.id == task.id)
+        {
+            *task = original.clone();
+        }
+    }
+    let used: std::collections::BTreeSet<_> = specs
+        .iter()
+        .flat_map(|t| t.depends_on.iter().cloned())
+        .collect();
+    specs.retain(|t| {
+        t.options_for
+            .as_ref()
+            .is_none_or(|owner| !preserved.contains(owner) || used.contains(&t.id))
+    });
+
     if team == tasks::Team::CodeReview {
         for task in &mut specs {
             task.reviewer.summary = Some(tasks::CODE_REVIEW_REVIEWER_SUMMARY.into());
@@ -68,6 +82,9 @@ pub(in crate::lean) fn checked_team_plan(
         }
     }
     let specs = tasks::order_graph(specs).map_err(|error| error.to_string())?;
+    if team == tasks::Team::Feature {
+        tasks::validate_feature_pipeline(&specs, preserved).map_err(|e| e.to_string())?;
+    }
     let findings = feasibility::check(&specs);
     let blocking: Vec<_> = findings
         .iter()
@@ -128,6 +145,45 @@ fn is_review_kind(kind: WorkKind) -> bool {
 }
 
 impl Core {
+    pub(in crate::lean) fn checked_candidate_plan(
+        &self,
+        conversation: &str,
+        specs: &[TaskContract],
+        team: tasks::Team,
+        redo: &[String],
+    ) -> Result<Vec<TaskContract>> {
+        let history = self.store.approved_task_history(conversation)?;
+        let generated: std::collections::BTreeSet<_> = history
+            .iter()
+            .filter(|t| t.spec["quality_gate"] == true || t.spec["options_for"].is_string())
+            .filter_map(|t| t.spec["id"].as_str().map(str::to_owned))
+            .chain(
+                specs
+                    .iter()
+                    .filter(|t| t.quality_gate || t.options_for.is_some())
+                    .map(|t| t.id.clone()),
+            )
+            .collect();
+        let normalize = |mut spec: TaskContract| {
+            spec.depends_on.retain(|id| !generated.contains(id));
+            spec
+        };
+        let preserved = specs
+            .iter()
+            .filter(|spec| {
+                !redo.contains(&spec.id)
+                    && history.iter().any(|task| {
+                        task.status == status::APPROVED
+                            && serde_json::from_value::<TaskContract>(task.spec.clone())
+                                .is_ok_and(|old| normalize(old) == normalize((*spec).clone()))
+                    })
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        checked_team_plan_preserving(specs, &self.config_snapshot(), team, &preserved)
+            .map_err(Error::Invalid)
+    }
+
     /// Stores the plan and has it checked. A plan the reviewer sends back
     /// goes back to the planner until review approves it. A checked plan
     /// waits for explicit user acceptance after review; failures and missing inputs remain visible.
@@ -174,13 +230,14 @@ impl Core {
         addressed: Option<&[u64]>,
         _cancel: &AtomicBool,
         specs: &[TaskContract],
-        config: &Config,
+        _config: &Config,
     ) -> Result<Option<Vec<TaskContract>>> {
         helpers::record_addressed_comments(&self.store, conversation, addressed)?;
-        match checked_team_plan(specs, config, self.store.team(conversation)?) {
+        match self.checked_candidate_plan(conversation, specs, self.store.team(conversation)?, &[])
+        {
             Ok(specs) => Ok(Some(specs)),
             Err(message) => {
-                self.record_plan_lint(conversation, &message)?;
+                self.record_plan_lint(conversation, &message.to_string())?;
                 Ok(None)
             }
         }

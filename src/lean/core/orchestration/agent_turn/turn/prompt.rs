@@ -229,12 +229,8 @@ mod tests {
                     "outputs":if matches!(delivery, "artifact" | "untracked") {json!(["report.md"])} else {json!([])},
                     "acceptance_criteria":[{"id":"C1","text":"CRITERION_SENTINEL retains every qualifier"}],
                 })).unwrap();
-                let specs = crate::lean::core::plan::helpers::finalize_team_plan(
-                    vec![contract],
-                    true,
-                    true,
-                    team,
-                );
+                let specs =
+                    crate::lean::core::plan::helpers::finalize_team_plan(vec![contract], team);
                 let tasks = core
                     .store
                     .add_plan(

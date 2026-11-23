@@ -166,8 +166,7 @@ fn open(dir: &Path) -> std::sync::Arc<Core> {
     .replace(
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
-    )
-    .replace("required_gates = true", "required_gates = false");
+    );
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
 }
 

@@ -92,7 +92,7 @@ src
    Config(C{schema_version,providers,profiles,orchestrator,routing,policy})
    Effort(E{Low,Medium,High,Xhigh})
    OrchestratorConfig(C{profile})
-   Policy(C{local_commits,required_gates,local_options})
+   Policy(C{local_commits})
    Profile(C{provider,binary,args,command,model,effort})
    ProviderConfig(C{binary,args,command})
    ProviderKind(E{Agy,Codex,Claude,Gemini,Opencode})
@@ -100,7 +100,7 @@ src
    RoleKind(E{Executor,Reviewer,Orchestrator,Planner})
    RoleRouting(C{executor,reviewer})
    WorkKind(E{Orchestration,Context,Requirements,Options,Planning,Architecture,Dependencies,Implementation,Refactoring,StaticAnalysis,TestDesign,Testing,Security,Performance,Integration,Research,Writing,Analysis,Delivery})
-   - Raw,default_{local_options,required_gates}×0
+   - Raw
   resolution
    resolve_command(provider,profile):Result<(PathBuf,Vec<String>)> > command_and_args,provider_command,merge_args
   validation
@@ -110,7 +110,7 @@ src
  config.rs
   ResolvedProfile(C{profile,provider,binary,args,model,effort,native_effort,work_kind,role})
   Config: load(path):Result<Self>; from_toml(source):Result<Self> > toml_error,remove; validate():Result<()>; resolve(work_kind,role):Result<ResolvedProfile> > validate,profile_name,profile,resolve_command,ResolvedProfile,native_effort
-  = SCHEMA_VERSION=4
+  = SCHEMA_VERSION=5
   - Config: {selected,orchestrator,routed}_profile
  lean
   agent/errors
@@ -287,8 +287,8 @@ src
       orchestrator_prompt_text(context):String > orchestrator_prompt,introduce,append_{history,decision,graph},prepend_phase,append_audit_response
       PromptContext(C{project,session,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,scope_context,decision,audit_response})
     planner_turn/prompt
-     planner_prompt_text(context):String ~53 > format_messages
-     PlannerPrompt(C{project,first,requirements,team_guidance,asked,replaced,keepable,scope_context,required_gates,local_options})
+     planner_prompt_text(context):String ~56 > format_messages
+     PlannerPrompt(C{project,first,requirements,team_guidance,asked,replaced,keepable,scope_context})
     planner_turn.rs
      - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
     planning_context
@@ -305,8 +305,8 @@ src
     answer
      PlanAnswer(C{conversation,project,config,text,scope,plan,addressed,is_comment,answered,upto})
     helpers
-     finalize_plan(specs,required_gates,local_options):Vec<TaskContract> > finalize_team_plan
-     finalize_team_plan(specs,required_gates,local_options,team):Vec<TaskContract>
+     finalize_plan(specs):Vec<TaskContract> > finalize_team_plan
+     finalize_team_plan(specs,team):Vec<TaskContract>
      writer_base_scratch(state,{plan,spec}_id):PathBuf
     kept_tasks
      - authored,not_keepable
@@ -314,14 +314,13 @@ src
      helpers/recording
       plan_event_payload(text,plan,specs,review,waiting,revision_token):Result<serde_json::Value>
       plan_review_prompt(project,request,specs,first):String
-      record_plan_review_start(store,conversation,plan,config,specs):Result<()> > Store.append_event
+      record_plan_review_start(store,conversation,plan):Result<()> > Store.append_event
      helpers.rs
       record_addressed_comments(store,conversation,addressed):Result<()> > Store.append_event
       PreparedPlan(C{id,tasks,answered})
     proposal.rs
-     checked_plan(specs,config):std::result::Result<Vec<TaskContract>,String> > checked_team_plan
-     checked_team_plan(specs,config,team):std::result::Result<Vec<TaskContract>,String> ~47 > {validate_code_review,finalize_team}_plan,is_review_only,check,message
-     - is_review_kind
+     checked_team_plan(specs,config,team):std::result::Result<Vec<TaskContract>,String> > checked_team_plan_preserving
+     - validate_code_review_plan,is_review_{only,kind}
     report
      - task_{result,findings},apply_audit_gates,unapproved_task_ids
     review
@@ -945,7 +944,7 @@ src
     replay_delivered_answers(&Arc<Self>):Result<()> > resume_delivered_answer
     resume_delivered_answer(&Arc<Self>,conversation) > accepted_plan
     defer_question_tool(conversation,args):Result<Value> > graph,required_text,agent_question,defer_question_to_user,notice
-    submit_plan_tool(conversation,role,turn,args):Result<Value> ~51 > require,interviewing,workflow,planned_tasks,graph,user_selected_team,team_origin,as_str,team,check_submitted_plan,select_planned_team,record_result
+    submit_plan_tool(conversation,role,turn,args):Result<Value> ~51 > require,interviewing,workflow,planned_tasks,graph,user_selected_team,team_origin,team,check_submitted_plan,select_planned_team,record_result
     revision_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > request_replan,required_text,revise_plan_tool
     revise_plan_tool(&Arc<Self>,conversation,args):Result<Value> > {prepare_plan,submit}_revision
     create_session_pr_with(conversation,gh):Result<Value> ~89 > db,session_pr_result,as_str,drop
@@ -965,7 +964,7 @@ src
     record_result(turn,result):Result<Value> > save_turn_result
     record_task_result(conversation,role,turn,result):Result<Value> > record_task_result_with_evidence
     record_task_result_with_evidence(conversation,role,turn,result,evidence):Result<Value> > validate_agent_result,save_turn_result_with_evidence,invalidate_open_questions
-    check_submitted_plan(conversation,tasks,keep,team):Result<()> > submitted_graph,checked_team_plan,config_snapshot,validate_result_inputs
+    check_submitted_plan(conversation,tasks,keep,team):Result<()> > submitted_graph,checked_candidate_plan,validate_result_inputs
     revised_tasks(_conversation,_plan,tasks):Result<Vec<TaskContract>>
     await_agent_answer(conversation,turn,request):Result<Value> > agent_question,require
     validate_agent_result(conversation,role,turn,result):Result<()> > task_{role,by_id},assert_task_inputs,validate_task,agent_question
@@ -1026,11 +1025,12 @@ src
     require_plan_correction(conversation,turn):Result<()> > db,has_uncorrected_review_draft,require
     submitted_graph(conversation,tasks,keep):Result<Vec<TaskContract>> > kept_contracts
     keepable_tasks_note(conversation):Result<Option<String>> > approved_task_history,keepable
-    review_plan(&Arc<Self>,conversation,project,plan,specs,config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,plan_scope_context,team_guidance,dependency_note,review,append_team_guidance
+    review_plan(&Arc<Self>,conversation,project,plan,specs,_config,cancel):Result<std::result::Result<Verdict,String>> > record_plan_review_start,plan_scope_context,team_guidance,dependency_note,review,append_team_guidance
     cancel_proposed_plan(plan):Result<()> > set_plan_status
     requeue_rejected_plan(conversation,plan,review):Result<bool> > previous_plan_rejection,open_obligations,notice,record_proposed_plan_rejection
     prepare_plan(conversation,specs,scope):Result<PreparedPlan> ~42 > flatten,plan_scope_id,scope_documents_current,create_scope,workflow,persist_proposed_tasks,bind_plan_scope,PreparedPlan,last_orchestration_answered
     publish_plan(&Arc<Self>,conversation,text,addressed,plan,review):Result<()> ~58 > PreparedPlan,resolve_plan_comments,plan_revision_token,flatten,accepted_plan,plan_event_payload
+    checked_candidate_plan(conversation,specs,team,redo):Result<Vec<TaskContract>> > approved_task_history,as_str,checked_team_plan_preserving,config_snapshot
     propose(&Arc<Self>,conversation,project,text,proposal,addressed,cancel):Result<()> > graph,prepare_{proposal,plan},complete_proposal,ProposalPublication
     upstream(plan_id,spec):Result<String> > dependency_inputs
     dependency_tasks(plan_id,spec):Result<Vec<Task>> > collect_dependencies
@@ -1048,7 +1048,7 @@ src
     accept_scope_revision(&Arc<Self>,conversation,plan):Result<Vec<Task>> > {pending_scope,plan}_revision,revised_specs,apply_direct_revision,publish_scope_resolution,maybe_continue_plan
     reject_scope_revision(&Arc<Self>,conversation,plan,reason):Result<bool> > discard_scope_revision
     supersede_scope_revision(&Arc<Self>,conversation,plan,key):Result<()> > {pending,discard}_scope_revision
-    select_rigor(&Arc<Self>,conversation,team,reason):Result<()> ~50 > select_team,accepted_plan,team,checked_team_plan,config_snapshot,PlanRevision,{plan,apply_direct}_revision,maybe_continue_plan
+    select_rigor(&Arc<Self>,conversation,team,reason):Result<bool> ~67 > select_team,accepted_plan,request_replan,team,checked_team_plan,config_snapshot,PlanRevision,{plan,apply_direct}_revision,maybe_continue_plan
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > include_scope_sources,{supersede_scope,reserve}_revision,revision_job,process_fresh_revision
     apply_user_revision(&Arc<Self>,conversation,request_key,revision,request_ai_review):Result<serde_json::Value> ~61 > normalize_user_revision_tasks,{submit,plan}_revision,ensure_accepted_plan,revised_specs,revision_checkpoints,apply_direct_revision,finish_revision_job,maybe_continue_plan,wake
     finish_blocked_plan(&Arc<Self>,conversation,tasks,cancel) > blocked_report,add_message,wake
@@ -1602,6 +1602,7 @@ src
    agents/gates
     GatePlan(C{prerequisites,deferred,prior_gates,refactoring,ordered})
      new(tasks,ordered,team_gates):Self > reserve_task_id,retarget_checkpoints,upstream_tasks,writer_ids
+     after_all_writers(tasks):Self > writer_ids
      next():Option<TaskContract> > remove,dependencies,gate_{description,task}
     - GateDescription,gate_summaries,is_audit,gate_goal
    agents.rs
@@ -1611,6 +1612,7 @@ src
     refresh_existing_options(tasks):Vec<TaskContract> > eligible_for_options,as_str,options_{task,goal}
     resolve_gate_dependencies(tasks) > expand_gate_dependencies
     same_contract(a,b):bool > normalize_options_presentation
+    with_feature_gates(tasks):Vec<TaskContract> > after_all_writers,GatePlan.new,refresh_existing_options,order_graph
     with_options(tasks):Vec<TaskContract> > eligible_for_options,options_{task,goal}
     with_required_agents(tasks):Vec<TaskContract> > with_team_gates
     with_team_gates(tasks,team_gates):Vec<TaskContract> > resolve_gate_dependencies,missing_gates,GatePlan.new,refresh_existing_options,order_graph
@@ -1627,6 +1629,10 @@ src
     effect(stat,files):(String,bool) > change_summary,effect_candidate,bound_cut
     effect_keys(effect):(Value,Value)
     report_effect(report):(String,bool) > bound_cut
+   feature
+    feature_fixture(specs):Vec<TaskContract> > with_{options,feature_gates}
+    validate_feature_pipeline(tasks,preserved):crate::Result<()> ~96 > require_feature_inputs
+    = FEATURE_{SPECIALISTS,PLANNING_RULES}
    feedback
     counted_status(entry):&'static str > as_str
     coverage(verdict,obligations):Value > obligation_counts,unknown_ids,bound,coverage_value
@@ -1655,7 +1661,7 @@ src
     checkout_slug(text):String
     order_graph(remaining):Result<Vec<TaskContract>> > graph_failure,validate
     planned_graph(tasks):Result<Vec<TaskContract>> > planned_graph_with
-    planned_graph_with(tasks,kept):Result<Vec<TaskContract>> > resolve_gate_dependencies,order_authored_graph
+    planned_graph_with(tasks,kept):Result<Vec<TaskContract>> > order_authored_graph
     validate(tasks):Result<()> > validate_task_id,has_delivery,validate_{change,acceptance_criteria,dependencies},as_str
     validate_task_id(id):Result<()> > all
     PlannedTask(C{id,checkout_name,title,goal,kind,depends_on,result_inputs,deferred,change_kind,outputs,delivery,acceptance_criteria,section,summary})
@@ -1713,7 +1719,7 @@ src
      options():bool
      summary():String > gates
      misfit(tasks):Option<String>
-    = TEAM_VERSION=3,CODE_REVIEW_REVIEWER_SUMMARY,{CODE_REVIEW,NO_QUALITY_GATES}_PLANNING_RULES,ALL
+    = TEAM_VERSION=4,CODE_REVIEW_REVIEWER_SUMMARY,{CODE_REVIEW,NO_QUALITY_GATES}_PLANNING_RULES,ALL
    validation
     check_comments_text(comments):String
     obligations(task):Vec<(String,String)> > normalize_options_presentation,for_kind
@@ -3314,6 +3320,6 @@ work/visualizations
    mod:*install_task_protocol,fixture_{conversation,conversation_with_requirements},session_{worktree,branch,worktree_if_present},confirm_scope,install_task_options_protocol,task_branch
    pty_shim.py:*ask,without,planned_task,call,finish,rpc,dialog,main
    task_cli.py:*_fixture_{tool,emit,block,contract}
-· 174,031 LOC · input 1,598,859 · output 49,417 tokens · state 4720f137bc80 · targets AGENTS.md
+· 174,401 LOC · input 1,602,358 · output 49,478 tokens · state 24dc3bea0729 · targets AGENTS.md
 ```
 <!-- hologram:end -->

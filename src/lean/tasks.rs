@@ -13,6 +13,8 @@ mod agents;
 mod bounds;
 #[path = "tasks/effect.rs"]
 mod effect;
+#[path = "tasks/feature.rs"]
+mod feature;
 #[path = "tasks/feedback.rs"]
 mod feedback;
 #[path = "tasks/graph.rs"]
@@ -38,6 +40,7 @@ mod worker;
 pub use agents::*;
 pub use bounds::*;
 pub use effect::*;
+pub use feature::*;
 #[cfg(test)]
 use feedback::OUTCOMES;
 pub(crate) use feedback::counted_status;

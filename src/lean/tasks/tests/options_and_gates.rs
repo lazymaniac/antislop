@@ -196,9 +196,12 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
     let reviewer = reviewer_prompt("project", &tasks[1], "report", None);
     assert!(reviewer.contains("Independently compare the implementation"));
     assert!(reviewer.contains("the worker's declaration is not proof"));
-    assert!(orchestrator_instructions().contains("even when required gates are disabled"));
+    assert!(
+        orchestrator_instructions()
+            .contains("Small-change, feature and refactoring always use them")
+    );
     for text in [planner_instructions(), orchestrator_instructions()] {
-        assert!(text.contains("runs with options off"), "{text}");
+        assert!(text.contains("other teams do not"), "{text}");
     }
     let plan = with_options(with_required_agents(vec![options_test_task(
         "writer", true,
@@ -384,7 +387,7 @@ fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
     for text in [&planner, &orchestrator] {
         assert!(text.contains("submit_plan"));
         assert!(!text.contains("```plan") && !text.contains("task_risks"));
-        assert!(text.contains("even when required gates are disabled"));
+        assert!(text.contains("Small-change, feature and refactoring always use them"));
         assert!(!text.contains("{KIND_NAMES}") && !text.contains("{AGENT_POOL}"));
     }
     for orchestrator_only in [
@@ -523,9 +526,9 @@ fn refreshing_options_keeps_each_owner_contract_and_dependency_pairing() {
 
 #[test]
 fn refinalization_preserves_a_read_only_consumers_explicit_options_dependency() {
-    for required_gates in [false, true] {
+    for include_gates in [false, true] {
         let finish = |plan| {
-            with_options(if required_gates {
+            with_options(if include_gates {
                 with_required_agents(plan)
             } else {
                 plan

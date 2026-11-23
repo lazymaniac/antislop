@@ -197,8 +197,12 @@ mod tests {
             "id":"writer", "title":"Contained fix", "goal":"Fix the contained behavior", "kind":"implementation", "change_kind":"code",
             "acceptance_criteria":[{"id":"C1","text":"The requested behavior works"}]
         })).unwrap();
-        let specs = checked_team_plan(std::slice::from_ref(&writer), &config, tasks::Team::Feature)
-            .unwrap();
+        let specs = checked_team_plan(
+            &tasks::feature_fixture(vec![writer.clone()]),
+            &config,
+            tasks::Team::Feature,
+        )
+        .unwrap();
         let original = core
             .prepare_plan(&conversation, &specs, Some("Fix the contained behavior"))
             .unwrap();

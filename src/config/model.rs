@@ -140,25 +140,6 @@ pub struct OrchestratorConfig {
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub local_commits: bool,
-    /// Every plan that changes code gets the required quality gates from the
-    /// predefined agent pool (refactoring, static analysis, testing, security and
-    /// performance audits, integration) it lacks.
-    #[serde(default = "default_required_gates")]
-    pub required_gates: bool,
-    /// Every writer gets a dedicated read-only options task that compares
-    /// approaches before it starts. Off, writers start straight from their
-    /// contract: for mechanical work (a refactor to fixed limits) the
-    /// comparison costs two agent runs per writer and decides nothing.
-    #[serde(default = "default_local_options")]
-    pub local_options: bool,
-}
-
-fn default_local_options() -> bool {
-    true
-}
-
-fn default_required_gates() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

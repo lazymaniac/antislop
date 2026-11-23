@@ -22,17 +22,17 @@ fn writer(id: &str) -> Value {
 
 fn run(
     plan: Value,
-    gates: bool,
+    team: tasks::Team,
     report: &str,
     implementation: &str,
     claim: &str,
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
-    run_with_requirement(plan, gates, report, implementation, claim, "A")
+    run_with_requirement(plan, team, report, implementation, claim, "A")
 }
 
 fn run_with_requirement(
     plan: Value,
-    gates: bool,
+    team: tasks::Team,
     report: &str,
     implementation: &str,
     claim: &str,
@@ -40,7 +40,7 @@ fn run_with_requirement(
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
     run_scenario(
         plan,
-        gates,
+        team,
         report,
         implementation,
         claim,
@@ -51,27 +51,7 @@ fn run_with_requirement(
 
 fn run_scenario(
     plan: Value,
-    gates: bool,
-    report: &str,
-    implementation: &str,
-    claim: &str,
-    required_format: &str,
-    scenario: &str,
-) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
-    run_scenario_with_options(
-        plan,
-        (gates, true),
-        report,
-        implementation,
-        claim,
-        required_format,
-        scenario,
-    )
-}
-
-fn run_scenario_with_options(
-    plan: Value,
-    (gates, local_options): (bool, bool),
+    team: tasks::Team,
     report: &str,
     implementation: &str,
     claim: &str,
@@ -80,7 +60,7 @@ fn run_scenario_with_options(
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
     run_scenario_with_team(
         plan,
-        (gates, local_options, None),
+        team,
         report,
         implementation,
         claim,
@@ -91,7 +71,7 @@ fn run_scenario_with_options(
 
 fn run_scenario_with_team(
     plan: Value,
-    (gates, local_options, team): (bool, bool, Option<tasks::Team>),
+    team: tasks::Team,
     report: &str,
     implementation: &str,
     claim: &str,
@@ -146,14 +126,6 @@ fn run_scenario_with_team(
     let config = include_str!("../examples/antislop.toml")
         .replace("binary = \"codex\"", &format!("binary = {:?}", codex))
         .replace("binary = \"agy\"", &format!("binary = {:?}", agy))
-        .replace(
-            "required_gates = true",
-            &format!("required_gates = {gates}"),
-        )
-        .replace(
-            "local_options = true",
-            &format!("local_options = {local_options}"),
-        )
         .replace("local_commits = true", "local_commits = false");
     let core = Core::open(
         &project.join(".antislop"),
@@ -161,7 +133,7 @@ fn run_scenario_with_team(
     )
     .unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
-    if let Some(team) = team {
+    {
         // Integration tests exercise the Core scheduler directly, so seed the
         // same persisted user choice that the daemon's select_team action writes.
         Connection::open(project.join(".antislop/core.db"))
@@ -332,35 +304,23 @@ const REPORT: &str = "A: direct; B: index. Criteria: correctness, complexity. B 
 
 #[test]
 fn orchestrator_plan_is_completed_before_each_writer_runs() {
-    for gates in [false, true] {
-        let (stored, calls, events) = run(
-            json!({"tasks":[writer("w")]}),
-            gates,
-            REPORT,
-            "selected",
-            "",
-        );
+    for team in [tasks::Team::SmallChange, tasks::Team::Refactoring] {
+        let (stored, calls, events) =
+            run(json!({"tasks":[writer("w")]}), team, REPORT, "selected", "");
         let specs: Vec<TaskContract> = stored
             .iter()
             .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
             .collect();
         assert_eq!(tasks::with_options(specs.clone()), specs);
         let input: Vec<TaskContract> = vec![serde_json::from_value(writer("w")).unwrap()];
-        let normalize = |input| {
-            tasks::with_options(if gates {
-                tasks::with_required_agents(input)
-            } else {
-                input
-            })
-        };
+        let normalize = |input| tasks::with_options(tasks::with_team_gates(input, team.gates()));
         assert_eq!(normalize(input.clone()), normalize(input));
-        assert_eq!(
+        assert!(
             specs
                 .iter()
                 .filter(|t| t.change_kind.has_delivery())
                 .count()
-                > 1,
-            gates
+                > 1
         );
         for spec in specs.iter().filter(|t| t.change_kind.has_delivery()) {
             let writer_row = stored.iter().find(|t| t.spec["id"] == spec.id).unwrap();
@@ -463,7 +423,7 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
 fn options_worker_review_and_repair_rounds_share_one_checkout_in_role_order() {
     let (stored, calls, _) = run_scenario(
         json!({"tasks":[writer("w")]}),
-        false,
+        tasks::Team::SmallChange,
         REPORT,
         "A",
         "",
@@ -481,10 +441,11 @@ fn options_worker_review_and_repair_rounds_share_one_checkout_in_role_order() {
     let role_calls: Vec<_> = calls
         .iter()
         .filter(|call| {
-            call["worker"].as_bool() == Some(true)
+            (call["worker"].as_bool() == Some(true)
+                && (call["task"] == "w" || call["task"] == "w-options"))
                 || call["reviewed"]
                     .as_str()
-                    .is_some_and(|task| !task.is_empty())
+                    .is_some_and(|task| task == "w" || task == "Options for w")
         })
         .collect();
     let worker_calls: Vec<_> = role_calls
@@ -544,12 +505,12 @@ fn shared_analysis_never_substitutes_for_dedicated_options() {
     x["depends_on"] = json!(["shared", "w"]);
     let (stored, calls, _) = run(
         json!({"tasks":[{"id":"shared","title":"shared","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Compare formats","change_kind": "none", "kind":"options","reviewer":{"summary": "selection"}},w,x]}),
-        false,
+        tasks::Team::SmallChange,
         REPORT,
         "A",
         "",
     );
-    assert_eq!(stored.len(), 5);
+    assert_eq!(stored.len(), 7);
     for id in ["w", "x"] {
         let local = stored.iter().find(|t| t.spec["options_for"] == id).unwrap();
         let target = stored.iter().find(|t| t.spec["id"] == id).unwrap();
@@ -592,7 +553,7 @@ fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
     ] {
         let (stored, calls, events) = run_with_requirement(
             json!({"tasks":[writer("w")]}),
-            false,
+            tasks::Team::SmallChange,
             REPORT,
             "B",
             claim,
@@ -652,9 +613,9 @@ fn only_reviewer_verdict_can_approve_worker_claims_and_departures() {
 
 #[test]
 fn read_only_plan_runs_without_generated_options_or_quality_writers() {
-    for gates in [false, true] {
+    for team in [tasks::Team::SmallChange, tasks::Team::Refactoring] {
         let input = json!({"id":"inspect", "title":"Inspect files", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read the repository contract", "change_kind": "none", "kind":"analysis",   "reviewer":{"summary": "read-only findings"}});
-        let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), gates, REPORT, "A", "");
+        let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), team, REPORT, "A", "");
         assert_eq!(
             stored.len(),
             1,
@@ -697,10 +658,10 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
 }
 
 #[test]
-fn explicitly_disabled_local_options_do_not_require_a_selection() {
-    let (stored, calls, _) = run_scenario_with_options(
+fn security_fix_needs_no_options_selection() {
+    let (stored, calls, _) = run_scenario_with_team(
         json!({"tasks":[writer("w")]}),
-        (false, false),
+        tasks::Team::SecurityFix,
         REPORT,
         "A",
         "",
@@ -708,7 +669,7 @@ fn explicitly_disabled_local_options_do_not_require_a_selection() {
         "",
     );
 
-    assert_eq!(stored.len(), 1);
+    assert_eq!(stored.len(), 5);
     let writer_task = stored.iter().find(|task| task.spec["id"] == "w").unwrap();
     assert_eq!(writer_task.status, "approved");
     assert!(
@@ -733,7 +694,7 @@ fn explicitly_disabled_local_options_do_not_require_a_selection() {
 fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_order() {
     let (stored, calls, events) = run_scenario_with_team(
         json!({"tasks":[writer("w")]}),
-        (true, true, Some(tasks::Team::SmallChange)),
+        tasks::Team::SmallChange,
         REPORT,
         "A",
         "",
@@ -842,22 +803,24 @@ fn small_change_policy_boundaries_match_core_scheduled_graph() {
     let writer_plan = json!({"tasks":[writer("w")]});
     let cases = [
         (
-            "options-off",
-            (true, false),
-            vec!["w", "review-testing", "static-analyzer"],
+            tasks::Team::SmallChange,
+            vec!["w", "w-options", "review-testing", "static-analyzer"],
         ),
-        ("gates-off", (false, true), vec!["w", "w-options"]),
+        (
+            tasks::Team::SecurityFix,
+            vec![
+                "w",
+                "review-testing",
+                "static-analyzer",
+                "security-auditor",
+                "integration-gate",
+            ],
+        ),
     ];
-    for (scenario, policies, expected) in cases {
-        let (stored, calls, events) = run_scenario_with_team(
-            writer_plan.clone(),
-            (policies.0, policies.1, Some(tasks::Team::SmallChange)),
-            REPORT,
-            "A",
-            "",
-            "A",
-            scenario,
-        );
+    for (team, expected) in cases {
+        let scenario = team.name();
+        let (stored, calls, events) =
+            run_scenario_with_team(writer_plan.clone(), team, REPORT, "A", "", "A", scenario);
         let mut actual: Vec<_> = stored
             .iter()
             .map(|task| task.spec["id"].as_str().unwrap())
@@ -887,7 +850,7 @@ fn small_change_policy_boundaries_match_core_scheduled_graph() {
 
     let (stored, calls, events) = run_scenario_with_team(
         json!({"tasks":[{"id":"inspect","title":"Inspect","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read only","change_kind":"none","kind":"analysis","reviewer":{"summary":"report findings"}}]}),
-        (true, true, Some(tasks::Team::SmallChange)),
+        tasks::Team::SmallChange,
         REPORT,
         "A",
         "",
@@ -916,7 +879,7 @@ fn small_change_policy_boundaries_match_core_scheduled_graph() {
 fn assert_core_delivery(scenario: &str) {
     let (stored, calls, _) = run_scenario(
         json!({"tasks":[writer("w")]}),
-        false,
+        tasks::Team::SmallChange,
         REPORT,
         "selected",
         "",
@@ -1028,7 +991,8 @@ fn assert_core_delivery(scenario: &str) {
         assert!(followup.contains("Ask the orchestrator"));
         let bytes: Vec<_> = calls
             .iter()
-            .filter_map(|c| c["written"].as_str().map(|_| c["actual"].clone()))
+            .filter(|c| c["written"] == "w")
+            .map(|c| c["actual"].clone())
             .collect();
         assert_eq!(bytes, vec![json!("B"), json!("A")]);
     }
@@ -1072,7 +1036,7 @@ fn assert_selected_input(prompt: &str) {
 fn an_independently_reviewed_local_choice_can_select_b() {
     let (tasks, _, _) = run_with_requirement(
         json!({"tasks":[writer("w")]}),
-        false,
+        tasks::Team::SmallChange,
         &REPORT.replace("Selected: A", "Selected: B"),
         "B",
         "",

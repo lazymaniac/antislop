@@ -157,6 +157,10 @@ fn setup(team: Team, root: &Path) -> (String, Daemon, PathBuf, PathBuf, PathBuf)
             "task = task.group(1) if task else previous.split(':', 1)[-1]",
             "task = task.group(1) if task else previous.split(':', 1)[-1]\n    if options_role:\n        task = 'w-options'\n    if task in (settings.get('barrier_id'), settings.get('barrier_title')):\n        open(os.path.join(root, 'writer-ready'), 'w').close()\n        import time\n        deadline = time.monotonic() + 120\n        while not os.path.exists(os.path.join(root, 'writer-release')):\n            if time.monotonic() > deadline:\n                raise RuntimeError('writer barrier was not released')\n            time.sleep(0.01)",
         );
+    let fixture_cli = fixture_cli.replace(
+        "answer = 'Inspected files read-only.'",
+        "answer = ('N/A: inspected required-format.txt and the fixture imports; no dependency changes are needed.' if task == 'feature-dependencies' else 'Inspected files read-only.')",
+    );
     assert!(fixture_cli.contains("Fixture artifact for rigor semantics."));
     for executable in [&codex, &agy] {
         common::install_probe_cli(executable, &fixture_cli);
@@ -170,14 +174,6 @@ fn setup(team: Team, root: &Path) -> (String, Daemon, PathBuf, PathBuf, PathBuf)
     let workspace = std::env::current_dir().unwrap();
     let state = project.strip_prefix(&workspace).unwrap().join(".antislop");
     let config = Config::from_toml(&config_text).unwrap();
-    assert!(
-        config.policy.required_gates,
-        "the fixture must exercise enabled required gates"
-    );
-    assert!(
-        config.policy.local_options,
-        "the fixture must exercise enabled local options"
-    );
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation =
         support::fixture_conversation_with_requirements(&core, &project, request).unwrap();
@@ -269,13 +265,44 @@ fn plan_for(team: Team) -> Value {
             "Implement the requested rigor selection behavior.",
         ),
     };
-    serde_json::json!({"tasks":[{
+    let mut plan = serde_json::json!({"tasks":[{
         "id":"w", "title":title, "goal":goal,
         "acceptance_criteria":[{"id":"C1","text":goal}],
         "kind":kind, "change_kind":change_kind,
         "outputs": if team == Team::Document { serde_json::json!(["RIGOR.md"]) } else { serde_json::json!([]) },
         "reviewer":{"summary":"Verify the task result against its acceptance criterion."}
-    }]})
+    }]});
+    if team == Team::Feature {
+        let tasks = plan["tasks"].as_array_mut().unwrap();
+        tasks[0]["depends_on"] = serde_json::json!(["feature-architecture", "feature-test-design"]);
+        for (id, kind, inputs) in [
+            ("feature-research", "research", vec![]),
+            ("feature-analysis", "analysis", vec![]),
+            (
+                "feature-dependencies",
+                "dependencies",
+                vec!["feature-research"],
+            ),
+            (
+                "feature-architecture",
+                "architecture",
+                vec!["feature-analysis", "feature-dependencies"],
+            ),
+            (
+                "feature-test-design",
+                "test_design",
+                vec!["feature-analysis"],
+            ),
+            (
+                "feature-delivery",
+                "delivery",
+                vec!["integration-gate", "w"],
+            ),
+        ] {
+            tasks.push(serde_json::json!({"id":id,"kind":kind,"title":id,"goal":format!("Assess {kind} for the fixture feature; report evidence or justified N/A"),"change_kind":"none","depends_on":inputs,"acceptance_criteria":[{"id":"C1","text":"Report the scoped assessment or justified N/A"}]}));
+        }
+    }
+    plan
 }
 
 // Contract oracle kept separate from Team::gates()/Team::options() so the
@@ -554,6 +581,32 @@ fn all_eight_rigors_drive_real_core_plans_and_direct_execution() {
             Team::Feature => {
                 assert!(has_options);
                 assert!(has_quality_gates);
+                for kind in [
+                    "research",
+                    "analysis",
+                    "dependencies",
+                    "architecture",
+                    "test_design",
+                    "delivery",
+                ] {
+                    assert!(
+                        tasks.iter().any(|task| task.2["kind"] == kind),
+                        "missing feature {kind}"
+                    );
+                }
+                assert!(tasks.iter().all(|task| !matches!(
+                    task.2["kind"].as_str(),
+                    Some("writing" | "requirements")
+                )));
+                let connection = rusqlite::Connection::open(&database).unwrap();
+                let report: String = connection.query_row(
+                    "SELECT report FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.id')='feature-dependencies'",
+                    [&plan_id], |row| row.get(0),
+                ).unwrap();
+                let report = antislop::lean::content::Content::new(&database)
+                    .decode(&report)
+                    .unwrap();
+                assert!(report.contains("N/A:"), "{report}");
                 assert!(tasks.iter().any(|task| task.2["kind"] == "security"));
                 assert!(tasks.iter().any(|task| task.2["kind"] == "integration"));
             }

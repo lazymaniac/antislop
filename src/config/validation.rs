@@ -6,7 +6,7 @@ use crate::{Error, Result, require};
 pub(super) fn validate(config: &Config) -> Result<()> {
     require(
         config.schema_version == super::SCHEMA_VERSION,
-        "schema_version is unsupported; set schema_version = 4",
+        "schema_version is unsupported; remove policy.required_gates and policy.local_options, then set schema_version = 5",
     )?;
     require(
         !config.providers.is_empty(),
@@ -133,7 +133,7 @@ fn validate_routing(config: &Config) -> Result<()> {
     validate_routes(config)?;
     require(
         config.routing.contains_key(&WorkKind::Options),
-        "routing.options is required even when policy.required_gates = false; \
+        "routing.options is required by rigor teams; \
              add an options route with executor and reviewer profiles",
     )?;
     require(
@@ -173,15 +173,16 @@ fn validate_route_profiles(
 }
 
 fn require_gate_routes(config: &Config) -> Result<()> {
-    if !config.policy.required_gates {
-        return Ok(());
-    }
-    for kind in crate::lean::tasks::GATE_KINDS {
+    for kind in crate::lean::tasks::GATE_KINDS.into_iter().chain(
+        crate::lean::tasks::FEATURE_SPECIALISTS
+            .iter()
+            .map(|agent| agent.kind),
+    ) {
         require(
             config.routing.contains_key(&kind),
             &format!(
-                "policy.required_gates adds {kind:?} tasks to plans that change code, \
-                     but there is no route for that work: add one or set required_gates = false"
+                "rigor teams require {kind:?} tasks, \
+                     but there is no route for that work: add executor and reviewer profiles"
             ),
         )?;
     }

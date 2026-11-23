@@ -314,41 +314,20 @@ fn obsolete_configuration_is_rejected_without_echoing_values() {
 }
 
 #[test]
-fn options_route_is_required_even_without_required_gates() {
-    let text = include_str!("../../examples/antislop.toml");
-    for required_gates in [true, false] {
-        let source = text.replace(
-            "required_gates = true",
-            &format!("required_gates = {required_gates}"),
-        );
-        let mut config = Config::from_toml(&source).unwrap();
-        let route = config.routing.remove(&WorkKind::Options).unwrap();
-        let error = config.validate().unwrap_err().to_string();
-        assert!(error.contains("routing.options is required"), "{error}");
-        config.routing.insert(WorkKind::Options, route);
-        assert!(config.validate().is_ok());
+fn required_rigor_routes_are_always_validated() {
+    let source = include_str!("../../examples/antislop.toml");
+    for kind in [
+        WorkKind::Options,
+        WorkKind::Research,
+        WorkKind::Architecture,
+        WorkKind::TestDesign,
+        WorkKind::Delivery,
+        WorkKind::Testing,
+    ] {
+        let mut config = Config::from_toml(source).unwrap();
+        config.routing.remove(&kind);
+        assert!(config.validate().is_err(), "accepted missing {kind:?}");
     }
-}
-
-#[test]
-fn required_gates_need_routes_for_the_work_they_add() {
-    let text = include_str!("../../examples/antislop.toml");
-    assert!(Config::from_toml(text).is_ok());
-    // Find the first route table of a gate kind and take it away.
-    let header = text
-        .lines()
-        .find(|line| line.starts_with("[routing.") && line.contains("static_analysis"))
-        .expect("the example routes static analysis");
-    let start = text.find(header).unwrap();
-    let end = text[start + header.len()..]
-        .find("\n[")
-        .map_or(text.len(), |at| start + header.len() + at);
-    let without = format!("{}{}", &text[..start], &text[end..]);
-    let error = Config::from_toml(&without).unwrap_err().to_string();
-    assert!(error.contains("required_gates"), "{error}");
-    // With the gates off, the route is not needed.
-    let off = without.replace("required_gates = true", "required_gates = false");
-    assert!(Config::from_toml(&off).is_ok());
 }
 
 #[test]
@@ -377,14 +356,20 @@ fn the_planner_resolves_the_planning_executor_and_nothing_else() {
 }
 
 #[test]
-fn local_options_have_a_default_and_can_be_disabled() {
-    let text = include_str!("../../examples/antislop.toml");
-    let stripped = text.replace("local_options = true\n", "");
-    let default = Config::from_toml(&stripped).unwrap();
-    assert!(default.policy.local_options);
-    let off =
-        Config::from_toml(&text.replace("local_options = true", "local_options = false")).unwrap();
-    assert!(!off.policy.local_options);
+fn retired_policy_fields_are_rejected_with_migration_instructions() {
+    let source = include_str!("../../examples/antislop.toml");
+    for field in ["required_gates", "local_options"] {
+        let text = source.replace("[policy]", &format!("[policy]\n{field} = false"));
+        let error = Config::from_toml(&text).unwrap_err().to_string();
+        assert!(
+            error.contains("remove policy.required_gates") && error.contains("schema_version = 5"),
+            "{error}"
+        );
+    }
+    let error = Config::from_toml(&source.replace("schema_version = 5", "schema_version = 4"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("schema_version = 5"), "{error}");
 }
 
 #[test]
@@ -425,9 +410,9 @@ fn load_and_resolve_preserve_file_error_context_and_role_selection() {
 fn previous_configuration_schemas_are_rejected_without_a_fallback() {
     for version in [2, 3] {
         let source = include_str!("../../examples/antislop.toml")
-            .replace("schema_version = 4", &format!("schema_version = {version}"));
+            .replace("schema_version = 5", &format!("schema_version = {version}"));
         let error = Config::from_toml(&source).unwrap_err().to_string();
-        assert!(error.contains("schema_version = 4"), "{error}");
+        assert!(error.contains("schema_version = 5"), "{error}");
     }
 }
 

@@ -186,9 +186,7 @@ print(json.dumps({"event":"result","result":{"conversation_id":"navigation-worke
             .replace(
                 "binary = \"agy\"",
                 &format!("binary = {:?}", agy.to_string_lossy()),
-            )
-            .replace("required_gates = true", "required_gates = false")
-            .replace("local_options = true", "local_options = false");
+            );
         std::fs::write(&config, content).unwrap();
         let state = root.join("state");
         std::fs::create_dir_all(&state).unwrap();

@@ -112,7 +112,6 @@ fn not_keepable(id: &str, approved: &[Task]) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::lean::core::plan::proposal::checked_plan;
     use serde_json::json;
 
     #[test]
@@ -198,7 +197,12 @@ mod tests {
             {"id":"build","title":"Build","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"]},
             {"id":"later","title":"Later","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then this","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
-        let first = checked_plan(&tasks::planned_graph(first).unwrap(), &config).unwrap();
+        let first = crate::lean::core::plan::proposal::checked_team_plan(
+            &tasks::planned_graph(first).unwrap(),
+            &config,
+            tasks::Team::SmallChange,
+        )
+        .unwrap();
         assert!(first.iter().any(|s| s.id == "build-options"));
         let values: Vec<_> = first
             .iter()
@@ -216,7 +220,12 @@ mod tests {
         ]));
         let keep = ["map".to_owned(), "build".to_owned()];
         let second = core.submitted_graph(&id, rest, &keep).unwrap();
-        let second = checked_plan(&second, &config).unwrap();
+        let second = crate::lean::core::plan::proposal::checked_team_plan(
+            &second,
+            &config,
+            tasks::Team::SmallChange,
+        )
+        .unwrap();
         for kept in ["map", "build", "build-options"] {
             let old = first.iter().find(|s| s.id == kept);
             let new = second.iter().find(|s| s.id == kept);
@@ -228,5 +237,32 @@ mod tests {
                 assert_eq!(old, new, "{kept}");
             }
         }
+
+        let graph = core.submitted_graph(&id, planned(json!([
+            {"id":"after","title":"After","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then that","change_kind":"code","kind":"implementation","depends_on":["build"]}
+        ])), &keep).unwrap();
+        let approved = graph.iter().find(|t| t.id == "build").unwrap().clone();
+        let mut feature = tasks::feature_fixture(graph);
+        *feature.iter_mut().find(|t| t.id == "build").unwrap() = approved.clone();
+        let validated = core
+            .checked_candidate_plan(&id, &feature, tasks::Team::Feature, &[])
+            .unwrap();
+        assert_eq!(
+            validated.iter().find(|t| t.id == "build").unwrap(),
+            &approved
+        );
+        let remaining = validated.iter().find(|t| t.id == "after").unwrap();
+        assert!(
+            remaining
+                .depends_on
+                .contains(&"feature-architecture".into())
+        );
+        assert!(remaining.depends_on.contains(&"feature-test-design".into()));
+        assert!(remaining.depends_on.contains(&"after-options".into()));
+        // Explicit redo removes the exemption and must restore the full prerequisites.
+        assert!(
+            core.checked_candidate_plan(&id, &feature, tasks::Team::Feature, &["build".into()])
+                .is_err()
+        );
     }
 }

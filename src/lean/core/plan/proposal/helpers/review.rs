@@ -7,10 +7,10 @@ impl Core {
         project: &Path,
         plan: &PreparedPlan,
         specs: &[TaskContract],
-        config: &Config,
+        _config: &Config,
         cancel: &AtomicBool,
     ) -> Result<std::result::Result<Verdict, String>> {
-        record_plan_review_start(&self.store, conversation, &plan.id, config, specs)?;
+        record_plan_review_start(&self.store, conversation, &plan.id)?;
         let project_text = project.to_string_lossy().into_owned();
         let scope_context = self.plan_scope_context(conversation, &plan.id)?;
         let team_guidance = self.store.team_guidance(conversation)?;
@@ -105,6 +105,8 @@ fn append_team_guidance(
 ) -> String {
     if let Some(guidance) = guidance {
         guidance.write_guidance_section(&mut prompt);
+    } else {
+        prompt.push_str(tasks::FEATURE_PLANNING_RULES);
     }
     prompt
 }

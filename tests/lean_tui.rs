@@ -6319,9 +6319,6 @@ mod config_editor_acceptance {
             schema_version: config.schema_version,
             policy: Policy {
                 local_commits: config.policy.local_commits,
-                required_gates: config.policy.required_gates,
-
-                local_options: config.policy.local_options,
             },
             providers: config
                 .providers
@@ -6428,9 +6425,7 @@ mod config_editor_acceptance {
                 let old = field.input.text.clone();
                 let key = path.last().unwrap().as_str();
                 let (new, cycle) = match key {
-                    "local_commits" | "required_gates" | "local_options" => {
-                        (json!(old != "true"), true)
-                    }
+                    "local_commits" => (json!(old != "true"), true),
                     "provider" => (json!(if old == "codex" { "agy" } else { "codex" }), true),
                     "effort" => (json!(if old == "low" { "medium" } else { "low" }), true),
                     "binary" => (json!("/tmp/config-editor-test-binary"), false),
@@ -7523,7 +7518,7 @@ fn vim_details_navigation_isolated_from_search_and_other_commands() {
 #[test]
 fn configuration_provider_and_route_structural_edits_round_trip() {
     use antislop::lean::tui::config::ConfigEditor;
-    for (section, name) in [("providers", "claude"), ("routing", "research")] {
+    for (section, name) in [("providers", "claude"), ("routing", "requirements")] {
         let mut config = include_str!("../examples/antislop.toml")
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
@@ -7531,7 +7526,7 @@ fn configuration_provider_and_route_structural_edits_round_trip() {
             config["routing"]
                 .as_table_like_mut()
                 .unwrap()
-                .remove("research");
+                .remove("requirements");
         }
         let source = config.to_string();
         let mut editor = ConfigEditor::new(&source, "antislop.toml".into()).unwrap();
@@ -7552,7 +7547,7 @@ fn configuration_provider_and_route_structural_edits_round_trip() {
             assert!(provider.args.is_empty());
             assert!(provider.command.is_none());
         } else {
-            let route = &config.routing[&antislop::config::WorkKind::Research];
+            let route = &config.routing[&antislop::config::WorkKind::Requirements];
             let first_profile = editor
                 .fields
                 .iter()
@@ -7613,7 +7608,7 @@ fn configuration_invalid_structural_deletion_preserves_draft_and_marks_field() {
                 "{error}"
             ),
             ("routing", "testing") => assert!(
-                error.contains("policy.required_gates adds Testing tasks")
+                error.contains("rigor teams require Testing tasks")
                     && error.contains("no route for that work"),
                 "{error}"
             ),
@@ -7650,12 +7645,16 @@ fn configuration_sparse_routes_and_empty_providers_can_be_restored() {
     let mut doc = include_str!("../examples/antislop.toml")
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
-    let options = doc["routing"]["options"].clone();
-    let planning = doc["routing"]["planning"].clone();
-    doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
-    doc["routing"]["options"] = options;
-    doc["routing"]["planning"] = planning;
-    doc["policy"]["required_gates"] = toml_edit::value(false);
+    for kind in [
+        "orchestration",
+        "context",
+        "requirements",
+        "implementation",
+        "writing",
+    ] {
+        doc["routing"].as_table_like_mut().unwrap().remove(kind);
+    }
+
     let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
     editor.selected = editor
         .fields
@@ -7711,23 +7710,16 @@ fn configuration_kind_picker_includes_every_missing_kind() {
         assert!(provider.command.is_none());
     }
 
-    // Keep the mandatory options and planning routes and offer every missing route exactly once.
-    let mut expected: BTreeSet<String> = serde_json::to_value(Config::from_toml(source).unwrap())
-        .unwrap()["routing"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
+    // Required rigor routes stay configured; every optional missing route is offered.
+    let expected: BTreeSet<String> = ["orchestration", "requirements", "implementation", "writing"]
+        .into_iter()
+        .map(str::to_owned)
         .collect();
-    assert!(expected.remove("options"));
-    assert!(expected.remove("planning"));
     let mut doc = source.parse::<toml_edit::DocumentMut>().unwrap();
-    let options = doc["routing"]["options"].clone();
-    let planning = doc["routing"]["planning"].clone();
-    doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
-    doc["routing"]["options"] = options;
-    doc["routing"]["planning"] = planning;
-    doc["policy"]["required_gates"] = toml_edit::value(false);
+    for kind in &expected {
+        doc["routing"].as_table_like_mut().unwrap().remove(kind);
+    }
+
     let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
     editor.selected = editor
         .fields

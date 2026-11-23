@@ -2,21 +2,15 @@
 # Copy to your project as antislop.toml and adjust binaries and models.
 # Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
 # and a reviewer profile; every reviewer gets its own session.
-schema_version = 4
+schema_version = 5
 
 # Every writer uses an isolated Git worktree. Reviewed changes are integrated
 # through the runtime; direct writes in the primary checkout are unsupported.
 
-# Full access and automatic progression are always enabled.
-# These policy settings select quality checks and delivery behavior.
+# The selected rigor defines specialist work, Options and quality gates.
+# This setting controls delivery commits only.
 [policy]
 local_commits = true
-# Plans that change code always get the static analysis, testing and
-# integration gates they lack from the predefined agent pool.
-required_gates = true
-# Every writer gets a options task that compares approaches first.
-# Turn it off for mechanical work where the comparison decides nothing.
-local_options = true
 
 [providers.codex]
 binary = "codex"

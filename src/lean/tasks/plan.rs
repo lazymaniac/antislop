@@ -122,7 +122,6 @@ pub fn planned_graph_with(
         )?;
         tasks.push(spec);
     }
-    resolve_gate_dependencies(&mut tasks);
     order_authored_graph(tasks)
 }
 

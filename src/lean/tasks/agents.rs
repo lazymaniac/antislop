@@ -187,6 +187,21 @@ pub fn with_required_agents(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     with_team_gates(tasks, &GATE_KINDS)
 }
 
+/// Feature has all six final checks, independent of authored specialist kinds.
+pub fn with_feature_gates(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
+    tasks.retain(|task| !task.quality_gate);
+    let required = PREDEFINED_AGENT_POOL
+        .iter()
+        .filter(|a| GATE_KINDS.contains(&a.kind) && tasks.iter().any(TaskContract::changes_code))
+        .collect();
+    let mut gates = GatePlan::new(&mut tasks, required, &GATE_KINDS).after_all_writers(&tasks);
+    while let Some(task) = gates.next() {
+        tasks.push(task);
+    }
+    let tasks = refresh_existing_options(tasks);
+    super::plan::order_graph(tasks.clone()).unwrap_or(tasks)
+}
+
 /// Like [`with_required_agents`], adding only the gates of `team_gates`.
 /// An obsolete final integration checkpoint follows the enabled pipeline instead of losing
 /// its ordering. Unknown checkpoints stay visible for graph validation.
@@ -206,7 +221,7 @@ pub fn with_team_gates(mut tasks: Vec<TaskContract>, team_gates: &[WorkKind]) ->
     super::plan::order_graph(tasks.clone()).unwrap_or(tasks)
 }
 
-/// The plan without generated options tasks, for `policy.local_options = false`.
+/// Remove generated options when the selected rigor does not use them.
 pub fn without_options(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let generated: BTreeSet<_> = tasks
         .iter()

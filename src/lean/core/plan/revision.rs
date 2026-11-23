@@ -1,6 +1,7 @@
 //! Reviewed revisions are applied behind a short scheduler barrier.
 use crate::lean::store::PlanRevision;
 use crate::lean::*;
+use rusqlite::OptionalExtension;
 
 mod acceptance;
 mod review;
@@ -54,30 +55,47 @@ impl Core {
         conversation: &str,
         team: tasks::Team,
         reason: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let changing = self.locks.turn(conversation, "rigor-change");
         let _changing = changing.lock().expect("conversation rigor change");
         let (baseline, revision, specs, accepted) = {
             let _graph = self.locks.graph();
             let baseline = self.store.latest_plan(conversation)?;
             let Some(plan) = baseline.first() else {
-                return self.store.select_team(conversation, team, reason);
+                return self
+                    .store
+                    .select_team(conversation, team, reason)
+                    .map(|_| false);
             };
             let accepted =
                 self.store.accepted_plan(conversation)?.as_deref() == Some(&plan.plan_id);
-            if self.store.team(conversation)? == team
-                || (!accepted && baseline.iter().any(|task| task.status != status::PROPOSED))
-            {
-                return self.store.select_team(conversation, team, reason);
-            }
             let current = baseline
                 .iter()
                 .map(|task| serde_json::from_value(task.spec.clone()))
                 .collect::<std::result::Result<Vec<TaskContract>, _>>()?;
+            if team == tasks::Team::Feature
+                && tasks::validate_feature_pipeline(&current, &Default::default()).is_err()
+            {
+                self.store.select_team(conversation, team, reason)?;
+                drop(_graph);
+                self.request_replan(conversation, &format!("Upgrade to the full feature pipeline: {reason}. Preserve approved work and checkpoints; author the missing specialist contracts and dependencies for remaining work."))?;
+                return Ok(true);
+            }
+            if self.store.team(conversation)? == team
+                || (!accepted && baseline.iter().any(|task| task.status != status::PROPOSED))
+            {
+                return self
+                    .store
+                    .select_team(conversation, team, reason)
+                    .map(|_| false);
+            }
             let specs = super::proposal::checked_team_plan(&current, &self.config_snapshot(), team)
                 .map_err(Error::Invalid)?;
             if current == specs {
-                return self.store.select_team(conversation, team, reason);
+                return self
+                    .store
+                    .select_team(conversation, team, reason)
+                    .map(|_| false);
             }
             let revision = PlanRevision {
                 plan: plan.plan_id.clone(),
@@ -102,7 +120,7 @@ impl Core {
         if accepted {
             self.maybe_continue_plan(conversation, &revision.plan)?;
         }
-        Ok(())
+        Ok(false)
     }
 
     pub(in crate::lean) fn submit_revision(
@@ -423,16 +441,31 @@ impl Core {
         revision: &PlanRevision,
         baseline: &[Task],
     ) -> Result<Vec<TaskContract>> {
-        let config = self.config_snapshot();
         let team = self
             .store
             .team(&self.store.plan_conversation(&revision.plan)?)?;
-        let specs = crate::lean::core::plan::helpers::finalize_team_plan(
-            revision.merge(baseline)?,
-            config.policy.required_gates,
-            config.policy.local_options,
-            team,
-        );
+        let merged = revision.merge(baseline)?;
+        let version: Option<i64> = self.store.db().query_row(
+            "SELECT json_extract(payload,'$.team_version') FROM events WHERE plan_id=?1 AND kind='plan_proposed' ORDER BY seq DESC LIMIT 1",
+            [&revision.plan], |row| row.get(0),
+        ).optional()?.flatten();
+        let specs = if team == tasks::Team::Feature && version.unwrap_or(0) >= 4 {
+            self.checked_candidate_plan(
+                &self.store.plan_conversation(&revision.plan)?,
+                &merged,
+                team,
+                &revision.redo,
+            )?
+        } else if team == tasks::Team::NoQualityGates {
+            tasks::finalize_no_quality_gates(merged)
+        } else {
+            let specs = tasks::with_team_gates(merged, team.gates());
+            if team.options() {
+                tasks::with_options(specs)
+            } else {
+                tasks::without_options(specs)
+            }
+        };
         tasks::validate(&specs)?;
         self.store
             .validate_result_inputs(&self.store.plan_conversation(&revision.plan)?, &specs)?;
@@ -684,9 +717,8 @@ mod tests {
     #[test]
     fn revision_prepares_current_options_before_review_and_keeps_cosmetic_selection() {
         let directory = tempfile::tempdir().unwrap();
-        let mut config =
-            Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
-        config.policy.local_options = true;
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+
         let core = Core::open(&directory.path().join("state"), config).unwrap();
         let conversation = core
             .store
@@ -1213,8 +1245,20 @@ mod tests {
             tasks::Team::Refactoring,
             tasks::Team::SmallChange,
         ] {
-            core.select_rigor(&conversation, team, "User changed quality checks")
+            let replanning = core
+                .select_rigor(&conversation, team, "User changed quality checks")
                 .unwrap();
+            if team == tasks::Team::Feature {
+                assert!(replanning);
+                assert!(
+                    core.store
+                        .messages_by(&conversation, REPLAN, 0)
+                        .unwrap()
+                        .len()
+                        == 1
+                );
+                continue;
+            }
             let current = core.store.plan(&revision.plan).unwrap();
             let specs = current
                 .iter()
@@ -1285,7 +1329,7 @@ mod tests {
         assert_eq!(events.len(), events_before);
         assert!(events.iter().all(|event| !matches!(
             event.kind.as_str(),
-            "plan_rejected" | "plan_invalid" | "turn_started" | "message"
+            "plan_rejected" | "plan_invalid" | "turn_started"
         )));
         assert!(core.is_idle(&conversation));
         assert_eq!(
@@ -1304,9 +1348,8 @@ mod tests {
     #[test]
     fn revision_adds_multi_producer_writer_with_acyclic_options_dependency() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config =
-            Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
-        config.policy.local_options = true;
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+
         let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
         let conversation = core
             .store
@@ -1355,12 +1398,8 @@ mod tests {
             }))
             .unwrap(),
         ];
-        let mut initial = crate::lean::core::plan::proposal::checked_team_plan(
-            &producers,
-            &config,
-            tasks::Team::Feature,
-        )
-        .unwrap();
+        let mut initial =
+            crate::lean::core::plan::helpers::finalize_team_plan(producers, tasks::Team::Feature);
         let gate_ids = initial
             .iter()
             .filter(|spec| spec.quality_gate)
@@ -1477,6 +1516,89 @@ mod tests {
     }
 
     #[test]
+    fn legacy_feature_graph_is_pinned_across_reopen_and_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+        let state = dir.path().join("state");
+        let core = Core::open(&state, config.clone()).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .select_planned_team(&conversation, tasks::Team::Feature, "Legacy selection")
+            .unwrap();
+        core.store
+            .db()
+            .execute(
+                "UPDATE teams SET version=3 WHERE conversation_id=?1",
+                [&conversation],
+            )
+            .unwrap();
+        let specs = tasks::with_options(tasks::with_team_gates(
+            vec![contract(true, &[])],
+            tasks::Team::Feature.gates(),
+        ));
+        let baseline = core
+            .store
+            .add_plan(
+                &conversation,
+                &specs
+                    .iter()
+                    .map(|s| serde_json::to_value(s).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let plan = baseline[0].plan_id.clone();
+        core.store
+            .append_event(
+                &conversation,
+                None,
+                Some(&plan),
+                "plan_proposed",
+                &json!({"plan":plan,"team_version":3}),
+            )
+            .unwrap();
+        drop(core);
+        let core = Core::open(&state, config).unwrap();
+        assert_eq!(core.store.plan(&plan).unwrap(), baseline);
+        let version: u32 = core
+            .store
+            .db()
+            .query_row(
+                "SELECT version FROM teams WHERE conversation_id=?1",
+                [&conversation],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 3);
+        let revision = PlanRevision {
+            plan: plan.clone(),
+            base_revision: 0,
+            reason: "Refresh legacy wording".into(),
+            scope: None,
+            tasks: vec![],
+            retire: vec![],
+            redo: vec![],
+            replacements: Default::default(),
+        };
+        let revised = core.revised_specs(&revision, &baseline).unwrap();
+        assert_eq!(revised, specs);
+        core.store
+            .append_event(
+                &conversation,
+                None,
+                Some(&plan),
+                "plan_proposed",
+                &json!({"plan":plan,"team_version":4}),
+            )
+            .unwrap();
+        let error = core.revised_specs(&revision, &baseline).unwrap_err();
+        assert!(error.to_string().contains("research"), "{error}");
+    }
+
+    #[test]
     fn rigor_change_preserves_completed_authored_work_in_an_accepted_plan() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
@@ -1553,10 +1675,7 @@ mod tests {
                 .events_since(&conversation, 0, 1000)
                 .unwrap()
                 .iter()
-                .all(|event| !matches!(
-                    event.kind.as_str(),
-                    "plan_rejected" | "turn_started" | "message"
-                ))
+                .all(|event| !matches!(event.kind.as_str(), "plan_rejected" | "turn_started"))
         );
     }
 

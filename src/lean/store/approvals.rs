@@ -45,6 +45,10 @@ impl TeamGuidance {
             "origin": self.origin.database_value(),
             "reason_untrusted": self.reason,
         });
+        if self.team == crate::lean::tasks::Team::Feature {
+            prompt.push('\n');
+            prompt.push_str(crate::lean::tasks::FEATURE_PLANNING_RULES);
+        }
         prompt.push_str("\n\nTrusted team policy: ");
         prompt.push_str(policy);
         prompt.push_str(&crate::lean::prompt_context::untrusted(
@@ -234,7 +238,7 @@ impl Store {
             "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(conversation_id) DO UPDATE SET team=excluded.team,reason=excluded.reason,version=excluded.version,updated_ms=excluded.updated_ms,user_selected=excluded.user_selected,origin=excluded.origin
              WHERE ?6=1
-               AND (teams.team<>excluded.team OR teams.reason<>excluded.reason OR teams.user_selected<>excluded.user_selected OR teams.origin<>excluded.origin)",
+               AND (teams.team<>excluded.team OR teams.reason<>excluded.reason OR teams.user_selected<>excluded.user_selected OR teams.origin<>excluded.origin OR teams.version<>excluded.version)",
             params![
                 conversation,
                 team.name(),

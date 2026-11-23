@@ -42,6 +42,11 @@ impl GatePlan {
         }
     }
 
+    pub(super) fn after_all_writers(mut self, tasks: &[TaskContract]) -> Self {
+        self.prerequisites = writer_ids(tasks);
+        self
+    }
+
     pub(super) fn next(&mut self) -> Option<TaskContract> {
         if self.ordered.is_empty() {
             return None;
@@ -75,7 +80,7 @@ fn retarget_checkpoints(
 ) {
     let disabled: BTreeSet<_> = PREDEFINED_AGENT_POOL
         .iter()
-        .filter(|agent| agent.kind == WorkKind::Integration && !team_gates.contains(&agent.kind))
+        .filter(|agent| GATE_KINDS.contains(&agent.kind) && !team_gates.contains(&agent.kind))
         .map(|agent| agent.id)
         .collect();
     let authored: BTreeSet<_> = tasks.iter().map(|task| task.id.clone()).collect();

@@ -49,12 +49,7 @@ impl Core {
         team: crate::lean::tasks::Team,
     ) -> Result<()> {
         let specs = self.submitted_graph(conversation, tasks, keep)?;
-        let specs = crate::lean::core::plan::proposal::checked_team_plan(
-            &specs,
-            &self.config_snapshot(),
-            team,
-        )
-        .map_err(Error::Invalid)?;
+        let specs = self.checked_candidate_plan(conversation, &specs, team, &[])?;
         self.store.validate_result_inputs(conversation, &specs)
     }
 

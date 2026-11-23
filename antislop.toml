@@ -1,5 +1,5 @@
 # Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and reviews.
-schema_version = 4
+schema_version = 5
 
 
 [policy]

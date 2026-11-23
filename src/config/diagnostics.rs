@@ -28,7 +28,14 @@ fn toml_location(source: &str, error: &toml::de::Error) -> String {
 }
 
 fn toml_diagnostic(message: &str) -> (String, &'static str) {
-    if message.starts_with("unknown field ") {
+    if message.starts_with("unknown field `required_gates`")
+        || message.starts_with("unknown field `local_options`")
+    {
+        (
+            "retired policy setting".into(),
+            "remove policy.required_gates and policy.local_options, then set schema_version = 5; the selected rigor defines gates and options",
+        )
+    } else if message.starts_with("unknown field ") {
         (
             message.to_owned(),
             "remove the unknown field or use one of the listed fields",

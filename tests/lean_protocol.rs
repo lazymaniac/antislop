@@ -1209,10 +1209,10 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
     let text = before["toml"]
         .as_str()
         .unwrap()
-        .replace("local_options = true", "local_options = false")
+        .replace("local_commits = true", "local_commits = false")
         .replace("effort = \"high\"", "effort = \"low\"");
     assert_ne!(text, before["toml"].as_str().unwrap());
-    assert!(text.contains("local_options = false"));
+    assert!(text.contains("local_commits = false"));
     assert!(text.contains("effort = \"low\""));
     let missing_revision = daemon
         .call_raw(&json!({"op": "set_config", "toml": text}))

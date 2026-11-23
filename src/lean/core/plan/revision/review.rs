@@ -114,6 +114,8 @@ impl Core {
                     );
                     if let Some(guidance) = &team_guidance {
                         guidance.write_guidance_section(&mut prompt);
+                    } else {
+                        prompt.push_str(tasks::FEATURE_PLANNING_RULES);
                     }
                     prompt
                 },

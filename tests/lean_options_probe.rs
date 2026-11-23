@@ -152,7 +152,6 @@ else:
         let text = include_str!("../examples/antislop.toml")
             .replace("binary = \"codex\"", &format!("binary = {:?}", codex))
             .replace("binary = \"agy\"", &format!("binary = {:?}", agy))
-            .replace("required_gates = true", "required_gates = false")
             .replace("local_commits = true", "local_commits = false");
         let core = Core::open(
             &project.join(".antislop"),

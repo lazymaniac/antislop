@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped when a template's gates or options change, so a recorded choice
 /// says which definition it meant.
-pub const TEAM_VERSION: u32 = 3;
+pub const TEAM_VERSION: u32 = 4;
 
 /// Runtime-owned marker used to specialize workers and reviewers for the
 /// report-only code-review workflow. Planner-authored summaries cannot enable
@@ -18,15 +18,15 @@ pub(crate) const CODE_REVIEW_REVIEWER_SUMMARY: &str =
 
 pub(crate) const CODE_REVIEW_PLANNING_RULES: &str = "\nSelected rigor: `code-review`. Plan a read-only review of the exact target derived from the user's request. Use an explicitly named commit/range, files, symbols or component when provided; use the current working-tree diff only when the request clearly asks to review current/uncommitted changes; use repository-wide scope only when explicitly requested. If no target or diff can be inferred, do not guess or submit a plan: finish_turn with the missing scope and ask the orchestrator to clarify it with the user. Plan only report-only review and validation tasks with change_kind=none. Every task must inspect the same declared target, must not modify/create/delete project files, and must not repair findings. Do not add implementation, refactoring, options, artifact/report-writing, quality-gate, or code-changing tasks. The final report task, if any, must depend on all review and validation tasks. Require results to state reviewed scope, overall verdict, prioritized confirmed findings (severity, path and line, trigger, impact, evidence, remediation), unresolved questions, commands/checks with actual outcomes, limitations and coverage gaps. No confirmed findings is a valid outcome.";
 
-pub(crate) const NO_QUALITY_GATES_PLANNING_RULES: &str = "\nSelected rigor: `no-quality-gates`. Plan the requested code and artifact work as ordinary tasks with meaningful acceptance criteria and real dependency edges. Do not add quality-gate tasks or options tasks; the runtime ignores global required-gates and local-options policy for this mode. The runtime adds one final integration task after all code-producing tasks and integrates their accepted results on the branch. Do not add another integration task or a final quality audit. Task-local acceptance and any explicitly requested validation remain ordinary planned work.";
+pub(crate) const NO_QUALITY_GATES_PLANNING_RULES: &str = "\nSelected rigor: `no-quality-gates`. Plan the requested code and artifact work as ordinary tasks with meaningful acceptance criteria and real dependency edges. Do not add quality-gate tasks or options tasks; the selected rigor defines this behavior. The runtime adds one final integration task after all code-producing tasks and integrates their accepted results on the branch. Do not add another integration task or a final quality audit. Task-local acceptance and any explicitly requested validation remain ordinary planned work.";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Team {
-    /// A contained fix or tweak: options where policy allows them, static
+    /// A contained fix or tweak: options, static
     /// analysis and tests.
     SmallChange,
-    /// New behaviour: every gate, options where policy allows them.
+    /// New behaviour: every gate, options.
     #[default]
     Feature,
     /// Behaviour kept, structure changed.
@@ -95,7 +95,7 @@ impl Team {
     }
 
     /// Whether writers get option tasks (alternatives compared before the
-    /// change), when policy allows them at all.
+    /// change), for the selected rigor.
     pub fn options(self) -> bool {
         matches!(self, Team::SmallChange | Team::Feature | Team::Refactoring)
     }
@@ -113,7 +113,9 @@ impl Team {
         };
         let use_for = match self {
             Team::SmallChange => "a contained fix or tweak in a few files",
-            Team::Feature => "new behaviour",
+            Team::Feature => {
+                "new behaviour with mandatory Research, Analysis, Dependencies, Architecture, Test Design and final Delivery"
+            }
             Team::Refactoring => "structure changed, behaviour kept",
             Team::SecurityFix => "closing a vulnerability",
             Team::CodeReview => "reviewing code changes without generated gates",
@@ -127,7 +129,7 @@ impl Team {
             "`{}`: {use_for}; gates: {gates}; options: {}",
             self.name(),
             if self.options() {
-                "when local options are enabled"
+                "before each eligible code writer"
             } else {
                 "no"
             }
@@ -152,7 +154,7 @@ pub(in crate::lean) fn is_report_only_review_task(task: &TaskContract) -> bool {
 }
 
 /// Preserve requested work while adding only the runtime-owned final landing
-/// task. Global gate policy and local-options policy do not apply to this team.
+/// task. This rigor has no Options or final quality gates.
 pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<TaskContract> {
     specs = super::without_options(specs);
     for spec in &mut specs {

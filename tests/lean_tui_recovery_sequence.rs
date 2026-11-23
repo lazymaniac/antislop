@@ -94,9 +94,7 @@ impl Fixture {
         .unwrap();
         let config_text = example
             .replace("binary = \"codex\"", &format!("binary = {:?}", codex))
-            .replace("binary = \"agy\"", &format!("binary = {:?}", agy))
-            .replace("required_gates = true", "required_gates = false")
-            .replace("local_options = true", "local_options = false");
+            .replace("binary = \"agy\"", &format!("binary = {:?}", agy));
         fs::write(&config, config_text).unwrap();
 
         let short_root = Path::new(".antislop/tmp");
