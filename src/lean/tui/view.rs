@@ -189,6 +189,7 @@ pub struct TaskMeta {
     pub integration_batch: bool,
     pub outputs: Vec<String>,
     pub acceptance_criteria: Vec<crate::lean::tasks::AcceptanceCriterion>,
+    pub result_inputs: Vec<crate::lean::tasks::ResultInput>,
     pub quality_gate: bool,
     pub options_for: Option<String>,
 }

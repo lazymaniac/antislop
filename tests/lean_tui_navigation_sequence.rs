@@ -364,19 +364,34 @@ fn open_reviewer_workbench(
     while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
         app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     }
+    pump_until(
+        &mut app,
+        &rx,
+        |app| {
+            app.diff
+                .as_ref()
+                .and_then(|diff| diff.target())
+                .is_some_and(|target| target.contains("navigation-artifact.txt"))
+        },
+        "real task diff loaded before selecting PTY",
+    );
+    assert!(draw(&mut app).contains("navigation-artifact.txt"));
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
     assert_eq!(
         app.navigation.presentation().terminal_owner.as_deref(),
         Some(owner)
     );
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().native_input);
     let until = Instant::now() + Duration::from_secs(30);
     loop {
@@ -398,8 +413,12 @@ fn open_reviewer_workbench(
         }
         draw(&mut app);
     }
-    assert!(app.navigation.presentation().split);
-    assert!(draw(&mut app).contains("navigation-artifact.txt"));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
+    draw(&mut app);
+    assert!(app.details.as_ref().unwrap().native_areas[0].height > 0);
     (app, rx)
 }
 
@@ -498,15 +517,18 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         app.navigation.presentation().terminal_owner.as_deref(),
         Some("orchestrator")
     );
-    assert!(app.navigation.presentation().split);
+    assert!(!app.navigation.presentation().split);
 
     // Attach the real fixture PTY after the app has rendered its actual panel.
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     draw(&mut app);
     let until = Instant::now() + Duration::from_secs(40);
     loop {
@@ -556,7 +578,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     );
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.navigation.presentation().zoomed);
-    assert!(app.navigation.presentation().split);
+    assert!(!app.navigation.presentation().split);
     pump_until(
         &mut app,
         &updates,
@@ -568,6 +590,9 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         },
         "real fixture response",
     );
+    while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Conversation {
+        app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let conversation_frame = draw(&mut app);
     assert!(
         conversation_frame.contains("navigation fixture response"),
@@ -575,6 +600,8 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     );
     assert!(app.details.as_ref().unwrap().available_rounds.contains(&0));
 
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
     // Preserve a fresh draft in A, then create B through the app's live request handler.
     app.input.insert_str("alpha unsent draft");
     app.run_workflow(Command::NewConversation);
@@ -839,6 +866,18 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         "the real writer task must expose run history"
     );
     assert_eq!(app.details.as_ref().unwrap().task_id(), Some("t1"));
+    pump_until(
+        &mut app,
+        &rx,
+        |app| {
+            app.diff
+                .as_ref()
+                .and_then(|diff| diff.target())
+                .is_some_and(|target| target.contains("navigation-artifact.txt"))
+        },
+        "real task diff loaded before selecting PTY",
+    );
+    assert!(draw(&mut app).contains("navigation-artifact.txt"));
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
     let owner = app
@@ -851,13 +890,16 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         owner.starts_with("reviewer:"),
         "unexpected PTY owner {owner}"
     );
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     let until = Instant::now() + Duration::from_secs(40);
     loop {
         if app
@@ -890,12 +932,16 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
     let frame = draw(&mut app);
     assert!(
         frame.contains("Diff"),
-        "Diff tab must remain visible beside PTY"
+        "Diff remains reachable in the dedicated PTY tab bar"
     );
-    assert!(frame.contains("navigation-artifact.txt"));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
+    assert!(app.details.as_ref().unwrap().native_areas[0].height > 1);
     assert!(
         frame.contains("NATIVE PTY READY"),
-        "one rendered Workbench frame must show live PTY and Diff together"
+        "the dedicated PTY tab must show the selected reviewer's live terminal"
     );
     assert!(app.details.as_ref().unwrap().native[&owner].error.is_none());
     let capture_marker = PathBuf::from(format!("{}.capture_native_keys", fixture.cli.display()));

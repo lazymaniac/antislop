@@ -72,15 +72,16 @@ impl App {
     }
 
     fn session_is_stale(&self, details: &Details) -> bool {
-        (matches!(
-            details.content_tab(),
-            Some(
-                WorkbenchTab::Summary
-                    | WorkbenchTab::Conversation
-                    | WorkbenchTab::Diff
-                    | WorkbenchTab::Results
-            )
-        ) || (details.workbench_tab.is_none() && details.tab == details::REVIEW))
+        !details.shows_checks()
+            && (matches!(
+                details.content_tab(),
+                Some(
+                    WorkbenchTab::Summary
+                        | WorkbenchTab::Conversation
+                        | WorkbenchTab::Diff
+                        | WorkbenchTab::Results
+                )
+            ) || (details.workbench_tab.is_none() && details.tab == details::REVIEW))
             && details.selected_round.is_none()
             && details.fetched_events != self.view.after
     }
@@ -97,5 +98,40 @@ impl App {
                 })
             })
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reviewer_summary_refreshes_when_the_final_verdict_arrives_without_another_check() {
+        let mut app = App::test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            round: 1,
+            status: "reviewing".into(),
+            ..Default::default()
+        });
+        app.view.after = 10;
+        app.view.check_events = 9;
+        app.view.task_check_events.insert("t1".into(), 9);
+        let mut details = Details::new("reviewer:t1".into());
+        details.prepare_workbench_details(None, WorkbenchTab::Summary);
+        details.fetched_round = Some(1);
+        details.latest_observed = 1;
+        details.fetched_checks = 9;
+        details.fetched_events = 10;
+        assert!(!app.details_are_stale(&details));
+        app.view
+            .apply(&serde_json::json!({"seq":11,"kind":"task","payload":{
+                "id":"t1","status":"approved","round":1
+            }}));
+        assert_eq!(app.view.task_check_events["t1"], 10);
+        assert!(app.details_are_stale(&details));
+        details.fetched_events = app.view.after;
+        details.fetched_checks = app.view.task_check_events["t1"];
+        assert!(!app.details_are_stale(&details));
     }
 }

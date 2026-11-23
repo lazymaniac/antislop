@@ -10,7 +10,7 @@ pub(super) fn execute(
     core: &Core,
     state: TurnState<'_>,
     cancel: &AtomicBool,
-    prompt: impl FnOnce(bool, bool) -> String,
+    prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
     let profile = state.profile.as_ref().map_err(clone_error)?.clone();
@@ -22,7 +22,7 @@ fn execute_profile(
     state: &TurnState<'_>,
     profile: ResolvedProfile,
     cancel: &AtomicBool,
-    prompt: impl FnOnce(bool, bool) -> String,
+    prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
     let mut prepared = prepare_agent(core, state, profile)?;

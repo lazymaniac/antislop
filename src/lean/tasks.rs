@@ -88,6 +88,14 @@ pub struct AcceptanceCriterion {
     pub text: String,
 }
 
+/// An exact historical report used as context, without approval or scheduling edges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResultInput {
+    pub alias: String,
+    pub result_ref: String,
+}
+
 /// A task as the runtime stores it, with an explicit delivery purpose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +133,8 @@ pub struct TaskContract {
     pub delivery: Option<DeliveryMode>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_inputs: Vec<ResultInput>,
     pub kind: WorkKind,
     #[serde(default)]
     pub reviewer: ReviewerSpec,

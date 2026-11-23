@@ -161,9 +161,7 @@ fn replace_or_append(specs: &mut Vec<TaskContract>, task: &TaskContract) {
 
 fn same_contract(task: &Task, spec: &TaskContract) -> bool {
     serde_json::from_value::<TaskContract>(task.spec.clone())
-        .ok()
-        .as_ref()
-        == Some(spec)
+        .is_ok_and(|old| crate::lean::tasks::same_contract(&old, spec))
 }
 
 pub(in crate::lean) struct RevisionLease<'a> {

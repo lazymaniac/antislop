@@ -50,7 +50,7 @@ impl Core {
         conversation: &str,
         turn: &str,
         args: &Value,
-        result: &mut TurnResult,
+        result: &TurnResult,
     ) -> Result<Vec<store::EvidenceReference>> {
         let requested: Vec<String> = match args.get("evidence").filter(|v| !v.is_null()) {
             Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
@@ -60,7 +60,7 @@ impl Core {
             })?,
             None => vec![],
         };
-        let TurnResult::Completed { report, .. } = result else {
+        let TurnResult::Completed { .. } = result else {
             require(
                 requested.is_empty(),
                 "evidence references are only supported by complete/select",
@@ -69,7 +69,7 @@ impl Core {
         };
         require(
             requested.len() <= store::MAX_RESULT_EVIDENCE,
-            "evidence: at most 64 references",
+            "evidence: at most 64 references including automatic and explicitly retained records",
         )?;
         let mut references = self.store.result_evidence(turn)?;
         for id in requested {
@@ -79,22 +79,9 @@ impl Core {
         }
         require(
             references.len() <= store::MAX_RESULT_EVIDENCE,
-            "evidence: at most 64 references",
+            "evidence: at most 64 references including automatic and explicitly retained records",
         )?;
         references.sort_by(|a, b| a.id.cmp(&b.id));
-        if !references.is_empty() {
-            report.push_str("\n\nMCP execution evidence (read_evidence; immutable records):");
-            for reference in &references {
-                report.push_str(&format!(
-                    "\n- {}: {} ({} bytes, SHA-256 {}; producer turn {})",
-                    reference.label,
-                    reference.id,
-                    reference.bytes,
-                    reference.sha256,
-                    reference.producer_turn
-                ));
-            }
-        }
         Ok(references)
     }
 }

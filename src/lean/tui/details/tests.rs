@@ -892,6 +892,26 @@ fn reviewer_summary_displays_accepted_pending_and_issue_checks() {
         id: "t1".into(),
         ..Default::default()
     });
+    details.load_task(reviewer_task(serde_json::json!({})));
+    let pending = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for row in check_rows(details.task.as_ref().unwrap()) {
+        assert!(
+            pending.contains(&row.id) && pending.contains(&row.text),
+            "{pending}"
+        );
+        assert_eq!(row.state, "pending");
+    }
+    assert!(pending.contains("all required checks are listed below"));
+    details.load_task(reviewer_task(serde_json::json!({"checks":[
+        {"id":"goal","state":"settled","status":"ok","note":"Verified goal"},
+        {"id":"C1","state":"settled","status":"issue","note":"Missing test"}
+    ]})));
+
     let text = details
         .records(&view)
         .iter()
@@ -907,6 +927,57 @@ fn reviewer_summary_displays_accepted_pending_and_issue_checks() {
             && text.contains("Missing test")
             && text.contains("not checked yet"),
         "{text}"
+    );
+    let coverage = check_rows(details.task.as_ref().unwrap())
+        .into_iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                serde_json::json!({"status":"ok", "note":format!("Final evidence {}", row.id)}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    details.load_task(reviewer_task(serde_json::json!({
+        "checks":[{"id":"goal","state":"checking","note":"Old live evidence"}],
+        "verdict":{"approved":true,"coverage":coverage,
+            "findings":[{"severity":"low","issue":"Review note café 👩‍💻","where":"a.rs:3"}]}
+    })));
+    let final_text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        final_text.contains("minor notes") && final_text.contains("a.rs:3"),
+        "{final_text}"
+    );
+    assert_eq!(final_text.matches("Review note café 👩‍💻").count(), 1);
+    assert_eq!(final_text.matches("Final evidence goal").count(), 1);
+    assert!(!final_text.contains("Old live evidence") && !final_text.contains("not checked yet"));
+    for row in check_rows(details.task.as_ref().unwrap()) {
+        assert_eq!(row.state, "settled");
+        assert_eq!(row.status.as_deref(), Some("ok"));
+    }
+    let mut rejected = details.task.clone().unwrap();
+    rejected["verdict"]["approved"] = serde_json::json!(false);
+    rejected["verdict"]["findings"] = serde_json::json!([]);
+    rejected["verdict"]["coverage"]["goal"] =
+        serde_json::json!({"status":"issue","note":"Goal needs repair"});
+    details.load_task(rejected);
+    let rejected_text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rejected_text.contains("issues found") && rejected_text.contains("Goal needs repair"));
+    assert!(!rejected_text.contains("reviewer approved"));
+    assert_eq!(
+        check_rows(details.task.as_ref().unwrap())[0]
+            .status
+            .as_deref(),
+        Some("issue")
     );
 }
 

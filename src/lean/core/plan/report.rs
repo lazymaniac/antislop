@@ -13,7 +13,7 @@ impl Core {
         let tasks = self.store.plan(plan_id)?;
         let team = self.store.team(conversation)?;
         let code_review = team == tasks::Team::CodeReview;
-        let results = task_results(&tasks);
+        let results = task_results(&self.store, &tasks)?;
         if team == tasks::Team::NoQualityGates {
             return Ok(report_intro(&results));
         }
@@ -50,6 +50,7 @@ impl Core {
             input.cancel,
             input.results,
         )?;
+        let audit_report = audit.as_ref().ok().map(|(report, _)| report.clone());
         let source = self.locks.source(input.conversation);
         let _source = source.lock().expect("conversation source scope");
         let _graph = self.locks.graph();
@@ -66,13 +67,9 @@ impl Core {
         } else if self.final_audit_binding(input.conversation, input.plan_id)? != binding {
             audit=Err("plan, scope or integrated files changed during final audit; audit the current result again".into());
         }
-        let mut audit_report = None;
-        if let Ok((report, _)) = &audit {
-            audit_report = Some(report.clone());
-        }
         let mut verdict = audit.map(|(_, verdict)| verdict);
         apply_audit_gates(&mut verdict, input.tasks);
-        self.persist_plan_audit(
+        let audit_ref = self.persist_plan_audit(
             input.conversation,
             input.plan_id,
             &binding,
@@ -80,7 +77,7 @@ impl Core {
             audit_report.as_deref(),
             &verdict,
         )?;
-        text.push_str(&audit_text(&verdict, code_review, audit_report.as_deref()));
+        text.push_str(&format!("\n## Independent audit\nVerdict: {}. Auditor report and findings: read_audit audit_ref=audit:{audit_ref}.\n", match &verdict { Ok(v) if v.approved => "approved", Ok(_) => "not approved", Err(_) => "unaudited" }));
         Ok(())
     }
 
@@ -92,16 +89,14 @@ impl Core {
         code_review: bool,
         report: Option<&str>,
         verdict: &std::result::Result<Verdict, String>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let mut payload = review_json(verdict);
-        if code_review {
-            payload["report"] = json!(report);
-        }
+        payload["report"] = json!(report);
+        payload["code_review"] = json!(code_review);
         payload["plan"] = json!(plan_id);
         payload["binding"] = json!(binding);
         self.store
-            .append_event(conversation, None, Some(plan_id), "audit", &payload)?;
-        Ok(())
+            .append_event(conversation, None, Some(plan_id), "audit", &payload)
     }
 
     pub(in crate::lean) fn final_audit_binding(
@@ -218,8 +213,21 @@ struct PlanAuditInput<'a> {
     results: &'a str,
 }
 
-fn task_results(tasks: &[Task]) -> String {
-    tasks.iter().map(task_result).collect()
+fn task_results(store: &Store, tasks: &[Task]) -> Result<String> {
+    tasks
+        .iter()
+        .map(|task| {
+            let summary = match store.task_summary(task) {
+                Ok(summary) => summary,
+                Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows)) => task.spec["summary"]
+                    .as_str()
+                    .unwrap_or("Read the full result through MCP")
+                    .to_owned(),
+                Err(error) => return Err(error),
+            };
+            Ok(task_result(task, &summary))
+        })
+        .collect()
 }
 
 fn report_intro(results: &str) -> String {
@@ -229,17 +237,17 @@ fn report_intro(results: &str) -> String {
     )
 }
 
-fn task_result(task: &Task) -> String {
-    let report = task.report.as_deref().unwrap_or("(no report)");
+fn task_result(task: &Task, summary: &str) -> String {
     let findings = task_findings(task);
     format!(
-        "\n## {} — {} ({}, {} round(s))\nGoal: {}\nAcceptance criteria: {}\nWorker report:\n{report}\nOpen reviewer findings:\n{findings}\n",
+        "\n## {} — {} ({}, {} round(s))\nSummary: {}\nFull contract: read_task_contract task={}. Full worker report: read_dependency_result dependency={}; use report_history for earlier input generations.\nOpen reviewer findings:\n{findings}\n",
         task.spec["id"].as_str().unwrap_or_default(),
         task.spec["title"].as_str().unwrap_or_default(),
         task.status,
         task.round,
-        task.spec["goal"].as_str().unwrap_or_default(),
-        task.spec["acceptance_criteria"],
+        summary,
+        task.id,
+        task.id
     )
 }
 
@@ -294,96 +302,36 @@ fn unapproved_task_ids(tasks: &[Task]) -> String {
         .join(", ")
 }
 
-fn audit_text(
-    audit: &std::result::Result<Verdict, String>,
-    code_review: bool,
-    report: Option<&str>,
-) -> String {
-    match audit {
-        Ok(verdict) if code_review => {
-            let report =
-                report.unwrap_or("The independent auditor returned no user-facing report text.");
-            let overall = if verdict.approved {
-                "**Overall verdict: no blocking findings.**"
-            } else {
-                "**Overall verdict: unresolved findings or checks remain.**"
-            };
-            let findings = if verdict.findings.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\nAdditional audit findings:\n{}\n",
-                    tasks::findings_text(&verdict.findings)
-                )
-            };
-            format!("\n## Independent code review\n{overall}\n\n{report}\n{findings}")
-        }
-        Ok(verdict) if verdict.approved => {
-            "\n## Independent audit\nThe request is fully delivered.\n".to_owned()
-        }
-        Ok(verdict) => format!(
-            "\n## Independent audit\nThe request is not fully delivered:\n{}\nPropose a plan for what is missing, or tell the user why it stays open.\n",
-            tasks::findings_text(&verdict.findings)
-        ),
-        Err(error) => format!(
-            "\n## Independent audit\nThe audit could not run ({error}); tell the user the result is unaudited.\n"
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn code_review_report_presents_scope_verdict_and_confirmed_findings_or_none() {
-        let clean = Verdict {
-            approved: true,
-            findings: vec![],
-            coverage: serde_json::Map::new(),
-            resolved: vec![],
-        };
-        let clean_report = "Scope: src/lib.rs:1-80\nVerdict: no confirmed findings\nUnresolved: dependency behavior not exercised; no tests run.";
-        let clean_text = audit_text(&Ok(clean), true, Some(clean_report));
-        assert!(clean_text.contains("Independent code review"));
-        assert!(clean_text.contains("Scope: src/lib.rs:1-80"));
-        assert!(clean_text.contains("no confirmed findings"));
-        assert!(clean_text.contains("Unresolved: dependency behavior not exercised"));
-        assert!(!clean_text.contains("Additional audit findings"));
-
-        let with_finding = Verdict {
-            approved: false,
-            findings: vec![
-                json!({"severity":"medium","issue":"Input X causes Y","where":"src/lib.rs:42"}),
-            ],
-            coverage: serde_json::Map::new(),
-            resolved: vec![],
-        };
-        let text = audit_text(
-            &Ok(with_finding),
-            true,
-            Some("Verdict: one confirmed issue"),
-        );
-        assert!(text.contains("one confirmed issue"));
-        assert!(text.contains("[medium] Input X causes Y (src/lib.rs:42)"));
-    }
-
-    #[test]
-    fn code_review_final_audit_persists_report_and_verdict_together() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let config = Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
-        let core = Core::open(&dir.path().join("state"), config).unwrap();
-        let conversation = core
-            .store
-            .create_conversation(project.to_str().unwrap())
-            .unwrap()
-            .id;
-        core.store
-            .select_team(&conversation, tasks::Team::CodeReview, "Review-only run")
-            .unwrap();
-        let tasks = core
+    fn every_final_audit_persists_its_own_report_and_verdict() {
+        for code_review in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            let config =
+                Config::from_toml(include_str!("../../../../examples/antislop.toml")).unwrap();
+            let core = Core::open(&dir.path().join("state"), config).unwrap();
+            let conversation = core
+                .store
+                .create_conversation(project.to_str().unwrap())
+                .unwrap()
+                .id;
+            core.store
+                .select_team(
+                    &conversation,
+                    if code_review {
+                        tasks::Team::CodeReview
+                    } else {
+                        tasks::Team::Feature
+                    },
+                    "Audit run",
+                )
+                .unwrap();
+            let tasks = core
             .store
             .add_plan(
                 &conversation,
@@ -397,42 +345,43 @@ mod tests {
                 })],
             )
             .unwrap();
-        let plan_id = &tasks[0].plan_id;
-        let report = "Scope: src/lib.rs:1-80\nVerdict: no confirmed findings";
-        let verdict = Ok(Verdict {
-            approved: false,
-            findings: vec![json!({
-                "severity":"medium",
-                "issue":"Input X causes Y",
-                "where":"src/lib.rs:42"
-            })],
-            coverage: serde_json::Map::new(),
-            resolved: vec![],
-        });
+            let plan_id = &tasks[0].plan_id;
+            let report = "Scope: src/lib.rs:1-80\nVerdict: no confirmed findings";
+            let verdict = Ok(Verdict {
+                approved: false,
+                findings: vec![json!({
+                    "severity":"medium",
+                    "issue":"Input X causes Y",
+                    "where":"src/lib.rs:42"
+                })],
+                coverage: serde_json::Map::new(),
+                resolved: vec![],
+            });
 
-        core.persist_plan_audit(
-            &conversation,
-            plan_id,
-            "binding-123",
-            true,
-            Some(report),
-            &verdict,
-        )
-        .unwrap();
+            core.persist_plan_audit(
+                &conversation,
+                plan_id,
+                "binding-123",
+                code_review,
+                Some(report),
+                &verdict,
+            )
+            .unwrap();
 
-        let event = core
-            .store
-            .latest_audit_event(&conversation)
-            .unwrap()
-            .expect("final audit event was persisted");
-        assert_eq!(event.kind, "audit");
-        assert_eq!(event.plan_id.as_deref(), Some(plan_id.as_str()));
-        assert_eq!(event.payload["plan"], json!(plan_id));
-        assert_eq!(event.payload["binding"], "binding-123");
-        assert_eq!(event.payload["report"], report);
-        assert_eq!(event.payload["approved"], false);
-        assert_eq!(event.payload["findings"][0]["issue"], "Input X causes Y");
-        assert_eq!(event.payload["findings"][0]["where"], "src/lib.rs:42");
+            let event = core
+                .store
+                .latest_audit_event(&conversation)
+                .unwrap()
+                .expect("final audit event was persisted");
+            assert_eq!(event.kind, "audit");
+            assert_eq!(event.plan_id.as_deref(), Some(plan_id.as_str()));
+            assert_eq!(event.payload["plan"], json!(plan_id));
+            assert_eq!(event.payload["binding"], "binding-123");
+            assert_eq!(event.payload["report"], report);
+            assert_eq!(event.payload["approved"], false);
+            assert_eq!(event.payload["findings"][0]["issue"], "Input X causes Y");
+            assert_eq!(event.payload["findings"][0]["where"], "src/lib.rs:42");
+        }
     }
 
     #[test]

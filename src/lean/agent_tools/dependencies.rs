@@ -10,8 +10,66 @@ impl Core {
         args: &Value,
     ) -> Result<Value> {
         let requested = required_text(args, "dependency")?;
+        let view = args["view"].as_str().unwrap_or("report");
+        require(
+            matches!(view, "report" | "review"),
+            "view: expected report or review",
+        )?;
+        if let Some((id, _)) = task_role(role) {
+            let task = self
+                .store
+                .task_by_id(id)?
+                .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+            require(
+                self.store.plan_conversation(&task.plan_id)? == conversation,
+                "task belongs to another conversation",
+            )?;
+            let spec: TaskContract = serde_json::from_value(task.spec)?;
+            if let Some(input) = spec
+                .result_inputs
+                .iter()
+                .find(|input| input.alias == requested)
+            {
+                require(
+                    view == "report",
+                    "view: an explicit result input exposes only its exact worker report",
+                )?;
+                let reference = self
+                    .store
+                    .historical_result(conversation, &input.result_ref)?;
+                require(
+                    args["result_ref"].is_null() || args["result_ref"] == input.result_ref,
+                    "result_ref: must match the exact explicit input reference",
+                )?;
+                require(
+                    args["round"].is_null()
+                        || args["round"].as_u64() == Some(u64::from(reference.round)),
+                    "round: does not match explicit input result_ref",
+                )?;
+                let output = self.store.referenced_worker_report(&reference)?;
+                let report = dependency_report_text(&output)?;
+                let binding = crate::hash(serde_json::to_vec(&(
+                    conversation,
+                    role,
+                    turn,
+                    task.input_generation,
+                    input,
+                ))?);
+                let (report, cursor) = page_text(&report, &binding, args)?;
+                let evidence = self.store.result_evidence(&input.result_ref)?;
+                return Ok(
+                    json!({"dependency":requested,"result_ref":input.result_ref,"result_type":reference.result_type,
+                    "result_id":reference.producer_task,"round":reference.round,"input_generation":reference.input_generation,
+                    "explicit_input":true,"historical":true,"task_approved":false,"grants_approval":false,
+                    "evidence":evidence,"report":report,"complete":cursor.is_none(),"cursor":cursor}),
+                );
+            }
+        }
         let scope = self.dependency_reader_scope(conversation, role, turn)?;
-        let coordinating = matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR);
+        let coordinating = matches!(
+            role,
+            ORCHESTRATOR | COMMENT_ORCHESTRATOR | "planner" | PLAN_REVIEWER | AUDITOR
+        ) || role.starts_with("code-review:");
         let task = scope.tasks.iter().rev().find(|task| {
             if task_role(role).is_some_and(|(id, _)| id == task.id) && requested != "self" { return false; }
             (task.id == requested || (requested == "self" && task_role(role).is_some_and(|(id, _)| id == task.id)))
@@ -82,6 +140,40 @@ impl Core {
                 requested_round.is_none_or(|round| round == selected.round),
                 "round: does not match result_ref",
             )?;
+        }
+        if view == "review" || selected.is_none() && requested_round.is_some() && own_history {
+            let producer = selected.map_or(task.id.as_str(), |r| r.producer_task.as_str());
+            let round = selected.map_or(requested_round.unwrap_or(task.round), |r| r.round);
+            let record = self.store.task_round(producer, round)?;
+            let report = if view == "review" {
+                require(
+                    record["verdict"].is_object(),
+                    "no retained reviewer verdict for this round",
+                )?;
+                crate::lean::prompt_context::markdown(&record["verdict"])
+            } else {
+                record["report"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        Error::Invalid("no retained worker report for this round".into())
+                    })?
+                    .to_owned()
+            };
+            let binding = crate::hash(serde_json::to_vec(&(
+                conversation,
+                role,
+                turn,
+                task.input_generation,
+                producer,
+                round,
+                view,
+                crate::hash(report.as_bytes()),
+            ))?);
+            let (report, cursor) = page_text(&report, &binding, args)?;
+            return Ok(
+                json!({"dependency":requested,"view":view,"round":round,"result_id":producer,
+                "historical":true,"grants_approval":false,"report":report,"complete":cursor.is_none(),"cursor":cursor}),
+            );
         }
         let mut available_rounds = history
             .reports
@@ -214,7 +306,10 @@ impl Core {
             });
         }
         require(
-            matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),
+            matches!(
+                role,
+                ORCHESTRATOR | COMMENT_ORCHESTRATOR | "planner" | PLAN_REVIEWER | AUDITOR
+            ) || role.starts_with("code-review:"),
             "tool unavailable for this role",
         )?;
         let plan = self.store.dependency_plan(conversation, role, turn)?;
@@ -233,19 +328,18 @@ pub(super) struct DependencyScope {
 }
 
 fn dependency_report_text(output: &Value) -> Result<String> {
-    let report = output["report"].as_str();
-    if output["selection"].is_object() {
-        let report =
-            report.filter(|report| Some(*report) != output["selection"]["rationale"].as_str());
-        return Ok(format!(
-            "{}\n\nSelected approach:\n{}",
-            report.unwrap_or_default(),
-            serde_json::to_string(&output["selection"])?
-        ));
-    }
-    report
-        .map(str::to_owned)
-        .ok_or_else(|| Error::Invalid("dependency has no report".into()))
+    let selection = output
+        .get("selection")
+        .filter(|v| v.is_object())
+        .map(|v| serde_json::from_value::<turn_result::Selection>(v.clone()))
+        .transpose()?;
+    let report = output["report"]
+        .as_str()
+        .ok_or_else(|| Error::Invalid("dependency has no report".into()))?;
+    Ok(turn_result::report_with_deliverables(
+        report,
+        selection.as_ref(),
+    ))
 }
 
 /// Cursor leases include the reader turn and the immutable result identity.

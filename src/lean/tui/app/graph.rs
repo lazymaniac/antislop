@@ -111,8 +111,7 @@ impl App {
             .work_selection
             .as_ref()
             .filter(|selection| selection.unit == unit.id)
-            .and_then(|selection| selection.stage.as_ref())
-            .or_else(|| self.navigation.remembered_stages.get(&unit.id));
+            .and_then(|selection| selection.stage.as_ref());
         Some(
             selected
                 .filter(|id| unit.stages.iter().any(|stage| stage.id == **id))
@@ -152,9 +151,6 @@ impl App {
         if let Some(unit) = work.for_stage(&key) {
             self.selected = unit.card.clone();
             let stage = StageId(key);
-            self.navigation
-                .remembered_stages
-                .insert(unit.id.clone(), stage.clone());
             self.navigation.work_selection = Some(WorkSelection {
                 unit: unit.id.clone(),
                 stage: Some(stage),

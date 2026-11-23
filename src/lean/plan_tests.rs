@@ -426,10 +426,13 @@ fn the_owner_goal_reaches_its_generated_options_task() {
             .unwrap()
             .goal
     };
-    assert!(options_goal(&writer).contains("source compatible"));
+    assert!(!options_goal(&writer).contains("source compatible"));
+    assert!(options_goal(&writer).contains("read_task_contract"));
     writer.goal = "Do a different thing entirely".into();
-    let revised = options_goal(&writer);
-    assert!(revised.contains("different thing") && !revised.contains("source compatible"));
+    let revised = finalize_plan(vec![writer.clone()], false, true);
+    let owner = revised.iter().find(|task| task.id == writer.id).unwrap();
+    assert_eq!(owner.goal, writer.goal);
+    assert!(!options_goal(&writer).contains("different thing"));
 }
 
 #[test]

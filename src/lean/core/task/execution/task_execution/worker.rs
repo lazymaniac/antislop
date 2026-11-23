@@ -476,7 +476,7 @@ fn run_worker_turn(
     continuation: Option<String>,
     upstream: &str,
 ) -> Result<Option<String>> {
-    core.turn(setup, cancel, |_, _| {
+    core.turn(setup, cancel, |_| {
         tasks::worker_turn_prompt(project_text, spec, continuation.as_deref(), upstream)
     })
 }

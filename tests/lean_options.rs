@@ -249,7 +249,11 @@ fn run_scenario_with_team(
     }
     idle();
     let plan = core.store.latest_plan(&conversation.id).unwrap();
-    assert!(!plan.is_empty());
+    assert!(
+        !plan.is_empty(),
+        "planning produced no tasks: {:?}",
+        core.store.events_since(&conversation.id, 0, 100).unwrap()
+    );
     if scenario.starts_with("resume-") {
         let stopped = core.task(&plan[0].plan_id, "w").unwrap();
         assert_eq!(stopped.status, "waiting", "{stopped:?}");
@@ -1046,35 +1050,22 @@ fn core_delivery_follows_rejection_in_both_roles() {
 }
 
 fn assert_selected_input(prompt: &str) {
-    let inputs: Vec<Value> = prompt
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|value| value["variant"].is_object())
-        .collect();
     assert_eq!(
-        inputs.len(),
+        prompt.matches("Selected variant:").count(),
         1,
         "expected one local selection, not dependency reports"
     );
-    assert!(inputs[0]["variant"]["id"].is_string());
-    assert!(
-        inputs[0]["rationale"].is_null(),
-        "Full rationale belongs in the dependency reader"
-    );
-    assert_eq!(
-        inputs[0]["details"],
-        "read_dependency_result(dependency=\"selected_approach\")"
-    );
-    assert!(
-        inputs[0]["variant"]["approach"]
-            .as_str()
-            .is_some_and(|text| !text.is_empty())
-    );
-    assert!(
-        inputs[0]["variant"]["tradeoffs"]
-            .as_str()
-            .is_some_and(|text| !text.is_empty())
-    );
+    assert!(prompt.contains("- id: A") || prompt.contains("- id: B"));
+    for field in ["approach", "tradeoffs"] {
+        assert!(prompt.lines().any(|line| {
+            line.strip_prefix(&format!("- {field}: "))
+                .is_some_and(|text| !text.is_empty())
+        }));
+    }
+    assert!(prompt.contains("read_dependency_result(dependency=\"selected_approach\")"));
+    assert!(!prompt.lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|value| value["variant"].is_object())
+    }));
 }
 
 #[test]

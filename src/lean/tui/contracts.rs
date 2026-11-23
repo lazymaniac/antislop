@@ -191,6 +191,7 @@ pub enum WorkbenchTab {
     #[default]
     Summary,
     Conversation,
+    Pty,
     Results,
     Checks,
     Comments,
@@ -224,8 +225,6 @@ pub struct WorkbenchPresentation {
     /// Focus remembered for this target; distinct from the current input owner.
     pub focus: NavigationFocus,
     pub split: bool,
-    /// A new target stays on its PTY until real changes or explicit navigation.
-    pub terminal_only_default: bool,
     /// Preferred PTY share of the vertical content area, in percent (1..=99).
     pub terminal_percent: u8,
     pub zoomed: bool,
@@ -245,11 +244,10 @@ impl Default for WorkbenchPresentation {
             tab: WorkbenchTab::Summary,
             round: None,
             focus: NavigationFocus::WorkbenchContent,
-            split: true,
-            terminal_only_default: false,
+            split: false,
             terminal_percent: 50,
             zoomed: false,
-            split_before_zoom: true,
+            split_before_zoom: false,
             list_visible: true,
             list_requested: false,
             pinned: false,
@@ -271,8 +269,6 @@ pub struct NavigationState {
     pub session_delivery: crate::lean::store::Delivery,
     pub compact_secondary: bool,
     pub work_selection: Option<super::work_units::WorkSelection>,
-    pub remembered_stages:
-        std::collections::HashMap<super::work_units::WorkUnitId, super::work_units::StageId>,
 }
 
 impl NavigationState {

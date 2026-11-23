@@ -76,9 +76,7 @@ impl Core {
             return Ok(None);
         }
         let graph = self.store.latest_plan(conversation)?;
-        Ok(Some(serde_json::to_string(&authored_contracts(
-            graph.iter().map(|task| &task.spec),
-        ))?))
+        Ok(Some(crate::lean::prompt_context::markdown(&graph.iter().filter(|task| task.spec["quality_gate"] != true && task.spec["options_for"].is_null()).map(|task| json!({"id":task.spec["id"],"summary":task.spec["summary"].as_str().or(task.spec["title"].as_str()),"status":task.status})).collect::<Vec<_>>())))
     }
 
     fn run_planner_turn(
@@ -86,8 +84,15 @@ impl Core {
         context: &PlannerTurnContext<'_>,
         cancel: &AtomicBool,
     ) -> Result<Option<String>> {
-        let setup = planner_setup(context);
-        self.turn(setup, cancel, |first, _| planner_prompt(context, first))
+        let mut setup = planner_setup(context);
+        setup.plan_id = self
+            .store
+            .latest_plan(context.conversation)?
+            .first()
+            .map(|task| task.plan_id.clone());
+        self.turn(setup, cancel, |session| {
+            planner_prompt(context, session.introduce())
+        })
     }
 
     fn handle_planner_answer(
@@ -144,15 +149,17 @@ impl Core {
 /// The contracts as `submit_plan` accepts them: only tasks the planner authors, only the
 /// fields it may write. Options, quality gates and runtime-resolved links are generated and
 /// would be rejected as unknown fields if copied back.
+#[cfg(test)]
 fn authored_contracts<'a>(
     specs: impl Iterator<Item = &'a serde_json::Value>,
 ) -> Vec<serde_json::Value> {
-    const FIELDS: [&str; 12] = [
+    const FIELDS: [&str; 13] = [
         "id",
         "title",
         "goal",
         "kind",
         "depends_on",
+        "result_inputs",
         "deferred",
         "change_kind",
         "outputs",
@@ -453,7 +460,7 @@ mod tests {
         let context = core.planner_turn_context(&id, upto).unwrap();
         let prompt = planner_prompt(&context, true);
         assert!(prompt.contains("The correction needs a user decision"));
-        assert!(prompt.contains("task contracts"));
+        assert!(prompt.contains("task index") && prompt.contains("read_task_contract"));
         assert!(context.replaced.as_ref().unwrap().contains("t1"));
         let turn = core
             .store

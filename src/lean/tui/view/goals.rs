@@ -128,15 +128,15 @@ mod tests {
             );
             if task.options_for.is_some() {
                 assert!(
-                    shown.contains("Provide actions for completed sessions 👩‍💻e\u{301}"),
+                    shown.contains("The choice concerns: Session actions"),
                     "{shown}"
                 );
                 assert!(!shown.contains("Run checks afterwards"));
                 assert!(!shown.contains("owner_contract") && !shown.contains("Do not execute"));
                 assert_eq!(shown.matches(". ").count(), 1, "{shown}");
                 assert!(
-                    task.goal.contains("owner_contract"),
-                    "the execution contract is retained"
+                    task.goal.contains("read_task_contract"),
+                    "the execution contract is available through MCP"
                 );
             } else if task.quality_gate {
                 assert!(

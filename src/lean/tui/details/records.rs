@@ -24,7 +24,7 @@ impl Details {
             Some(WorkbenchTab::Summary) if self.shows_checks() => {
                 checks::checks(self, view, &mut records)
             }
-            Some(WorkbenchTab::Summary | WorkbenchTab::Diff) => {
+            Some(WorkbenchTab::Summary | WorkbenchTab::Diff | WorkbenchTab::Pty) => {
                 overview::overview(self, view, &mut records)
             }
             Some(WorkbenchTab::Conversation) => return self.project_dialogue_entries(view),

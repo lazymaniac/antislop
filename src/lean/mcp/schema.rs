@@ -82,8 +82,9 @@ pub(super) fn planned_task() -> Value {
             "kind":{"enum":KINDS},
             "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. When that kind already has explicitly declared checks, its canonical gate id refers to all of those checks. Each dependent receives dependency summaries"},
 
+            "result_inputs":{"type":"array","items":object(json!({"alias":{"type":"string"},"result_ref":{"type":"string","description":"Exact immutable worker result reference from this conversation; grants no approval and creates no scheduling edge"}}), &["alias","result_ref"])},
             "deferred":{"type":"boolean","description":"True keeps future work in the graph but runtime cannot schedule or launch it. Its options and code gates are deferred too. Release through a reviewed plan revision when its prerequisites are ready."},
-            "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Describes the result; all agents have full filesystem access."},
+            "change_kind":{"enum":["none","artifact","code"],"description":"none: report only; artifact: analysis/document in explicit outputs, no code gates; code: implementation with required code gates. Describes the result; the CLI permission policy and allocated role apply."},
             "outputs":{"type":"array","items":{"type":"string"},"description":"Explicit relative output files, required for artifact"},
             "delivery":{"enum":["untracked"],"description":"Deliver a new artifact without modifying the project HEAD or index"},
             "acceptance_criteria":{"type":"array","minItems":1,"items":object(json!({"id":{"type":"string","description":"Task-local stable id, e.g. C1"},"text":{"type":"string"}}), &["id","text"])},

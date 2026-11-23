@@ -143,7 +143,11 @@ mod tests {
             ]
         }))
         .unwrap();
-        let legacy = crate::lean::turn_result::report_with_deliverables("Report", Some(&selection));
+        let legacy = format!(
+            "{}\n\nRecorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n{}\n```",
+            "Report",
+            serde_json::to_string_pretty(&selection).unwrap()
+        );
         let structured = json!({"type":"completed","summary":"Summary text","report":"Report","selection":selection}).to_string();
         for raw in [legacy, structured] {
             let text = worker_report(&raw);
@@ -179,7 +183,11 @@ mod tests {
             }],
         };
         let prose = "café 👩‍👩‍👧‍👦\n\n- Item\n".repeat(100);
-        let legacy = crate::lean::turn_result::report_with_deliverables(&prose, Some(&selection));
+        let legacy = format!(
+            "{}\n\nRecorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n{}\n```",
+            prose,
+            serde_json::to_string_pretty(&selection).unwrap()
+        );
         let structured = serde_json::json!({"type":"completed","summary":"Done","report":prose,"selection":selection}).to_string();
         for raw in [prose.clone(), legacy, structured] {
             let mut formatter = ReportStream::default();

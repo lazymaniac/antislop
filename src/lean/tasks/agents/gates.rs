@@ -210,6 +210,7 @@ fn gate_task(
         integration_batch: false,
         acceptance_criteria: Vec::new(),
         options_for: None,
+        result_inputs: Vec::new(),
 
         id,
         checkout_name: (!description.audit).then(|| crate::lean::tasks::checkout_slug(agent.title)),

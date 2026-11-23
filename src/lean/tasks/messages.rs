@@ -12,7 +12,13 @@ pub(crate) fn inbox_text_from<'a>(
         let _ = writeln!(
             text,
             "- from {} ({}): {}",
-            message.sender, message.kind, message.text
+            message.sender,
+            message.kind,
+            if message.sender == crate::lean::RUNTIME && message.kind == "agent_work" {
+                message.text.clone()
+            } else {
+                crate::lean::prompt_context::untrusted("Message", &message.text)
+            }
         );
     }
     text.push('\n');
@@ -50,11 +56,12 @@ mod tests {
             },
         ];
 
-        let expected = "Messages for you:\n- from worker:a (agent_work): first\n- from user (guidance): second\n\n";
-        assert_eq!(inbox_text(&messages), expected);
-        assert_eq!(
-            inbox_text_from(messages.iter().skip(1)),
-            "Messages for you:\n- from user (guidance): second\n\n"
-        );
+        let all = inbox_text(&messages);
+        assert!(all.contains("worker:a (agent_work)"));
+        assert!(all.contains("user (guidance)"));
+        assert_eq!(all.matches("untrusted reference data").count(), 2);
+        assert!(all.contains("first") && all.contains("second"));
+        let filtered = inbox_text_from(messages.iter().skip(1));
+        assert!(!filtered.contains("first") && filtered.contains("second"));
     }
 }

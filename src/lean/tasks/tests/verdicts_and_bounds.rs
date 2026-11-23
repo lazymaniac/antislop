@@ -70,8 +70,8 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
     assert_eq!(
         findings_text(&verdict.findings),
         format!(
-            "- [medium] {}: EUR + PLN ({})\n- [medium] could not be settled: {}: no data to rerun ({})",
-            first.1, first.0, second.1, second.0
+            "- check:{} [medium] {}: EUR + PLN ({})\n- check:{} [medium] could not be settled: {}: no data to rerun ({})",
+            first.0, first.1, first.0, second.0, second.1, second.0
         )
     );
 }

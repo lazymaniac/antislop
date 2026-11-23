@@ -605,6 +605,7 @@ impl FlowEditor {
             outputs,
             delivery: None,
             depends_on,
+            result_inputs: meta.result_inputs,
             kind,
             acceptance_criteria,
             reviewer: ReviewerSpec {
@@ -957,6 +958,7 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
         change_kind: row.change_kind,
         outputs: meta.outputs,
         delivery: None,
+        result_inputs: meta.result_inputs,
         depends_on: row.depends_on.clone(),
         kind: parse_work_kind(&row.kind),
 

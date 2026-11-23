@@ -255,7 +255,12 @@ impl Session {
             if interrupt {
                 terminal::Session::interrupt(&self.screen)?;
             }
-            terminal::Session::submit(&self.screen, text)
+            let mut context = crate::lean::prompt_context::PromptContext::default();
+            context.section(
+                "Steering",
+                crate::lean::prompt_context::untrusted("Message", text),
+            );
+            terminal::Session::submit(&self.screen, &context.render())
         })
     }
 
@@ -301,7 +306,17 @@ impl Session {
         })?;
         self.gateway.begin(turn)?;
         let result_instructions = self.gateway.completion_footer()?;
-        terminal::Session::submit(&self.screen, &turn_text(turn, prompt, &result_instructions))?;
+        let transmitted = turn_text(turn, prompt, &result_instructions);
+        if let Some(core) = self.core.upgrade()
+            && core.store.db().query_row(
+                "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1)",
+                [turn],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            core.store.append_event(&self.conversation, Some(turn), None, "prompt_transport", &serde_json::json!({"body_bytes":prompt.len(),"footer_bytes":transmitted.len() - prompt.len(),"measurement":"UTF-8 transport bytes; excludes provider context and billed tokens"}))?;
+        }
+        terminal::Session::submit(&self.screen, &transmitted)?;
         self.primed.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -343,14 +358,15 @@ impl Session {
                 .map_err(invalid)?
                 .observe(self.spec.provider, &screen, false, paused);
         if ready && !cancel.load(Ordering::SeqCst) {
+            let footer = self.gateway.completion_footer()?;
             self.gateway.while_pending(turn, || {
                 if cancel.load(Ordering::SeqCst) {
                     return Ok(());
                 }
-                terminal::Session::submit(
-                    &self.screen,
-                    "Your response appears complete, but this MCP turn is still open. Continue any remaining work, then call the required result tool now. Do not finish in terminal prose.",
-                )
+                let mut context = crate::lean::prompt_context::PromptContext::default();
+                context.section("Continuation", "Your response appears complete, but this MCP turn is still open. Continue any remaining work, then call the required result tool now. Do not finish in terminal prose.");
+                context.section("Required result", &footer);
+                terminal::Session::submit(&self.screen, &context.render())
             })?;
         }
         Ok(())

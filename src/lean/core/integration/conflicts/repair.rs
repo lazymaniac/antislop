@@ -144,11 +144,9 @@ impl<'a> Repair<'a> {
     fn worker_report(&self, prompt: &str) -> Result<Option<String>> {
         let worker = format!("worker:{}", self.task.id);
         let setup = self.worker_setup(worker.clone());
-        let handoff = self
-            .core
-            .round_handoff(&self.task.id, self.task.round, self.worktree)?;
-        let Some(answer) = self.core.turn(setup, self.cancel, |fresh, _| {
-            self.worker_prompt(prompt, &handoff, fresh)
+        let Some(answer) = self.core.turn(setup, self.cancel, |session| {
+            let _ = session;
+            self.worker_prompt(prompt)
         })?
         else {
             return Ok(None);
@@ -176,18 +174,13 @@ impl<'a> Repair<'a> {
         }
     }
 
-    fn worker_prompt(&self, prompt: &str, handoff: &rounds::RoundHandoff, fresh: bool) -> String {
-        let instructions = tasks::worker_turn_prompt(
+    fn worker_prompt(&self, prompt: &str) -> String {
+        tasks::worker_turn_prompt(
             &self.worktree.to_string_lossy(),
             self.spec,
             Some(prompt),
             "",
-        );
-        if fresh {
-            instructions
-        } else {
-            instructions + &tasks::round_handoff_prompt(handoff, false)
-        }
+        )
     }
 
     fn persist_repair(&mut self, report: String) -> Result<()> {

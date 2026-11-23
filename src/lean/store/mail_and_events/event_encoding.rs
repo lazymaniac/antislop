@@ -3,6 +3,11 @@ use super::super::*;
 impl Store {
     pub(super) fn encode_event_payload(&self, kind: &str, payload: &Value) -> Result<Value> {
         let mut payload = payload.clone();
+        if kind == "audit"
+            && let Some(report) = payload["report"].as_str()
+        {
+            payload["report"] = self.content.encode(report)?.into();
+        }
         if is_agent_event(kind) {
             encode_session_fields(self, &mut payload)?;
         }

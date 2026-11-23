@@ -18,13 +18,13 @@ fn handoff_with_findings_repeats_neither_report_nor_task() {
         primary: "/primary".into(),
     };
     let worker = super::round_handoff_prompt(&handoff, false);
-    assert!(worker.contains("src/a.rs") && worker.contains("listed above"));
-    assert!(!worker.contains("\"f1\""));
-    assert!(super::round_handoff_prompt(&handoff, true).contains("\"f1\""));
+    assert!(worker.contains("src/a.rs") && worker.contains("read_dependency_result"));
+    assert!(worker.contains("f1"));
+    assert!(super::round_handoff_prompt(&handoff, true).contains("earlier findings"));
     assert!(!worker.contains("PREVIOUS REPORT BODY"));
     assert!(!worker.contains("Full task and working rules"));
     handoff.verdict = None;
-    assert!(super::round_handoff_prompt(&handoff, false).contains("PREVIOUS REPORT BODY"));
+    assert!(!super::round_handoff_prompt(&handoff, false).contains("PREVIOUS REPORT BODY"));
     assert!(!super::round_handoff_prompt(&handoff, true).contains("PREVIOUS REPORT BODY"));
 }
 
@@ -43,7 +43,7 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     let prompt = plan_review_prompt("/p", "request", &[options, writer]);
     assert!(prompt.contains("WRITER GOAL"));
     assert!(!prompt.contains("OPTIONS BOILERPLATE"));
-    assert!(prompt.contains("\"id\":\"w-options\"") && prompt.contains("\"options_for\":\"w\""));
+    assert!(prompt.contains("id: w-options") && prompt.contains("options_for: w"));
     assert!(
         !prompt.contains("\n  \"id\""),
         "plan JSON is not pretty-printed"
@@ -131,14 +131,15 @@ fn no_quality_gates_plan_checks_preserve_rigor_through_initial_and_revision_revi
             )
         );
         assert!(!prompt.contains("only change_kind=code requires quality"));
-        assert!(prompt.contains("\"integration_batch\":true"));
+        assert!(prompt.contains("integration_batch: true"));
         assert!(prompt.contains(PLAN_DECOMPOSITION));
         assert!(
             prompt.contains("Name the concrete boundaries and missing producer/consumer edges")
         );
         assert!(prompt.contains("granularity alone is not grounds to redo completed work"));
     }
-    for prompt in [planner_instructions(), orchestrator_instructions()] {
+    {
+        let prompt = planner_instructions();
         assert!(prompt.contains("For `no-quality-gates`, plan the requested work with ordinary task acceptance and dependencies"));
         assert!(prompt.contains("do not add quality gates, options, a separate integration task or a final quality audit"));
         assert!(prompt.contains("For other code-changing rigor teams, include key quality agents"));
@@ -197,7 +198,7 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
         .lines()
         .find_map(|line| line.strip_prefix("Complete candidate task IDs: "))
         .unwrap();
-    let candidate_ids: Vec<String> = serde_json::from_str(manifest).unwrap();
+    let candidate_ids: Vec<String> = manifest.split(", ").map(str::to_owned).collect();
     assert_eq!(candidate_ids, vec!["a", "b"]);
     let resumed = plan_revision_review_prompt(
         "/p",

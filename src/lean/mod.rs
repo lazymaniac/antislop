@@ -25,6 +25,7 @@ mod plan_tests;
 mod process_tree;
 mod progress;
 pub mod projects;
+pub(crate) mod prompt_context;
 #[cfg(test)]
 mod reliability_tests;
 pub mod risks;

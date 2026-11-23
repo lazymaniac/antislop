@@ -17,12 +17,12 @@ pub(super) fn comment_context(
 fn append_comment_instructions(context: &mut String) {
     context.push_str(
         "\n\nAddress each new user comment explicitly by its #id now. For plan feedback, \
-         produce a revised complete plan in the required plan format when changes are \
+         call revise_plan for changed contracts or request_replan for a new plan shape when changes are \
          needed; otherwise explain your decision or ask a concrete question. Do not \
          merely acknowledge or wait for plan acceptance. Only comments included in \
          this turn can be addressed.\n\n\
          Name the comments your answer or revised plan took care of in `addressed` of \
-         finish_turn or submit_plan, each with its id and how. A comment you only \
+         finish_turn after any revision request, each with its id and how. A comment you only \
          answered, or that needs the user's decision, stays out of it and stays open.\n",
     );
 }
@@ -68,7 +68,7 @@ fn append_referenced_plans<'a>(
 ) -> Result<()> {
     for plan in plans {
         if let Some(document) = core.store.plan_document(conversation, plan)? {
-            context.push_str(&format!("\nReferenced plan {plan}:\n{document}\n"));
+            context.push_str(&format!("\nReferenced plan {plan}; its document remains in plan history ({} bytes). Current full contracts and scope: read_task_contract and read_plan_context.\n", document.len()));
         }
     }
     Ok(())

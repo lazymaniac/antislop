@@ -424,16 +424,12 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
         .dependency_inputs(&tasks[2].plan_id, &spec)
         .unwrap();
     assert_eq!(inputs.len(), 1);
-    let selected: Value = serde_json::from_str(&inputs[0].report).unwrap();
-    assert_eq!(
-        selected["variant"],
-        json!({"id":"A","approach":"Use A","tradeoffs":"Cost A"})
-    );
-    assert!(selected["rationale"].is_null());
-    assert_eq!(
-        selected["details"],
-        "read_dependency_result(dependency=\"selected_approach\")"
-    );
+    let selected = &inputs[0].report;
+    for field in ["- id: A", "- approach: Use A", "- tradeoffs: Cost A"] {
+        assert!(selected.contains(field), "{selected}");
+    }
+    assert!(selected.contains("read_dependency_result(dependency=\"selected_approach\")"));
+    assert!(serde_json::from_str::<Value>(selected).is_err());
     assert!(!inputs[0].report.contains("All details retained"));
     for role in [
         format!("worker:{}", tasks[2].id),
@@ -481,10 +477,10 @@ fn local_options_handoff_alias_reads_the_complete_selection_without_expanding_ac
                 full.push_str(page["report"].as_str().unwrap());
             }
             assert_eq!(full.matches("All details retained").count(), 1);
-            let selection: Value =
-                serde_json::from_str(full.split_once("Selected approach:\n").unwrap().1).unwrap();
-            assert_eq!(selection["rationale"], rationale);
-            assert_eq!(selection["alternatives"].as_array().unwrap().len(), 2);
+            assert!(full.contains(&rationale));
+            assert!(full.contains("- selected:"));
+            assert_eq!(full.matches("- approach:").count(), 2);
+            assert!(!full.contains("```json"));
         }
         let error = core
             .agent_tool(

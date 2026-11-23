@@ -510,7 +510,11 @@ fn carry_plan_tasks(
         let Some(old) = captured.sources.get(&name) else {
             continue;
         };
-        let unchanged_contract = same_contract(&old.1, spec);
+        let plan: String = one(tx, "SELECT plan_id FROM tasks WHERE id=?1", [id], |r| {
+            r.get(0)
+        })?;
+        let unchanged_contract =
+            same_contract(&old.1, spec) && options_owner_current(tx, &old.0, &plan, spec)?;
         let source_changes = &prepared.changes[&old.0];
         let unchanged_sources = source_changes
             .as_ref()
@@ -628,9 +632,46 @@ fn decode_row((id, spec, feedback): (String, String, Option<String>)) -> Result<
 }
 
 /// Dependency order is the planner's; everything else must be identical.
+/// Generated options carry no owner snapshot in their goal. Compare the bound
+/// owner contracts before retaining a selection across plans.
+fn options_owner_current(
+    tx: &rusqlite::Transaction<'_>,
+    old: &str,
+    plan: &str,
+    spec: &Value,
+) -> Result<bool> {
+    let Some(owner) = spec["options_for"].as_str() else {
+        return Ok(true);
+    };
+    let previous: Option<String> = tx.query_row("SELECT spec FROM tasks WHERE plan_id=(SELECT plan_id FROM tasks WHERE id=?1) AND json_extract(spec,'$.id')=?2", params![old, owner], |row| row.get(0)).optional()?;
+    let current: Option<String> = tx
+        .query_row(
+            "SELECT spec FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.id')=?2",
+            params![plan, owner],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let (Some(previous), Some(current)) = (previous, current) else {
+        return Ok(false);
+    };
+    let mut previous: crate::lean::tasks::TaskContract = serde_json::from_str(&previous)?;
+    let current: crate::lean::tasks::TaskContract = serde_json::from_str(&current)?;
+    previous.title = current.title.clone();
+    previous.summary = current.summary.clone();
+    previous.section = current.section.clone();
+    previous.reviewer = current.reviewer.clone();
+    Ok(crate::lean::tasks::same_contract(&previous, &current))
+}
+
 fn same_contract(old: &Value, new: &Value) -> bool {
     let normal = |spec: &Value| {
         let mut spec = spec.clone();
+        if let Ok(mut typed) =
+            serde_json::from_value::<crate::lean::tasks::TaskContract>(spec.clone())
+        {
+            crate::lean::tasks::normalize_options_presentation(&mut typed);
+            spec = serde_json::to_value(typed).expect("contract serializes");
+        }
         if let Some(object) = spec.as_object_mut() {
             for field in [
                 "acceptance_criteria",

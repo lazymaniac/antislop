@@ -25,7 +25,15 @@ No database schema or daemon request format changes are needed.
 | Configuration, help, search, modal isolation | Ctrl+P, F1, `/` | Existing editors, pickers and modal state |
 | Unicode, ASCII, monochrome, small terminals | All surfaces | Shared theme, grapheme editing and viewport canvas |
 
-Canvas Enter restores a remembered valid stage or selects current activity.
+Canvas Enter selects the active agent, including dedicated Options and review
+stages. Completed tasks default to their worker. An explicitly selected inspector
+stage keeps its role. New Workbench targets open Summary; PTY is a separate tab,
+selected by the tab strip, arrow keys or its number. PTY is always the second
+tab. Task reviewers combine checks and review results in Summary: all obligations
+are visible before review, live checks update during review, and the final verdict
+and findings appear above the completed checklist. The `t` shortcut opens PTY
+and enables native input; Ctrl+] releases input. Each content tab uses the whole
+work area by default.
 Selecting a stage explicitly never changes its underlying role. External mail
 routes join work cards; the inspector retains exact internal endpoints.
 
@@ -37,7 +45,7 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 |---|---|
 | Outer chrome | Two-column side margins, one-row top margin; Canvas starts below the brand, without a heading or subtitle |
 | Canvas | Flat work cards; three-column gap before the padded 36-column inspector |
-| Workbench | 30-column task hierarchy, three-column gap, equal content/PTY shares |
+| Workbench | 30-column task hierarchy, three-column gap, full-height content or PTY tab |
 | Content | Filled panel with padded title and tabs; no nested diff toolbar or box outlines |
 | Native terminal | Raised header, dark `#0a1114` surface, quiet controls, visible attachment errors |
 | Direction | One full-width dock: invitation becomes an inline editor; questions and available actions expand above it |
@@ -69,8 +77,8 @@ formatter. The new projection state is reconstructed from existing events.
 
 Application colors match the reference tokens, including selected cards and
 diff additions/removals. Native CLI output retains its own colors and text.
-The exact 160×50 offsets, pane widths, split and backgrounds have a regression
-test. The capture catalog also checks real diff-plus-PTY output, compact layouts,
+The exact 160×50 offsets, pane widths and backgrounds have a regression
+test. The capture catalog also checks diff and PTY tabs, compact layouts,
 pending decisions, unavailable history, errors, drafts and monochrome/ASCII modes.
 
 Reviewed 160×50 captures: [Canvas](images/tui-canvas.png),
@@ -173,3 +181,9 @@ role tab click → terminal focus for worker and reviewer, and Help → blocked 
 preview → Escape → scope wheel/click → keyboard choice without submission.
 The existing per-conversation query/draft, role content, completion, grapheme,
 small-terminal, ASCII/NO_COLOR and bounded Canvas regressions remain applicable.
+The reviewer Summary reuses the existing `reviewer_result` renderer alongside
+`check_rows`. Hologram's name-similarity notice against the graph's
+`reviewer_text` compares different responsibilities: a compact live card label
+and the selected round's detailed verdict and findings. Summary renders coverage
+once through the checklist, and existing task events invalidate its snapshot
+when the final verdict arrives.

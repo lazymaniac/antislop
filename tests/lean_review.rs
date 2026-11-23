@@ -289,8 +289,8 @@ fn checked_plan_runs_after_acceptance_and_reports_audit_gaps() {
     let core = open(
         dir.path(),
         r#"
-if "The plan finished. Results of each task follow." in prompt:
-    answer = "gap noted" if "not fully delivered" in prompt else "all done"
+if "The plan finished. Results of each task follow." in prompt or "AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:" in prompt:
+    answer = "gap noted\n\nAudit response:\nfinding 1: open - README still needs work." if "README not covered" in prompt else "all done"
 else:
     answer = plan(task("t1", "Analyse"))
 "#,
@@ -320,7 +320,9 @@ else:
         })
         .unwrap();
     assert!(
-        report.text.contains("README not covered"),
+        report.text.contains("read_audit")
+            && audits[0]["findings"][0]["issue"] == "README not covered"
+            && audits[0]["report"].is_string(),
         "{}",
         report.text
     );

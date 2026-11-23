@@ -247,7 +247,7 @@ mod tests {
     fn historical_result_formats_options_and_omits_the_verdict() {
         let state = tempfile::tempdir().unwrap();
         let client = Client::at(state.path());
-        let selection = serde_json::from_value(json!({
+        let selection: crate::lean::turn_result::Selection = serde_json::from_value(json!({
             "selected":"A", "rationale":"Smallest change.",
             "alternatives":[
                 {"id":"A","approach":"Reuse the store","tradeoffs":"Existing constraints"},
@@ -255,8 +255,11 @@ mod tests {
             ]
         }))
         .unwrap();
-        let report =
-            crate::lean::turn_result::report_with_deliverables("Worker text", Some(&selection));
+        let report = format!(
+            "{}\n\nRecorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n{}\n```",
+            "Worker text",
+            serde_json::to_string_pretty(&selection).unwrap()
+        );
         let task = json!({"status":"approved", "report":report,
             "verdict":{"findings":[{"issue":"Reviewer-only finding"}]}});
         let document = result_document(&client, "conversation", "task", 1, &task).unwrap();

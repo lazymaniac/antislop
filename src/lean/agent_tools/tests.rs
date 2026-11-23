@@ -2,7 +2,7 @@ use super::*;
 use crate::config::Config;
 use serde_json::json;
 
-fn core() -> (tempfile::TempDir, Arc<Core>, String) {
+pub(in crate::lean) fn core() -> (tempfile::TempDir, Arc<Core>, String) {
     let directory = tempfile::tempdir().unwrap();
     let config = Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
     let core = Core::open(&directory.path().join("state"), config).unwrap();
@@ -849,3 +849,6 @@ fn answer_delivery_commits_while_integration_is_held_and_rejects_a_closed_caller
     );
     drop(integration);
 }
+
+#[path = "tests/context.rs"]
+mod context;

@@ -5,6 +5,7 @@ use super::*;
 use rusqlite::OptionalExtension;
 use serde_json::Value;
 
+mod context;
 mod controls;
 mod dependencies;
 mod evidence;
@@ -50,6 +51,10 @@ impl Core {
     ) -> Result<Value> {
         self.require_open_agent_turn(conversation, role, turn)?;
         match tool {
+            "read_plan_context" | "read_task_contract" => {
+                self.read_plan_context(conversation, role, turn, tool, args)
+            }
+            "read_audit" => self.read_audit(conversation, role, turn, args),
             "get_images" => self.conversation_images(conversation, turn, args),
             "record_evidence" | "read_evidence" => {
                 self.evidence_tool(conversation, role, turn, tool, args)
@@ -75,7 +80,9 @@ impl Core {
                 self.merge_session_with_main_tool(conversation, turn)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),
-            "revise_plan" | "request_replan" => self.revision_tool(conversation, role, tool, args),
+            "revise_plan" | "request_replan" => {
+                self.revision_tool(conversation, role, turn, tool, args)
+            }
             _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
         }
     }
@@ -115,11 +122,11 @@ impl Core {
         tool: &str,
         args: &Value,
     ) -> Result<Value> {
-        let mut result = turn_result::task_tool_result(tool, args)?;
-        let evidence = self.completion_evidence(conversation, turn, args, &mut result)?;
+        let result = turn_result::task_tool_result(tool, args)?;
+        let evidence = self.completion_evidence(conversation, turn, args, &result)?;
         self.record_task_result_with_evidence(conversation, role, turn, result, &evidence)
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::lean) mod tests;

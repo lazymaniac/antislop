@@ -199,6 +199,7 @@ pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<Tas
         change_kind: super::ChangeKind::Code,
         outputs: Vec::new(),
         delivery: None,
+        result_inputs: Vec::new(),
         depends_on: producers,
         kind: crate::config::WorkKind::Integration,
         reviewer: super::ReviewerSpec::default(),

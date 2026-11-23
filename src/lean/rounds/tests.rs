@@ -233,9 +233,14 @@ fn handoff_recovers_latest_report_after_interruption_without_older_reports() {
     assert!(handoff.interrupted);
     assert_eq!(handoff.report.as_ref().unwrap().0, 2);
     let prompt = tasks::round_handoff_prompt(&handoff, false);
-    assert!(prompt.contains(&"Latest complete report\n".repeat(2000)));
-    assert!(prompt.contains("listed above"));
-    assert!(tasks::round_handoff_prompt(&handoff, true).contains("file:12"));
+    assert!(!prompt.contains("Latest complete report\n"));
+    assert!(prompt.contains("read_dependency_result"));
+    assert_eq!(
+        core.store.task_round(&task.id, 2).unwrap()["report"],
+        "Latest complete report\n".repeat(2000)
+    );
+    assert!(prompt.contains("view=review"));
+    assert!(tasks::round_handoff_prompt(&handoff, true).contains("view=review"));
     assert!(!prompt.contains("OLD REPORT MUST NOT APPEAR"));
     assert!(!prompt.contains("HISTORICAL TOOL NEVER IN HANDOFF"));
     assert!(handoff.files.is_empty());
@@ -291,7 +296,7 @@ echo '{"type":"turn.completed"}'
                     upto_message: 0,
                 };
                 assert_eq!(
-                    core.turn(setup, &AtomicBool::new(false), |_, _| "Do the task".into())
+                    core.turn(setup, &AtomicBool::new(false), |_| "Do the task".into())
                         .unwrap()
                         .map(|s| serde_json::from_str::<turn_result::TurnResult>(&s)
                             .unwrap()
@@ -591,7 +596,7 @@ fn execute(
             upto_message: 0,
         },
         &AtomicBool::new(false),
-        |_, _| "Perform the task using the round handoff.".into(),
+        |_| "Perform the task using the round handoff.".into(),
     )
     .unwrap()
     .map(|s| {
@@ -638,7 +643,7 @@ fn editing_same_named_profile_rotates_cli_and_supplies_full_context_after_restar
     let second = core.store.last_turn(&conversation, &role).unwrap().unwrap();
     assert_ne!(first.session_id, second.session_id);
     let prompt = turn_prompt(dir.path(), &second.id);
-    assert!(prompt.contains("Latest worker report (source round 1):\ncomplete report"));
+    assert!(prompt.contains("read_dependency_result") && prompt.contains("round=1"));
     assert_eq!(
         execute(&core, &conversation, &task, changed.clone(), false).as_deref(),
         Some("complete report")
@@ -706,7 +711,8 @@ fn provider_context_rejection_preserves_full_report_and_raw_reason() {
             .unwrap()
             .contains("context_length_exceeded: full handoff rejected by offline provider")
     );
-    assert!(turn_prompt(dir.path(), &turn.id).contains(&report));
+    assert!(!turn_prompt(dir.path(), &turn.id).contains(&report));
+    assert!(turn_prompt(dir.path(), &turn.id).contains("read_dependency_result"));
     assert_eq!(
         core.store.task_round(&task.id, 1).unwrap()["report"],
         report
@@ -792,7 +798,14 @@ fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh(
             let prompt = turn_prompt(dir.path(), &latest.id);
             assert!(prompt.contains("Round: 3"));
             if prefix == "worker" {
-                assert!(prompt.contains(expected))
+                assert!(!prompt.contains(expected));
+                assert!(prompt.contains("read_dependency_result"));
+                assert!(
+                    core.round_handoff(&task.id, 3, dir.path())
+                        .unwrap()
+                        .report
+                        .is_some()
+                );
             }
         }
     }
@@ -917,23 +930,26 @@ fn same_round_cli_turns_keep_known_identity_when_resumed_output_omits_it() {
             execute(&core, &conversation, &task, profile.clone(), reviewer).unwrap();
             let next = core.store.last_turn(&conversation, &role).unwrap().unwrap();
             assert_eq!(next.session_id, first.session_id);
-            assert!(!turn_prompt(dir.path(), &next.id).contains("Round handoff"));
+            assert!(turn_prompt(dir.path(), &next.id).contains("Round handoff"));
             let prompt = turn_prompt(dir.path(), &next.id);
-            let allocation = prompt
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix("Current runtime allocation (for this turn only): ")
-                })
-                .unwrap();
-            let allocation: serde_json::Value = serde_json::from_str(allocation).unwrap();
-            assert_eq!(allocation["turn"], next.id);
-            assert_eq!(allocation["role"], role);
+            assert_eq!(
+                prompt
+                    .matches("Current runtime allocation (for this turn only):")
+                    .count(),
+                1
+            );
+            assert!(prompt.contains(if reviewer {
+                "Task role: reviewer"
+            } else {
+                "Task role: worker"
+            }));
+            assert!(prompt.contains(&format!("task: {}", task.id)));
             let recorded = core
                 .store
                 .run_context(&conversation, &next.id)
                 .unwrap()
                 .unwrap();
-            assert_eq!(allocation["cwd"], recorded.cwd.to_string_lossy().as_ref());
+            assert!(prompt.contains(recorded.cwd.to_string_lossy().as_ref()));
             let durable = prompt
                 .lines()
                 .find_map(|line| line.strip_prefix("Durable task runtime allocation: "))

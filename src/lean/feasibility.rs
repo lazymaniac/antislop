@@ -217,6 +217,7 @@ mod tests {
             } else {
                 crate::lean::tasks::ChangeKind::None
             },
+            result_inputs: Vec::new(),
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
 
@@ -257,7 +258,8 @@ mod tests {
         writer.goal = "Run cargo fmt --check and cargo test --test lean_core".into();
         let plan = crate::lean::tasks::with_options(vec![writer]);
         let options = plan.iter().find(|t| t.options_for.is_some()).unwrap();
-        assert!(options.goal.contains("Run cargo fmt"), "{}", options.goal);
+        assert!(!options.goal.contains("Run cargo fmt"), "{}", options.goal);
+        assert!(options.goal.contains("read_task_contract"));
         assert!(check(&plan).is_empty(), "{:?}", check(&plan));
     }
 

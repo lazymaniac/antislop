@@ -5742,7 +5742,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     let check = |id: &str, task: &str, seq| Update::Events {
         conversation: "test-conv".into(),
@@ -6021,7 +6021,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         observer: false,
     });
     app.open_details("reviewer:t1".into());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let request = app.task_request_id;
     app.apply_update(Update::Task {
         documents: Default::default(),
@@ -6993,7 +6993,7 @@ mod text_selection_acceptance {
                         ..Default::default()
                     });
                     app.open_details("worker:t1".into());
-                    app.key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+                    app.key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
                     let details = app.details.as_mut().unwrap();
                     details.task = Some(json!({"report": "sample café 👩‍👩‍👧‍👦"}));
                     details.switch_tab(antislop::lean::tui::details::RESULT);
@@ -7124,7 +7124,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
         observer: false,
     });
     app.open_details("reviewer:t1".into());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     let failure = updates.recv_timeout(Duration::from_secs(3)).unwrap();
     assert!(matches!(&failure, Update::TaskFailed { .. }));
@@ -7162,38 +7162,33 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
 
 #[test]
 fn checks_refetch_on_task_verdict_in_the_same_round() {
-    for tab in [
-        antislop::lean::tui::WorkbenchTab::Summary,
-        antislop::lean::tui::WorkbenchTab::Checks,
-    ] {
-        let mut app = App::test_app();
-        app.apply_update(Update::Events {
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"reviewing","round":1}})],
         idle: false,
         observer: false,
     });
-        app.open_details("reviewer:t1".into());
-        select_workbench_tab(&mut app, tab);
-        let issued = app.task_request_id;
-        app.apply_update(Update::Task {
-            documents: Default::default(),
-            conversation: "test-conv".into(),
-            plan: Some("p1".into()),
-            generation: 1,
-            request_id: issued,
-            key: "reviewer:t1".into(),
-            round: 1,
-            task: json!({"id":"u1","round":1,"checks":[]}),
-        });
-        app.apply_update(Update::Events {
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
+    let issued = app.task_request_id;
+    app.apply_update(Update::Task {
+        documents: Default::default(),
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued,
+        key: "reviewer:t1".into(),
+        round: 1,
+        task: json!({"id":"u1","round":1,"checks":[]}),
+    });
+    app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":3,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1,"feedback":{"summary":"accepted"}}})],
         idle: false,
         observer: false,
     });
-        assert_eq!(app.task_request_id, issued + 1);
-    }
+    assert_eq!(app.task_request_id, issued + 1);
 }
 
 #[test]
@@ -7239,7 +7234,7 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     });
     app.open_details("reviewer:t1".into());
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7342,7 +7337,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
         ..Default::default()
     });
     app.open_details("reviewer:t1".into());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let mut issued = Vec::new();
     for round in 1..=3 {
         if round > 1 {
@@ -7437,7 +7432,7 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
         ..Default::default()
     });
     app.open_details("reviewer:t1".into());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let batch = || Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7825,7 +7820,7 @@ fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
     let mut app = App::test_app();
     app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,observer:false,});
     app.open_details("reviewer:t1".into());
-    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Checks);
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     for seq in 3..10 {
         app.apply_update(Update::Events {

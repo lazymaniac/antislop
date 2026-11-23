@@ -74,7 +74,23 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             theme,
         );
     }
-    if let Some(diff) = &mut app.diff {
+    if presentation.tab == WorkbenchTab::Pty {
+        let key = app
+            .details
+            .as_ref()
+            .map_or("conversation", |details| details.key.as_str());
+        let delivers = app
+            .details
+            .as_ref()
+            .and_then(|details| details.task_id())
+            .and_then(|id| app.view.tasks.iter().find(|task| task.id == id))
+            .is_some_and(|task| task.change_kind.has_delivery());
+        app.workbench_tabs = super::super::workbench::tab_hits(areas.content, key, delivers);
+        frame.render_widget(
+            super::super::workbench::tab_line(key, delivers, presentation.tab, theme),
+            areas.content,
+        );
+    } else if let Some(diff) = &mut app.diff {
         let panel = areas.content.inner(ratatui::layout::Margin::new(
             u16::from(areas.content.width >= 80) * 2,
             u16::from(areas.content.height >= 10),
@@ -176,7 +192,10 @@ fn draw_workbench(app: &mut App, frame: &mut Frame, theme: &Theme) -> bool {
             historical_terminal,
             theme,
         );
-        if app.diff.is_none() && details.key != "conversation" {
+        if presentation.tab == WorkbenchTab::Pty {
+            app.text_area = Some(details.native_areas[0]);
+            app.text_origin = 0;
+        } else if app.diff.is_none() && details.key != "conversation" {
             app.text_area = Some(details.text_area);
             app.text_origin = details.scroll;
         }

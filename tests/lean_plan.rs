@@ -811,6 +811,7 @@ fn extend_running_graph(sent_back_draft: bool) {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let release = dir.path().join("release-worker");
+    let _release_on_drop = common::ReleaseOnDrop(release.clone());
     let started = dir.path().join("worker-started");
     let worker = std::fs::read_to_string(&agy).unwrap().replace(
         "else:\n    session, answer = \"worker\", \"first report for \"",
@@ -818,11 +819,9 @@ fn extend_running_graph(sent_back_draft: bool) {
     );
     std::fs::write(&agy, worker).unwrap();
     let hook = r#"
-if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
+if 'insert-extra' in prompt and 'Current task index for plan' in prompt:
     import re
-    base, snapshot = re.search(r'Current task contracts for plan ([-\w]+):\n([^\n]+)', prompt).groups()
-    snapshot = json.loads(snapshot)
-    snapshot = snapshot['tasks']
+    snapshot = [_fixture_contract('t1'), _fixture_contract('t2')]
     planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'acceptance_criteria', 'section', 'summary')
     def planned_task(task):
         return {key: task[key] for key in planned if task.get(key) is not None}
@@ -991,8 +990,10 @@ fn a_task_a_revision_changes_waits_for_its_review_instead_of_starting_on_the_old
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let release_worker = dir.path().join("release-worker");
+    let _worker_release_on_drop = common::ReleaseOnDrop(release_worker.clone());
     let started = dir.path().join("worker-started");
     let release_review = dir.path().join("release-review");
+    let _review_release_on_drop = common::ReleaseOnDrop(release_review.clone());
     let reviewing = dir.path().join("review-started");
     let reviewer = std::fs::read_to_string(&agy)
         .unwrap()
@@ -1006,9 +1007,9 @@ fn a_task_a_revision_changes_waits_for_its_review_instead_of_starting_on_the_old
         );
     std::fs::write(&agy, reviewer).unwrap();
     let hook = r#"
-if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
+if 'revise-t2' in prompt and 'Current task index for plan' in prompt:
     import re, os, urllib.request
-    snapshot = json.loads(re.search(r'Current task contracts for plan [-\w]+:\n([^\n]+)', prompt).group(1))['tasks']
+    snapshot = [_fixture_contract('t1'), _fixture_contract('t2')]
     planned = ('id', 'title', 'goal', 'kind', 'change_kind', 'depends_on', 'deferred', 'outputs', 'delivery', 'acceptance_criteria', 'section', 'summary')
     t2 = {key: value for key, value in next(t for t in snapshot if t['id'] == 't2').items() if key in planned and value is not None}
     t2['goal'] = 'Assess TUI again'

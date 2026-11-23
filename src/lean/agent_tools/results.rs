@@ -49,9 +49,13 @@ impl Core {
         team: crate::lean::tasks::Team,
     ) -> Result<()> {
         let specs = self.submitted_graph(conversation, tasks, keep)?;
-        crate::lean::core::plan::proposal::checked_team_plan(&specs, &self.config_snapshot(), team)
-            .map(|_| ())
-            .map_err(Error::Invalid)
+        let specs = crate::lean::core::plan::proposal::checked_team_plan(
+            &specs,
+            &self.config_snapshot(),
+            team,
+        )
+        .map_err(Error::Invalid)?;
+        self.store.validate_result_inputs(conversation, &specs)
     }
 
     /// Revised tasks carry their complete task-local acceptance criteria.

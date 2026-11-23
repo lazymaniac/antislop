@@ -35,7 +35,7 @@ pub(super) struct AuditResponse {
     pub(super) approved: bool,
     pub(super) findings: Vec<serde_json::Value>,
     pub(super) error: Option<String>,
-    pub(super) report: String,
+    pub(super) audit_ref: Option<String>,
     /// Runtime reminders already sent for this report.
     pub(super) reminders: usize,
 }
@@ -104,7 +104,7 @@ fn audit_response(core: &Core, conversation: &str) -> Result<Option<AuditRespons
             approved: false,
             findings: Vec::new(),
             error: Some("the auditor report has no persisted audit verdict".into()),
-            report: report.text.clone(),
+            audit_ref: None,
             reminders,
         }));
     };
@@ -115,7 +115,7 @@ fn audit_response(core: &Core, conversation: &str) -> Result<Option<AuditRespons
             .cloned()
             .unwrap_or_default(),
         error: event.payload["error"].as_str().map(str::to_owned),
-        report: report.text.clone(),
+        audit_ref: Some(format!("audit:{}", event.seq)),
         reminders,
     }))
 }
@@ -171,11 +171,13 @@ fn turn_setup<'a>(
     }
 }
 
-fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -> String {
+fn render_prompt(
+    context: &OrchestrationContext<'_>,
+    session: crate::lean::prompt_context::SessionContext,
+) -> String {
     orchestrator_prompt_text(PromptContext {
         project: &context.project,
-        first,
-        fresh,
+        session,
         answered: context.answered,
         asked: &context.asked,
         open: &context.open,
@@ -204,9 +206,7 @@ pub(super) fn ask(
         &context.config,
     );
     setup.plan_id = context.graph.first().map(|task| task.plan_id.clone());
-    core.turn(setup, cancel, |first, fresh| {
-        render_prompt(context, first, fresh)
-    })
+    core.turn(setup, cancel, |session| render_prompt(context, session))
 }
 
 #[path = "context/answer.rs"]

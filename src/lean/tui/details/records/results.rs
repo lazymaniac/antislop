@@ -23,12 +23,12 @@ pub(super) fn results(details: &mut Details, view: &View, records: &mut Vec<Rc<D
             " ",
         )),
         (None, Some(_), _) => records.push(record(vec![(dim(), "Loading…".into())], " ")),
-        (Some(stored), Some(_), true) => records.push(reviewer_result(&stored["verdict"])),
+        (Some(stored), Some(_), true) => records.push(reviewer_result(&stored["verdict"], true)),
         (Some(stored), Some(_), false) => worker_results(stored, records),
     }
 }
 
-fn reviewer_result(verdict: &Value) -> Rc<DetailRecord> {
+pub(super) fn reviewer_result(verdict: &Value, include_coverage: bool) -> Rc<DetailRecord> {
     if verdict.is_null() {
         return record(
             vec![(dim(), "Reviewer has not evaluated the task yet.".into())],
@@ -39,14 +39,23 @@ fn reviewer_result(verdict: &Value) -> Rc<DetailRecord> {
         .into_iter()
         .map(plain)
         .collect::<Vec<_>>();
+    if !include_coverage {
+        lines.truncate(1);
+    }
     append_findings(&mut lines, verdict);
+    lines.push(plain(String::new()));
     record(lines, " ")
 }
 
 fn append_findings(lines: &mut Vec<(Style, String)>, verdict: &Value) {
     match verdict["findings"].as_array() {
         Some(findings) if findings.is_empty() => lines.push(plain(
-            "Findings: no issues (reviewer approved the task without notes).".into(),
+            if verdict["approved"] == true {
+                "Findings: no issues (reviewer approved the task without notes)."
+            } else {
+                "Findings: no reported findings."
+            }
+            .into(),
         )),
         Some(findings) => {
             lines.push(label("Reviewer findings"));

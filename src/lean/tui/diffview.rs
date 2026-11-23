@@ -70,10 +70,6 @@ impl DiffView {
         self.line = self.line.min(self.lines_in_file().saturating_sub(1));
     }
 
-    pub(in crate::lean::tui) fn has_changes(&self) -> bool {
-        matches!(&self.files, Some(Ok(files)) if !files.is_empty())
-    }
-
     fn files(&self) -> &[FileDiff] {
         match &self.files {
             Some(Ok(files)) => files,

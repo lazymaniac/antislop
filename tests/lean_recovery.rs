@@ -17,7 +17,7 @@ fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         r#"#!/usr/bin/env python3
 import json, sys, os
 prompt = sys.argv[-1]
-prompt = prompt.split("\nCurrent task contracts for plan ",1)[0].rstrip()
+prompt = prompt.split("\nCurrent task index for plan ",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal": "g", "depends_on": list(depends),
               "change_kind": ("code" if writes else "none"), "kind": "implementation" if writes else "analysis",
@@ -74,9 +74,7 @@ print(json.dumps({"event": "init", "conversation_id": "s"}), flush=True)
 here = os.path.dirname(sys.argv[0])
 with open(os.path.join(here, "agy.log"), "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\n")
-allocation_marker = "Current runtime allocation (for this turn only): "
-allocation = (json.loads(prompt.split(allocation_marker, 1)[1].splitlines()[0])
-              if allocation_marker in prompt else {})
+allocation = _fixture_tool('current_turn')
 with open(os.path.join(here, "cwd.log"), "a") as log:
     log.write(json.dumps({"cwd": os.getcwd(), "role": allocation.get("role", ""),
                           "review": "End with review: your report" in prompt}) + "\n")
@@ -198,7 +196,22 @@ fn init_git_project(dir: &Path) -> std::path::PathBuf {
 
 fn wait_idle(core: &Core, conversation: &str) {
     let deadline = Instant::now() + Duration::from_secs(120);
-    while !core.is_idle(conversation) {
+    loop {
+        let tasks = core.store.latest_plan(conversation).unwrap();
+        let completed = !tasks.is_empty() && tasks.iter().all(|task| task.status == "approved");
+        let finalized = !completed
+            || core
+                .store
+                .events_since(conversation, 0, 10000)
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.kind == "session_completed"
+                        && event.plan_id.as_deref() == Some(tasks[0].plan_id.as_str())
+                });
+        if core.is_idle(conversation) && finalized {
+            break;
+        }
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -579,8 +592,8 @@ fn a_task_that_stops_wakes_the_orchestrator_while_others_still_run() {
         .filter(|m| m.author == "runtime" && m.text.contains("keeps running"))
         .collect();
     assert_eq!(interim.len(), 1, "{messages:?}");
-    assert!(interim[0].text.contains("\"t1\""));
-    assert!(!interim[0].text.contains("\"s1\""));
+    assert!(interim[0].text.contains("task: t1"));
+    assert!(!interim[0].text.contains("task: s1"));
 }
 
 #[test]
@@ -708,7 +721,6 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
         .id;
-    let session = support::session_worktree(&core, &project, &conversation);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
@@ -722,6 +734,21 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
         .into_iter()
         .find(|task| task.id == *w1_id)
         .unwrap();
+    task.status = "needs_user".into();
+    task.verdict = None;
+    core.store.update_task(&task).unwrap();
+    let branch = support::session_branch(&core, &conversation);
+    let session = support::session_worktree_if_present(&project, &branch).unwrap_or_else(|| {
+        let path = dir
+            .path()
+            .join("state/session-worktrees")
+            .join(antislop::hash(conversation.as_bytes()));
+        git(
+            &project,
+            &["worktree", "add", path.to_str().unwrap(), &branch],
+        );
+        path
+    });
     assert!(
         std::process::Command::new("git")
             .args([
@@ -735,9 +762,6 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             .unwrap()
             .success()
     );
-    task.status = "needs_user".into();
-    task.verdict = None;
-    core.store.update_task(&task).unwrap();
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
@@ -899,7 +923,13 @@ fn manual_snapshot_cancellation_preserves_snapshot_and_finishes_cancelled() {
     let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
     wait_idle(&core, &conversation);
-    let mut task = core.store.plan(&plan).unwrap().remove(0);
+    let mut task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "m1")
+        .unwrap();
     task.status = "needs_user".into();
     core.store.update_task(&task).unwrap();
     std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
@@ -1300,7 +1330,7 @@ fn test_mechanical_audit_gate_prevents_false_success() {
         "findings must note unapproved tasks"
     );
     assert!(
-        report_output.contains("not fully delivered"),
+        report_output.contains("Verdict: not approved") && report_output.contains("read_audit"),
         "plan report text must reflect audit rejection"
     );
 }
