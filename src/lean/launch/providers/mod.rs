@@ -29,15 +29,21 @@ const PARENT_SESSION_ENV: [&str; 7] = [
 
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     let mut command = base_command(spec);
-    if spec.provider == ProviderKind::Pi {
-        let (session, pi) = pi::prepare(&mut command, spec, gateway)?;
-        return Ok(Launch {
-            command,
-            session: Some(session),
-            pi: Some(pi),
-        });
-    }
-    let session = configure(&mut command, spec, gateway)?;
+    let session = match spec.provider {
+        ProviderKind::Claude => configure_claude(&mut command, spec, gateway)?,
+        ProviderKind::Codex => configure_codex(&mut command, spec, gateway)?,
+        ProviderKind::Opencode => configure_opencode(&mut command, spec, gateway)?,
+        ProviderKind::Agy => configure_agy(&mut command, spec, gateway)?,
+        ProviderKind::Gemini => configure_gemini(&mut command, spec, gateway)?,
+        ProviderKind::Pi => {
+            let (session, pi) = pi::prepare(&mut command, spec, gateway)?;
+            return Ok(Launch {
+                command,
+                session: Some(session),
+                pi: Some(pi),
+            });
+        }
+    };
     Ok(Launch {
         command,
         session,
@@ -50,23 +56,6 @@ fn base_command(spec: &Spec) -> CommandBuilder {
     command.cwd(&spec.cwd);
     command.env("TERM", "xterm-256color");
     command
-}
-
-fn configure(
-    command: &mut CommandBuilder,
-    spec: &Spec,
-    gateway: &Gateway,
-) -> Result<Option<String>> {
-    match spec.provider {
-        ProviderKind::Claude => configure_claude(command, spec, gateway),
-        ProviderKind::Codex => configure_codex(command, spec, gateway),
-        ProviderKind::Opencode => configure_opencode(command, spec, gateway),
-        ProviderKind::Agy => configure_agy(command, spec, gateway),
-        ProviderKind::Gemini => configure_gemini(command, spec, gateway),
-        ProviderKind::Pi => Err(Error::Invalid(
-            "Pi must use its extension launch path".into(),
-        )),
-    }
 }
 
 fn configure_claude(

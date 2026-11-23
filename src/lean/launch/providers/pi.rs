@@ -78,22 +78,7 @@ pub(super) fn prepare(
     std::fs::write(&adapter, include_str!("pi.ts"))?;
     let sessions = runtime.join("sessions");
     crate::lean::daemon::private_directory(&sessions)?;
-    let session = match &spec.resume {
-        Some(path) => {
-            let path = PathBuf::from(path);
-            require(
-                path.is_absolute(),
-                "Pi resume requires an absolute JSONL session path",
-            )?;
-            validate_resume(&path)?;
-            path
-        }
-        None => sessions.join(format!("{launch_id}.jsonl")),
-    };
-    let session = session
-        .to_str()
-        .ok_or_else(|| invalid("Pi session path is not UTF-8"))?
-        .to_owned();
+    let session = session_path(&sessions, &launch_id, spec.resume.as_deref())?;
     let expected = json!({
         "launch_id": launch_id,
         "alias": format!("antislop_{launch_id}"),
@@ -131,6 +116,30 @@ pub(super) fn prepare(
             submitted: std::sync::Mutex::new(None),
         },
     ))
+}
+
+/// Select and validate the durable session independently of process arguments.
+fn session_path(
+    sessions: &std::path::Path,
+    launch_id: &str,
+    resume: Option<&str>,
+) -> Result<String> {
+    let session = match resume {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            require(
+                path.is_absolute(),
+                "Pi resume requires an absolute JSONL session path",
+            )?;
+            validate_resume(&path)?;
+            path
+        }
+        None => sessions.join(format!("{launch_id}.jsonl")),
+    };
+    Ok(session
+        .to_str()
+        .ok_or_else(|| invalid("Pi session path is not UTF-8"))?
+        .to_owned())
 }
 
 /// `unsloth start pi` splits a hub repo:variant before resolving the backend

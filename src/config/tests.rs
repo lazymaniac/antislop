@@ -489,9 +489,10 @@ fn pi_commands_round_trip_without_reinterpreting_wrapper_tokens() {
         ),
     ] {
         let source = example
-            .replace(
+            .replacen(
                 "binary = \"pi\"",
                 &format!("command = {command}\nargs = [\"--custom\", \"wartość ze spacjami 👩‍💻\"]"),
+                1,
             )
             .replace(
                 "[profiles.orchestrator]",
