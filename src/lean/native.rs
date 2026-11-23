@@ -50,6 +50,7 @@ pub struct Session {
     pub(crate) spec: agent::Spec,
     signature: String,
     gateway: mcp::Gateway,
+    pi: Option<launch::providers::pi::PiLaunchState>,
     pub(crate) terminal: Mutex<terminal::Session>,
     screen: Arc<Mutex<State>>,
     /// The CLI's own session identifier, once known.
@@ -67,12 +68,11 @@ pub struct Session {
 
 /// What is typed into the CLI: the prompt and how to hand the answer back. The
 /// shape of the result for the agent's role is the tool's own schema.
-fn turn_text(turn: &str, prompt: &str, result_instructions: &str) -> String {
+fn turn_text(turn: &str, prompt: &str, result_instructions: &str, server: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
-         result tool of the MCP server `{}`, with turn = \"{turn}\". \
+         result tool of the MCP server `{server}`, with turn = \"{turn}\". \
          {result_instructions} Never finish only in terminal prose.",
-        mcp::SERVER,
     )
 }
 

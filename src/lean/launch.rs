@@ -12,6 +12,7 @@ pub(crate) struct Launch {
     /// The CLI's own session identifier when it is known before the process
     /// starts (Claude is told it; any CLI is told it when resuming).
     pub session: Option<String>,
+    pub pi: Option<providers::pi::PiLaunchState>,
 }
 
 #[cfg(test)]

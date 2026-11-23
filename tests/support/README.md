@@ -142,3 +142,17 @@ owning directory up to ANTISLOP_TEST_ROOT. TestDir copies diagnostics and retain
 a marked fixture; the launcher also retains a marked active root. The marker
 contains the raw failure reason. Retention is conservative and requires explicit
 owner cleanup after daemon release has been confirmed; no automatic sweep runs.
+
+Pi extension tests execute the shipped `src/lean/launch/providers/pi.ts` with
+Node and a fixture API, using the real Rust Gateway. `pi_pty` additionally sends
+an interactive prompt through the managed terminal and checks that prose leaves
+the turn open. Node must support importing TypeScript (Node >=22.19, as Pi does).
+The ignored `installed_pi_mcp_executes_the_shipped_adapter` compatibility test
+uses Pi's installed SDK and built-in MCP implementation, including image and
+error results. Set `ANTISLOP_TEST_PI_MODULE` to the absolute path of the installed
+`@earendil-works/pi-coding-agent/dist/index.js` and run
+`./cargo.sh test --lib installed_pi_mcp -- --ignored --nocapture`.
+Unset, empty and relative module paths are invalid for this opt-in test. It
+creates an isolated agent directory under the test allocation, uses in-memory
+settings, and requires no model credentials or package installation. It does not
+validate the external Unsloth `launch` subcommand.

@@ -8,7 +8,12 @@ fn turn_text_keeps_the_current_turn_and_gateway_completion_scope() {
     let contract = serde_json::from_value(serde_json::json!({"id":"task","title":"Task","kind":"analysis","change_kind":"none","goal":"Report","acceptance_criteria":[{"id":"C1","text":"Verified"}]})).unwrap();
     gateway.set_task_contract(contract).unwrap();
     let body = "Preserve this body, including an old turn = \"previous\".";
-    let text = turn_text("current", body, &gateway.completion_footer().unwrap());
+    let text = turn_text(
+        "current",
+        body,
+        &gateway.completion_footer().unwrap(),
+        mcp::SERVER,
+    );
     assert!(text.starts_with(body));
     let (_, footer) = text
         .rsplit_once("\n\n---\nWhen this turn is complete")
@@ -1376,4 +1381,101 @@ fn session_completion_releases_its_clis_and_preserves_other_conversations() {
     );
     assert!(core.native.get("other", "orchestrator").unwrap().is_some());
     foreign.check_alive().unwrap();
+}
+
+#[test]
+fn pi_pty_executes_shipped_extension_and_terminal_prose_does_not_finish_the_turn() {
+    for wrapped in [false, true] {
+        let dir = test_tempdir();
+        let core = core(dir.path());
+        let script = dir.path().join("pi");
+        let adapter_fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/pi_extension.mjs");
+        // The wrapper has the same argv forwarding contract as a configured command.
+        let prefix = if wrapped {
+            "[ \"$1\" = launch ] && [ \"$2\" = pi ] || exit 2\nshift 2\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n{prefix}exec node '{}' \"$@\"\n",
+                adapter_fixture.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let release = dir.path().join("release");
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Pi,
+            binary: script,
+            args: [
+                if wrapped {
+                    vec!["launch".into(), "pi".into(), "--tools-first".into()]
+                } else {
+                    vec![]
+                },
+                vec![
+                    "--interactive".into(),
+                    "--release".into(),
+                    release.to_str().unwrap().into(),
+                ],
+            ]
+            .concat(),
+            model: Some("fixture/model".into()),
+            effort: Some("high".into()),
+            cwd: dir.path().into(),
+            runtime: core.state.clone(),
+            add_dirs: vec![],
+            resume: None,
+        };
+        let session = core
+            .native
+            .prepare_scoped(&core, "c", "worker:task", &spec, "")
+            .unwrap();
+        session
+            .set_tool_handler(Arc::new(|name, args| {
+                assert_eq!(name, "complete");
+                assert_eq!(args["report"], "adapter result");
+                Ok(serde_json::json!({"recorded":true}))
+            }))
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let worker = session.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = worker.run(&core.native, "current", "hello", &worker_cancel);
+            let _ = send.send(outcome);
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !terminal::tail(&session.screen, SCREEN_LINES)
+            .contains("terminal prose is not a result")
+        {
+            if Instant::now() >= deadline {
+                cancel.store(true, Ordering::SeqCst);
+                panic!(
+                    "Pi fixture failed: {}",
+                    terminal::tail(&session.screen, SCREEN_LINES)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            receive.try_recv().is_err(),
+            "terminal prose must leave the turn open"
+        );
+        std::fs::write(release, "accept").unwrap();
+        let outcome = receive.recv_timeout(Duration::from_secs(30));
+        if outcome.is_err() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&outcome.unwrap().unwrap().text).unwrap()["report"],
+            "adapter result"
+        );
+        assert!(session.gateway.connected());
+        assert!(session.identity().unwrap().ends_with(".jsonl"));
+    }
 }

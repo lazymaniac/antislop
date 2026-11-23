@@ -13,6 +13,7 @@ mod codex;
 mod common;
 pub(crate) mod gemini;
 mod opencode;
+pub(crate) mod pi;
 use common::runtime_args;
 
 const TOKEN_ENV: &str = "ANTISLOP_MCP_TOKEN";
@@ -28,8 +29,20 @@ const PARENT_SESSION_ENV: [&str; 7] = [
 
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     let mut command = base_command(spec);
+    if spec.provider == ProviderKind::Pi {
+        let (session, pi) = pi::prepare(&mut command, spec, gateway)?;
+        return Ok(Launch {
+            command,
+            session: Some(session),
+            pi: Some(pi),
+        });
+    }
     let session = configure(&mut command, spec, gateway)?;
-    Ok(Launch { command, session })
+    Ok(Launch {
+        command,
+        session,
+        pi: None,
+    })
 }
 
 fn base_command(spec: &Spec) -> CommandBuilder {
@@ -50,7 +63,9 @@ fn configure(
         ProviderKind::Opencode => configure_opencode(command, spec, gateway),
         ProviderKind::Agy => configure_agy(command, spec, gateway),
         ProviderKind::Gemini => configure_gemini(command, spec, gateway),
-        ProviderKind::Pi => Err(Error::Invalid("Pi connection not implemented".into())),
+        ProviderKind::Pi => Err(Error::Invalid(
+            "Pi must use its extension launch path".into(),
+        )),
     }
 }
 

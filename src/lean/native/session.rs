@@ -39,6 +39,7 @@ impl Session {
             terminal: Mutex::new(terminal),
             screen,
             identity: Mutex::new(launch.session),
+            pi: launch.pi,
             started_ms: store::now_ms(),
             stop: AtomicBool::new(false),
             executing: AtomicBool::new(false),
@@ -64,7 +65,12 @@ impl Session {
         if self.stop.load(Ordering::SeqCst) {
             return Err(StopCause::Cancelled.diagnostic("the agent session was stopped"));
         }
-        let screen = terminal::tail(&self.screen, SCREEN_LINES);
+        let screen =
+            terminal::tail(&self.screen, SCREEN_LINES).replace(self.gateway.token(), "[REDACTED]");
+        if let Some(pi) = &self.pi {
+            pi.poll()?;
+            pi.check_transport(&screen)?;
+        }
         if let Some(cause) = stops::screen_stop(self.spec.provider, &screen)
             && !(cause == StopCause::UnexpectedDialog && self.approval().is_some())
         {
@@ -180,15 +186,18 @@ impl Session {
     }
 
     fn wait_for_connection(&self, cancel: &AtomicBool) -> Result<()> {
-        while !self.gateway.connected() {
+        loop {
             if cancel.load(Ordering::SeqCst) {
                 return Err(invalid(mcp::CANCELLED));
+            }
+            let extension_ready = self.pi.as_ref().map_or(Ok(true), |pi| pi.poll())?;
+            if self.gateway.connected() && extension_ready {
+                return Ok(());
             }
             self.check_alive()?;
             self.serve_approval(cancel)?;
             std::thread::sleep(Duration::from_millis(50));
         }
-        Ok(())
     }
 
     fn wait_for_settle(&self, cancel: &AtomicBool) -> Result<()> {
@@ -237,7 +246,12 @@ impl Session {
         match result {
             Err(error) if error.to_string() != mcp::CANCELLED => {
                 self.stop.store(true, Ordering::SeqCst);
-                Err(invalid(format!("{EXECUTION_FAILED}{error}")))
+                Err(invalid(format!(
+                    "{EXECUTION_FAILED}{}",
+                    error
+                        .to_string()
+                        .replace(self.gateway.token(), "[REDACTED]")
+                )))
             }
             other => other,
         }
@@ -306,7 +320,8 @@ impl Session {
         })?;
         self.gateway.begin(turn)?;
         let result_instructions = self.gateway.completion_footer()?;
-        let transmitted = turn_text(turn, prompt, &result_instructions);
+        let server = self.pi.as_ref().map_or(mcp::SERVER, |pi| pi.alias());
+        let transmitted = turn_text(turn, prompt, &result_instructions, server);
         if let Some(core) = self.core.upgrade()
             && core.store.db().query_row(
                 "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1)",
@@ -351,7 +366,8 @@ impl Session {
             .upgrade()
             .ok_or_else(|| invalid("agent session lost its core"))?;
         let paused = core.store.paused(&self.conversation)?;
-        let screen = terminal::tail(&self.screen, SCREEN_LINES);
+        let screen =
+            terminal::tail(&self.screen, SCREEN_LINES).replace(self.gateway.token(), "[REDACTED]");
         let ready =
             readiness
                 .lock()
