@@ -357,3 +357,142 @@ fn audit_reads_keep_individual_reports_paged_and_never_substitute_aggregate_resu
             .is_err()
     );
 }
+
+#[test]
+fn paged_carried_report_keeps_exact_generation_and_evidence_without_implying_acceptance() {
+    let (_directory, core, conversation, mut tasks) = fixture();
+    core.store
+        .db()
+        .execute(
+            "UPDATE task_inputs SET generation=1 WHERE task_id=?1",
+            [&tasks[0].id],
+        )
+        .unwrap();
+    tasks[0] = core.store.task_by_id(&tasks[0].id).unwrap().unwrap();
+    tasks[0].round = 1;
+    core.store.update_task(&tasks[0]).unwrap();
+    let (role, producer) = start(&core, &conversation, &tasks[0], false);
+    let raw = "raw output é 👩‍💻\n".repeat(2000);
+    let recorded = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &producer.id,
+            "record_evidence",
+            &json!({"label":"carry-output","text":raw}),
+        )
+        .unwrap();
+    let evidence = recorded["evidence"]["id"].as_str().unwrap();
+    let report = "retained interpretation é 👩‍💻\n".repeat(2000);
+    core.agent_tool(
+        &conversation,
+        &role,
+        &producer.id,
+        "complete",
+        &json!({"summary":"Retained interpretation","report":report}),
+    )
+    .unwrap();
+    core.store
+        .finish_turn(&producer.id, store::TurnStatus::Done, None)
+        .unwrap();
+    tasks[0].status = status::APPROVED.into();
+    tasks[0].report = Some(report.clone());
+    core.store.update_task(&tasks[0]).unwrap();
+    // An older generation's revision cannot establish current source equality.
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_source_revisions VALUES(?1,0,'unknown-old-revision')",
+            [&tasks[0].id],
+        )
+        .unwrap();
+    let scope = core
+        .store
+        .plan_scope_id(&tasks[0].plan_id)
+        .unwrap()
+        .unwrap();
+    let next = core
+        .store
+        .add_plan(
+            &conversation,
+            &tasks.iter().map(|t| t.spec.clone()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    core.store
+        .bind_plan_scope(&conversation, &next[0].plan_id, &scope)
+        .unwrap();
+    core.store
+        .queue_plan(&conversation, &next[0].plan_id)
+        .unwrap();
+    let carried = core.store.task_by_id(&next[0].id).unwrap().unwrap();
+    assert_eq!(carried.status, status::QUEUED);
+    assert_eq!(
+        carried.feedback.as_ref().unwrap()["carried_from"],
+        tasks[0].id
+    );
+    let event = core
+        .store
+        .events_since(&conversation, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "task_reassessment_required" && e.payload["task"] == carried.id)
+        .unwrap();
+    assert_eq!(event.payload["source_comparison_unknown"], true);
+    let reader = core
+        .store
+        .start_turn(
+            &conversation,
+            ORCHESTRATOR,
+            "fixture",
+            0,
+            Some(&next[0].plan_id),
+        )
+        .unwrap();
+    let mut args = json!({"dependency":"baseline"});
+    let mut text = String::new();
+    loop {
+        let page = core
+            .agent_tool(
+                &conversation,
+                ORCHESTRATOR,
+                &reader.id,
+                "read_dependency_result",
+                &args,
+            )
+            .unwrap();
+        assert_eq!(page["result_ref"], producer.id);
+        assert_eq!(page["input_generation"], 1);
+        assert_eq!(page["task_approved"], false);
+        assert_eq!(page["compatibility_reviewed"], false);
+        assert_eq!(page["evidence"][0]["id"], evidence);
+        text.push_str(page["report"].as_str().unwrap());
+        if page["complete"] == true {
+            break;
+        }
+        args["cursor"] = page["cursor"].clone();
+    }
+    assert_eq!(text, report);
+    let mut args = json!({"evidence":evidence});
+    let mut text = String::new();
+    loop {
+        let page = core
+            .agent_tool(
+                &conversation,
+                ORCHESTRATOR,
+                &reader.id,
+                "read_evidence",
+                &args,
+            )
+            .unwrap();
+        text.push_str(page["text"].as_str().unwrap());
+        if page["complete"] == true {
+            break;
+        }
+        args["cursor"] = page["cursor"].clone();
+    }
+    assert_eq!(text, raw);
+    assert_eq!(
+        core.store.task_by_id(&tasks[0].id).unwrap().unwrap().status,
+        status::APPROVED
+    );
+}

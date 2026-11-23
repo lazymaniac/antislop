@@ -268,7 +268,7 @@ answer = "noted" if "The plan finished. Results of each task follow." in prompt 
 }
 
 #[test]
-fn a_turn_stores_its_whole_answer_and_no_mirror_of_the_session() {
+fn a_turn_retains_answer_and_inspection_prompt_without_mirroring_cli_output() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -291,12 +291,13 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
         antislop::lean::turn_result::TurnResult::decode(finals[0]["text"].as_str().unwrap()).text(),
         "First sentence.\nSecond line of the answer that is kept whole."
     );
-    // What the agent read, thought and ran stays in its own session.
-    assert!(
-        events(&core, &conversation, "agent")
-            .iter()
-            .all(|event| event["type"] == "prompt")
-    );
+    // Inspection retains the launch prompt, but does not mirror native CLI output.
+    let inspection = events(&core, &conversation, "agent");
+    assert_eq!(inspection.len(), 1);
+    assert_eq!(inspection[0]["type"], "prompt");
+    let prompt = inspection[0]["text"].as_str().unwrap();
+    assert!(prompt.contains("hello there"));
+    assert!(!prompt.contains("First sentence."));
 }
 
 fn plan_with_two_draft_comments(core: &Arc<Core>, dir: &Path) -> (String, String, Vec<u64>) {
@@ -484,6 +485,11 @@ fn plan_review_does_not_require_a_context_scout_for_code_changes() {
     let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
+    rusqlite::Connection::open(dir.path().join("state/core.db"))
+        .unwrap().execute(
+            "INSERT INTO teams(conversation_id,team,reason,version,updated_ms,user_selected,origin) VALUES(?1,'small-change','Contained code fixture',?2,0,1,'user')",
+            rusqlite::params![conversation, antislop::lean::tasks::TEAM_VERSION],
+        ).unwrap();
     core.send(&conversation, "change a.rs").unwrap();
     wait_until("plan reviewer started", || {
         std::fs::read_to_string(dir.path().join("prompts.jsonl"))

@@ -1,5 +1,5 @@
 //! How each supported CLI is started as an interactive process in a terminal,
-//! wired to the daemon's `finish_turn` gateway. Everything is passed per
+//! wired to the daemon's role-scoped MCP result tools. Everything is passed per
 //! launch (flags, `-c` overrides, environment): no CLI's own configuration
 //! files are written. The human can then use the CLI exactly as usual.
 use portable_pty::CommandBuilder;
@@ -12,7 +12,6 @@ pub(crate) struct Launch {
     /// The CLI's own session identifier when it is known before the process
     /// starts (Claude is told it; any CLI is told it when resuming).
     pub session: Option<String>,
-    pub settings: Option<tempfile::NamedTempFile>,
 }
 
 #[cfg(test)]

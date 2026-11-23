@@ -358,8 +358,7 @@ mod tests {
     }
     #[test]
     fn resize_while_waiting_for_a_session_is_used_by_the_next_open() {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let directory = crate::test_resources::tempdir();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -452,8 +451,7 @@ mod tests {
     }
     #[test]
     fn first_attachment_waits_for_the_actual_panel_dimensions() {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let directory = crate::test_resources::tempdir();
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
         app.navigation.screen = crate::lean::tui::Screen::Workbench;
         app.navigation.target = WorkbenchTarget::Session;
@@ -529,7 +527,7 @@ mod tests {
     #[test]
     fn graph_card_does_not_attach_a_cli_pty() {
         let mut app = App::test_app();
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.graph_viewport = Some((120, 48));
         app.view.tasks = vec![crate::lean::tui::view::TaskRow {
             id: "t1".into(),
@@ -563,7 +561,7 @@ mod tests {
         use std::time::Instant;
         let mut app = App::test_app();
         app.animate_graph = true;
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.graph_viewport = Some((120, 48));
         app.view.tasks = vec![crate::lean::tui::view::TaskRow {
             id: "t1".into(),
@@ -598,7 +596,7 @@ mod tests {
         use crossterm::event::KeyEvent;
 
         let mut app = App::test_app();
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.navigation.screen = crate::lean::tui::Screen::Workbench;
         app.navigation.target = WorkbenchTarget::Agent("worker:options".into());
         app.navigation.focus = NavigationFocus::WorkbenchTerminal;
@@ -710,8 +708,7 @@ mod tests {
 
     #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let directory = crate::test_resources::tempdir();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -751,8 +748,7 @@ mod tests {
     }
     #[test]
     fn closing_a_view_delivers_accepted_input_before_detaching() {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let directory = crate::test_resources::tempdir();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();

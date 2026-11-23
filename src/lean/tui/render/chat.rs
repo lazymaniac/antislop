@@ -169,7 +169,7 @@ impl App {
         let visible_box_lines = usize::from(editor.height).max(1);
         let (cursor_col, cursor_row) = cursor;
         let shown_lines = self.chat_input_window(&input_lines, cursor_row, visible_box_lines);
-        let focused = self.focus == Focus::Chat
+        let focused = self.navigation.background_focus == Focus::Chat
             && self.editor.is_none()
             && self.picker.is_none()
             && self.help.is_none()
@@ -286,7 +286,7 @@ mod tests {
             app.input = InputBuffer::with_text("draft 👩‍💻e\u{301}");
             let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
             for focus in [Focus::Graph, Focus::Chat] {
-                app.focus = focus;
+                app.set_focus(focus);
                 terminal
                     .draw(|frame| app.draw_chat(frame, frame.area(), &theme))
                     .unwrap();

@@ -14,25 +14,22 @@ use ratatui::{Terminal, backend::TestBackend};
 use std::io::{IsTerminal, Write};
 use std::{
     path::PathBuf,
-    process::{Child, Command as ProcessCommand, Stdio},
+    process::{Command as ProcessCommand, Stdio},
     time::{Duration, Instant},
 };
 
 struct NavigationFixture {
-    child: Child,
+    child: common::ChildGuard,
     client: Client,
     project: PathBuf,
     state: PathBuf,
     cli: PathBuf,
-    _root: tempfile::TempDir,
+    _root: common::TestDir,
 }
 
 impl NavigationFixture {
     fn start() -> Self {
-        let root_guard = tempfile::Builder::new()
-            .prefix("anti-nav-")
-            .tempdir()
-            .unwrap();
+        let root_guard = common::tempdir();
         let root = root_guard.path().to_path_buf();
         let project = root.join("p");
         std::fs::create_dir_all(&project).unwrap();
@@ -74,6 +71,7 @@ impl NavigationFixture {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(&state);
         wait_for("fixture daemon identity", || {
@@ -92,10 +90,7 @@ impl NavigationFixture {
     }
 
     fn start_delivery(capture_dir: &std::path::Path) -> Self {
-        let root_guard = tempfile::Builder::new()
-            .prefix("anti-nav-delivery-")
-            .tempdir()
-            .unwrap();
+        let root_guard = common::tempdir();
         let root = root_guard.path();
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -205,6 +200,7 @@ print(json.dumps({"event":"result","result":{"conversation_id":"navigation-worke
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(&state);
         wait_for("delivery daemon identity", || {
@@ -225,11 +221,8 @@ print(json.dumps({"event":"result","result":{"conversation_id":"navigation-worke
 
 impl Drop for NavigationFixture {
     fn drop(&mut self) {
-        let _ = self
-            .client
-            .call(&Request::Control(ControlRequest::ForceShutdown));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
@@ -278,7 +271,7 @@ fn instrument_local_native_key_reader(cli: &std::path::Path) {
     let source = std::fs::read_to_string(&shim).unwrap();
     let original = "        dialog(\"after_work\", fd)\n";
     let instrumented = concat!(
-        "        if os.path.exists(here + '.capture_native_terminal') and 'You review another agent\\'s work' in prompt:\n",
+        "        if os.path.exists(here + '.capture_native_terminal') and 'You review another agent\\'s work' in prompt and 'This is an options task:' not in prompt:\n",
         "            sys.stdout.write('\\x1b[2J\\x1b[H' + 'NATIVE PTY READY — key capture is active')\n",
         "            sys.stdout.flush()\n",
         "            open(here + '.native_terminal_ready', 'w').close()\n",
@@ -305,6 +298,30 @@ fn instrument_local_native_key_reader(cli: &std::path::Path) {
     .unwrap();
 }
 
+fn select_graph_reviewer(app: &mut App, task_id: &str) {
+    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert!(app.picker.is_some(), "graph agent picker must open by key");
+    for character in task_id.chars() {
+        app.key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    let reviewer = format!("reviewer:{task_id}");
+    let index = app
+        .picker
+        .as_ref()
+        .unwrap()
+        .items(&app.view)
+        .iter()
+        .position(|(_, action)| {
+            matches!(action,
+            antislop::lean::tui::palette::Action::Select(key) if key == &reviewer)
+        })
+        .expect("the task reviewer is in the filtered picker");
+    for _ in 0..index {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
 fn open_reviewer_workbench(
     fixture: &NavigationFixture,
     conversation: &str,
@@ -327,14 +344,8 @@ fn open_reviewer_workbench(
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-    assert!(app.picker.is_some());
-    for character in task_id.chars() {
-        app.key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
-    }
-    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
+    select_graph_reviewer(&mut app, task_id);
     let graph_agent = format!("reviewer:{task_id}");
     assert_eq!(app.selected, format!("worker:{task_id}"));
     assert_eq!(
@@ -369,19 +380,34 @@ fn open_reviewer_workbench(
     while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Diff {
         app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     }
+    pump_until(
+        &mut app,
+        &rx,
+        |app| {
+            app.diff
+                .as_ref()
+                .and_then(|diff| diff.target())
+                .is_some_and(|target| target.contains("navigation-artifact.txt"))
+        },
+        "real task diff loaded before selecting PTY",
+    );
+    assert!(draw(&mut app).contains("navigation-artifact.txt"));
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
     assert_eq!(
         app.navigation.presentation().terminal_owner.as_deref(),
         Some(owner)
     );
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().native_input);
     let until = Instant::now() + Duration::from_secs(30);
     loop {
@@ -403,8 +429,12 @@ fn open_reviewer_workbench(
         }
         draw(&mut app);
     }
-    assert!(app.navigation.presentation().split);
-    assert!(draw(&mut app).contains("navigation-artifact.txt"));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
+    draw(&mut app);
+    assert!(app.details.as_ref().unwrap().native_areas[0].height > 0);
     (app, rx)
 }
 
@@ -445,7 +475,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         |app| app.view.agents.contains_key("orchestrator"),
         "graph agent",
     );
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     if app
         .interview_forms
         .get(&conversation_a)
@@ -471,7 +501,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.navigation.screen, Screen::Workbench);
     assert_eq!(
@@ -503,15 +533,18 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         app.navigation.presentation().terminal_owner.as_deref(),
         Some("orchestrator")
     );
-    assert!(app.navigation.presentation().split);
+    assert!(!app.navigation.presentation().split);
 
     // Attach the real fixture PTY after the app has rendered its actual panel.
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     draw(&mut app);
     let until = Instant::now() + Duration::from_secs(40);
     loop {
@@ -561,7 +594,7 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     );
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.navigation.presentation().zoomed);
-    assert!(app.navigation.presentation().split);
+    assert!(!app.navigation.presentation().split);
     pump_until(
         &mut app,
         &updates,
@@ -573,6 +606,9 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
         },
         "real fixture response",
     );
+    while app.navigation.presentation().tab != antislop::lean::tui::WorkbenchTab::Conversation {
+        app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let conversation_frame = draw(&mut app);
     assert!(
         conversation_frame.contains("navigation fixture response"),
@@ -580,6 +616,8 @@ fn graph_workbench_history_native_pty_and_a_b_a_preserve_context() {
     );
     assert!(app.details.as_ref().unwrap().available_rounds.contains(&0));
 
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
     // Preserve a fresh draft in A, then create B through the app's live request handler.
     app.input.insert_str("alpha unsent draft");
     app.run_workflow(Command::NewConversation);
@@ -661,6 +699,16 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         .as_str()
         .unwrap()
         .to_owned();
+    // This fixture owns one contained writer; Feature's specialist pipeline
+    // is exercised independently by lean_tui_rigor_semantics.
+    fixture
+        .client
+        .call(&Request::Conversation(ConversationRequest::SelectTeam {
+            conversation: conversation.clone(),
+            team: "small-change".into(),
+            reason: "Exercise one contained writer and its reviewer PTY".into(),
+        }))
+        .unwrap();
     fixture
         .client
         .call(&Request::Conversation(ConversationRequest::Send {
@@ -802,14 +850,8 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
-    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-    assert!(app.picker.is_some(), "graph agent picker must open by key");
-    for character in "t1".chars() {
-        app.key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
-    }
-    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
+    select_graph_reviewer(&mut app, "t1");
     assert_eq!(
         app.selected, "worker:t1",
         "key-filtered graph picker must select the delivered task"
@@ -844,6 +886,18 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         "the real writer task must expose run history"
     );
     assert_eq!(app.details.as_ref().unwrap().task_id(), Some("t1"));
+    pump_until(
+        &mut app,
+        &rx,
+        |app| {
+            app.diff
+                .as_ref()
+                .and_then(|diff| diff.target())
+                .is_some_and(|target| target.contains("navigation-artifact.txt"))
+        },
+        "real task diff loaded before selecting PTY",
+    );
+    assert!(draw(&mut app).contains("navigation-artifact.txt"));
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
     assert!(app.navigation.presentation().pinned);
     let owner = app
@@ -856,13 +910,16 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
         owner.starts_with("reviewer:"),
         "unexpected PTY owner {owner}"
     );
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
     assert_eq!(
         app.navigation.focus,
         antislop::lean::tui::NavigationFocus::WorkbenchTerminal
     );
     draw(&mut app);
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     let until = Instant::now() + Duration::from_secs(40);
     loop {
         if app
@@ -895,12 +952,16 @@ fn real_delivery_graph_diff_and_reviewer_pty_share_task_round_owner() {
     let frame = draw(&mut app);
     assert!(
         frame.contains("Diff"),
-        "Diff tab must remain visible beside PTY"
+        "Diff remains reachable in the dedicated PTY tab bar"
     );
-    assert!(frame.contains("navigation-artifact.txt"));
+    assert_eq!(
+        app.navigation.presentation().tab,
+        antislop::lean::tui::WorkbenchTab::Pty
+    );
+    assert!(app.details.as_ref().unwrap().native_areas[0].height > 1);
     assert!(
         frame.contains("NATIVE PTY READY"),
-        "one rendered Workbench frame must show live PTY and Diff together"
+        "the dedicated PTY tab must show the selected reviewer's live terminal"
     );
     assert!(app.details.as_ref().unwrap().native[&owner].error.is_none());
     let capture_marker = PathBuf::from(format!("{}.capture_native_keys", fixture.cli.display()));

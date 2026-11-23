@@ -194,7 +194,9 @@ pub struct Details {
     pub editing: bool,
     pub input_width: [usize; 2],
     pub key: String,
+    /// Legacy standalone selection; ignored while a Workbench tab is supplied.
     pub tab: usize,
+    pub(in crate::lean::tui) workbench_tab: Option<crate::lean::tui::WorkbenchTab>,
     /// Lines scrolled down from the top.
     pub scroll: usize,
     /// The task as the daemon stores it, once fetched.

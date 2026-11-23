@@ -16,11 +16,8 @@ fn reopening_details_restores_independent_workbench_tab_state() {
         (WorkbenchTab::Conversation, (8, "conversation query")),
         (WorkbenchTab::Diff, (13, "diff query")),
     ] {
-        let slot = usize::MAX - tab as usize;
-        app.details_scroll_memory
-            .insert(("worker:t1".into(), slot), scroll);
-        app.details_query_memory
-            .insert(("worker:t1".into(), slot), query.into());
+        app.workbench_memory
+            .insert(("worker:t1".into(), tab), (scroll, query.into()));
     }
 
     app.restore_details("worker:t1");
@@ -400,6 +397,44 @@ fn deletion_replies_keep_other_pending_decisions_and_their_selection() {
     assert!(picker.delete_target.is_none());
     assert_eq!(picker.conversations, vec![first]);
     assert!(app.conversation_deletions.is_empty());
+}
+
+#[test]
+fn saved_panels_keep_only_their_own_tab_memory() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = App::test_app();
+    for index in 0..40 {
+        let key = format!("worker:t{index}");
+        app.open_details(key.clone());
+        let details = app.details.as_mut().unwrap();
+        details.query = format!("query {index}");
+        details.scroll = index;
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.details.is_none());
+        let saved = &app.detail_states[&(app.conversation.clone(), key.clone())];
+        assert!(
+            saved
+                .workbench_memory
+                .keys()
+                .all(|(target, _)| target == &key)
+        );
+        assert!(saved.scroll_memory.keys().all(|(target, _)| target == &key));
+        assert!(saved.query_memory.keys().all(|(target, _)| target == &key));
+    }
+    assert_eq!(
+        app.detail_states
+            .values()
+            .map(|panel| panel.workbench_memory.len())
+            .sum::<usize>(),
+        40
+    );
+    for index in (0..40).rev() {
+        app.open_details(format!("worker:t{index}"));
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.query, format!("query {index}"));
+        assert_eq!(details.scroll, index);
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    }
 }
 
 #[test]

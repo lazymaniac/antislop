@@ -62,7 +62,7 @@ impl App {
     }
 
     fn checks_are_stale(&self, details: &Details) -> bool {
-        details.tab == CHECKS
+        details.shows_checks()
             && details.fetched_checks
                 != details
                     .task_id()
@@ -72,10 +72,17 @@ impl App {
     }
 
     fn session_is_stale(&self, details: &Details) -> bool {
-        matches!(
-            details.tab,
-            0 | details::RESULT | details::REVIEW | details::REVIEWER
-        ) && details.selected_round.is_none()
+        !details.shows_checks()
+            && (matches!(
+                details.content_tab(),
+                Some(
+                    WorkbenchTab::Summary
+                        | WorkbenchTab::Conversation
+                        | WorkbenchTab::Diff
+                        | WorkbenchTab::Results
+                )
+            ) || (details.workbench_tab.is_none() && details.tab == details::REVIEW))
+            && details.selected_round.is_none()
             && details.fetched_events != self.view.after
     }
 

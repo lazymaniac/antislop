@@ -1,3 +1,8 @@
+#[allow(dead_code)]
+mod fixture_paths {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/external.rs"));
+}
+
 /// Makes a headless-style test script also answer as an interactive agent
 /// CLI. Started in a terminal (as the daemon does) the script runs
 /// `pty_shim.py`, which takes the pasted prompt, runs the script itself once
@@ -6,16 +11,7 @@
 /// script stays at its path and keeps its text.
 pub fn interactive(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        // SAFETY: set once, before the first daemon of this process starts.
-        unsafe {
-            // The fixtures stand in for Agy; they need no registered bridge.
-            std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
-            // A turn nobody ends would otherwise hold a test for half an hour.
-            std::env::set_var("ANTISLOP_TURN_TIMEOUT_SECS", "90");
-        }
-    });
+    fixture_paths::external(path.parent().unwrap());
     let source = std::fs::read_to_string(path).unwrap();
     if !source.contains("FIXTURE_PTY") {
         let (shebang, rest) = source.split_once('\n').unwrap();

@@ -38,7 +38,12 @@ impl Details {
         } else {
             sections = self.agent_sections(view, theme, width, &keys);
         }
-        filter_tab_sections(self.tab, &mut sections);
+        let reviewer = if self.workbench_tab.is_some() {
+            self.key.starts_with("reviewer:")
+        } else {
+            self.tab == super::super::details::REVIEWER
+        };
+        filter_tab_sections(reviewer, &mut sections);
         sections
     }
 }
@@ -157,8 +162,7 @@ fn risks_section(theme: &Theme, width: usize, row: &TaskRow, checks: &[CheckRow]
     }
 }
 
-fn filter_tab_sections(tab: usize, sections: &mut Vec<Section>) {
-    let reviewer = tab == super::super::details::REVIEWER;
+fn filter_tab_sections(reviewer: bool, sections: &mut Vec<Section>) {
     sections.retain(|section| match section.id {
         "goal" | "scope" => !reviewer,
         "review" | "risks" | "checks" | "findings" => reviewer,

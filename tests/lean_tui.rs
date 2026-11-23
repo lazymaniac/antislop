@@ -34,72 +34,25 @@ use ratatui::{
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    mpsc,
-};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-struct TestTempDir {
-    relative: PathBuf,
-    absolute: PathBuf,
-}
-
-impl TestTempDir {
-    fn path(&self) -> &Path {
-        &self.absolute
-    }
-
-    fn relative_path(&self) -> &Path {
-        &self.relative
-    }
-}
-
-impl Drop for TestTempDir {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.relative).unwrap();
-    }
-}
-
-fn test_tempdir() -> TestTempDir {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    let path = Path::new(".antislop/tmp").join(format!(
-        "lean-tui-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&path).unwrap();
-    let absolute = std::env::current_dir().unwrap().join(&path);
-    TestTempDir {
-        relative: path,
-        absolute,
-    }
+fn test_tempdir() -> common::TestDir {
+    common::tempdir()
 }
 
 fn test_socket(state: &std::path::Path) -> std::path::PathBuf {
-    let socket = daemon_socket(state);
-    assert!(
-        socket.starts_with(".antislop/tmp"),
-        "test socket escaped the in-worktree fixture root: {}",
-        socket.display()
-    );
-    assert!(
-        socket.as_os_str().len() < 100,
-        "test socket exceeded the Unix socket path limit: {}",
-        socket.display()
-    );
-    socket
+    common::assert_test_socket(state, std::path::Path::new("."));
+    daemon_socket(state)
 }
 
 #[test]
-fn test_socket_is_project_local_and_removed_with_its_fixture() {
+fn test_socket_is_external_and_removed_with_its_fixture() {
     let socket;
     {
         let dir = test_tempdir();
-        socket = test_socket(dir.relative_path());
+        socket = test_socket(dir.path());
         let listener = UnixListener::bind(&socket).unwrap();
         assert!(socket.exists(), "the bound fixture socket must exist");
         eprintln!(
@@ -111,7 +64,7 @@ fn test_socket_is_project_local_and_removed_with_its_fixture() {
     }
     assert!(
         !socket.exists(),
-        "removing the in-project fixture must remove its socket"
+        "removing the external fixture must remove its socket"
     );
 }
 
@@ -298,7 +251,7 @@ fn graph_scrolls_through_many_short_cards() {
             ..Default::default()
         })
         .collect();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t0".into();
     let mut terminal = Terminal::new(TestBackend::new(180, 32)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -345,14 +298,14 @@ fn graph_scrolls_through_many_short_cards() {
             .all(|node| node.height <= HEIGHT)
     );
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 }
 
 #[test]
 fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
     for focus in [Focus::Chat, Focus::Graph] {
         let mut app = App::test_app();
-        app.focus = focus;
+        app.set_focus(focus);
         assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
     }
@@ -462,7 +415,7 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
 #[test]
 fn long_activity_labels_fit_the_grouped_canvas_card() {
     let mut app = App::test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.activity = Some("a".repeat(LARGE_PASTE_BYTES - 1));
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -749,7 +702,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         let mut app = App::test_app();
         app.input = InputBuffer::with_text("chat draft?");
         if help != Help::Graph {
-            app.focus = Focus::Graph;
+            app.set_focus(Focus::Graph);
             app.selected = "worker:t1".into();
         }
         if matches!(
@@ -826,7 +779,7 @@ fn help_blocks_typing_and_action_shortcuts_until_explicitly_dismissed() {
         app.paste("pasted text");
         assert_eq!(app.help, Some(Help::Graph));
         assert_eq!(app.input.text, "draft");
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         assert!(app.picker.is_none());
 
         app.key(KeyEvent::new(dismiss, KeyModifiers::NONE));
@@ -986,7 +939,7 @@ fn modal_round_trip_preserves_unicode_draft_and_grapheme_editing() {
 #[test]
 fn app_fake_request_capture_through_app() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -1006,7 +959,7 @@ fn app_fake_request_capture_through_app() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     let pump_until = |app: &mut App, predicate: fn(&antislop::lean::tui::Update) -> bool| {
@@ -1092,7 +1045,7 @@ fn app_fake_request_capture_through_app() {
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.navigation.screen = antislop::lean::tui::Screen::Graph;
     app.details = None;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.editor.is_some());
@@ -1144,7 +1097,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
     let dir = test_tempdir();
     let image = dir.path().join("wireframe.png");
     image::RgbImage::new(1, 1).save(&image).unwrap();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -1160,7 +1113,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
         writer.flush().unwrap();
     });
 
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.input = InputBuffer::with_text("review this image");
     app.paste(&image.to_string_lossy());
@@ -1188,7 +1141,7 @@ fn chat_composer_sends_attached_images_with_text_and_confirms_success() {
 #[test]
 fn agent_composer_sends_each_delivery_mode_to_the_selected_session() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -1217,7 +1170,7 @@ fn agent_composer_sends_each_delivery_mode_to_the_selected_session() {
         }
     });
 
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.conversation = "agent-conversation".into();
     app.view.plan = Some("plan-7".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -1299,9 +1252,9 @@ fn app_graph_details_diff_navigation_and_search() {
         }
     }));
 
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert!(
         app.navigation
             .work_selection
@@ -1321,7 +1274,11 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.relations, Relations::default());
-    assert_eq!(app.focus, Focus::Graph, "Esc closed only the menu");
+    assert_eq!(
+        app.navigation.background_focus,
+        Focus::Graph,
+        "Esc closed only the menu"
+    );
 
     // Arrow navigation in Graph
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
@@ -1349,7 +1306,7 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.diff.is_none());
     assert!(app.details.is_some());
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(app.graph_expanded.as_deref(), Some("worker:t1"));
     app.graph_expanded = None;
     app.details = None;
@@ -1375,7 +1332,7 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(app.picker.is_none());
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     assert_eq!(app.scroll, usize::MAX);
     assert!(app.found.is_some());
 }
@@ -1397,7 +1354,7 @@ fn enter_opens_workbench_and_graph_detail_state_remains_renderable() {
             ..Default::default()
         },
     );
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
 
@@ -1431,7 +1388,7 @@ fn enter_opens_workbench_and_graph_detail_state_remains_renderable() {
     // Closing the retained graph detail view restores ordinary graph navigation.
     app.graph_expanded = None;
     app.navigation.screen = Screen::Graph;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     assert!(app.graph_expanded.is_none());
     assert!(app.details.is_some());
 }
@@ -1473,7 +1430,7 @@ fn expanded_graph_event_sequence_reflows_rendered_cards_and_edges() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     fn graph(app: &App) -> Graph {
@@ -1618,7 +1575,7 @@ fn expanded_card_resize_redraws_same_app_with_margins_and_clipping() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t3".into();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -1778,7 +1735,7 @@ fn graph_position_markers_follow_offscreen_nodes_and_resize() {
             ..TaskRow::default()
         })
         .collect();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.graph_revealed = Some(app.selected.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -1852,7 +1809,7 @@ fn expanded_card_content_measurements_cover_compact_near_full_and_wide_terminals
             title: "Measured card".into(),
             ..TaskRow::default()
         }];
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.selected = "worker:t1".into();
         app.graph_inspector_visible = false;
         app.graph_expanded = Some("worker:t1".into());
@@ -2138,7 +2095,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
 #[test]
 fn tui_isolated_fake_request_capture() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -2159,7 +2116,7 @@ fn tui_isolated_fake_request_capture() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
 
     // 1. Send
     let res = client.call(&Request::Conversation(
@@ -3475,7 +3432,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         assert!(cursor.x < width && cursor.y < height);
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.input.text, "test command");
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         app.open_details("conversation".into());
         terminal.draw(|frame| app.draw(frame)).unwrap();
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -3849,7 +3806,7 @@ fn test_spatial_graph_rdm_relation_markers_and_visible_only_navigation() {
             ..TaskRow::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     app.set_graph_filter(Some("second".into()));
@@ -3884,7 +3841,7 @@ fn test_spatial_graph_rdm_relation_markers_and_visible_only_navigation() {
 #[test]
 fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retention() {
     let dir = test_tempdir();
-    let sock = test_socket(dir.relative_path());
+    let sock = test_socket(dir.path());
     let listener = UnixListener::bind(&sock).unwrap();
     let (tx, rx) = mpsc::channel();
 
@@ -3931,7 +3888,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     let load_list = |app: &mut App| {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -4031,7 +3988,7 @@ fn test_refresh_updates_preserve_graph_selection() {
         }
     }));
 
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t2".into();
 
     app.view.apply(&json!({
@@ -4127,6 +4084,48 @@ fn test_inspector_conversation_switch_preserves_details_memory() {
     let d = app.details.as_ref().unwrap();
     assert_eq!(d.scroll, 42);
     assert_eq!(d.query, "szukana_fraza");
+}
+
+#[test]
+fn new_conversation_does_not_inherit_closed_details_search_or_scroll() {
+    for legacy in [false, true] {
+        let mut app = App::test_app();
+        app.open("conv-A".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for ch in "query only in A".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.details.as_ref().unwrap().query, "query only in A");
+        app.details.as_mut().unwrap().scroll = 42;
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.details.is_none());
+
+        app.open("conv-B".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.query, "", "new conversation, legacy={legacy}");
+        assert_eq!(details.scroll, 0, "new conversation, legacy={legacy}");
+        app.details.as_mut().unwrap().query = "only B".into();
+        app.details.as_mut().unwrap().scroll = 7;
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        app.open("conv-A".into());
+        app.open_details("orchestrator".into());
+        if legacy {
+            app.details.as_mut().unwrap().switch_tab(0);
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.query, "query only in A", "legacy={legacy}");
+        assert_eq!(details.scroll, 42, "legacy={legacy}");
+    }
 }
 
 #[test]
@@ -4272,7 +4271,7 @@ fn test_precise_comment_targets_and_labels() {
     // Commenting in PlanView while Details and an interview/decision question are present
     // must isolate PlanView input/paste and send comment_scoped without leaking round/run.
     let dir = test_tempdir();
-    let sock = test_socket(dir.relative_path());
+    let sock = test_socket(dir.path());
     let listener = UnixListener::bind(&sock).unwrap();
     let (tx, rx) = mpsc::channel();
     let _server = thread::spawn(move || {
@@ -4288,7 +4287,7 @@ fn test_precise_comment_targets_and_labels() {
             }
         }
     });
-    let (mut app, _rx_updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, _rx_updates) = App::test_app_with_client(Client::at(dir.path()));
     app.conversation = "c-plan".into();
     app.view.apply(&json!({
         "seq": 1,
@@ -4686,7 +4685,7 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
             ..Default::default()
         },
     ];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     let mut terminal = Terminal::new(TestBackend::new(160, 70)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -4758,7 +4757,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     for task in &mut app.view.tasks {
         task.status = "working".into();
     }
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
 
     // 1. Initial draw on 80x24 terminal
@@ -5083,7 +5082,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     for &(term_name, term_w, term_h, _inner_w, _inner_h) in &terminal_configs {
         let (mut app, _rx) =
             App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
 
         // 1. Long chain: c1 -> c2 -> c3 -> c4
         app.view.tasks = vec![
@@ -5658,7 +5657,12 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         idle: false,
         observer: false,
     });
-    app.open_details("worker:t1".into());
+    // Manual plans now open for review; dismiss that input owner before
+    // exercising Workbench keys and the task-fetch lifecycle.
+    assert!(app.plan_view.is_some());
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.plan_view.is_none());
+    app.open_details("reviewer:t1".into());
     let issued = app.task_request_id;
     assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(1));
     // A late reply for the previous round is dropped, not shown.
@@ -5668,7 +5672,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 0,
         task: json!({"id": "t1", "report": "old round"}),
     });
@@ -5680,7 +5684,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id": "t1", "report": "round one"}),
     });
@@ -5715,7 +5719,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued + 1,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id": "t1", "report": "stale again"}),
     });
@@ -5730,7 +5734,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued + 1,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 2,
         task: json!({"id": "t1", "report": "round two"}),
     });
@@ -5738,7 +5742,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
-    app.details.as_mut().unwrap().tab = antislop::lean::tui::details::CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     let check = |id: &str, task: &str, seq| Update::Events {
         conversation: "test-conv".into(),
@@ -5882,8 +5886,8 @@ fn project_switches_use_each_daemons_history_directory() {
     let second = test_tempdir();
     let mut app = App::test_app();
     app.projects = vec![
-        ProjectConn::new(first.path().into(), Client::at(first.relative_path())),
-        ProjectConn::new(second.path().into(), Client::at(second.relative_path())),
+        ProjectConn::new(first.path().into(), Client::at(first.path())),
+        ProjectConn::new(second.path().into(), Client::at(second.path())),
     ];
     app.load_history(first.path());
     app.open("first-conversation".into());
@@ -6009,7 +6013,6 @@ fn configuration_shortcut_is_removed_from_palette_and_profile_actions_work() {
 
 #[test]
 fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
@@ -6017,8 +6020,8 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         idle: false,
         observer: false,
     });
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let request = app.task_request_id;
     app.apply_update(Update::Task {
         documents: Default::default(),
@@ -6026,7 +6029,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
         plan: Some("p1".into()),
         generation: 1,
         request_id: request,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id":"u1","round":1,"checks":[]}),
     });
@@ -6058,7 +6061,7 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
 fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
     use antislop::lean::tui::config::ConfigEditor;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.config_editor = Some(
         ConfigEditor::new(
             include_str!("../examples/antislop.toml"),
@@ -6087,7 +6090,7 @@ fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
 #[test]
 fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (captured, requests) = mpsc::channel();
     let server = thread::spawn(move || {
         for _ in 0..3 {
@@ -6108,7 +6111,7 @@ fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
     });
 
     let conversation = "existing-session-42";
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.conversation = conversation.into();
     let kinds = [
@@ -6162,7 +6165,7 @@ fn completion_action_keys_send_matching_action_to_the_existing_conversation() {
 #[test]
 fn configuration_load_and_save_use_live_daemon_requests() {
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let (captured, requests) = mpsc::channel();
     let server = thread::spawn(move || {
         for save in [false, false, true] {
@@ -6182,7 +6185,7 @@ fn configuration_load_and_save_use_live_daemon_requests() {
             writeln!(stream, "{response}").unwrap();
         }
     });
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.input = InputBuffer::with_text("chat draft");
     app.run_workflow(antislop::lean::tui::Command::Config);
     assert_eq!(
@@ -6225,14 +6228,14 @@ mod config_editor_acceptance {
     use std::{
         collections::BTreeSet,
         path::Path,
-        process::{Child, Command, Stdio},
+        process::{Command, Stdio},
         time::Instant,
     };
 
     const SOURCE: &str = include_str!("../examples/antislop.toml");
 
     struct Daemon {
-        child: Child,
+        child: common::ChildGuard,
         client: Client,
     }
     impl Daemon {
@@ -6248,6 +6251,7 @@ mod config_editor_acceptance {
                 .stdout(Stdio::null())
                 .stderr(Stdio::inherit())
                 .spawn()
+                .map(common::ChildGuard::new)
                 .unwrap();
             let daemon = Self {
                 child,
@@ -6266,11 +6270,8 @@ mod config_editor_acceptance {
     }
     impl Drop for Daemon {
         fn drop(&mut self) {
-            let _ = self.client.call(&Request::Control(
-                antislop::lean::daemon::ControlRequest::ForceShutdown,
-            ));
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            common::stop_daemon(&self.client);
+            self.child.stop();
         }
     }
     fn wait(mut done: impl FnMut() -> bool) {
@@ -6403,7 +6404,7 @@ mod config_editor_acceptance {
             } else {
                 (&local, &global)
             };
-            let state = dir.relative_path().join("project/.antislop");
+            let state = dir.path().join("project/.antislop");
             let daemon = Daemon::start(&project, target, &state, &registry);
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
             app.run_workflow(antislop::lean::tui::Command::Config);
@@ -6593,7 +6594,7 @@ mod config_editor_acceptance {
         std::fs::create_dir(&project).unwrap();
         let path = project.join("antislop.toml");
         std::fs::write(&path, SOURCE).unwrap();
-        let state = dir.relative_path().join("project/.antislop");
+        let state = dir.path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
         app.run_workflow(antislop::lean::tui::Command::Config);
@@ -6777,7 +6778,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             edit(&mut initial, index, text, false);
         }
         std::fs::write(&path, initial.source().unwrap()).unwrap();
-        let state = dir.relative_path().join("project/.antislop");
+        let state = dir.path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let conversation = daemon
             .client
@@ -7109,17 +7110,16 @@ mod text_selection_acceptance {
 
 #[test]
 fn checks_retry_failed_fetch_on_next_empty_event_batch() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
         idle: false,
         observer: false,
     });
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     let failure = updates.recv_timeout(Duration::from_secs(3)).unwrap();
     assert!(matches!(&failure, Update::TaskFailed { .. }));
@@ -7129,7 +7129,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
             .as_ref()
             .is_some_and(|notice| notice.contains('✗'))
     );
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut line = String::new();
@@ -7157,7 +7157,6 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
 
 #[test]
 fn checks_refetch_on_task_verdict_in_the_same_round() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
@@ -7165,8 +7164,8 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
         idle: false,
         observer: false,
     });
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     app.apply_update(Update::Task {
         documents: Default::default(),
@@ -7174,7 +7173,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id":"u1","round":1,"checks":[]}),
     });
@@ -7189,10 +7188,9 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
 
 #[test]
 fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let listener = UnixListener::bind(test_socket(dir.path())).unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     let server = thread::spawn(move || {
         for index in 0..3 {
             let (mut stream, _) = listener.accept().unwrap();
@@ -7229,9 +7227,9 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
         idle: false,
         observer: false,
     });
-    app.open_details("worker:t1".into());
+    app.open_details("reviewer:t1".into());
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7326,7 +7324,6 @@ fn task_replies_match_saved_conversation_plan_round_and_request_generation() {
 
 #[test]
 fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.view.plan = Some("p1".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -7334,8 +7331,8 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
         round: 1,
         ..Default::default()
     });
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let mut issued = Vec::new();
     for round in 1..=3 {
         if round > 1 {
@@ -7350,7 +7347,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
             app.apply_update(Update::Task {
         documents: Default::default(),
                 conversation:"test-conv".into(), plan:Some("p1".into()), generation:1,
-                request_id, key:"worker:t1".into(), round:reply_round,
+                request_id, key:"reviewer:t1".into(), round:reply_round,
                 task:json!({"round":reply_round,"checks":[{"id":format!("round-{reply_round}") }]}),
             });
         }
@@ -7421,17 +7418,16 @@ fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
 
 #[test]
 fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
-    use antislop::lean::tui::details::CHECKS;
     let dir = test_tempdir();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
     app.view.plan = Some("p1".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
         id: "t1".into(),
         round: 1,
         ..Default::default()
     });
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let batch = || Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -7462,7 +7458,7 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
         generation: 1,
         plan: Some("p1".into()),
         request_id: app.task_request_id,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id":"u1","round":1,"checks":[]}),
     });
@@ -7813,11 +7809,10 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
 
 #[test]
 fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
-    use antislop::lean::tui::details::CHECKS;
     let mut app = App::test_app();
     app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"change_kind":"none","id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,observer:false,});
-    app.open_details("worker:t1".into());
-    app.details.as_mut().unwrap().tab = CHECKS;
+    app.open_details("reviewer:t1".into());
+    select_workbench_tab(&mut app, antislop::lean::tui::WorkbenchTab::Summary);
     let issued = app.task_request_id;
     for seq in 3..10 {
         app.apply_update(Update::Events {
@@ -7838,7 +7833,7 @@ fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
         plan: Some("p1".into()),
         generation: 1,
         request_id: issued,
-        key: "worker:t1".into(),
+        key: "reviewer:t1".into(),
         round: 1,
         task: json!({"id":"u1","round":1,"checks":[]}),
     });
@@ -8195,7 +8190,7 @@ fn open_cards(
 #[test]
 fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let dir = test_tempdir();
-    let sock_path = test_socket(dir.relative_path());
+    let sock_path = test_socket(dir.path());
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, requests) = mpsc::channel::<Value>();
 
@@ -8214,7 +8209,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
         }
     });
 
-    let client = Client::at(dir.relative_path());
+    let client = Client::at(dir.path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     app.view.apply(&json!({
         "seq": 1,
@@ -8256,7 +8251,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     assert_eq!(req1["team"], "feature");
 
     // 2. Visual edge linking (`l` on t1, then move to t2 and press Enter) sends Fast-Path revise_plan
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
     assert_eq!(app.graph_link_source.as_deref(), Some("t1"));
@@ -8273,7 +8268,7 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     let _ = rx_updates.recv_timeout(Duration::from_secs(2));
 
     // 3. Direct execution (`/direct`) sends `/direct ...` message over daemon socket
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.input = InputBuffer::with_text("Fix typo in config");
     app.run_workflow(Command::DirectExecute);
     let req3 = requests.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -8281,4 +8276,71 @@ fn domain_cockpit_flow_editor_linking_and_direct_execution_round_trip() {
     assert_eq!(req3["text"], "/direct Fix typo in config");
 
     handle.join().unwrap();
+}
+
+// Drive the public input boundary, rather than changing the standalone Details
+// selection underneath an active Workbench.
+fn select_workbench_tab(app: &mut App, tab: antislop::lean::tui::WorkbenchTab) {
+    assert_eq!(app.navigation.screen, Screen::Workbench);
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(app.navigation.presentation().tab) {
+        if app.navigation.presentation().tab == tab {
+            return;
+        }
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    }
+    assert_eq!(app.navigation.presentation().tab, tab);
+}
+
+#[test]
+fn retained_details_visibility_includes_layout_before_attachment() {
+    let visible: fn(&Details) -> bool = Details::terminal_visible;
+    let mut details = Details::new("worker:t1".into());
+    details.native_areas = [Rect::default(); 2];
+    details.tab = 0;
+    details.show_info = false;
+    details.split = false;
+    assert!(
+        visible(&details),
+        "overview requests a terminal before allocation"
+    );
+    details.show_info = true;
+    assert!(!visible(&details));
+    details.split = true;
+    assert!(visible(&details));
+    details.tab = 1;
+    assert!(
+        !visible(&details),
+        "results do not request the overview fallback"
+    );
+    details.native_areas[1] = Rect::new(0, 0, 10, 2);
+    assert!(visible(&details), "allocated area is an independent branch");
+}
+
+#[test]
+fn retained_theme_helpers_remain_public_and_respect_modes() {
+    let checkbox: fn(&Theme, &str) -> String = Theme::checkbox;
+    let warn: fn(&Theme) -> Style = Theme::warn;
+    let purple: fn(&Theme) -> Style = Theme::purple;
+    for color in [false, true] {
+        for ascii in [false, true] {
+            let theme = Theme::new(color, ascii);
+            assert_eq!(checkbox(&theme, "queued"), "[ ]");
+            assert_eq!(
+                checkbox(&theme, "completed"),
+                if ascii { "[x]" } else { "[✓]" }
+            );
+            assert!(!warn(&theme).add_modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                theme.warning().add_modifier.contains(Modifier::BOLD),
+                !color,
+                "warning adds emphasis in monochrome mode"
+            );
+            assert_eq!(warn(&theme).fg.is_some(), color);
+            assert_eq!(purple(&theme).fg.is_some(), color);
+            if color {
+                assert_ne!(warn(&theme), purple(&theme));
+            }
+        }
+    }
 }

@@ -16,4 +16,4 @@ jobs:
         run: |
           git config --global user.name "Fixture Author"
           git config --global user.email "fixtures@example.invalid"
-      - run: cargo test --locked --all-targets
+      - run: ./cargo.sh test --locked --all-targets

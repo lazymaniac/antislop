@@ -1,4 +1,4 @@
-use super::super::details::{details_footer_hint_for, format_tabs, tabs_for};
+use super::super::details::{format_tabs, tabs_for};
 use super::super::*;
 use super::specialized_details_layout::*;
 use ratatui::widgets::Paragraph;
@@ -29,7 +29,10 @@ impl Details {
         workbench_tab: Option<WorkbenchTab>,
         theme: &Theme,
     ) {
-        self.normalize_tab();
+        self.workbench_tab = workbench_tab;
+        if workbench_tab.is_none() {
+            self.normalize_tab();
+        }
         if area.width == 0 || area.height == 0 {
             if let Some(terminal) = terminal {
                 self.draw_workbench_terminal(frame, terminal, view, theme);
@@ -380,7 +383,7 @@ impl Details {
     }
 
     fn draw_result_document_footer(&self, frame: &mut Frame, footer: Rect, theme: &Theme) {
-        let mut hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
+        let mut hint = self.footer_hint(usize::from(footer.width));
         if self.visible_result_keys().len() > 1 {
             hint.push_str(" · Alt+←/→ documents");
         }
@@ -433,11 +436,16 @@ impl Details {
         width: usize,
         theme: &Theme,
     ) {
+        let record_tab = if self.shows_checks() {
+            Some(WorkbenchTab::Checks)
+        } else {
+            self.content_tab()
+        };
         let records = self.records(view);
         let lines = self.layout_cache.update(records, &self.query, width);
         position_record_scroll(
             lines,
-            self.tab,
+            record_tab,
             self.show_info,
             &mut self.follow,
             &mut self.scroll,

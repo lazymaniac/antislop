@@ -27,8 +27,9 @@ fn project(root: &Path, name: &str) -> PathBuf {
         &format!(
             r#"#!/usr/bin/env python3
 import json, sys
+answer = "```question\n" + json.dumps({{"context": "Fixture response", "question": "{name} answers", "options": ["Continue", "Finish"]}}) + "\n```"
 print(json.dumps({{"type": "thread.started", "thread_id": "orch"}}))
-print(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "{name} answers"}}}}))
+print(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": answer}}}}))
 print(json.dumps({{"type": "turn.completed", "usage": {{}}}}))
 "#
         ),
@@ -55,7 +56,7 @@ print(json.dumps({{"type": "turn.completed", "usage": {{}}}}))
 }
 
 struct Daemon {
-    child: std::process::Child,
+    child: common::ChildGuard,
     conn: ProjectConn,
 }
 
@@ -75,6 +76,7 @@ impl Daemon {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(&state);
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -106,12 +108,8 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self.conn.client.call(&Request::Control(
-            antislop::lean::daemon::ControlRequest::Shutdown,
-        ));
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_daemon(&self.conn.client);
+        self.child.stop();
     }
 }
 
@@ -138,7 +136,7 @@ fn conversations(conn: &ProjectConn) -> Vec<Value> {
 
 #[test]
 fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
-    let root = tempfile::tempdir().unwrap();
+    let root = common::tempdir();
     let root = root.path().canonicalize().unwrap();
     let (path_a, path_b) = (project(&root, "alpha"), project(&root, "beta"));
     let (a, b) = (Daemon::start(&path_a), Daemon::start(&path_b));
@@ -225,7 +223,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
 
 #[test]
 fn opening_a_project_uses_global_state_without_consent_or_local_artifacts() {
-    let root = tempfile::tempdir().unwrap();
+    let root = common::tempdir();
     let root = root.path().canonicalize().unwrap();
     let path_a = project(&root, "alpha");
     let a = Daemon::start(&path_a);
@@ -261,7 +259,7 @@ fn configuration_precedence_and_errors_without_creating_state() {
         println!("SELECTED={}", selected.display());
         return;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = common::tempdir();
     let project = root.path().join("project");
     let global = root.path().join("global");
     std::fs::create_dir(&project).unwrap();
@@ -354,7 +352,7 @@ fn configuration_precedence_and_errors_without_creating_state() {
 
 #[test]
 fn worktree_cleanup_keeps_history_and_uses_the_remaining_checkout_config() {
-    let root = tempfile::tempdir().unwrap();
+    let root = common::tempdir();
     let primary = project(root.path(), "primary");
     common::runtime_environment(&primary);
     let git = |args: &[&str]| {

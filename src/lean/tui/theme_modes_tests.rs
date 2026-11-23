@@ -103,7 +103,7 @@ fn actual_draw_mode_child() {
     let theme = Theme::from_env();
     assert_eq!(theme.color, std::env::var_os("NO_COLOR").is_none());
     assert_eq!(theme.ascii, std::env::var_os("ANTISLOP_ASCII").is_some());
-    for size in [(100, 30), (40, 12), (12, 5), (11, 4)] {
+    for size in [(140, 30), (100, 30), (40, 12), (12, 5), (11, 4)] {
         let mut graph = app();
         let buffer = draw(&mut graph, size);
         application_cells(&buffer, &theme, "graph");
@@ -234,6 +234,25 @@ fn actual_draw_mode_child() {
             );
         }
     }
+    // An indented user title is still content, while the metadata separator
+    // follows the theme. Inspect only sidebar cells, not repeated body titles.
+    let mut workbench = app();
+    workbench.view.tasks[0].title = "  Literal · title".into();
+    workbench.open_details("worker:t1".into());
+    let buffer = draw(&mut workbench, (140, 30));
+    let area = workbench.workbench_areas.list;
+    let mut sidebar = String::new();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            sidebar.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(sidebar.contains("Literal · title"));
+    assert!(sidebar.contains(if theme.ascii {
+        "implementation - round 0"
+    } else {
+        "implementation · round 0"
+    }));
     for kind in [
         Kind::Agents,
         Kind::Recipients,

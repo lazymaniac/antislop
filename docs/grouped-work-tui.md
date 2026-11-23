@@ -37,7 +37,7 @@ work area by default.
 Selecting a stage explicitly never changes its underlying role. External mail
 routes join work cards; the inspector retains exact internal endpoints.
 
-The visual baseline is [Canvas](../work/visualizations/agent-layout-1.html) and
+The design baseline is [Canvas](../work/visualizations/agent-layout-1.html) and
 [Workbench with PTY](../work/visualizations/agent-workbench-pty.html). The terminal
 translation uses a single font size and maps spacing onto cells. At 160×50:
 
@@ -50,6 +50,13 @@ translation uses a single font size and maps spacing onto cells. At 160×50:
 | Native terminal | Raised header, dark `#0a1114` surface, quiet controls, visible attachment errors |
 | Direction | One full-width dock: invitation becomes an inline editor; questions and available actions expand above it |
 | Bottom chrome | One quiet keybar; mouse hit regions come from the rendered labels |
+
+The retained PNG design references are [Canvas](../work/visualizations/agent-layout-1.png)
+and [Workbench with PTY](../work/visualizations/agent-workbench-pty-uniform-font.png).
+They are historical design material, not captures of the current application;
+their original generation path and current manual use are unconfirmed. See
+[the retention decision](api-and-reference-retention.md) for the evidence and
+conditions for reconsidering them.
 
 The top bar reads `> antislop <session branch>` on the left and the session
 status plus total work time on the right, in both Canvas and Workbench. Before
@@ -104,7 +111,8 @@ the original modal renderer; its name-similarity notice against diff file-list
 rendering is unrelated to that shared question renderer. The original form,
 scope cache, and session-action handler are reused rather than duplicated.
 
-Validation completed on 2026-11-22 with the pinned Rust toolchain:
+Historical validation on 2026-11-22 with the pinned Rust toolchain
+(these totals do not validate the subsequent merge):
 
 - Formatting, `cargo.sh check`, clippy for all targets with warnings denied,
   and `git diff --check`.
@@ -137,6 +145,42 @@ those have different responsibilities. The diff adapter calls the original
 sequence helper was renamed to `click_workflow_control` because it clicks the
 rendered keybar and action palette rather than the removed toolbar.
 
+### Navigation model for frontend adapters
+
+`NavigationState` owns the current `screen`, `target` and `focus`.
+`WorkbenchPresentation.focus` remembers a target's preferred focus;
+`NavigationState.background_focus` retains the graph/chat surface behind a
+Workbench pane or composer. These values have different lifetimes and conversation
+snapshots preserve them without reconciling mirrored fields. Frontend callers that
+previously wrote `App.focus` should use `App::set_focus(Focus)` to select a surface;
+read `navigation.background_focus` for the retained surface and `navigation.focus`
+for the current input focus. `ConversationState.focus` is likewise replaced by its
+navigation state. Keeping writable mirrors would reintroduce ambiguous ownership.
+
+Workbench content receives `WorkbenchTab` directly. Scroll/query memory uses
+`(target key, WorkbenchTab)`, scoped to the conversation, without reserved integer
+slots. `Details.tab`, its numeric switch methods, and standalone rendering remain
+the compatibility boundary for older callers. The Workbench adapter ignores that
+numeric selection; callers inspecting active Workbench selection should read
+`navigation.presentation().tab`. Calling `Details::switch_tab` or standalone
+`Details::draw` selects the legacy API again. Modal keyboard, paste and pointer
+routing retain their existing precedence; this model does not grant PTY input.
+
+### Merge input ownership
+
+The direction dock uses the same derived `InputOwner` as keyboard, paste and
+PTY routing. Help and other modal owners consume pointer events before dock
+actions, sidebar tabs and native input. The interview owner delegates clicks
+and wheel events to its inline dock; an unfocused scope preview scrolls without
+changing Canvas focus. Dismissing Help restores the underlying role and draft.
+Workbench tab clicks leave native input, and separator dragging uses the rendered
+footer-aware areas. Sidebar hit testing reuses one set of projected rows.
+
+The merge regressions exercise Help → blocked tab click/wheel/paste → Escape →
+role tab click → terminal focus for worker and reviewer, and Help → blocked scope
+preview → Escape → scope wheel/click → keyboard choice without submission.
+The existing per-conversation query/draft, role content, completion, grapheme,
+small-terminal, ASCII/NO_COLOR and bounded Canvas regressions remain applicable.
 The reviewer Summary reuses the existing `reviewer_result` renderer alongside
 `check_rows`. Hologram's name-similarity notice against the graph's
 `reviewer_text` compares different responsibilities: a compact live card label

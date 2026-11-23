@@ -36,6 +36,7 @@ impl App {
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
             self.text_selection = Default::default();
             editor.draw_themed(frame, theme);
+            super::overlays::draw_foreground(self, frame, theme);
             return;
         }
         super::specialized_screens::draw_secondary_or_main(self, frame, theme);
@@ -182,7 +183,10 @@ mod tests {
             KeyCode::Char('1'),
             event::KeyModifiers::NONE,
         ));
-        assert_eq!(app.details.as_ref().unwrap().tab, 0);
+        assert_eq!(
+            app.details.as_ref().unwrap().content_tab(),
+            Some(WorkbenchTab::Summary)
+        );
         assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Summary);
         app.key(event::KeyEvent::new(
             KeyCode::Right,
@@ -195,7 +199,10 @@ mod tests {
             event::KeyModifiers::SHIFT,
         ));
         assert_eq!(app.navigation.presentation().tab, WorkbenchTab::Results);
-        assert_eq!(app.details.as_ref().unwrap().tab, details::RESULT);
+        assert_eq!(
+            app.details.as_ref().unwrap().content_tab(),
+            Some(WorkbenchTab::Results)
+        );
     }
 
     #[test]
@@ -252,7 +259,7 @@ mod tests {
         let mut app = App::test_app();
         for (width, height) in [(140, 30), (100, 24), (99, 24), (85, 24), (84, 24), (12, 5)] {
             for focus in [Focus::Chat, Focus::Graph] {
-                app.focus = focus;
+                app.set_focus(focus);
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let theme = Theme::new(true, false);
                 terminal

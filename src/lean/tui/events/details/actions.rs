@@ -70,7 +70,7 @@ impl App {
             && self
                 .details
                 .as_ref()
-                .is_some_and(|d| d.tab == details::PLAN)
+                .is_some_and(|d| d.workbench_tab.is_none() && d.tab == details::PLAN)
         {
             self.run_workflow(Command::Plan);
             return true;
@@ -101,16 +101,8 @@ impl App {
                     (details.key.clone(), tab),
                     (details.scroll, details.query.clone()),
                 );
-                for ((key, tab), (scroll, query)) in &details.workbench_memory {
-                    if key == &details.key {
-                        // Keep Workbench slots outside the legacy Details tab range (0..7).
-                        let slot = usize::MAX - *tab as usize;
-                        self.details_scroll_memory
-                            .insert((key.clone(), slot), *scroll);
-                        self.details_query_memory
-                            .insert((key.clone(), slot), query.clone());
-                    }
-                }
+                self.workbench_memory
+                    .extend(details.workbench_memory.clone());
                 self.details_scroll_memory
                     .extend(details.scroll_memory.clone());
                 self.details_query_memory
@@ -291,16 +283,9 @@ mod workbench_memory_tests {
             (WorkbenchTab::Summary, (3, "summary query")),
             (WorkbenchTab::Conversation, (8, "conversation query")),
         ] {
-            let slot = usize::MAX - tab as usize;
             assert_eq!(
-                app.details_scroll_memory.get(&("worker:t1".into(), slot)),
-                Some(&expected.0)
-            );
-            assert_eq!(
-                app.details_query_memory
-                    .get(&("worker:t1".into(), slot))
-                    .map(String::as_str),
-                Some(expected.1)
+                app.workbench_memory.get(&("worker:t1".into(), tab)),
+                Some(&(expected.0, expected.1.into()))
             );
         }
     }

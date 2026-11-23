@@ -198,6 +198,14 @@ pub enum WorkbenchTab {
     Diff,
 }
 
+impl WorkbenchTab {
+    /// These tabs use the Overview adapter's layout/follow rules; Conversation
+    /// and Diff still have their own records and independent view memory.
+    pub(in crate::lean::tui) fn uses_overview(self) -> bool {
+        matches!(self, Self::Summary | Self::Conversation | Self::Diff)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NavigationFocus {
     #[default]
@@ -214,6 +222,7 @@ pub enum NavigationFocus {
 pub struct WorkbenchPresentation {
     pub tab: WorkbenchTab,
     pub round: Option<u64>,
+    /// Focus remembered for this target; distinct from the current input owner.
     pub focus: NavigationFocus,
     pub split: bool,
     /// Preferred PTY share of the vertical content area, in percent (1..=99).
@@ -251,6 +260,8 @@ impl Default for WorkbenchPresentation {
 /// Frontend navigation model; it contains no daemon-owned or persisted data.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NavigationState {
+    /// Focus of the graph/chat surface behind Workbench or composer.
+    pub background_focus: Focus,
     pub screen: Screen,
     pub target: WorkbenchTarget,
     pub focus: NavigationFocus,
@@ -261,6 +272,16 @@ pub struct NavigationState {
 }
 
 impl NavigationState {
+    /// Select the underlying graph/chat surface, preserving its return focus
+    /// when a Workbench pane or composer subsequently takes input.
+    pub fn set_surface_focus(&mut self, focus: Focus) {
+        self.background_focus = focus;
+        self.focus = match focus {
+            Focus::Chat => NavigationFocus::Chat,
+            Focus::Graph => NavigationFocus::Graph,
+        };
+    }
+
     pub fn presentation(&self) -> WorkbenchPresentation {
         self.presentations
             .get(&self.target)
@@ -313,13 +334,13 @@ pub struct ConversationState {
     pub scroll: usize,
     pub task_request_id: u64,
     pub diff_request_id: u64,
-    pub focus: Focus,
     pub navigation: NavigationState,
     pub graph_scope: Scope,
     pub graph_visibility_exception: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
+    pub workbench_memory: std::collections::HashMap<(String, WorkbenchTab), (usize, String)>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
     pub flow_editor: Option<flow_editor::FlowEditor>,
@@ -357,32 +378,7 @@ impl ConversationState {
         self.relations = app.relations;
         self.offset = app.offset;
         self.scroll = app.scroll;
-        self.focus = app.focus;
         self.navigation = app.navigation.clone();
-        // Focus remains mirrored for older graph/chat handlers; snapshots
-        // always capture the most recent interaction as the navigation truth.
-        let navigation_coarse_focus = match self.navigation.focus {
-            NavigationFocus::Graph => Focus::Graph,
-            NavigationFocus::Chat
-            | NavigationFocus::WorkbenchList
-            | NavigationFocus::WorkbenchContent
-            | NavigationFocus::WorkbenchTerminal
-            | NavigationFocus::Composer => Focus::Chat,
-        };
-        let workbench_owns_focus = self.navigation.screen == Screen::Workbench
-            && matches!(
-                self.navigation.focus,
-                NavigationFocus::WorkbenchList
-                    | NavigationFocus::WorkbenchContent
-                    | NavigationFocus::WorkbenchTerminal
-                    | NavigationFocus::Composer
-            );
-        if !workbench_owns_focus && navigation_coarse_focus != app.focus {
-            self.navigation.focus = match app.focus {
-                Focus::Chat => NavigationFocus::Chat,
-                Focus::Graph => NavigationFocus::Graph,
-            };
-        }
         self.graph_scope = app.graph_scope.clone();
         self.graph_visibility_exception = app.graph_visibility_exception.clone();
         self.graph_collapsed = app.graph_collapsed.clone();
@@ -404,6 +400,7 @@ impl ConversationState {
         self.diff_request_id = app.diff_request_id;
         self.details_scroll_memory = app.details_scroll_memory.clone();
         self.details_query_memory = app.details_query_memory.clone();
+        self.workbench_memory = app.workbench_memory.clone();
     }
 
     pub(super) fn restore(&self, app: &mut App) {
@@ -434,25 +431,6 @@ impl ConversationState {
         app.offset = self.offset;
         app.scroll = self.scroll;
         app.navigation = self.navigation.clone();
-        app.focus = if app.navigation.screen == Screen::Workbench
-            && matches!(
-                app.navigation.focus,
-                NavigationFocus::WorkbenchList
-                    | NavigationFocus::WorkbenchContent
-                    | NavigationFocus::WorkbenchTerminal
-                    | NavigationFocus::Composer
-            ) {
-            self.focus
-        } else {
-            match app.navigation.focus {
-                NavigationFocus::Graph => Focus::Graph,
-                NavigationFocus::Chat
-                | NavigationFocus::WorkbenchList
-                | NavigationFocus::WorkbenchContent
-                | NavigationFocus::WorkbenchTerminal
-                | NavigationFocus::Composer => Focus::Chat,
-            }
-        };
         app.graph_scope = self.graph_scope.clone();
         app.graph_visibility_exception = self.graph_visibility_exception.clone();
         app.graph_collapsed = self.graph_collapsed.clone();
@@ -474,6 +452,7 @@ impl ConversationState {
         app.diff_request_id = self.diff_request_id;
         app.details_scroll_memory = self.details_scroll_memory.clone();
         app.details_query_memory = self.details_query_memory.clone();
+        app.workbench_memory = self.workbench_memory.clone();
     }
 }
 
@@ -513,6 +492,37 @@ mod navigation_tests {
     }
 
     #[test]
+    fn snapshot_preserves_current_remembered_and_background_focus_independently() {
+        let mut app = App::test_app();
+        app.set_focus(Focus::Graph);
+        app.navigation.screen = Screen::Workbench;
+        app.navigation.target = WorkbenchTarget::Agent("reviewer:t1".into());
+        app.navigation.update_presentation(|p| {
+            p.focus = NavigationFocus::WorkbenchTerminal;
+            p.tab = WorkbenchTab::Checks;
+        });
+        app.navigation.focus = NavigationFocus::Composer;
+        app.workbench_memory.insert(
+            ("reviewer:t1".into(), WorkbenchTab::Checks),
+            (7, "e\u{301} 👩‍💻".into()),
+        );
+        let saved = ConversationState::capture(&app);
+        app.navigation = NavigationState::default();
+        app.workbench_memory.clear();
+        saved.restore(&mut app);
+        assert_eq!(app.navigation.focus, NavigationFocus::Composer);
+        assert_eq!(
+            app.navigation.presentation().focus,
+            NavigationFocus::WorkbenchTerminal
+        );
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
+        assert_eq!(
+            app.workbench_memory[&("reviewer:t1".into(), WorkbenchTab::Checks)],
+            (7, "e\u{301} 👩‍💻".into())
+        );
+    }
+
+    #[test]
     fn presentation_preferences_are_scoped_to_stable_target() {
         let mut nav = NavigationState {
             target: WorkbenchTarget::Agent("worker:t1".into()),
@@ -536,7 +546,7 @@ mod navigation_tests {
         app.set_focus(Focus::Chat);
         snapshot.restore(&mut app);
 
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         assert_eq!(app.navigation.focus, NavigationFocus::Graph);
     }
 
@@ -544,7 +554,7 @@ mod navigation_tests {
     fn conversation_snapshot_preserves_workbench_content_focus_opened_from_graph() {
         let mut app = App::test_app();
         app.set_focus(Focus::Graph);
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
         app.navigation.screen = Screen::Workbench;
         app.navigation.focus = NavigationFocus::WorkbenchContent;
 
@@ -555,6 +565,6 @@ mod navigation_tests {
 
         assert_eq!(app.navigation.screen, Screen::Workbench);
         assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchContent);
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
     }
 }

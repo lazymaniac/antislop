@@ -50,7 +50,7 @@ impl App {
         if self
             .details
             .as_ref()
-            .is_some_and(|d| d.tab == RESULT || d.tab == CHECKS)
+            .is_some_and(|d| d.on_tab(WorkbenchTab::Results) || d.shows_checks())
         {
             self.refetch_stale_details();
         }

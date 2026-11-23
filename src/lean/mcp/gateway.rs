@@ -1,8 +1,9 @@
 // The one channel back from an interactive agent: a loopback MCP server
 // with role-scoped tools. The daemon types the prompt into the
 // agent's terminal; the agent ends the turn by calling the tool with the
-// turn's id and its final answer. Nothing is read from the terminal screen.
-use crate::lean::native::invalid;
+// turn's id and its role-specific result. Answers come through MCP; terminal
+// screens are used separately for readiness, approval dialogs and diagnostics.
+use crate::invalid;
 use crate::{Error, Result};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};

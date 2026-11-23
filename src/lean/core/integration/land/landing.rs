@@ -116,9 +116,8 @@ fn unresolved(
 mod tests {
     use super::*;
 
-    fn core() -> (tempfile::TempDir, Arc<Core>) {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let project = tempfile::tempdir_in(".antislop/tmp").unwrap();
+    fn core() -> (crate::test_resources::TestDir, Arc<Core>) {
+        let project = crate::test_resources::tempdir();
         let state = project.path().join(".antislop");
         let config =
             Config::from_toml(include_str!("../../../../../examples/antislop.toml")).unwrap();

@@ -291,8 +291,7 @@ mod tests {
 
     #[test]
     fn an_earlier_round_shows_its_own_findings_from_the_verdict_reference() {
-        std::fs::create_dir_all(".antislop/tmp").unwrap();
-        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
+        let directory = crate::test_resources::tempdir();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();

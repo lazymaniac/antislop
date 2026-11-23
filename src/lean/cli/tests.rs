@@ -1,9 +1,7 @@
 use super::*;
 
-fn test_tempdir() -> tempfile::TempDir {
-    let root = crate::lean::paths::state_root().unwrap().join("tests");
-    std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+fn test_tempdir() -> crate::test_resources::TestDir {
+    crate::test_resources::tempdir()
 }
 
 #[test]

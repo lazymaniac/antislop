@@ -1,7 +1,7 @@
 use super::dispatch::{call, error, result};
 use super::gateway::{BODY, SERVER, Shared};
 use super::tools::scoped_tool_list;
-use crate::lean::native::invalid;
+use crate::invalid;
 use crate::{Error, Result};
 use serde_json::{Value, json};
 use std::io::Read;

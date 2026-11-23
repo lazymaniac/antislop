@@ -823,10 +823,70 @@ fn the_footer_hint_fits_beside_the_tab_numbers_and_offers_rounds_only_to_tasks()
 }
 
 #[test]
+fn typed_workbench_tabs_ignore_the_standalone_selection_and_keep_role_identity() {
+    use crate::lean::tui::WorkbenchTab;
+    for key in ["worker:t1", "reviewer:t1", "conversation"] {
+        let mut details = Details::new(key.into());
+        let mut previous = None;
+        for (index, tab) in [
+            WorkbenchTab::Summary,
+            WorkbenchTab::Conversation,
+            WorkbenchTab::Results,
+            WorkbenchTab::Checks,
+            WorkbenchTab::Comments,
+            WorkbenchTab::Diff,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // A caller of the legacy API may retain a different integer. It
+            // must not decide Workbench records, selection or document fetch.
+            details.tab = PLAN;
+            details.prepare_workbench_details(previous, tab);
+            assert_eq!(details.content_tab(), Some(tab));
+            assert_eq!(details.session_keys(), vec![key]);
+            assert!(details.selected_check().is_none());
+            details.scroll = index + 1;
+            details.query = format!("{key} {tab:?} 👩‍💻");
+            previous = Some(tab);
+        }
+        details.save_current_tab();
+        details.query.clear();
+        details.scroll = 0;
+        details.restore_current_tab();
+        assert_eq!(details.scroll, 6);
+        assert_eq!(details.query, format!("{key} Diff 👩‍💻"));
+        assert!(details.scroll_memory.is_empty());
+        for tab in [
+            WorkbenchTab::Summary,
+            WorkbenchTab::Conversation,
+            WorkbenchTab::Results,
+            WorkbenchTab::Checks,
+            WorkbenchTab::Comments,
+            WorkbenchTab::Diff,
+        ] {
+            details.prepare_workbench_details(None, tab);
+            assert_eq!(details.query, format!("{key} {tab:?} 👩‍💻"));
+        }
+        details.switch_tab(COMMENTS);
+        assert_eq!(details.content_tab(), Some(WorkbenchTab::Comments));
+    }
+}
+
+#[test]
 fn reviewer_summary_displays_accepted_pending_and_issue_checks() {
     let mut details = Details::new("reviewer:t1".into());
     details.prepare_workbench_details(None, crate::lean::tui::WorkbenchTab::Summary);
-    assert_eq!(details.tab, CHECKS);
+    assert_eq!(
+        details.content_tab(),
+        Some(crate::lean::tui::WorkbenchTab::Summary)
+    );
+    details.load_task(reviewer_task(serde_json::json!({"checks":[
+        {"id":"goal","state":"settled","status":"ok","note":"Verified goal"},
+        {"id":"C1","state":"settled","status":"issue","note":"Missing test"}
+    ]})));
+    assert!(details.shows_checks());
+    assert_eq!(details.selected_check().as_deref(), Some("goal"));
     let mut view = View::default();
     view.tasks.push(super::super::view::TaskRow {
         id: "t1".into(),

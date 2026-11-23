@@ -951,6 +951,7 @@ fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> Stri
 fn the_cli_talks_to_one_daemon_that_outlives_it() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1162,6 +1163,7 @@ fn a_rebuilt_frontend_with_changed_configuration_reconnects_to_running_work() {
 fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1204,6 +1206,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap()
     };
 
@@ -1330,17 +1333,14 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let third = chat(dir, &project, "third");
     assert!(third.contains("answer: third"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
-    antislop::lean::daemon::Client::at(&state)
-        .call(&antislop::lean::daemon::Request::Control(
-            antislop::lean::daemon::ControlRequest::Shutdown,
-        ))
-        .unwrap();
+    common::stop_daemon(&antislop::lean::daemon::Client::at(&state));
 }
 
 #[test]
 fn a_daemon_whose_state_is_deleted_leaves() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1403,6 +1403,7 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
         0,
     )
     .spawn()
+    .map(common::ChildGuard::new)
     .unwrap();
     core.store.set_turn_pid(&turn.id, orphan.id()).unwrap();
     drop(core);
@@ -1419,6 +1420,7 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
 fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let dir = common::tempdir();
     let dir = dir.path();
+    let _daemon = common::DaemonStateGuard(dir.join("state"));
     let project = dir.join("project");
     init_project(&project);
     let codex = fake_codex(dir);
@@ -1449,6 +1451,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
+        .map(common::ChildGuard::new)
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     while !std::fs::read_to_string(dir.join("calls.log"))
@@ -1809,6 +1812,7 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         .stdout(std::process::Stdio::null())
         .stderr(std::fs::File::create(dir.join("daemon-test.log")).unwrap())
         .spawn()
+        .map(common::ChildGuard::new)
         .unwrap();
     let client = Client::at(&state);
     let identity = || client.call(&Request::Control(ControlRequest::Identity));
@@ -1989,4 +1993,26 @@ fn runtime_activation_checks_environment_drains_work_and_confirms_the_successor(
         serde_json::from_slice::<serde_json::Value>(&offline.stdout).unwrap()["state"],
         "applied"
     );
+}
+
+#[test]
+fn retained_store_queries_remain_publicly_callable() {
+    use antislop::lean::store::Store;
+
+    // Compile the public boundary without promoting all historical SQL details
+    // to new semantic contracts. Use the existing external fixture owner.
+    let targets = Store::pending_mail_targets;
+    let answer = Store::turn_final_answer;
+    let plans = Store::pending_mail_plans;
+    let count = Store::count_since_user;
+    let ran = Store::last_plan_that_ran;
+    let approved = Store::last_plan_with_approvals;
+    let dir = common::tempdir();
+    let store = Store::open(&dir.path().join("api.db")).unwrap();
+    assert!(targets(&store, "absent").unwrap().is_empty());
+    assert_eq!(answer(&store, "absent", "absent").unwrap(), None);
+    assert!(plans(&store).unwrap().is_empty());
+    assert_eq!(count(&store, "absent", "orchestrator").unwrap(), 0);
+    assert!(ran(&store, "absent", "except").unwrap().is_none());
+    assert!(approved(&store, "absent", None).unwrap().is_empty());
 }

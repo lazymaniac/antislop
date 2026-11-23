@@ -1,3 +1,4 @@
+use super::super::input_owner::{InputKind, InputOwner};
 use super::super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -11,17 +12,17 @@ impl App {
         self.sync_interview();
         self.sync_approval();
         self.sync_rigor_recommendation();
-        if self.help.is_some()
+        if self.input_owner(InputKind::Key) == InputOwner::Help
             && let Some(result) = self.route_overlays(key)
         {
             return result;
         }
-        if self.decision_inbox.is_some()
+        if self.input_owner(InputKind::Key) == InputOwner::Decisions
             && let Some(result) = self.route_decision_inbox(key)
         {
             return result;
         }
-        if self.picker.is_some() {
+        if self.input_owner(InputKind::Key) == InputOwner::Picker {
             if key.code == KeyCode::F(1) {
                 self.show_help(Help::Picker);
                 return true;
@@ -43,8 +44,8 @@ impl App {
         }
         // The visible interview form owns input before navigation shortcuts and
         // zoom handling. Its own key handler keeps Ctrl+P/Ctrl+O exceptions.
-        if let Some(result) = self.route_interview(key) {
-            return result;
+        if self.input_owner(InputKind::Key) == InputOwner::Interview {
+            return self.route_interview(key).unwrap_or(true);
         }
         if self.details.as_ref().is_some_and(|details| details.editing) && self.editor.is_none() {
             return self.route_screen(key).unwrap_or(true);
@@ -76,7 +77,7 @@ impl App {
                 } else {
                     NavigationFocus::WorkbenchContent
                 };
-                self.focus = if self.navigation.screen == Screen::Graph {
+                self.navigation.background_focus = if self.navigation.screen == Screen::Graph {
                     Focus::Graph
                 } else {
                     Focus::Chat
@@ -517,7 +518,7 @@ impl App {
             if let Some(details) = &mut self.details {
                 details.native_focus = false;
             }
-            if self.focus == Focus::Graph && self.graph_tab == 1 {
+            if self.navigation.background_focus == Focus::Graph && self.graph_tab == 1 {
                 self.graph_tab = 0;
             }
         } else {
@@ -563,7 +564,7 @@ impl App {
                 .details
                 .as_ref()
                 .is_some_and(|details| details.searching)
-            || (self.focus == Focus::Chat
+            || (self.navigation.background_focus == Focus::Chat
                 && self.help.is_none()
                 && self.plan_view.is_none()
                 && (self.details.is_none() || self.graph_expanded.is_some())
@@ -572,7 +573,7 @@ impl App {
     }
 
     fn route_overlays(&mut self, key: KeyEvent) -> Option<bool> {
-        if self.help.is_some() && self.help_key(key) {
+        if self.input_owner(InputKind::Key) == InputOwner::Help && self.help_key(key) {
             return Some(true);
         }
         if key.code == KeyCode::F(1) {
@@ -582,13 +583,12 @@ impl App {
         if let Some(handled) = self.route_approval(key) {
             return Some(handled);
         }
-        if let Some(handled) = self.route_flow_editor(key) {
-            return Some(handled);
+        match self.input_owner(InputKind::Key) {
+            InputOwner::Flow => self.route_flow_editor(key),
+            InputOwner::Filters => self.route_graph_filters(key),
+            InputOwner::Consent | InputOwner::Recovery => self.route_unblock(key),
+            _ => None,
         }
-        if let Some(handled) = self.route_graph_filters(key) {
-            return Some(handled);
-        }
-        self.route_unblock(key)
     }
 
     fn route_flow_editor(&mut self, key: KeyEvent) -> Option<bool> {
@@ -679,18 +679,15 @@ impl App {
     }
 
     fn route_screen(&mut self, key: KeyEvent) -> Option<bool> {
-        if self.picker.is_some() {
-            return Some(self.picker_key(key));
-        }
-        if self.editor.is_some() {
-            self.editor_key(key);
-            return Some(true);
-        }
-        if let Some(result) = self.route_interview(key) {
-            return Some(result);
-        }
-        if let Some(result) = self.route_plan_view(key) {
-            return Some(result);
+        match self.input_owner(InputKind::Key) {
+            InputOwner::Picker => return Some(self.picker_key(key)),
+            InputOwner::Editor => {
+                self.editor_key(key);
+                return Some(true);
+            }
+            InputOwner::Interview => return self.route_interview(key),
+            InputOwner::Plan => return self.route_plan_view(key),
+            _ => {}
         }
         if self.embedded_diff_graph_active() {
             if embedded_diff_graph_key(key, self.graph_tab == 3) {
@@ -741,14 +738,14 @@ impl App {
 
     fn route_base_layout(&mut self, key: KeyEvent) -> bool {
         if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-            if self.focus == Focus::Graph {
+            if self.navigation.background_focus == Focus::Graph {
                 self.cycle_work_stage(key.code == KeyCode::BackTab);
             } else {
                 self.toggle_focus();
             }
             return true;
         }
-        if self.focus == Focus::Graph {
+        if self.navigation.background_focus == Focus::Graph {
             return self.route_graph(key);
         }
         self.chat_key(key)
@@ -813,7 +810,7 @@ impl App {
                 details.editing = true;
             }
             self.navigation.focus = NavigationFocus::Composer;
-            self.focus = Focus::Chat;
+            self.navigation.background_focus = Focus::Chat;
             return true;
         }
         if control {

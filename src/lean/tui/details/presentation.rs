@@ -5,6 +5,10 @@ use unicode_width::UnicodeWidthStr;
 /// The widest hint that fits beside the tab numbers; a view without rounds
 /// does not offer to switch them, nor the conversation a session to show.
 pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
+    footer_hint_for(key, width, |width| details_footer_hint(tab, width))
+}
+
+fn footer_hint_for(key: &str, width: usize, hint: impl Fn(usize) -> &'static str) -> String {
     let prefix = if width >= 45 {
         format!("1–{} / ", tabs_for(key).len())
     } else {
@@ -13,7 +17,7 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
     let room = width.saturating_sub(UnicodeWidthStr::width(prefix.as_str()));
     let rounds = key.contains(':');
     let shown = |width: usize| {
-        let mut hint = details_footer_hint(tab, width).to_owned();
+        let mut hint = hint(width).to_owned();
         if !rounds {
             hint = hint.replace(",/. rounds · ", "");
         }
@@ -28,6 +32,25 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
         .find(|hint| UnicodeWidthStr::width(hint.as_str()) <= room)
         .unwrap_or_else(|| shown(0));
     format!("{prefix}{controls}")
+}
+
+impl Details {
+    pub(in crate::lean::tui) fn footer_hint(&self, width: usize) -> String {
+        // The legacy facade alone translates its integer selection. Workbench
+        // content dispatches directly on the same typed tab as navigation.
+        match self.workbench_tab {
+            Some(tab) => footer_hint_for(&self.key, width, |width| match tab {
+                crate::lean::tui::WorkbenchTab::Summary if self.shows_checks() => {
+                    checks_hint(width)
+                }
+                crate::lean::tui::WorkbenchTab::Checks => checks_hint(width),
+                crate::lean::tui::WorkbenchTab::Comments => comments_hint(width),
+                crate::lean::tui::WorkbenchTab::Results => content_hint(width),
+                _ => overview_hint(width),
+            }),
+            None => details_footer_hint_for(&self.key, self.tab, width),
+        }
+    }
 }
 
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {

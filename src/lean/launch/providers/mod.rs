@@ -28,12 +28,8 @@ const PARENT_SESSION_ENV: [&str; 7] = [
 
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     let mut command = base_command(spec);
-    let (session, settings) = configure(&mut command, spec, gateway)?;
-    Ok(Launch {
-        command,
-        session,
-        settings,
-    })
+    let session = configure(&mut command, spec, gateway)?;
+    Ok(Launch { command, session })
 }
 
 fn base_command(spec: &Spec) -> CommandBuilder {
@@ -47,7 +43,7 @@ fn configure(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     match spec.provider {
         ProviderKind::Claude => configure_claude(command, spec, gateway),
         ProviderKind::Codex => configure_codex(command, spec, gateway),
@@ -61,47 +57,47 @@ fn configure_claude(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     command.args(runtime_args(&spec.args, spec.provider));
-    Ok((claude::claude(command, spec, gateway), None))
+    Ok(claude::claude(command, spec, gateway))
 }
 
 fn configure_codex(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     command.args(runtime_args(&spec.args, spec.provider));
     codex::codex(command, spec, gateway);
-    Ok((spec.resume.clone(), None))
+    Ok(spec.resume.clone())
 }
 
 fn configure_opencode(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     command.args(runtime_args(&spec.args, spec.provider));
     opencode::opencode(command, spec, gateway)?;
-    Ok((spec.resume.clone(), None))
+    Ok(spec.resume.clone())
 }
 
 fn configure_agy(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     command.args(runtime_args(&spec.args, spec.provider));
     agy::agy(command, spec, gateway)?;
-    Ok((spec.resume.clone(), None))
+    Ok(spec.resume.clone())
 }
 
 fn configure_gemini(
     command: &mut CommandBuilder,
     spec: &Spec,
     gateway: &Gateway,
-) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
+) -> Result<Option<String>> {
     command.args(runtime_args(&spec.args, spec.provider));
     gemini::gemini(command, spec, gateway)?;
-    Ok((spec.resume.clone(), None))
+    Ok(spec.resume.clone())
 }

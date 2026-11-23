@@ -1426,7 +1426,7 @@ mod tests {
     #[test]
     fn slash_in_empty_chat_opens_slash_commands_and_preserves_non_matching_slash_input() {
         let mut app = App::test_app();
-        app.focus = Focus::Chat;
+        app.set_focus(Focus::Chat);
         app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         assert_eq!(app.picker.as_ref().unwrap().kind, Kind::SlashCommands);
 
@@ -1524,7 +1524,7 @@ mod tests {
         // Interactive keyboard flow on Graph (`l` -> Esc, and `l` -> navigate -> Enter)
         let mut app = App::test_app();
         app.view = sample_view_with_plan();
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.selected = "worker:t1".into();
 
         app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
@@ -1544,7 +1544,7 @@ mod tests {
         // Esc cancels link mode without leaving Graph focus
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.graph_link_source.is_none());
-        assert_eq!(app.focus, Focus::Graph);
+        assert_eq!(app.navigation.background_focus, Focus::Graph);
     }
 
     #[test]
@@ -1555,7 +1555,7 @@ mod tests {
         app.view = sample_view_with_plan();
         app.view.tasks[0].status = "failed".into();
         app.view.tasks[0].reason = Some("compile error in lib.rs".into());
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.selected = "worker:t1".into();
 
         // Even in narrow Graph-only view (width 70 < 85), Attention Inbox is rendered and clickable
@@ -1589,7 +1589,7 @@ mod tests {
         let mut app = App::test_app();
         app.run_workflow(Command::DirectExecute);
         assert_eq!(app.input.text, "/direct ");
-        assert_eq!(app.focus, Focus::Chat);
+        assert_eq!(app.navigation.background_focus, Focus::Chat);
     }
 
     #[test]
@@ -1611,7 +1611,7 @@ mod tests {
             .expect("live clock available");
         assert!(clock.contains("01:1"));
 
-        app.focus = Focus::Graph;
+        app.set_focus(Focus::Graph);
         app.selected = "worker:t1".into();
         let mut term = Terminal::new(TestBackend::new(140, 32)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();

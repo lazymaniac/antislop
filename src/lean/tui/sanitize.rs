@@ -22,6 +22,11 @@ pub(super) struct Sanitizer {
     state: State,
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static VISITED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Sanitizer {
     pub(super) fn at_text_boundary(&self) -> bool {
         self.state == State::Text
@@ -39,9 +44,20 @@ impl Sanitizer {
 
     pub(super) fn append_chunk(&mut self, input: &str, output: &mut String) {
         for c in input.chars() {
-            append_visible(self.state, c, output);
-            self.state = self.state.transition(c);
+            append_visible(self.consume(c), output);
         }
+    }
+
+    fn consume(&mut self, c: char) -> Visible {
+        #[cfg(test)]
+        VISITED_BYTES.with(|count| count.set(count.get() + c.len_utf8()));
+        let visible = if self.at_text_boundary() {
+            visible_character(c)
+        } else {
+            Visible::None
+        };
+        self.state = self.state.transition(c);
+        visible
     }
 }
 
@@ -109,15 +125,32 @@ impl State {
     }
 }
 
-fn append_visible(state: State, c: char, output: &mut String) {
-    if state != State::Text {
-        return;
+impl Visible {
+    fn characters(self) -> impl Iterator<Item = char> {
+        match self {
+            Self::None => [None; 4],
+            Self::Character(c) => [Some(c), None, None, None],
+            Self::Tab => [Some(' '); 4],
+        }
+        .into_iter()
+        .flatten()
     }
-    match visible_character(c) {
-        Visible::None => {}
-        Visible::Character(character) => output.push(character),
-        Visible::Tab => output.push_str("    "),
-    }
+}
+
+fn append_visible(visible: Visible, output: &mut String) {
+    output.extend(visible.characters());
+}
+
+/// Lazily consumes borrowed fragments with the same state machine as `sanitize`.
+/// Fragment boundaries do not end escape sequences or grapheme clusters.
+pub(super) fn sanitized_characters<'a>(
+    fragments: impl IntoIterator<Item = &'a str>,
+) -> impl Iterator<Item = char> {
+    let mut sanitizer = Sanitizer::default();
+    fragments
+        .into_iter()
+        .flat_map(str::chars)
+        .flat_map(move |c| sanitizer.consume(c).characters())
 }
 
 fn visible_character(c: char) -> Visible {
@@ -147,17 +180,16 @@ pub(super) fn sanitize_bounded(input: &str, byte_limit: usize) -> String {
         return String::new();
     }
     let mut output = String::with_capacity(byte_limit.min(input.len()));
-    let mut state = State::Text;
+    let mut sanitizer = Sanitizer::default();
     let mut cut_short = false;
     for c in input.chars() {
         let before = output.len();
-        append_visible(state, c, &mut output);
+        append_visible(sanitizer.consume(c), &mut output);
         if output.len() > byte_limit {
             output.truncate(before);
             cut_short = true;
             break;
         }
-        state = state.transition(c);
     }
     if cut_short && let Some((start, _)) = output.grapheme_indices(true).next_back() {
         output.truncate(start);

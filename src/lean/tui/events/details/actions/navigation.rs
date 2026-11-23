@@ -39,7 +39,7 @@ impl App {
             details.switch_role();
             return true;
         }
-        if details.tab == RESULT
+        if details.on_tab(WorkbenchTab::Results)
             && details
                 .visible_result_keys()
                 .iter()
@@ -92,16 +92,16 @@ impl App {
             return false;
         };
         match key.code {
-            KeyCode::Down if details.tab == CHECKS => {
+            KeyCode::Down if details.shows_checks() => {
                 details.check = (details.check + 1).min(details.check_count().saturating_sub(1));
                 details.reveal_check = true;
             }
-            KeyCode::Up if details.tab == CHECKS => {
+            KeyCode::Up if details.shows_checks() => {
                 details.check = details.check.saturating_sub(1);
                 details.reveal_check = true;
             }
-            KeyCode::Down if details.tab == COMMENTS => details.comment += 1,
-            KeyCode::Up if details.tab == COMMENTS => {
+            KeyCode::Down if details.on_tab(WorkbenchTab::Comments) => details.comment += 1,
+            KeyCode::Up if details.on_tab(WorkbenchTab::Comments) => {
                 details.comment = details.comment.saturating_sub(1)
             }
             _ => return false,
@@ -189,10 +189,10 @@ impl App {
         }
         details.follow = details.overview() && !details.show_info;
         details.scroll = usize::MAX;
-        if details.tab == CHECKS {
+        if details.shows_checks() {
             details.check = details.check_count().saturating_sub(1);
         }
-        if details.tab == COMMENTS {
+        if details.on_tab(WorkbenchTab::Comments) {
             details.comment = self.view.comments_on(&details.key).len().saturating_sub(1);
         }
         true

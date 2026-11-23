@@ -137,28 +137,6 @@ impl App {
         false
     }
 
-    pub(in crate::lean::tui) fn native_input_blocked(&self) -> bool {
-        self.navigation.focus == NavigationFocus::Composer
-            || self.help.is_some()
-            || self
-                .config_editor
-                .as_ref()
-                .is_some_and(|editor| editor.visible)
-            || self.unblock.is_some()
-            || self.recovery_consent.is_some()
-            || self.graph_filters.is_some()
-            || self.decision_inbox.is_some()
-            || self.picker.is_some()
-            || self.editor.is_some()
-            || self.flow_editor.is_some()
-            || self.interview_visible()
-            || self.plan_history.is_some()
-            || self.plan_view.is_some()
-            || self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.editing || details.searching)
-    }
     pub(in crate::lean::tui) fn native_send(&mut self, input: Input) {
         if let Some(role) = self.native_key_role() {
             let result = self

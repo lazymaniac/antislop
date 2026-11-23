@@ -232,7 +232,7 @@ impl App {
         let Some(details) = self
             .details
             .as_mut()
-            .filter(|details| details.tab == details::RESULT)
+            .filter(|details| details.on_tab(WorkbenchTab::Results))
         else {
             self.result_fetch.cancel_document_fetch();
             if let Some(details) = self.details.as_mut() {
@@ -331,7 +331,7 @@ impl App {
             checks_only: self
                 .details
                 .as_ref()
-                .is_some_and(|details| details.tab == CHECKS),
+                .is_some_and(|details| details.shows_checks()),
             client: self.client.clone(),
             updates: self.updates.clone(),
         })
@@ -526,26 +526,24 @@ impl App {
             let mut details = Details::new(key.to_owned());
             details.conversation = self.conversation.clone();
             details.drafts = std::rc::Rc::clone(&self.agent_drafts);
-            details.scroll_memory = self.details_scroll_memory.clone();
-            details.query_memory = self.details_query_memory.clone();
-            details.workbench_memory = [
-                WorkbenchTab::Summary,
-                WorkbenchTab::Conversation,
-                WorkbenchTab::Pty,
-                WorkbenchTab::Results,
-                WorkbenchTab::Checks,
-                WorkbenchTab::Comments,
-                WorkbenchTab::Diff,
-            ]
-            .into_iter()
-            .filter_map(|tab| {
-                // These reserved high slots are disjoint from legacy Details indices.
-                let slot = usize::MAX - tab as usize;
-                let scroll = self.details_scroll_memory.get(&(key.to_owned(), slot))?;
-                let query = self.details_query_memory.get(&(key.to_owned(), slot))?;
-                Some(((key.to_owned(), tab), (*scroll, query.clone())))
-            })
-            .collect();
+            details.scroll_memory = self
+                .details_scroll_memory
+                .iter()
+                .filter(|((target, _), _)| target == key)
+                .map(|(key, value)| (key.clone(), *value))
+                .collect();
+            details.query_memory = self
+                .details_query_memory
+                .iter()
+                .filter(|((target, _), _)| target == key)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            details.workbench_memory = self
+                .workbench_memory
+                .iter()
+                .filter(|((target, _), _)| target == key)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             details.selected_round = presentation.round;
             details.restore_current_tab();
             details.prepare_workbench_details(None, presentation.tab);
@@ -674,6 +672,15 @@ impl App {
     pub(in crate::lean::tui) fn remember_workbench(&mut self) {
         if let Some(details) = &self.details {
             let mut saved = details.clone();
+            // A saved panel owns only its target's tab state. Copying the
+            // conversation-wide maps into every panel grows quadratically.
+            saved
+                .scroll_memory
+                .retain(|(key, _), _| key == &details.key);
+            saved.query_memory.retain(|(key, _), _| key == &details.key);
+            saved
+                .workbench_memory
+                .retain(|(key, _), _| key == &details.key);
             let target = if details.key == "conversation" {
                 WorkbenchTarget::Session
             } else {

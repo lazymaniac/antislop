@@ -6,11 +6,16 @@ use serde_json::Value;
 
 #[test]
 fn every_provider_launches_without_permission_flags_and_resumes_the_selected_session() {
-    // SAFETY: all launch tests use this fixture-only bridge-check override.
-    unsafe {
-        std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
-        std::env::set_var("ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK", "1");
-    };
+    for name in [
+        "ANTISLOP_SKIP_AGY_BRIDGE_CHECK",
+        "ANTISLOP_SKIP_GEMINI_SETTINGS_CHECK",
+    ] {
+        assert_eq!(
+            std::env::var(name).as_deref(),
+            Ok("1"),
+            "run ./cargo.sh test"
+        );
+    }
     let gateway = Gateway::start().unwrap();
     for provider in [
         ProviderKind::Codex,
@@ -45,6 +50,13 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
             "{provider:?}: {args:?}"
         );
         assert!(args.iter().any(|v| v == "model-fixture"));
+        assert_eq!(launch.session.as_deref(), Some("saved-session"));
+        assert!(
+            std::fs::read_dir(&specification.cwd)
+                .unwrap()
+                .next()
+                .is_none()
+        );
         // The CLI's own permission policy decides; its dialogs reach the runtime.
         for forbidden in [
             "--dangerously-bypass-approvals-and-sandbox",
@@ -73,15 +85,23 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
         match provider {
             ProviderKind::Codex => {
                 assert!(args.iter().any(|v| v == "--no-daemon"));
-                assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
+                assert_eq!(
+                    launch.command.get_env("ANTISLOP_MCP_TOKEN").unwrap(),
+                    gateway.token()
+                );
             }
             ProviderKind::Claude => {
                 assert!(!args.iter().any(|v| v == "--disallowedTools"));
             }
             ProviderKind::Gemini => {
-                assert!(launch.settings.is_none());
-                assert!(launch.command.get_env("ANTISLOP_MCP_URL").is_some());
-                assert!(launch.command.get_env("ANTISLOP_MCP_TOKEN").is_some());
+                assert_eq!(
+                    launch.command.get_env("ANTISLOP_MCP_URL").unwrap(),
+                    gateway.url()
+                );
+                assert_eq!(
+                    launch.command.get_env("ANTISLOP_MCP_TOKEN").unwrap(),
+                    gateway.token()
+                );
                 assert!(
                     launch
                         .command
@@ -111,12 +131,49 @@ fn every_provider_launches_without_permission_flags_and_resumes_the_selected_ses
                 .unwrap();
                 assert!(config["permission"].is_null());
                 assert!(config["agent"]["antislop"]["permission"].is_null());
-                assert!(
-                    config["mcp"]["antislop"]["url"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("http://")
+                assert_eq!(config["mcp"]["antislop"]["url"], gateway.url());
+            }
+        }
+        let fresh_gateway = Gateway::start().unwrap();
+        let fresh_spec = Spec {
+            resume: None,
+            ..specification
+        };
+        let fresh = command(&fresh_spec, &fresh_gateway).unwrap();
+        assert_eq!(fresh.session.is_some(), provider == ProviderKind::Claude);
+        let args = fresh
+            .command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!args.contains("saved-session"));
+        match provider {
+            ProviderKind::Claude | ProviderKind::Codex => {
+                assert!(args.contains(fresh_gateway.url()));
+                assert!(!args.contains(gateway.url()));
+            }
+            ProviderKind::Gemini | ProviderKind::Agy => {
+                assert_eq!(
+                    fresh.command.get_env("ANTISLOP_MCP_URL").unwrap(),
+                    fresh_gateway.url()
                 );
+                assert_eq!(
+                    fresh.command.get_env("ANTISLOP_MCP_TOKEN").unwrap(),
+                    fresh_gateway.token()
+                );
+            }
+            ProviderKind::Opencode => {
+                let config: Value = serde_json::from_str(
+                    &fresh
+                        .command
+                        .get_env("OPENCODE_CONFIG_CONTENT")
+                        .unwrap()
+                        .to_string_lossy(),
+                )
+                .unwrap();
+                assert_eq!(config["mcp"]["antislop"]["url"], fresh_gateway.url());
             }
         }
     }

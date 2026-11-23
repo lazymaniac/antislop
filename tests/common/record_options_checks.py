@@ -9,9 +9,11 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import sys
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT / '.antislop/options-evidence'
+OUTPUT = None
 BASE = '3f77db2'
 
 
@@ -44,7 +46,11 @@ def execute(label, root, command, env):
 
 
 def main():
-    OUTPUT.mkdir(parents=True, exist_ok=True)
+    global OUTPUT
+    sys.path.insert(0, str(ROOT / 'tests/support'))
+    from resources import external
+    OUTPUT = external(os.environ['ANTISLOP_OPTIONS_EVIDENCE'], strict=False)
+    OUTPUT.mkdir(parents=True, exist_ok=False)
     metadata = {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(),
                 'base': subprocess.check_output(['git', 'rev-parse', BASE], cwd=ROOT).decode().strip(),
                 'diff': subprocess.check_output(['git', 'diff', '--', 'tests/lean_options.rs', 'tests/common'], cwd=ROOT).decode(),
@@ -55,15 +61,16 @@ def main():
                 'environment': {k: os.environ[k] for k in ['PATH', 'TMPDIR', 'RUSTUP_TOOLCHAIN', 'CARGO_TARGET_DIR'] if k in os.environ}}
     (OUTPUT / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
     env = dict(os.environ)
-    env['CARGO_TARGET_DIR'] = str(ROOT / 'target')
-    with tempfile.TemporaryDirectory(prefix='antislop-options-base-') as temporary:
+    env['CARGO_TARGET_DIR'] = str(OUTPUT / 'target')
+    env['ANTISLOP_TEST_DIAGNOSTICS'] = str(OUTPUT / 'diagnostics')
+    with tempfile.TemporaryDirectory(prefix='as-baseline-', dir=external('/tmp')) as temporary:
         archive = subprocess.check_output(['git', 'archive', BASE], cwd=ROOT)
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             source.extractall(temporary, filter='data')
         for name in ['lean_core', 'lean_tui']:
-            execute('base-' + name, Path(temporary), ['cargo', 'test', '--test', name], env)
+            execute('base-' + name, Path(temporary), [str(ROOT / 'cargo.sh'), 'test', '--test', name], dict(env, ANTISLOP_TEST_EXTERNAL_CWD='1'))
     for name in ['lean_options', 'lean_core', 'lean_tui']:
-        execute('head-' + name, ROOT, ['cargo', 'test', '--test', name], env)
+        execute('head-' + name, ROOT, [str(ROOT / 'cargo.sh'), 'test', '--test', name], env)
     for name, command in [('fmt', ['cargo', 'fmt', '--check']),
                           ('check', ['cargo', 'check']),
                           ('clippy', ['cargo', 'clippy', '--all-targets', '--', '-D', 'warnings'])]:

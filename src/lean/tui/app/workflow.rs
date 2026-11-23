@@ -156,7 +156,7 @@ impl App {
         width: u16,
         theme: &Theme,
     ) -> Line<'static> {
-        let panel_focus = match self.focus {
+        let panel_focus = match self.navigation.background_focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Graph => PanelFocus::Graph,
         };

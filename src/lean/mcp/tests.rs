@@ -510,3 +510,52 @@ fn the_planner_chooses_a_team_with_submit_plan() {
     assert!(submit["inputSchema"]["properties"]["team_reason"].is_object());
     assert!(crate::lean::tasks::planner_instructions().contains("`security-fix`"));
 }
+
+#[test]
+fn bridge_preserves_json_io_and_gateway_error_causes() {
+    let mut output = Vec::new();
+    let error = forward(
+        b"{broken\n".as_slice(),
+        &mut output,
+        "http://127.0.0.1:1",
+        "token",
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::Error::Json(_)));
+
+    struct BrokenOutput;
+    impl std::io::Write for BrokenOutput {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("output fixture failed"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let gateway = Gateway::start().unwrap();
+    let error = forward(
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n".as_slice(),
+        BrokenOutput,
+        gateway.url(),
+        gateway.token(),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::Error::Io(_)));
+    assert_eq!(error.to_string(), "output fixture failed");
+
+    let url = "http://[invalid";
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let cause = agent
+        .post(url)
+        .header("authorization", "Bearer token")
+        .send_json(json!({}))
+        .unwrap_err();
+    let error = forward(b"{}\n".as_slice(), &mut output, url, "token", None).unwrap_err();
+    assert!(matches!(error, crate::Error::Invalid(_)));
+    assert_eq!(error.to_string(), format!("gateway unreachable: {cause}"));
+}

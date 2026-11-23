@@ -1,44 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SessionRequest {
-    SessionAction {
-        conversation: String,
-        action: SessionActionKind,
-    },
-    RunContext {
-        conversation: String,
-        turn: String,
-    },
-    SessionEvents {
-        conversation: String,
-        turn: String,
-        after: u64,
-        limit: Option<usize>,
-        include_messages: Option<bool>,
-    },
-    SessionContent {
-        conversation: String,
-        event: u64,
-        field: String,
-        offset: u64,
-    },
-    ResultDocuments {
-        conversation: String,
-    },
-    ResultDocumentContent {
-        conversation: String,
-        id: String,
-        offset: u64,
-    },
-    Sessions {
-        conversation: String,
-    },
-    DeleteSession {
-        conversation: String,
-    },
-}
-
 /// A user-selected next step for a completed session. The orchestrator owns
 /// the work; this request only hands the selection back to that conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

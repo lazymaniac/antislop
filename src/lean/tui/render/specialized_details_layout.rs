@@ -1,4 +1,4 @@
-use super::super::details::{RESULT, REVIEW, details_footer_hint_for, is_overview};
+use super::super::details::REVIEW;
 use super::super::view::fit_hint;
 use super::super::*;
 use ratatui::widgets::{Padding, Scrollbar, ScrollbarOrientation, ScrollbarState};
@@ -92,23 +92,25 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
 }
 
 pub(super) fn document_key(details: &super::super::details::Details) -> Option<String> {
-    match details.tab {
-        RESULT if details.key.starts_with("reviewer:") => Some("reviewer_result".into()),
-        RESULT => details
+    match details.content_tab() {
+        Some(WorkbenchTab::Results) if details.key.starts_with("reviewer:") => {
+            Some("reviewer_result".into())
+        }
+        Some(WorkbenchTab::Results) => details
             .selected_result_document
             .as_ref()
             .filter(|key| details.has_result_key(key))
             .cloned()
             .or_else(|| details.visible_result_keys().first().cloned())
             .or_else(|| Some("result".into())),
-        REVIEW => Some("review".into()),
+        None if details.tab == REVIEW => Some("review".into()),
         _ => None,
     }
 }
 
 pub(super) fn position_record_scroll(
     lines: &[Line<'static>],
-    tab: usize,
+    tab: Option<WorkbenchTab>,
     show_info: bool,
     follow: &mut bool,
     scroll: &mut usize,
@@ -116,15 +118,16 @@ pub(super) fn position_record_scroll(
     height: usize,
 ) {
     let bottom = lines.len().saturating_sub(height);
-    if tab == CHECKS && std::mem::take(reveal) {
+    if tab == Some(WorkbenchTab::Checks) && std::mem::take(reveal) {
         reveal_check_scroll(lines, scroll, height);
     }
-    if is_overview(tab) && !show_info && *follow {
+    let overview = tab.is_some_and(WorkbenchTab::uses_overview);
+    if overview && !show_info && *follow {
         *scroll = bottom;
     } else {
         *scroll = (*scroll).min(bottom);
     }
-    *follow = is_overview(tab) && !show_info && *scroll >= bottom;
+    *follow = overview && !show_info && *scroll >= bottom;
 }
 
 pub(super) fn draw_document_scrollbar(
@@ -196,11 +199,7 @@ pub(super) fn records_hint(details: &Details, width: u16, theme: &Theme) -> Stri
             theme.chrome("_ (Enter: confirm · Esc: cancel)")
         )
     } else {
-        theme.chrome(&details_footer_hint_for(
-            &details.key,
-            details.tab,
-            usize::from(width),
-        ))
+        theme.chrome(&details.footer_hint(usize::from(width)))
     }
 }
 

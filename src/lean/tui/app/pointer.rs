@@ -1,5 +1,6 @@
 use super::super::*;
 mod click;
+use super::super::input_owner::{InputKind, InputOwner};
 
 impl App {
     pub(in crate::lean::tui) fn mouse_scroll(&mut self, down: bool) {
@@ -31,7 +32,7 @@ impl App {
         if self.graph_expanded.is_none() && self.scroll_details(down) {
             return;
         }
-        if self.focus == Focus::Graph {
+        if self.navigation.background_focus == Focus::Graph {
             self.scroll_graph(down, false);
         } else {
             self.scroll_chat(down);
@@ -110,20 +111,22 @@ impl App {
     }
 
     fn mouse_inner(&mut self, mouse: event::MouseEvent) -> bool {
-        let dock_uncovered = self.picker.is_none()
-            && self.help.is_none()
-            && self.editor.is_none()
-            && self.decision_inbox.is_none()
-            && self.unblock.is_none()
-            && self.recovery_consent.is_none()
-            && self.graph_filters.is_none()
-            && self.plan_history.is_none()
-            && self.plan_view.is_none()
-            && self.flow_editor.is_none()
-            && !self
-                .config_editor
-                .as_ref()
-                .is_some_and(|editor| editor.visible);
+        self.sync_interview();
+        let owner = self.input_owner(InputKind::Mouse);
+        if owner == InputOwner::Interview {
+            self.workbench_dragging = false;
+        }
+        let dock_uncovered = matches!(
+            owner,
+            InputOwner::Navigation
+                | InputOwner::Composer
+                | InputOwner::DetailsInput
+                | InputOwner::Interview
+        );
+        if !dock_uncovered && self.handle_modal_mouse(mouse) {
+            self.workbench_dragging = false;
+            return true;
+        }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && dock_uncovered
             && let Some((_, action)) = self
@@ -232,13 +235,6 @@ impl App {
         if self.handle_native_mouse(mouse) {
             return true;
         }
-        if self.plan_history.is_some() {
-            return true;
-        }
-        self.sync_interview();
-        if self.handle_modal_mouse(mouse) {
-            return true;
-        }
         self.handle_content_mouse(mouse);
         true
     }
@@ -247,14 +243,10 @@ impl App {
         if self.navigation.screen != Screen::Workbench {
             return false;
         }
-        if self.help.is_some()
-            || self.picker.is_some()
-            || self.editor.is_some()
-            || self.interview_visible()
-            || self.plan_history.is_some()
-            || self.plan_view.is_some()
-            || self.modal_blocks_mouse()
-        {
+        if !matches!(
+            self.input_owner(InputKind::Mouse),
+            InputOwner::Navigation | InputOwner::Composer | InputOwner::DetailsInput
+        ) {
             self.workbench_dragging = false;
             return false;
         }
@@ -344,13 +336,14 @@ impl App {
                 .list
                 .contains((mouse.column, mouse.row).into())
         {
+            let rows = super::super::workbench::sidebar(&self.view);
             let row = mouse.row.saturating_sub(self.workbench_areas.list.y) as usize
                 + super::super::workbench::visible_start(
-                    &self.view,
+                    &rows,
                     &self.navigation.target,
                     self.workbench_areas.list.height,
                 );
-            if let Some(row) = super::super::workbench::sidebar(&self.view).get(row) {
+            if let Some(row) = rows.get(row) {
                 self.focus_workbench_content();
                 self.open_work_card_or_stage(row);
                 self.focus_workbench_content();
@@ -466,28 +459,30 @@ impl App {
 
     fn handle_modal_mouse(&mut self, mouse: event::MouseEvent) -> bool {
         self.update_selection_context();
-        if self.modal_blocks_mouse() {
-            self.click_graph_filters(mouse);
-            self.click_unblock(mouse);
-            if self
-                .config_editor
-                .as_ref()
-                .is_none_or(|editor| !editor.visible)
-                && self.unblock.is_none()
-                && self.recovery_consent.is_none()
-                && self.graph_filters.is_none()
-                && self.flow_editor.is_none()
-                && self.decision_inbox.is_none()
-                && matches!(
+        match self.input_owner(InputKind::Mouse) {
+            InputOwner::Filters => self.click_graph_filters(mouse),
+            InputOwner::Recovery => self.click_unblock(mouse),
+            InputOwner::Help | InputOwner::Interview => {
+                if matches!(
                     mouse.kind,
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                )
-            {
-                self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+                ) {
+                    self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
+                }
             }
-            return true;
+            InputOwner::History
+            | InputOwner::Decisions
+            | InputOwner::Picker
+            | InputOwner::Config
+            | InputOwner::Flow
+            | InputOwner::Consent
+            | InputOwner::Editor => {}
+            InputOwner::Plan
+            | InputOwner::Composer
+            | InputOwner::DetailsInput
+            | InputOwner::Navigation => return false,
         }
-        false
+        true
     }
 
     fn update_selection_context(&mut self) {
@@ -496,17 +491,6 @@ impl App {
         }
         self.text_selection
             .invalidate_context(&self.selection_context());
-    }
-
-    fn modal_blocks_mouse(&self) -> bool {
-        self.config_editor
-            .as_ref()
-            .is_some_and(|editor| editor.visible)
-            || self.unblock.is_some()
-            || self.recovery_consent.is_some()
-            || self.graph_filters.is_some()
-            || self.interview_visible()
-            || self.decision_inbox.is_some()
     }
 
     fn click_graph_filters(&mut self, mouse: event::MouseEvent) {

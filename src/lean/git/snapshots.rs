@@ -57,9 +57,7 @@ fn write_snapshot(
 }
 
 fn with_index(dir: &Path, index: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let output = super::command(dir)
         .args(args)
         .env("GIT_INDEX_FILE", index)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -239,8 +237,7 @@ pub(super) fn stage_source(dir: &Path, index: Option<&Path>) -> Result<()> {
     use std::io::Write;
     use std::process::Stdio;
     let command = || {
-        let mut command = Command::new("git");
-        command.arg("-C").arg(dir).env("GIT_TERMINAL_PROMPT", "0");
+        let mut command = super::command(dir);
         if let Some(index) = index {
             command.env("GIT_INDEX_FILE", index);
         }

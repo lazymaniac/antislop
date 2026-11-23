@@ -35,7 +35,6 @@ impl Session {
             core: weak,
             spec,
             signature,
-            _settings: launch.settings,
             gateway,
             terminal: Mutex::new(terminal),
             screen,

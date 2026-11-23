@@ -421,13 +421,13 @@ fn draw_workbench_list(
     owner: &str,
     theme: &Theme,
 ) {
-    let rows = super::super::workbench::sidebar(view);
-    let start = super::super::workbench::visible_start(view, target, area.height);
+    let work = super::super::work_units::WorkUnits::new(view);
+    let rows = super::super::workbench::sidebar_with_units(view, &work);
+    let start = super::super::workbench::visible_start(&rows, target, area.height);
     let selected = match target {
         WorkbenchTarget::Session => "conversation",
         WorkbenchTarget::Agent(key) => key,
     };
-    let work = super::super::work_units::WorkUnits::new(view);
     let selected_unit = work.for_stage(selected);
     for (index, row) in rows
         .iter()
@@ -474,6 +474,9 @@ fn draw_workbench_list(
                 unicode_width::UnicodeWidthStr::width(left.as_str()) + status.len(),
             );
             format!("{left}{}{status}", " ".repeat(gap.max(1)))
+        } else if row.metadata {
+            // Convert generated metadata chrome; keep task titles literal.
+            theme.chrome(&row.label)
         } else {
             row.label.clone()
         };

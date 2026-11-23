@@ -39,8 +39,14 @@ impl MessageInspector {
         let identity = (conversation.to_owned(), key.to_owned());
         let max = self.rows.len().saturating_sub(self.height);
         let top = self.positions.entry(identity).or_default();
-        *top = (*top).min(max);
-        let top = *top;
+        // Switching conversations clears View before its history is replayed.
+        // An empty loading frame must not erase the remembered position.
+        let top = if self.messages.is_empty() {
+            0
+        } else {
+            *top = (*top).min(max);
+            *top
+        };
         let heading = split_row(
             theme.card(),
             vec![Span::styled("Recent messages", theme.accent())],

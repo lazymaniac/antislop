@@ -46,7 +46,6 @@ pub struct App {
     pub notice: Option<String>,
     pub updates: UpdateSender,
     pub(super) result_fetch: app::requests::ResultFetchCoordinator,
-    pub focus: Focus,
     /// Frontend screen, workbench target, focus and per-target presentation.
     pub navigation: NavigationState,
     pub navigation_revision: u64,
@@ -136,6 +135,7 @@ pub struct App {
     pub detail_states: std::collections::HashMap<(String, String), Details>,
     pub diff_states: std::collections::HashMap<(String, String), DiffView>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
+    pub workbench_memory: std::collections::HashMap<(String, WorkbenchTab), (usize, String)>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
@@ -205,9 +205,9 @@ macro_rules! initial_app {
             notice: None,
             updates: $updates,
             result_fetch: app::requests::ResultFetchCoordinator::new(),
-            focus: Focus::Graph,
             navigation: NavigationState {
                 focus: NavigationFocus::Graph,
+                background_focus: Focus::Graph,
                 ..Default::default()
             },
             navigation_revision: 0,
@@ -285,6 +285,7 @@ macro_rules! initial_app {
             detail_states: Default::default(),
             diff_states: Default::default(),
             details_scroll_memory: std::collections::HashMap::new(),
+            workbench_memory: Default::default(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
             graph_area: None,
@@ -313,12 +314,9 @@ macro_rules! initial_app {
 }
 
 impl App {
-    pub(super) fn set_focus(&mut self, focus: Focus) {
-        self.focus = focus;
-        self.navigation.focus = match focus {
-            Focus::Chat => NavigationFocus::Chat,
-            Focus::Graph => NavigationFocus::Graph,
-        };
+    /// Select graph/chat focus through the navigation model.
+    pub fn set_focus(&mut self, focus: Focus) {
+        self.navigation.set_surface_focus(focus);
     }
 
     pub(super) fn bootstrap(client: Client, updates: UpdateSender) -> App {

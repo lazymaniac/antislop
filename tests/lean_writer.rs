@@ -636,10 +636,19 @@ fn the_default_pipeline_finishes_every_task_of_a_session() {
         );
     });
     assert!(core.is_idle(&conversation));
-    let session = support::session_worktree(&core, &project, &conversation);
+    common::wait_until("session result is durably finalized", || {
+        core.store
+            .events_since(&conversation, 0, 10_000)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "session_completed")
+    });
+    // Completion may already have released the linked checkout; the result
+    // remains on the durable session branch.
+    let branch = support::session_branch(&core, &conversation);
     assert_eq!(
-        std::fs::read_to_string(session.join("hello.txt")).unwrap(),
-        "from worker\n"
+        git(&project, &["show", &format!("{branch}:hello.txt")]),
+        "from worker"
     );
 }
 

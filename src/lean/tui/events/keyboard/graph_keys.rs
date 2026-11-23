@@ -2,11 +2,11 @@ use super::*;
 
 impl App {
     pub(super) fn toggle_focus(&mut self) {
-        if self.focus == Focus::Graph {
+        if self.navigation.background_focus == Focus::Graph {
             self.cycle_work_stage(false);
             return;
         }
-        self.set_focus(match self.focus {
+        self.set_focus(match self.navigation.background_focus {
             Focus::Chat => Focus::Graph,
             Focus::Graph => Focus::Chat,
         });

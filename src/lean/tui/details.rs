@@ -68,6 +68,29 @@ pub fn tabs_for(key: &str) -> Vec<usize> {
 }
 
 impl Details {
+    /// Typed selection for active content; numeric tabs are a standalone API boundary.
+    pub(in crate::lean::tui) fn content_tab(&self) -> Option<super::WorkbenchTab> {
+        use super::WorkbenchTab;
+        self.workbench_tab.or(match self.tab {
+            0 | REVIEWER => Some(WorkbenchTab::Summary),
+            RESULT => Some(WorkbenchTab::Results),
+            CHECKS => Some(WorkbenchTab::Checks),
+            COMMENTS => Some(WorkbenchTab::Comments),
+            _ => None,
+        })
+    }
+
+    pub(in crate::lean::tui) fn on_tab(&self, tab: super::WorkbenchTab) -> bool {
+        self.content_tab() == Some(tab)
+    }
+
+    /// Reviewer Workbench summaries expose the same live checks and actions.
+    pub(in crate::lean::tui) fn shows_checks(&self) -> bool {
+        self.on_tab(super::WorkbenchTab::Checks)
+            || (self.workbench_tab == Some(super::WorkbenchTab::Summary)
+                && self.key.starts_with("reviewer:"))
+    }
+
     pub(super) fn fetch_failed(&mut self, error: &str) -> bool {
         self.fetch_in_flight = false;
         self.fetched_round = None;
@@ -197,14 +220,14 @@ impl Details {
 
     /// The id of the selected comment, on the Comments tab.
     pub fn selected_comment(&self, view: &View) -> Option<u64> {
-        (self.tab == COMMENTS)
+        (self.on_tab(super::WorkbenchTab::Comments))
             .then(|| self.comments(view).get(self.comment).map(|c| c.id))
             .flatten()
     }
 
-    /// The id of the selected check, on the Checks tab.
+    /// The id of the selected check, wherever check records are displayed.
     pub fn selected_check(&self) -> Option<String> {
-        if self.tab != CHECKS {
+        if !self.shows_checks() {
             return None;
         }
         let rows = check_rows(self.task.as_ref()?);
@@ -243,10 +266,14 @@ impl Details {
     }
 
     pub fn overview(&self) -> bool {
-        is_overview(self.tab)
+        self.content_tab()
+            .is_some_and(super::WorkbenchTab::uses_overview)
+            && !self.shows_checks()
     }
 
-    /// Whether the active details view has an allocated live PTY area.
+    /// Whether a terminal area is allocated, or the overview layout requests one
+    /// through its terminal-only or split presentation. This does not imply
+    /// that a live PTY is attached.
     pub fn terminal_visible(&self) -> bool {
         self.native_areas.iter().any(|area| !area.is_empty())
             || (self.overview() && (!self.show_info || self.split))

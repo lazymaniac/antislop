@@ -48,6 +48,7 @@ impl Store {
                 "UPDATE teams SET user_selected=CASE WHEN origin='user' THEN 1 ELSE 0 END;",
             )?;
         }
+        migration.execute_batch(include_str!("carry_indexes.sql"))?;
         migration.commit()?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",

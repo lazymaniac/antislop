@@ -108,20 +108,14 @@ fn create_session_pr_targets_completed_branch_and_records_success() {
     let gh = directory.path().join("gh-success");
     std::fs::write(
         &gh,
-        "#!/bin/sh\nprintf 'cwd=%s\\n' \"$PWD\" > \"$PR_ARGS_FILE\"\nprintf 'git_root=%s\\n' \"$(git rev-parse --show-toplevel)\" >> \"$PR_ARGS_FILE\"\nprintf 'branch=%s\\n' \"$(git branch --show-current)\" >> \"$PR_ARGS_FILE\"\nprintf 'args=%s\\n' \"$*\" >> \"$PR_ARGS_FILE\"\necho https://github.com/o/r/pull/7\n",
+        "#!/bin/sh\nPR_ARGS_FILE=\"$(dirname \"$0\")/args\"\nprintf 'cwd=%s\\n' \"$PWD\" > \"$PR_ARGS_FILE\"\nprintf 'git_root=%s\\n' \"$(git rev-parse --show-toplevel)\" >> \"$PR_ARGS_FILE\"\nprintf 'branch=%s\\n' \"$(git branch --show-current)\" >> \"$PR_ARGS_FILE\"\nprintf 'args=%s\\n' \"$*\" >> \"$PR_ARGS_FILE\"\necho https://github.com/o/r/pull/7\n",
     )
     .unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let args_file = directory.path().join("args");
-    unsafe {
-        std::env::set_var("PR_ARGS_FILE", &args_file);
-    }
     let result = app
         .create_session_pr_with(&conversation, gh.to_str().unwrap())
         .unwrap();
-    unsafe {
-        std::env::remove_var("PR_ARGS_FILE");
-    }
     assert_eq!(result["status"], "succeeded");
     let invocation = std::fs::read_to_string(&args_file).unwrap();
     let field = |name: &str| {

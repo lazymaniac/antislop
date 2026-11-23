@@ -1,9 +1,8 @@
 use super::*;
 use crate::lean::core::plan::helpers::*;
 
-fn test_tempdir() -> tempfile::TempDir {
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    tempfile::tempdir_in(".antislop/tmp").unwrap()
+fn test_tempdir() -> crate::test_resources::TestDir {
+    crate::test_resources::tempdir()
 }
 
 #[test]

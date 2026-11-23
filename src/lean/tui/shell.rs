@@ -147,18 +147,21 @@ fn handle_events(app: &mut App) -> Result<bool> {
     if !event::poll(Duration::from_millis(wait))? {
         return Ok(true);
     }
-    let event = event::read()?;
+    Ok(dispatch_event(app, event::read()?))
+}
+
+fn dispatch_event(app: &mut App, event: Event) -> bool {
     match event {
         Event::Key(key) if key.kind != KeyEventKind::Release || app.native_focused() => {
             app.notice = None;
-            Ok(app.key(key))
+            app.key(key)
         }
-        Event::Mouse(mouse) => Ok(app.mouse(mouse)),
+        Event::Mouse(mouse) => app.mouse(mouse),
         Event::Paste(text) => {
             app.paste(&text);
-            Ok(true)
+            true
         }
-        _ => Ok(true),
+        _ => true,
     }
 }
 
@@ -224,6 +227,38 @@ mod tests {
             println!("STEP {index}");
             std::io::stdout().flush().unwrap();
         }
+    }
+
+    #[test]
+    fn modal_input_dispatch_keeps_release_repeat_and_non_input_event_policy() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::test_app();
+        app.open_details("worker:t1".into());
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let received = app.bind_native_input_for_test();
+        app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(app.native_focused());
+        let mut release = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(dispatch_event(&mut app, Event::Key(release)));
+        assert!(
+            matches!(received.try_recv(), Ok(crate::lean::tui::native_view::Command::Input(crate::lean::terminal::Input::Key { event })) if event == release)
+        );
+        app.show_help(crate::lean::tui::palette::Help::Details);
+        let mut down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        down.kind = KeyEventKind::Release;
+        dispatch_event(&mut app, Event::Key(down));
+        assert_eq!(app.help_scroll, 0);
+        down.kind = KeyEventKind::Repeat;
+        dispatch_event(&mut app, Event::Key(down));
+        assert_eq!(app.help_scroll, 1);
+        let navigation = app.navigation.clone();
+        for event in [Event::Resize(10, 4), Event::FocusLost, Event::FocusGained] {
+            assert!(dispatch_event(&mut app, event));
+        }
+        assert_eq!(app.navigation, navigation);
+        assert_eq!(app.help_scroll, 1);
+        assert!(received.try_recv().is_err());
     }
 
     #[test]

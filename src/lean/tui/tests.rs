@@ -295,7 +295,7 @@ fn multiple_dropped_file_uris_attach_as_a_batch() {
 #[test]
 fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((120, 48));
     app.view.tasks = vec![
         view::TaskRow {
@@ -347,7 +347,7 @@ fn graph_enter_expands_compacts_and_transfers_the_only_expanded_card() {
 fn expanded_card_keeps_one_round_across_tabs_and_never_attaches_historical_pty() {
     let state = tempfile::tempdir().unwrap();
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((100, 28));
     app.selected = "worker:t1".into();
     app.view.plan = Some("plan".into());
@@ -589,7 +589,7 @@ fn graph_layout_rebuild_count(app: &App) -> usize {
 #[test]
 fn clicking_now_focuses_and_scrolls_to_active_agent() {
     let mut app = test_app();
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.view.tasks = (0..12)
         .map(|index| view::TaskRow {
             id: format!("t{index}"),
@@ -609,7 +609,7 @@ fn clicking_now_focuses_and_scrolls_to_active_agent() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t11");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let scope = app.graph_scope_with_exception();
@@ -657,7 +657,7 @@ fn now_click_mapping_contains_only_the_rows_shown_in_the_bar() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t0");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
 }
 
 #[test]
@@ -683,7 +683,7 @@ fn clicking_now_keeps_an_already_visible_agent_in_view() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t1");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert!(app.graph_visibility_exception.is_none());
     assert_eq!(app.view.layout_revision, initial_revision);
     assert_eq!(app.graph_scope_with_exception(), initial_scope);
@@ -718,7 +718,7 @@ fn clicking_now_temporarily_exposes_a_filtered_agent() {
     let now = app.now_area.expect("activity status rendered");
     let initial_offset = app.offset;
     app.graph_revealed = Some("worker:t1".into());
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
@@ -726,7 +726,7 @@ fn clicking_now_temporarily_exposes_a_filtered_agent() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selected, "worker:t0");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(
         app.offset, initial_offset,
         "an already visible target stays put"
@@ -758,18 +758,29 @@ fn clicking_now_without_an_active_agent_leaves_graph_state_unchanged() {
     }];
     app.selected = "worker:t1".into();
     app.offset = (3, 4);
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let now = app.now_area.expect("activity status rendered");
-    let graph_state = (app.selected.clone(), app.offset, app.focus);
+    let graph_state = (
+        app.selected.clone(),
+        app.offset,
+        app.navigation.background_focus,
+    );
     app.mouse(event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: now.x + 1,
         row: now.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!((app.selected.clone(), app.offset, app.focus), graph_state);
+    assert_eq!(
+        (
+            app.selected.clone(),
+            app.offset,
+            app.navigation.background_focus
+        ),
+        graph_state
+    );
     assert!(app.graph_visibility_exception.is_none());
 }
 
@@ -821,7 +832,7 @@ fn pointer_graph_filter_change_clears_now_visibility_exception() {
 #[test]
 fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
         change_kind: crate::lean::tasks::ChangeKind::Code,
@@ -873,7 +884,7 @@ fn embedded_diff_keeps_graph_tabs_and_selection_navigation_available() {
 #[test]
 fn code_task_card_offers_diff_and_brackets_walk_its_files() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.graph_viewport = Some((120, 48));
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
@@ -926,7 +937,7 @@ fn code_task_card_offers_diff_and_brackets_walk_its_files() {
 #[test]
 fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = (1..=4)
         .map(|n| view::TaskRow {
             id: format!("t{n}"),
@@ -1014,7 +1025,7 @@ fn expanded_card_panels_stay_inside_the_card_when_the_graph_scrolls() {
 #[test]
 fn expanded_task_frame_keeps_one_cell_margin_across_viewport_resizes() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = vec![
         view::TaskRow {
             id: "t1".into(),
@@ -1189,7 +1200,7 @@ fn grouped_task_long_title_keeps_incoming_routes_visible_after_resize() {
 #[test]
 fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view
         .agents
         .insert(view::ORCHESTRATOR.into(), view::Agent::default());
@@ -1244,7 +1255,7 @@ fn expanded_standalone_agent_keeps_one_cell_canvas_margin_across_resizes() {
 #[test]
 fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.view.tasks = (1..=4)
         .map(|n| view::TaskRow {
             id: format!("t{n}"),
@@ -1337,7 +1348,7 @@ fn wheel_over_an_expanded_card_scrolls_its_tab_not_the_graph() {
 #[test]
 fn graph_comment_popup_shows_scoped_history_and_keeps_the_element_draft() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.comment_drafts.insert(
         App::comment_key(&app.conversation, app.view.plan.as_deref(), "worker:t1"),
@@ -1448,7 +1459,7 @@ fn active_picker_owns_global_shortcuts_and_escape_before_zoom() {
     app.navigation
         .update_presentation(|presentation| presentation.split = true);
     app.navigation.zoom(true);
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.picker = Some(Picker::new(Kind::History));
     app.picker.as_mut().unwrap().query = "keep query".into();
 
@@ -1590,7 +1601,7 @@ fn escape_restores_zoom_split_before_leaving_workbench() {
 #[test]
 fn escape_restores_zoom_split_while_workbench_terminal_has_focus() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "worker:t1".into();
     app.view.tasks = vec![view::TaskRow {
         id: "t1".into(),
@@ -2015,7 +2026,7 @@ fn ctrl_m_opens_workflow_rigor_picker_from_chat_and_graph() {
     assert_eq!(app.input.text, "draft stays here");
 
     app.picker = None;
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     assert!(app.key(key_ctrl('m')));
     assert!(matches!(
         app.picker.as_ref().map(|picker| picker.kind),
@@ -2027,7 +2038,7 @@ fn ctrl_m_opens_workflow_rigor_picker_from_chat_and_graph() {
 #[test]
 fn ctrl_enter_opens_workflow_rigor_picker_for_terminals_that_encode_ctrl_m_as_enter() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     let key = event::KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
 
     assert!(app.key(key));
@@ -2337,7 +2348,7 @@ fn ac_key_03_multiline_boundary_up() {
 #[test]
 fn ac_modal_02_comment_editor_dismissal_preserves_graph_selection() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "reviewer:t1".into();
     app.editor = Some(Editor {
         target: app.selected.clone(),
@@ -2394,7 +2405,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
     let mut app = test_app();
     app.input = InputBuffer::with_text("@t2 please investigate");
     app.key(key_press(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     assert_eq!(app.input.text, "@t2 please investigate");
 
     app.key(key_press(KeyCode::Char('c')));
@@ -2406,7 +2417,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
     assert_eq!(app.input.text, "@t2 please investigate");
 
     app.key(key_ctrl('k'));
-    assert_eq!(app.focus, Focus::Chat);
+    assert_eq!(app.navigation.background_focus, Focus::Chat);
     assert_eq!(app.input.text, "@t2 please investigate");
 }
 
@@ -2414,7 +2425,7 @@ fn draft_preservation_across_panel_switching_and_modals() {
 fn comment_targets_from_graph_and_details() {
     let mut app = test_app();
     app.selected = "worker:t2".into();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.key(key_press(KeyCode::Char('c')));
     assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
 
@@ -2682,7 +2693,7 @@ fn agent_canvas_remains_available_in_every_workflow_phase() {
             }
             app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
             terminal.draw(|frame| app.draw(frame)).unwrap();
-            assert_eq!(app.focus, Focus::Graph, "{phase}");
+            assert_eq!(app.navigation.background_focus, Focus::Graph, "{phase}");
             assert!(app.graph_area.is_some(), "{phase}");
             assert_eq!(app.input.text, "unsent draft");
         }
@@ -2695,7 +2706,7 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
     use ratatui::backend::TestBackend;
 
     let mut app = test_app();
-    app.focus = Focus::Chat;
+    app.set_focus(Focus::Chat);
     let backend = TestBackend::new(84, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -2710,7 +2721,7 @@ fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
     assert!(text.contains("ctrl k"));
 
     // Switch to Focus::Graph
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     terminal
         .draw(|frame| {
             app.draw(frame);
@@ -3131,7 +3142,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
         status: "working".into(),
         ..view::TaskRow::default()
     }];
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
 
     let backend = TestBackend::new(100, 30);
@@ -3164,7 +3175,7 @@ fn ac_resp_app_draw_progress_overlay_collision_free() {
     let mut app_compact = test_app();
     app_compact.view.activity = Some("very long activity line".into());
     app_compact.view.tasks = app.view.tasks.clone();
-    app_compact.focus = Focus::Graph;
+    app_compact.set_focus(Focus::Graph);
 
     // Create a fake test terminal where inner area forces collision
     let backend_tiny = TestBackend::new(60, 12);
@@ -3525,7 +3536,7 @@ fn scope_confirmation_card_shows_the_complete_requirements_summary() {
         .map(|index| format!("REQ{index:03} preserve rows 👩‍💻e\u{301}\n"))
         .collect::<String>();
     app.input = InputBuffer::with_text("chat draft");
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     for (width, height) in [(120, 24), (84, 16)] {
         app.view.scope_confirmation_summary = Some(format!("{summary}Width {width}"));
         app.view.after += 1;
@@ -3765,7 +3776,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
 
     // The graph key acts on the selected step.
     app.view.tasks.push(task("t4", "failed"));
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = "reviewer:t4".into();
     // Stage Blocked keeps the graph visible: nothing is running.
     app.key(key_press(KeyCode::Char('u')));
@@ -3982,7 +3993,7 @@ fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
     assert!(app.view.controls().resume_plan);
     assert_eq!(app.view.stage(), view::Stage::Blocked);
     assert_eq!(app.phase_action().unwrap().1, Command::TaskActions);
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
     app.key(key_press(KeyCode::Char('u')));
     let modal = app.unblock.take().unwrap();
@@ -4004,7 +4015,7 @@ fn a_cancelled_final_audit_is_recoverable_from_u_with_all_tasks_approved() {
 #[test]
 fn the_orchestrator_actions_open_without_a_plan_and_with_an_existing_plan() {
     let mut app = test_app();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.selected = ORCHESTRATOR.into();
     for plan in [None, Some("p1".into())] {
         app.view.plan = plan;
@@ -4030,7 +4041,7 @@ fn an_active_step_can_be_restarted_from_the_actions_menu() {
         ..Default::default()
     }];
     app.selected = "worker:t1".into();
-    app.focus = Focus::Graph;
+    app.set_focus(Focus::Graph);
     app.key(key_press(KeyCode::Char('u')));
     assert_eq!(app.unblock.as_ref().unwrap().task, "t1");
     app.key(key_press(KeyCode::Enter));
@@ -4239,7 +4250,7 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let area = app.graph_area.expect("graph drawn beside the chat");
-    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.navigation.background_focus, Focus::Graph);
     for _ in 0..3 {
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -4255,7 +4266,11 @@ fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left
         app.offset.1, scrolled,
         "the selection does not pull it back"
     );
-    assert_eq!(app.focus, Focus::Graph, "scrolling moves no focus");
+    assert_eq!(
+        app.navigation.background_focus,
+        Focus::Graph,
+        "scrolling moves no focus"
+    );
 }
 
 #[test]
@@ -4594,6 +4609,492 @@ fn canvas_and_stage_composers_own_their_keys_and_preserve_independent_drafts() {
 }
 
 #[test]
+fn modal_input_help_precedes_background_composer_buttons() {
+    let mut app = test_app();
+    app.set_focus(Focus::Chat);
+    app.navigation.focus = NavigationFocus::Composer;
+    app.input = InputBuffer::with_text("unsent 👩‍💻 é");
+    let focus = app.navigation.clone();
+    let send = Rect::new(1, 1, 6, 1);
+    let cancel = Rect::new(8, 1, 8, 1);
+    app.direction_actions = Some((send, cancel));
+    app.show_help(Help::Chat);
+    for area in [send, cancel] {
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.help.is_some());
+        assert_eq!(app.navigation, focus);
+        assert_eq!(app.input.text, "unsent 👩‍💻 é");
+    }
+    app.paste("must not reach composer");
+    app.key(key_press(KeyCode::Char('x')));
+    assert_eq!(app.input.text, "unsent 👩‍💻 é");
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.help.is_none());
+    assert_eq!(app.navigation, focus);
+    app.paste(" continued");
+    assert_eq!(app.input.text, "unsent 👩‍💻 é continued");
+}
+
+#[test]
+fn modal_input_flow_blocks_paste_and_background_pointer_navigation() {
+    let mut app = test_app();
+    app.set_focus(Focus::Chat);
+    app.input = InputBuffer::with_text("draft");
+    app.flow_editor = Some(flow_editor::FlowEditor::add_dependent(&app.view, "t1"));
+    let title = app.flow_editor.as_ref().unwrap().title_input.text.clone();
+    let navigation = app.navigation.clone();
+    let scroll = app.scroll;
+    app.paste("not a chat message");
+    for kind in [
+        MouseEventKind::ScrollUp,
+        MouseEventKind::ScrollDown,
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+    ] {
+        app.mouse(event::MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(app.input.text, "draft");
+    assert_eq!(app.scroll, scroll);
+    assert_eq!(app.navigation, navigation);
+    assert_eq!(app.flow_editor.as_ref().unwrap().title_input.text, title);
+    assert!(app.native_input_blocked());
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.flow_editor.is_none());
+    assert_eq!(app.input.text, "draft");
+}
+
+#[test]
+fn modal_input_help_picker_and_comment_editor_have_one_owner() {
+    let mut app = test_app();
+    app.editor = Some(Editor {
+        target: "comment:test".into(),
+        input: InputBuffer::with_text("comment"),
+    });
+    app.picker = Some(Picker::new(Kind::Commands));
+    app.picker.as_mut().unwrap().query = "query".into();
+    app.show_help(Help::Picker);
+    app.paste(" ignored");
+    app.key(key_press(KeyCode::Char('x')));
+    assert_eq!(app.picker.as_ref().unwrap().query, "query");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment");
+    app.key(key_press(KeyCode::Esc));
+    app.paste(" picker");
+    assert_eq!(app.picker.as_ref().unwrap().query, "querypicker");
+    app.key(key_press(KeyCode::Esc));
+    app.paste(" editor");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment editor");
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.editor.is_none());
+    assert_eq!(app.get_comment_draft("comment:test").text, "comment editor");
+}
+
+#[test]
+fn modal_input_restores_native_key_paste_and_mouse_after_help() {
+    let mut app = test_app();
+    app.input = InputBuffer::with_text("session draft");
+    app.open_details("worker:t1".into());
+    app.key(key_press(KeyCode::Tab));
+    let received = app.bind_native_input_for_test();
+    app.key(key_press(KeyCode::Char('t')));
+    assert!(app.native_focused());
+    let navigation = app.navigation.clone();
+    app.show_help(Help::Details);
+    app.key(key_press(KeyCode::Char('x')));
+    app.paste("hidden paste");
+    let mouse = event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 2,
+        row: 2,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(mouse);
+    assert!(received.try_recv().is_err());
+    assert_eq!(app.navigation, navigation);
+    app.key(key_press(KeyCode::Esc));
+    assert!(app.native_focused());
+    let key = key_press(KeyCode::Char('x'));
+    app.key(key);
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Key { event })) if event == key)
+    );
+    app.paste("native paste");
+    assert!(
+        matches!(received.try_recv(), Ok(native_view::Command::Input(crate::lean::terminal::Input::Paste { text })) if text == "native paste")
+    );
+    app.mouse(mouse);
+    assert!(matches!(
+        received.try_recv(),
+        Ok(native_view::Command::Input(
+            crate::lean::terminal::Input::Mouse { .. }
+        ))
+    ));
+    assert_eq!(app.input.text, "session draft");
+}
+
+#[test]
+fn modal_input_help_is_visible_over_flow_and_configuration() {
+    for configuration in [false, true] {
+        let mut app = test_app();
+        if configuration {
+            app.config_editor = Some(
+                config::ConfigEditor::new(
+                    include_str!("../../../examples/antislop.toml"),
+                    "project.toml".into(),
+                )
+                .unwrap(),
+            );
+        } else {
+            app.flow_editor = Some(flow_editor::FlowEditor::add_dependent(&app.view, "t1"));
+        }
+        app.key(key_press(KeyCode::F(1)));
+        assert!(app.help.is_some());
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(
+            terminal_text(&terminal).contains("help ·"),
+            "configuration={configuration}"
+        );
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.help.is_none());
+        assert_eq!(app.config_editor.is_some(), configuration);
+        assert_eq!(app.flow_editor.is_some(), !configuration);
+    }
+}
+
+#[test]
+fn modal_input_decision_filter_and_recovery_isolate_search_and_drafts() {
+    for layer in 0..3 {
+        let mut app = test_app();
+        app.open_details("worker:t1".into());
+        app.details.as_mut().unwrap().searching = true;
+        app.details.as_mut().unwrap().query = "saved query".into();
+        app.input = InputBuffer::with_text("saved draft");
+        match layer {
+            0 => {
+                app.view.approvals.push(view::PendingApproval {
+                    request: "permission".into(),
+                    role: "worker:t1".into(),
+                    provider: "codex".into(),
+                    summary: "Allow?".into(),
+                    orchestrator: false,
+                    options: vec![],
+                });
+                app.open_decision_inbox();
+                assert!(app.decision_inbox.is_some());
+            }
+            1 => app.graph_filters = Some(Default::default()),
+            _ => app.unblock = Some(unblock::Unblock::orchestrator()),
+        }
+        let navigation = app.navigation.clone();
+        app.paste("ignored");
+        app.key(key_ctrl('o'));
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.navigation, navigation);
+        assert_eq!(app.details.as_ref().unwrap().query, "saved query");
+        assert_eq!(app.input.text, "saved draft");
+        assert!(app.native_input_blocked());
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.decision_inbox.is_none());
+        assert!(app.graph_filters.is_none());
+        assert!(app.unblock.is_none());
+        assert!(app.details.as_ref().unwrap().searching);
+    }
+}
+
+#[test]
+fn modal_input_image_drop_belongs_to_picker_or_comment_editor() {
+    for picker in [false, true] {
+        let mut app = test_app();
+        app.set_focus(Focus::Chat);
+        app.input = InputBuffer::with_text("chat draft");
+        app.editor = Some(Editor {
+            target: "comment:test".into(),
+            input: InputBuffer::with_text("comment"),
+        });
+        if picker {
+            app.picker = Some(Picker::new(Kind::Commands));
+        }
+        app.paste("file:///missing-modal-image.png");
+        assert_eq!(app.input.text, "chat draft");
+        assert!(app.image_drafts.is_empty());
+        assert!(app.notice.is_none());
+        if picker {
+            assert_eq!(
+                app.picker.as_ref().unwrap().query,
+                "file:///missing-modal-image.png"
+            );
+            assert_eq!(app.editor.as_ref().unwrap().input.text, "comment");
+        } else {
+            assert_eq!(
+                app.editor.as_ref().unwrap().input.text,
+                "commentfile:///missing-modal-image.png"
+            );
+        }
+    }
+}
+
+#[test]
+fn modal_input_preserves_event_specific_form_and_composer_exceptions() {
+    let mut app = test_app();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((
+        42,
+        serde_json::from_value(
+            serde_json::json!({"id":"scope", "context":"Scope", "question":"Which scope?", "options":[]}),
+        )
+        .unwrap(),
+    ));
+    app.sync_interview();
+    app.interview_forms
+        .get_mut(&app.conversation)
+        .unwrap()
+        .visible = true;
+    app.editor = Some(Editor {
+        target: "comment:test".into(),
+        input: InputBuffer::with_text("comment"),
+    });
+    app.key(key_press(KeyCode::Char('x')));
+    app.paste(" paste");
+    assert_eq!(app.interview_forms[&app.conversation].input.text, "x");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "comment paste");
+
+    let mut app = test_app();
+    app.open_details("conversation".into());
+    app.set_focus(Focus::Chat);
+    app.navigation.focus = NavigationFocus::Composer;
+    app.details.as_mut().unwrap().searching = true;
+    app.details.as_mut().unwrap().query = "kept search".into();
+    app.paste("session paste");
+    assert_eq!(app.input.text, "session paste");
+    assert_eq!(app.details.as_ref().unwrap().query, "kept search");
+}
+
+#[test]
+fn sidebar_projection_builds_on_actual_draw() {
+    for size in [40, 80, 160, 320] {
+        let mut app = test_app();
+        app.view.tasks = (0..size)
+            .map(|n| view::TaskRow {
+                id: format!("t{n}"),
+                title: format!("Task {n}"),
+                reviewer_summary: Some("Reviewed".into()),
+                ..Default::default()
+            })
+            .collect();
+        app.open_details(format!("reviewer:t{}", size - 1));
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size, size)
+        );
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw visible sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (1, 1));
+        assert!(app.workbench_areas.list_visible);
+        app.view.tasks[size - 1].title = "Updated".into();
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size, size)
+        );
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw refreshed sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (1, 1));
+        app.navigation
+            .update_presentation(|presentation| presentation.list_visible = false);
+        workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        eprintln!(
+            "metadata size={size} work={:?}",
+            workbench::METADATA_WORK.with(|count| count.get())
+        );
+        assert_eq!(workbench::METADATA_WORK.with(|count| count.get()), (0, 0));
+        let builds = workbench::PROJECTION_BUILDS.with(|count| count.get());
+        eprintln!(
+            "actual App::draw hidden sidebar: WorkUnits={} rows={}",
+            builds.0, builds.1
+        );
+        assert_eq!(builds, (0, 0));
+        assert!(!app.workbench_areas.list_visible);
+    }
+}
+
+#[test]
+fn sidebar_metadata_uses_first_match_and_current_view() {
+    for size in [0, 1, 40, 80, 160, 320] {
+        let mut view = view::View::default();
+        view.tasks = (0..size)
+            .map(|n| view::TaskRow {
+                id: format!("t{n}"),
+                ..Default::default()
+            })
+            .collect();
+        let projection = super::work_units::WorkUnits::new(&view);
+        view.tasks.truncate(size / 2);
+        workbench::METADATA_WORK.with(|count| count.set((0, 0)));
+        let rows = workbench::sidebar_with_units(&view, &projection);
+        assert_eq!(rows.iter().filter(|row| row.metadata).count(), size / 2);
+        assert_eq!(
+            workbench::METADATA_WORK.with(|count| count.get()),
+            (size / 2, size)
+        );
+        eprintln!(
+            "missing metadata units={size} index_visits={} lookups={size}",
+            size / 2
+        );
+        assert_eq!(rows.iter().filter(|row| row.stage).count(), size + 1);
+    }
+    let mut view = view::View::default();
+    view.tasks = vec![view::TaskRow {
+        id: "task".into(),
+        kind: "implementation".into(),
+        round: 3,
+        title: "Title".into(),
+        reviewer_summary: Some("Review".into()),
+        ..Default::default()
+    }];
+    let projection = super::work_units::WorkUnits::new(&view);
+    view.tasks.push(view::TaskRow {
+        id: "task".into(),
+        kind: "wrong duplicate".into(),
+        round: 99,
+        ..Default::default()
+    });
+    let rows = workbench::sidebar_with_units(&view, &projection);
+    let metadata: Vec<_> = rows.iter().filter(|row| row.metadata).collect();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].label, "  implementation · round 3");
+    view.tasks.reverse();
+    let rows = workbench::sidebar_with_units(&view, &projection);
+    assert_eq!(
+        rows.iter().find(|row| row.metadata).unwrap().label,
+        "  wrong duplicate · round 99"
+    );
+    view.tasks.clear();
+    let missing = workbench::sidebar_with_units(&view, &projection);
+    assert!(missing.iter().all(|row| !row.metadata));
+    assert_eq!(
+        missing
+            .iter()
+            .filter(|row| row.stage)
+            .map(|row| &row.key)
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .filter(|row| row.stage)
+            .map(|row| &row.key)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn sidebar_scroll_click_and_refresh_preserve_stage_order() {
+    let mut app = test_app();
+    app.view.tasks = (0..20)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("Task {n}"),
+            reviewer_summary: Some("Review".into()),
+            ..Default::default()
+        })
+        .collect();
+    app.view.tasks.push(view::TaskRow {
+        id: "options".into(),
+        kind: "options".into(),
+        title: "Options".into(),
+        ..Default::default()
+    });
+    app.view.tasks[19].depends_on.push("options".into());
+    app.view
+        .task_meta
+        .entry("options".into())
+        .or_default()
+        .options_for = Some("t19".into());
+    app.open_details("reviewer:t19".into());
+    let rows = workbench::sidebar(&app.view);
+    let stages: Vec<_> = rows
+        .iter()
+        .filter(|r| r.stage)
+        .map(|r| r.key.as_str())
+        .collect();
+    assert_eq!(
+        &stages[stages.len() - 3..],
+        ["worker:options", "worker:t19", "reviewer:t19"]
+    );
+    let target = WorkbenchTarget::Agent("worker:t19".into());
+    let start = workbench::visible_start(&rows, &target, 2);
+    assert!(rows[start].stage, "prefer stage over header with same key");
+    let mut terminal = Terminal::new(TestBackend::new(140, 12)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let area = app.workbench_areas.list;
+    let start = workbench::visible_start(&rows, &app.navigation.target, area.height);
+    assert!(start > 0);
+    let (offset, expected) = rows
+        .iter()
+        .skip(start)
+        .take(usize::from(area.height))
+        .enumerate()
+        .find(|(_, r)| r.key == "worker:t19" && r.stage)
+        .unwrap();
+    let expected = expected.key.clone();
+    workbench::PROJECTION_BUILDS.with(|count| count.set((0, 0)));
+    app.mouse(event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: area.x,
+        row: area.y + offset as u16,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.details.as_ref().unwrap().key, expected);
+    assert_eq!(workbench::PROJECTION_BUILDS.with(|count| count.get().1), 1);
+    app.view.tasks[19].title = "Changed title".into();
+    app.view.tasks[19].round = 7;
+    app.view.tasks[19].kind = "research".into();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal_text(&terminal);
+    assert!(text.contains("Changed title"));
+    assert!(text.contains("round 7"));
+    assert!(text.contains("research"));
+    app.view = view::View::default();
+    app.open_details("orchestrator".into());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!terminal_text(&terminal).contains("Changed title"));
+}
+
+#[test]
 fn graph_inspector_prioritizes_each_selected_roles_content_and_preserves_actions() {
     use crate::lean::tui::view::{AUDITOR, PLAN_REVIEWER};
     use crate::lean::tui::work_units::InspectorAction;
@@ -4714,5 +5215,117 @@ fn graph_inspector_prioritizes_each_selected_roles_content_and_preserves_actions
     }
 }
 
+#[test]
+fn merged_dock_and_role_tabs_keep_modal_pointer_ownership() {
+    for target in ["worker:t1", "reviewer:t1"] {
+        let mut app = test_app();
+        app.view.tasks.push(view::TaskRow {
+            id: "t1".into(),
+            change_kind: crate::lean::tasks::ChangeKind::Code,
+            ..Default::default()
+        });
+        app.input = InputBuffer::with_text("Retained 👩‍💻 é");
+        app.open_details(target.into());
+        app.workbench_select_tab(WorkbenchTab::Summary);
+        let _native = app.bind_native_input_for_test();
+        let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let tab = app.workbench_tabs[1];
+        app.navigation
+            .update_presentation(|state| state.native_input = true);
+        app.show_help(Help::Chat);
+        let navigation = app.navigation.clone();
+        app.workbench_dragging = true;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            app.mouse(event::MouseEvent {
+                kind,
+                column: tab.0.x,
+                row: tab.0.y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        app.paste("blocked");
+        assert_eq!(app.navigation, navigation);
+        assert!(!app.workbench_dragging);
+        assert!(app.native_input_blocked());
+        assert_eq!(app.input.text, "Retained 👩‍💻 é");
+        app.key(key_press(KeyCode::Esc));
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: tab.0.x,
+            row: tab.0.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.navigation.presentation().tab, tab.1);
+        assert_eq!(app.details.as_ref().unwrap().key, target);
+        assert!(!app.native_focused());
+        app.key(key_press(KeyCode::Tab));
+        assert_eq!(app.navigation.focus, NavigationFocus::WorkbenchTerminal);
+        assert_eq!(app.input.text, "Retained 👩‍💻 é");
+    }
+}
+
+#[test]
+fn merged_scope_dock_scroll_and_click_resume_after_help() {
+    let mut app = test_app();
+    app.view.workflow_phase = Some("interview".into());
+    app.view.interview_question = Some((
+        1,
+        crate::lean::interview::Question {
+            id: "merge-scope".into(),
+            context: "Scope".into(),
+            question: "Confirm?".into(),
+            options: vec![crate::lean::interview::Choice {
+                label: "Confirm".into(),
+                description: "Proceed".into(),
+            }],
+        },
+    ));
+    app.view.scope_confirmation_summary = Some(
+        (0..80)
+            .map(|index| format!("REQ{index:03} 👩‍💻 é\n"))
+            .collect(),
+    );
+    app.input = InputBuffer::with_text("session draft 👩‍💻 é");
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let hit = app
+        .direction_choices
+        .iter()
+        .find(|(_, action)| matches!(action, render::direction::Action::Review))
+        .unwrap()
+        .0;
+    let pointer = |kind| event::MouseEvent {
+        kind,
+        column: hit.x + 1,
+        row: hit.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.show_help(Help::Chat);
+    app.mouse(pointer(MouseEventKind::Down(MouseButton::Left)));
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    app.paste("blocked");
+    assert!(!app.interview_visible());
+    app.key(key_press(KeyCode::Esc));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(terminal_text(&terminal).contains("REQ000"));
+    let offset = app.offset;
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!terminal_text(&terminal).contains("REQ000"));
+    assert!(!app.interview_visible());
+    app.mouse(pointer(MouseEventKind::Down(MouseButton::Left)));
+    assert!(app.interview_visible());
+    app.workbench_dragging = true;
+    app.mouse(pointer(MouseEventKind::ScrollDown));
+    assert!(!app.workbench_dragging);
+    app.key(key_press(KeyCode::Down));
+    assert!(!app.interview_forms[&app.conversation].sending);
+    assert_eq!(app.offset, offset);
+    assert_eq!(app.input.text, "session draft 👩‍💻 é");
+}
 #[path = "tests/workbench_regressions.rs"]
 mod workbench_regressions;

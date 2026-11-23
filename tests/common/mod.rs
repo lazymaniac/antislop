@@ -2,7 +2,10 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::sync::Once;
+#[path = "../support/resources.rs"]
+mod resources;
+#[allow(unused_imports)]
+pub use resources::{ChildGuard, TestDir, daemon_lock_released_file, tempdir};
 
 pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -16,34 +19,79 @@ pub struct ReleaseOnDrop(pub std::path::PathBuf);
 
 impl Drop for ReleaseOnDrop {
     fn drop(&mut self) {
-        let _ = std::fs::write(&self.0, "release");
+        if let Err(error) = std::fs::write(&self.0, "release") {
+            resources::cleanup_failure(format!("release barrier {}: {error}", self.0.display()));
+        }
     }
 }
 
-/// Creates a relative fixture root so daemon socket paths stay under this
-/// checkout, even when its absolute worktree path is too long for Unix sockets.
-pub fn tempdir() -> tempfile::TempDir {
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    tempfile::tempdir_in(".antislop/tmp").unwrap()
-}
-
-/// Guard daemon tests before startup: a relative, short state path must resolve
-/// beneath this checkout's private test root rather than daemon.rs's fallback.
+/// Resolve relative states against the child's cwd and reject socket fallback.
 pub fn assert_test_socket(state: &Path, process_cwd: &Path) {
+    let resolved = if state.is_absolute() {
+        state.to_path_buf()
+    } else {
+        process_cwd.canonicalize().unwrap().join(state)
+    };
     let socket = antislop::lean::daemon::socket(state);
     assert_eq!(socket, state.join("core.sock"));
-    assert!(socket.is_relative(), "test socket escaped to {socket:?}");
-    let workspace = std::env::current_dir().unwrap().canonicalize().unwrap();
-    let process_cwd = if process_cwd.is_absolute() {
-        process_cwd.to_path_buf()
-    } else {
-        workspace.join(process_cwd)
-    };
-    let private_root = workspace.join(".antislop/tmp");
     assert!(
-        process_cwd.join(&socket).starts_with(&private_root),
-        "test socket is outside .antislop/tmp: {process_cwd:?}/{socket:?}"
+        resolved.as_os_str().len() + "/core.sock".len() < 100,
+        "test socket too long: {resolved:?}"
     );
+    let parent = resolved.parent().unwrap().canonicalize().unwrap();
+    let parent = resources::external(&parent);
+    let root = std::env::var_os("ANTISLOP_TEST_ROOT").expect("run ./cargo.sh test");
+    let root = resources::external(Path::new(&root));
+    assert!(
+        parent.starts_with(root),
+        "test socket must be owned by test root: {resolved:?}"
+    );
+}
+
+/// Own an autostarted daemon's state for the whole consumer scope.
+/// Declare before starting the frontend, after allocating the fixture directory.
+pub struct DaemonStateGuard(pub std::path::PathBuf);
+
+impl Drop for DaemonStateGuard {
+    fn drop(&mut self) {
+        stop_daemon(&antislop::lean::daemon::Client::at(&self.0));
+    }
+}
+
+pub fn stop_daemon(client: &antislop::lean::daemon::Client) {
+    use std::os::unix::fs::FileTypeExt;
+    let stopped = antislop::lean::daemon::Client::stop(client.state_dir(), true);
+    let released = resources::daemon_lock_released(client.state_dir());
+    if let Err(error) = stopped.map(|_| ()).map_err(|e| e.to_string()).and(released) {
+        let message = format!(
+            "stop owned daemon {}: {error}",
+            client.state_dir().display()
+        );
+        resources::retain_resources(client.state_dir(), &message);
+        resources::cleanup_failure(message);
+        return;
+    }
+    // State ownership includes exactly its endpoint, including the long-path fallback.
+    let socket = antislop::lean::daemon::socket(client.state_dir());
+    match std::fs::symlink_metadata(&socket) {
+        Ok(metadata) if metadata.file_type().is_socket() => {
+            if let Err(error) = std::fs::remove_file(&socket) {
+                resources::cleanup_failure(format!(
+                    "remove owned socket {}: {error}",
+                    socket.display()
+                ));
+            }
+        }
+        Ok(_) => resources::cleanup_failure(format!(
+            "owned socket path is no longer a socket: {}",
+            socket.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => resources::cleanup_failure(format!(
+            "inspect owned socket {}: {error}",
+            socket.display()
+        )),
+    }
 }
 
 /// Creates the local `main` ref required before a session branch can start.
@@ -80,24 +128,24 @@ pub fn initialize_git_project(project: &Path) {
     );
 }
 
-/// Isolates user configuration and global runtime for this test process.
+/// Validate pre-launch isolation; never mutate environment in a threaded test.
 pub fn runtime_environment(_project: &Path) {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join(".antislop/tmp")
-            .join(format!("antislop-test-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        // SAFETY: set once before this process starts its test daemons.
-        unsafe {
-            std::env::set_var("ANTISLOP_CONFIG_DIR", root.join("config"));
-            std::env::set_var("ANTISLOP_STATE_ROOT", root.join("state"));
-        }
-    });
+    let root = std::env::var_os("ANTISLOP_TEST_ROOT").expect("run ./cargo.sh test");
+    let root = resources::external(Path::new(&root));
+    for name in ["ANTISLOP_CONFIG_DIR", "ANTISLOP_STATE_ROOT"] {
+        let path = std::env::var_os(name).unwrap_or_else(|| {
+            panic!("{name} missing; run ./cargo.sh test (tests/support/README.md)")
+        });
+        let path = resources::external(Path::new(&path));
+        assert!(
+            path.starts_with(&root),
+            "{name} must be owned by test root: {path:?}"
+        );
+    }
 }
 
 pub fn install_probe_cli(path: &Path, source: &str) {
+    resources::external(path.parent().unwrap());
     use std::os::unix::fs::PermissionsExt;
     // Reuse the canonical protocol without loading support/mod.rs twice in
     // integration crates that already declare their own support module.

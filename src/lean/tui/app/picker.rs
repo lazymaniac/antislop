@@ -239,12 +239,7 @@ impl App {
         let details = self.details.as_ref().map(|details| {
             let mut query = std::collections::hash_map::DefaultHasher::new();
             details.query.hash(&mut query);
-            (
-                &details.key,
-                details.tab,
-                self.navigation.presentation().tab,
-                query.finish(),
-            )
+            (&details.key, details.content_tab(), query.finish())
         });
         format!(
             "{}:{}:{}:{:?}:{:?}",
@@ -257,20 +252,14 @@ impl App {
     }
 
     pub(in crate::lean::tui) fn selection_blocked(&self) -> bool {
-        if self.plan_history.is_some() {
-            return true;
-        }
-        if self.interview_visible() {
-            return true;
-        }
-
-        self.help.is_some()
-            || self.picker.is_some()
-            || self.editor.is_some()
-            || self.flow_editor.is_some()
-            || self.diff.is_some()
-            || self.unblock.is_some()
-            || self.config_editor.as_ref().is_some_and(|e| e.visible)
+        use super::super::input_owner::{InputKind, InputOwner};
+        !matches!(
+            self.input_owner(InputKind::Mouse),
+            InputOwner::Navigation
+                | InputOwner::Composer
+                | InputOwner::DetailsInput
+                | InputOwner::Plan
+        ) || self.diff.is_some()
     }
 }
 

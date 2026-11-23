@@ -80,7 +80,7 @@ fn write_config(dir: &Path, codex: &Path, agy: &Path) -> PathBuf {
 }
 
 struct DaemonGuard {
-    child: std::process::Child,
+    child: common::ChildGuard,
     client: Client,
     state: PathBuf,
 }
@@ -100,6 +100,7 @@ impl DaemonGuard {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .spawn()
+            .map(common::ChildGuard::new)
             .unwrap();
         let client = Client::at(state);
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -215,27 +216,14 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        let _ = self.client.call(&Request::Control(
-            antislop::lean::daemon::ControlRequest::Shutdown,
-        ));
-        let deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        common::stop_daemon(&self.client);
+        self.child.stop();
     }
 }
 
 #[test]
 fn test_conversations_structured_summary() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -273,7 +261,7 @@ fn test_conversations_structured_summary() {
 
 #[test]
 fn test_history_and_events_pagination_and_unavailable_flag() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -374,7 +362,7 @@ fn test_history_and_events_pagination_and_unavailable_flag() {
 
 #[test]
 fn test_message_addressing_validation_and_mail_queue() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -488,7 +476,7 @@ fn test_message_addressing_validation_and_mail_queue() {
 
 #[test]
 fn test_sessions_structured_data() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -563,7 +551,7 @@ fn test_sessions_structured_data() {
 
 #[test]
 fn test_revision_token_review_and_stale_revision_rejection() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -663,7 +651,7 @@ fn grouped_requests_reach_each_daemon_dispatch_domain() {
         ControlRequest, ConversationRequest, HistoryRequest, SessionRequest, TerminalRequest,
     };
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -746,7 +734,7 @@ fn grouped_requests_reach_each_daemon_dispatch_domain() {
 
 #[test]
 fn test_wire_request_deny_unknown_fields_and_defaults() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -785,7 +773,7 @@ fn test_wire_request_deny_unknown_fields_and_defaults() {
 
 #[test]
 fn test_stale_revision_forced_change_between_read_and_execution_has_no_side_effects() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -880,7 +868,7 @@ fn test_stale_revision_forced_change_between_read_and_execution_has_no_side_effe
 
 #[test]
 fn test_task_scoped_query_includes_freshness_token() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -982,7 +970,7 @@ fn test_task_scoped_query_includes_freshness_token() {
 
 #[test]
 fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -1086,7 +1074,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
 
 #[test]
 fn removed_options_are_refused_with_a_reason() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let run = |args: &[&str]| {
         std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
             .args(args)
@@ -1105,7 +1093,7 @@ fn removed_options_are_refused_with_a_reason() {
 
 #[test]
 fn unattended_start_uses_global_state_without_a_trust_registry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let root = dir.path().canonicalize().unwrap();
     let project = root.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -1182,7 +1170,7 @@ fn an_oversized_first_event_still_advances_the_cursor() {
 
 #[test]
 fn live_config_updates_are_validated_and_preserve_daemon_identity() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::tempdir();
     let canonical = temp.path().canonicalize().unwrap();
     let project = canonical.as_path();
     common::initialize_git_project(project);
@@ -1258,7 +1246,7 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
 
 #[test]
 fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let listener =
         std::os::unix::net::UnixListener::bind(antislop::lean::daemon::socket(dir.path())).unwrap();
     let server = std::thread::spawn(move || {
@@ -1285,7 +1273,7 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
 
 #[test]
 fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     common::initialize_git_project(&project);
@@ -1326,7 +1314,7 @@ fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
 #[test]
 fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them() {
     use antislop::lean::store::{ContentOwner, HistoryScope, Mail, Store, TurnStatus};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     let state = dir.path().join("state");
     std::fs::create_dir(&project).unwrap();
@@ -1498,7 +1486,7 @@ fn removed_fixture_endpoint_is_rejected() {
 
 #[test]
 fn retried_operations_act_once_and_return_their_first_result() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();
@@ -1540,7 +1528,7 @@ fn retried_operations_act_once_and_return_their_first_result() {
 
 #[test]
 fn one_named_frontend_steers_a_conversation_and_the_others_watch_until_they_take_control() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let dir_path = dir.path().canonicalize().unwrap();
     let project = dir_path.join("project");
     std::fs::create_dir(&project).unwrap();

@@ -897,7 +897,7 @@ fn apply_fixture(app: &mut App, id: &str) {
                 {"id":"t2","title":"Verify rendering","goal":"Check captured output","kind":"testing","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"Capture is complete"}],"depends_on":["t1"]}
             ]}}));
             app.navigation.screen = Screen::Graph;
-            app.focus = Focus::Graph;
+            app.set_focus(Focus::Graph);
             app.graph_inspector_visible = true;
             if id == "graph-ordinary" {
                 app.view.tasks.insert(
@@ -954,7 +954,7 @@ fn apply_fixture(app: &mut App, id: &str) {
         }
         "graph-empty" | "graph-compact" => {
             app.navigation.screen = Screen::Graph;
-            app.focus = Focus::Graph;
+            app.set_focus(Focus::Graph);
         }
         "workbench-agent" => {
             app.view.apply(&json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p-fixture","tasks":[
@@ -1682,14 +1682,7 @@ fn workbench_identity(app: &App, fixture: Fixture) -> bool {
         && app.details.as_ref().is_some_and(|details| {
             details.key == key
                 && workbench::tabs_for(key, true).contains(&expected_tab)
-                && details.tab
-                    == match expected_tab {
-                        WorkbenchTab::Summary if key.starts_with("reviewer:") => details::CHECKS,
-                        WorkbenchTab::Results => details::RESULT,
-                        WorkbenchTab::Checks => details::CHECKS,
-                        WorkbenchTab::Comments => details::COMMENTS,
-                        _ => 0,
-                    }
+                && details.content_tab() == Some(expected_tab)
         })
         && (expected_tab != WorkbenchTab::Diff
             || app.diff.as_ref().is_some_and(|diff| diff.task == "t1"))

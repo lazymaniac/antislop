@@ -162,125 +162,144 @@ fn grouped_protocol_keeps_defaults_and_rejects_malformed_or_unknown_fields() {
     }
 }
 
-#[test]
-fn every_wire_operation_round_trips_through_its_grouped_request() {
-    let inputs = [
-        json!({"op":"terminal_open","conversation":"c","role":"writer","columns":80,"rows":24}),
-        json!({"op":"terminal_read","conversation":"c","role":"writer","handle":"h","after":2}),
-        json!({"op":"terminal_input","conversation":"c","role":"writer","handle":"h","sequence":3,"input":{"kind":"paste","text":"hello"}}),
-        json!({"op":"terminal_resize","conversation":"c","role":"writer","handle":"h","columns":100,"rows":30}),
-        json!({"op":"terminal_detach","conversation":"c","role":"writer","handle":"h"}),
-        json!({"op":"run_context","conversation":"c","turn":"t"}),
-        json!({"op":"session_action","conversation":"c","action":"create_pr"}),
-        json!({"op":"session_action","conversation":"c","action":"merge_with_main"}),
-        json!({"op":"session_action","conversation":"c","action":"continue_work"}),
-        json!({"op":"comment","conversation":"c","plan":null,"target":"T1","text":"note","round":null,"run":null}),
-        json!({"op":"send_to_agent","message":{"conversation":"c","plan":null,"recipient":"worker","operation_id":"op","expected_round":null,"expected_run":null,"text":"hello"}}),
-        json!({"op":"task_rounds","conversation":"c","plan":"p","id":"task"}),
-        json!({"op":"task_round","conversation":"c","plan":"p","id":"task","round":1}),
-        json!({"op":"session_events","conversation":"c","turn":"t","after":0,"limit":null}),
-        json!({"op":"history_content","conversation":"c","owner":{"kind":"round","task":"task","round":1,"field":"report"},"offset":0}),
-        json!({"op":"history_messages","conversation":"c","scope":{"kind":"round","task":"task","round":1},"after":0,"limit":null}),
-        json!({"op":"session_content","conversation":"c","event":1,"field":"prompt","offset":0}),
-        json!({"op":"result_documents","conversation":"c"}),
-        json!({"op":"result_document_content","conversation":"c","id":"e8f444f0-e3e5-4823-bc05-cd5857368f0e","offset":65536}),
-        json!({"op":"get_source","conversation":"c","source_id":"s"}),
-        json!({"op":"identity"}),
-        json!({"op":"get_config"}),
-        json!({"op":"set_config","toml":"[policy]","expected_revision":"revision"}),
-        json!({"op":"shutdown"}),
-        json!({"op":"force_shutdown"}),
-        json!({"op":"conversations"}),
-        json!({"op":"start"}),
-        json!({"op":"send","conversation":"c","text":"hello"}),
-        json!({"op":"send","conversation":"c","text":"hello","operation_id":"op"}),
-        json!({"op":"cancel","conversation":"c","operation_id":"op"}),
-        json!({"op":"answer_approval","conversation":"c","request":"r","choice":"1","operation_id":"op"}),
-        json!({"op":"reject","conversation":"c","plan":"p"}),
-        json!({"op":"resume","conversation":"c","plan":"p"}),
-        json!({"op":"review_comments","conversation":"c","plan":"p"}),
-        json!({"op":"recover","conversation":"c","plan":"p","task":"t","action":"retry_with_guidance","freshness_token":"f"}),
-        json!({"op":"restart_orchestrator","conversation":"c"}),
-        json!({"op":"take_control","conversation":"c"}),
-        json!({"op":"cancel","conversation":"c"}),
-        json!({"op":"pause","conversation":"c","paused":true}),
-        json!({"op":"plans","conversation":"c"}),
-        json!({"op":"plan","conversation":"c","plan":"p"}),
-        json!({"op":"comments","conversation":"c"}),
-        json!({"op":"comment","conversation":"c","target":"T1","text":"note"}),
-        json!({"op":"comment_status","conversation":"c","id":1,"status":"resolved"}),
-        json!({"op":"diff","conversation":"c","plan":"p","id":"t"}),
-        json!({"op":"review","conversation":"c","plan":"p","id":"t"}),
-        json!({"op":"task_checks","plan":"p","id":"t"}),
-        json!({"op":"task","plan":"p","id":"t"}),
-        json!({"op":"events","conversation":"c","after":0,"wait_ms":0}),
-        json!({"op":"sessions","conversation":"c"}),
-        json!({"op":"history","conversation":"c"}),
-        json!({"op":"mail","conversation":"c"}),
-    ];
+mod fixtures;
 
-    for input in inputs {
-        let wire: WireRequest = serde_json::from_value(input.clone()).unwrap();
-        let expected = serde_json::to_value(wire).unwrap();
-        let request: Request = serde_json::from_value(input).unwrap();
-        assert_group_matches_operation(&request, expected["op"].as_str().unwrap());
-        assert_eq!(serde_json::to_value(request).unwrap(), expected);
+#[test]
+fn every_operation_matches_frozen_messages_in_both_directions() {
+    let fixtures = fixtures::fixtures();
+    assert_eq!(fixtures.len(), 58);
+    let mut operations = std::collections::BTreeSet::new();
+    for fixture in fixtures {
+        let expected = fixture.expected;
+        assert!(operations.insert(expected["op"].as_str().unwrap().to_owned()));
+        assert_eq!(serde_json::to_value(&fixture.request).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<Request>(expected.clone()).unwrap(),
+            fixture.request,
+            "{expected}"
+        );
+        // Every supplied field has a type contract; arbitrary arrays are invalid.
+        for field in expected.as_object().unwrap().keys() {
+            let mut invalid = expected.clone();
+            invalid[field] = json!([{}]);
+            assert!(
+                serde_json::from_value::<Request>(invalid).is_err(),
+                "{field}: {expected}"
+            );
+
+            let mut absent = expected.clone();
+            absent.as_object_mut().unwrap().remove(field);
+            if let Some(default) = fixture.defaults.get(field) {
+                let mut canonical = expected.clone();
+                if fixture.omitted.contains(&field.as_str()) {
+                    canonical.as_object_mut().unwrap().remove(field);
+                } else {
+                    canonical[field] = default.clone();
+                }
+                let request: Request = serde_json::from_value(absent).unwrap();
+                assert_eq!(
+                    serde_json::to_value(request).unwrap(),
+                    canonical,
+                    "{field}: {expected}"
+                );
+            } else {
+                assert!(
+                    serde_json::from_value::<Request>(absent).is_err(),
+                    "{field}: {expected}"
+                );
+            }
+
+            let mut null = expected.clone();
+            null[field] = serde_json::Value::Null;
+            if fixture.optional.contains(&field.as_str()) {
+                let request: Request = serde_json::from_value(null).unwrap();
+                let mut canonical = expected.clone();
+                if fixture.omitted.contains(&field.as_str()) {
+                    canonical.as_object_mut().unwrap().remove(field);
+                } else {
+                    canonical[field] = serde_json::Value::Null;
+                }
+                assert_eq!(serde_json::to_value(request).unwrap(), canonical);
+            } else {
+                assert!(
+                    serde_json::from_value::<Request>(null).is_err(),
+                    "{field}: {expected}"
+                );
+            }
+        }
+        let mut absent_defaults = expected.clone();
+        let mut canonical_defaults = expected.clone();
+        for (field, default) in fixture.defaults.as_object().unwrap() {
+            absent_defaults.as_object_mut().unwrap().remove(field);
+            canonical_defaults[field] = default.clone();
+            let mut explicit = expected.clone();
+            explicit[field] = default.clone();
+            let mut canonical = explicit.clone();
+            if fixture.omitted.contains(&field.as_str()) {
+                canonical.as_object_mut().unwrap().remove(field);
+                canonical_defaults.as_object_mut().unwrap().remove(field);
+            }
+            let request: Request = serde_json::from_value(explicit).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), canonical);
+        }
+        let request: Request = serde_json::from_value(absent_defaults).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), canonical_defaults);
+
+        let mut unknown = expected.clone();
+        unknown["scope_hash"] = json!("obsolete");
+        if expected.as_object().unwrap().len() == 1 {
+            // Existing internally tagged unit variants ignore surplus fields.
+            assert_eq!(
+                serde_json::from_value::<Request>(unknown).unwrap(),
+                fixture.request
+            );
+        } else {
+            assert!(
+                serde_json::from_value::<Request>(unknown)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unknown field")
+            );
+        }
     }
-    assert!(
-        serde_json::from_value::<Request>(json!({
-            "op":"session_action","conversation":"c","action":"publish"
-        }))
-        .is_err()
-    );
 }
 
-fn assert_group_matches_operation(request: &Request, operation: &str) {
-    let actual = match request {
-        Request::Terminal(_) => "terminal",
-        Request::Session(_) => "session",
-        Request::History(_) => "history",
-        Request::Conversation(_) => "conversation",
-        Request::Control(_) => "control",
-    };
-    let expected = match operation {
-        "terminal_open" | "terminal_read" | "terminal_input" | "terminal_resize"
-        | "terminal_detach" => "terminal",
-        "run_context"
-        | "session_action"
-        | "session_events"
-        | "session_content"
-        | "result_documents"
-        | "result_document_content"
-        | "sessions" => "session",
-        "task_rounds" | "task_round" | "history_content" | "history_messages" | "events"
-        | "history" | "mail" => "history",
-        "add_source"
-        | "get_source"
-        | "send_to_agent"
-        | "send"
-        | "reject"
-        | "resume"
-        | "review_comments"
-        | "recover"
-        | "restart_orchestrator"
-        | "cancel"
-        | "pause"
-        | "answer_approval"
-        | "take_control"
-        | "plans"
-        | "plan"
-        | "comments"
-        | "comment"
-        | "comment_status"
-        | "diff"
-        | "review"
-        | "task_checks"
-        | "task" => "conversation",
-        "identity" | "get_config" | "set_config" | "shutdown" | "force_shutdown"
-        | "conversations" | "start" => "control",
-        unknown => panic!("unmapped wire operation: {unknown}"),
-    };
-    assert_eq!(actual, expected, "operation: {operation}");
+#[test]
+fn special_adapters_keep_their_grouped_variants() {
+    for (input, request, output) in [
+        (
+            json!({"op":"start"}),
+            Request::Control(ControlRequest::Start),
+            json!({"op":"start","project":null}),
+        ),
+        (
+            json!({"op":"start","project":null}),
+            Request::Control(ControlRequest::Start),
+            json!({"op":"start","project":null}),
+        ),
+        (
+            json!({"op":"events","conversation":"c","after":1,"wait_ms":2}),
+            Request::History(HistoryRequest::Events {
+                conversation: "c".into(),
+                after: 1,
+                wait_ms: 2,
+            }),
+            json!({"op":"events","conversation":"c","after":1,"wait_ms":2,"limit":null}),
+        ),
+    ] {
+        assert_eq!(serde_json::from_value::<Request>(input).unwrap(), request);
+        assert_eq!(serde_json::to_value(request).unwrap(), output);
+    }
+    let paged = Request::History(HistoryRequest::EventsPaged {
+        conversation: "c".into(),
+        after: 1,
+        wait_ms: 2,
+        limit: None,
+    });
+    assert_eq!(
+        serde_json::to_value(paged).unwrap(),
+        json!({"op":"events","conversation":"c","after":1,"wait_ms":2,"limit":null})
+    );
 }
 
 #[test]
@@ -317,4 +336,91 @@ fn removed_scope_fingerprint_field_is_rejected_in_favor_of_revision_token() {
         serde_json::to_value(request).unwrap()["revision_token"],
         "current"
     );
+}
+
+#[test]
+fn envelope_and_transport_keep_validation_errors() {
+    for input in [
+        json!({"protocol":6,"request":{"op":"identity"}}),
+        json!({"protocol":6,"request":{"op":"identity"},"client":null}),
+        json!({"protocol":6,"request":{"op":"identity"},"client":"frontend"}),
+    ] {
+        let envelope: super::RequestEnvelope = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(envelope.protocol, 6);
+        assert_eq!(envelope.request, Request::Control(ControlRequest::Identity));
+        assert_eq!(envelope.client.as_deref(), input["client"].as_str());
+    }
+    for (input, error) in [
+        (
+            json!({"request":{"op":"identity"}}),
+            "missing field `protocol`",
+        ),
+        (json!({"protocol":6}), "missing field `request`"),
+        (
+            json!({"protocol":6,"request":{"op":"identity"},"extra":true}),
+            "unknown field `extra`",
+        ),
+        (
+            json!({"protocol":6,"request":{"op":"identity"},"client":false}),
+            "invalid type",
+        ),
+        (
+            json!({"protocol":"6","request":{"op":"identity"}}),
+            "invalid type",
+        ),
+    ] {
+        let actual = serde_json::from_value::<super::RequestEnvelope>(input)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(actual.contains(error), "{actual}");
+    }
+    // Use the real framing/unique-key decoder rather than serde_json alone.
+    for bytes in [
+        &b"{\"protocol\":6,\"protocol\":6,\"request\":{\"op\":\"identity\"}}\n"[..],
+        &b"{\"protocol\":6,\"request\":{\"op\":\"identity\",\"op\":\"shutdown\"}}\n"[..],
+    ] {
+        let error =
+            crate::transport::read::<super::RequestEnvelope>(&mut std::io::Cursor::new(bytes))
+                .err()
+                .unwrap()
+                .to_string();
+        assert!(error.contains("duplicate JSON object key"), "{error}");
+    }
+}
+
+#[test]
+fn malformed_messages_keep_diagnostic_text() {
+    let unknown = serde_json::from_value::<Request>(json!({"op":"unknown_operation"}))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        unknown,
+        include_str!("tests/unknown_operation.txt").trim_end()
+    );
+    for (input, expected) in [
+        (
+            json!({"op":"session_action","conversation":"c","action":"publish"}),
+            "unknown variant `publish`, expected one of `create_pr`, `merge_with_main`, `continue_work`",
+        ),
+        (
+            json!({"op":"send","conversation":"c"}),
+            "missing field `text`",
+        ),
+        (
+            json!({"op":"terminal_open","conversation":"c","role":"writer","columns":65536,"rows":24}),
+            "invalid value: integer `65536`, expected u16",
+        ),
+        (
+            json!({"op":"send","conversation":"c","text":"hello","scope_hash":"old"}),
+            "unknown field `scope_hash`, expected one of `conversation`, `operation_id`, `text`, `to`, `images`",
+        ),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<Request>(input)
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
 }

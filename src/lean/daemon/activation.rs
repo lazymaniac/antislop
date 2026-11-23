@@ -858,9 +858,7 @@ mod operation_tests {
             use std::os::unix::fs::MetadataExt;
             let cwd = std::env::current_dir().unwrap();
             let before = std::fs::metadata(".").unwrap();
-            let root = crate::lean::paths::state_root().unwrap().join("tests");
-            std::fs::create_dir_all(&root).unwrap();
-            let directory = tempfile::tempdir_in(root).unwrap();
+            let directory = crate::test_resources::tempdir();
             let receipt = directory.path().join("completed");
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([

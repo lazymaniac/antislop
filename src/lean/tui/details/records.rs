@@ -19,13 +19,21 @@ pub(super) struct ConversationCache {
 impl Details {
     pub(in crate::lean::tui) fn records(&mut self, view: &View) -> Vec<Rc<DetailRecord>> {
         let mut records = Vec::new();
-        match self.tab {
-            PLAN => plan::plan(self, view, &mut records),
-            0 | REVIEWER => overview::overview(self, view, &mut records),
-            REVIEW => review::review(self, view, &mut records),
-            COMMENTS => comments::comments(self, view, &mut records),
-            CHECKS => checks::checks(self, view, &mut records),
-            _ => results::results(self, view, &mut records),
+        use crate::lean::tui::WorkbenchTab;
+        match self.content_tab() {
+            Some(WorkbenchTab::Summary) if self.shows_checks() => {
+                checks::checks(self, view, &mut records)
+            }
+            Some(WorkbenchTab::Summary | WorkbenchTab::Diff | WorkbenchTab::Pty) => {
+                overview::overview(self, view, &mut records)
+            }
+            Some(WorkbenchTab::Conversation) => return self.project_dialogue_entries(view),
+            Some(WorkbenchTab::Results) => results::results(self, view, &mut records),
+            Some(WorkbenchTab::Comments) => comments::comments(self, view, &mut records),
+            Some(WorkbenchTab::Checks) => checks::checks(self, view, &mut records),
+            None if self.tab == PLAN => plan::plan(self, view, &mut records),
+            None if self.tab == REVIEW => review::review(self, view, &mut records),
+            None => results::results(self, view, &mut records),
         }
         records
     }
