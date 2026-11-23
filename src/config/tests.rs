@@ -481,7 +481,7 @@ fn pi_commands_round_trip_without_reinterpreting_wrapper_tokens() {
     let example = include_str!("../../examples/antislop.toml").replace("codex", "pi");
     for (command, binary, prefix) in [
         (r#""pi""#, "pi", vec![]),
-        (r#""unsloth launch pi""#, "unsloth", vec!["launch", "pi"]),
+        (r#""unsloth start pi""#, "unsloth", vec!["start", "pi"]),
         (
             r#"["unsloth", "launch", "pi"]"#,
             "unsloth",

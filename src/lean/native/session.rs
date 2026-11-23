@@ -44,6 +44,7 @@ impl Session {
             stop: AtomicBool::new(false),
             executing: AtomicBool::new(false),
             primed: AtomicBool::new(false),
+            finished_pi_turn: Mutex::new(None),
             startup_failed: AtomicBool::new(false),
             approver: Mutex::new(None),
             touched: Mutex::new(Instant::now()),
@@ -186,12 +187,23 @@ impl Session {
     }
 
     fn wait_for_connection(&self, cancel: &AtomicBool) -> Result<()> {
+        if let Some(pi) = &self.pi {
+            let mut finished = self.finished_pi_turn.lock().map_err(invalid)?;
+            if let Some(turn) = finished.as_deref() {
+                pi.request_idle(turn, false)?;
+                *finished = None;
+            }
+        }
         loop {
             if cancel.load(Ordering::SeqCst) {
                 return Err(invalid(mcp::CANCELLED));
             }
             let extension_ready = self.pi.as_ref().map_or(Ok(true), |pi| pi.poll())?;
-            if self.gateway.connected() && extension_ready {
+            let idle = self
+                .pi
+                .as_ref()
+                .map_or(Ok(true), |pi| pi.idle_confirmed())?;
+            if self.gateway.connected() && extension_ready && idle {
                 return Ok(());
             }
             self.check_alive()?;
@@ -267,6 +279,10 @@ impl Session {
         }
         self.gateway.while_open(|| {
             if interrupt {
+                require(
+                    self.pi.is_none(),
+                    "Pi interrupt steering requires cancelling the current turn first",
+                )?;
                 terminal::Session::interrupt(&self.screen)?;
             }
             let mut context = crate::lean::prompt_context::PromptContext::default();
@@ -305,6 +321,9 @@ impl Session {
     ) -> Result<agent::Outcome> {
         self.submit_turn(turn, prompt, cancel)?;
         let finish = self.wait_for_result(turn, cancel)?;
+        if self.pi.is_some() {
+            *self.finished_pi_turn.lock().map_err(invalid)? = Some(turn.to_owned());
+        }
         self.learn_identity(registry);
         Ok(agent::Outcome {
             session: self.identity(),
@@ -331,6 +350,9 @@ impl Session {
         {
             core.store.append_event(&self.conversation, Some(turn), None, "prompt_transport", &serde_json::json!({"body_bytes":prompt.len(),"footer_bytes":transmitted.len() - prompt.len(),"measurement":"UTF-8 transport bytes; excludes provider context and billed tokens"}))?;
         }
+        if let Some(pi) = &self.pi {
+            pi.track_submission(turn)?;
+        }
         terminal::Session::submit(&self.screen, &transmitted)?;
         self.primed.store(true, Ordering::SeqCst);
         Ok(())
@@ -338,18 +360,25 @@ impl Session {
 
     fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
         let readiness = Mutex::new(readiness::Tracker::default());
-        self.gateway
+        let result = self
+            .gateway
             .wait(turn, cancel, || {
                 self.check_alive()?;
                 self.serve_approval(cancel)
                     .and_then(|()| self.remind_if_ready(turn, cancel, &readiness))
             })
-            .inspect_err(|error| {
-                if error.to_string() == mcp::CANCELLED {
-                    let _ = terminal::Session::interrupt(&self.screen);
-                }
-            })
-            .map_err(|error| self.describe_result_error(error))
+            .map_err(|error| self.describe_result_error(error));
+        if result
+            .as_ref()
+            .is_err_and(|error| error.to_string() == mcp::CANCELLED)
+        {
+            if let Some(pi) = &self.pi {
+                pi.request_idle(turn, true)?;
+            } else {
+                terminal::Session::interrupt(&self.screen)?;
+            }
+        }
+        result
     }
 
     fn remind_if_ready(
@@ -366,13 +395,16 @@ impl Session {
             .upgrade()
             .ok_or_else(|| invalid("agent session lost its core"))?;
         let paused = core.store.paused(&self.conversation)?;
-        let screen =
-            terminal::tail(&self.screen, SCREEN_LINES).replace(self.gateway.token(), "[REDACTED]");
-        let ready =
-            readiness
-                .lock()
-                .map_err(invalid)?
-                .observe(self.spec.provider, &screen, false, paused);
+        let mut tracker = readiness.lock().map_err(invalid)?;
+        let ready = if let Some(pi) = &self.pi {
+            pi.submitted_turn_idle()?
+                .is_some_and(|idle| tracker.observe_pi(idle, paused))
+        } else {
+            let screen = terminal::tail(&self.screen, SCREEN_LINES)
+                .replace(self.gateway.token(), "[REDACTED]");
+            tracker.observe(self.spec.provider, &screen, false, paused)
+        };
+        drop(tracker);
         if ready && !cancel.load(Ordering::SeqCst) {
             let footer = self.gateway.completion_footer()?;
             self.gateway.while_pending(turn, || {

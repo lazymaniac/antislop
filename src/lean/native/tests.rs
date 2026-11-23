@@ -379,43 +379,50 @@ fn a_session_is_replaced_when_the_wanted_one_differs_from_the_live_one() {
 
 #[test]
 fn cancelled_gateway_startup_keeps_the_session_retryable() {
-    let dir = test_tempdir();
-    let core = core(dir.path());
-    let binary = dir.path().join("never-connect");
-    std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let spec = agent::Spec {
-        provider: crate::config::ProviderKind::Opencode,
-        binary: binary.canonicalize().unwrap(),
-        args: vec![],
-        model: None,
-        effort: None,
-        cwd: dir.path().into(),
-        runtime: core.state.clone(),
-        add_dirs: vec![],
+    for variant in 0..3 {
+        let dir = test_tempdir();
+        let core = core(dir.path());
+        let binary = dir.path().join("never-connect");
+        std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut spec = agent::Spec {
+            provider: crate::config::ProviderKind::Opencode,
+            binary: binary.canonicalize().unwrap(),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().into(),
+            runtime: core.state.clone(),
+            add_dirs: vec![],
 
-        resume: None,
-    };
-    let session = core
-        .native
-        .prepare_scoped(&core, "c", "orchestrator", &spec, "")
-        .unwrap();
+            resume: None,
+        };
+        if variant > 0 {
+            let pi = pi_lifecycle_spec(&core, dir.path(), variant == 2);
+            spec.provider = pi.provider;
+            spec.args = pi.args;
+        }
+        let session = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
 
-    let error = session
-        .run(
-            &core.native,
-            "cancelled",
-            "must not be typed",
-            &AtomicBool::new(true),
-        )
-        .unwrap_err();
+        let error = session
+            .run(
+                &core.native,
+                "cancelled",
+                "must not be typed",
+                &AtomicBool::new(true),
+            )
+            .unwrap_err();
 
-    assert_eq!(error.to_string(), mcp::CANCELLED);
-    assert!(!session.failed_before_start());
-    assert!(!session.stop.load(Ordering::SeqCst));
-    assert!(!session.primed.load(Ordering::SeqCst));
-    assert!(!session.gateway.connected());
-    core.native.shutdown().unwrap();
+        assert_eq!(error.to_string(), mcp::CANCELLED);
+        assert!(!session.failed_before_start());
+        assert!(!session.stop.load(Ordering::SeqCst));
+        assert!(!session.primed.load(Ordering::SeqCst));
+        assert!(!session.gateway.connected());
+        core.native.shutdown().unwrap();
+    }
 }
 
 #[test]
@@ -1478,4 +1485,417 @@ fn pi_pty_executes_shipped_extension_and_terminal_prose_does_not_finish_the_turn
         assert!(session.gateway.connected());
         assert!(session.identity().unwrap().ends_with(".jsonl"));
     }
+}
+
+fn pi_lifecycle_spec(core: &Core, directory: &Path, wrapped: bool) -> agent::Spec {
+    let script = directory.join(if wrapped { "unsloth" } else { "pi-lifecycle" });
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/pi_extension.mjs");
+    let prefix = if wrapped {
+        "[ \"$1\" = start ] && [ \"$2\" = pi ] || exit 2\nshift 2\n"
+    } else {
+        ""
+    };
+    let invocation = if wrapped {
+        "exec 3<&0\nnode"
+    } else {
+        "exec node"
+    };
+    let wait = if wrapped { " <&3 &\nwait $!" } else { "" };
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n{prefix}{invocation} '{}' \"$@\"{wait}\n",
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut args: Vec<String> = if wrapped {
+        vec!["start".into(), "pi".into()]
+    } else {
+        vec![]
+    };
+    args.extend(
+        [
+            "--interactive",
+            "--lifecycle",
+            "--model",
+            "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL",
+            "--context-length",
+            "200000",
+            "--reasoning",
+            "auto",
+        ]
+        .map(str::to_owned),
+    );
+    agent::Spec {
+        provider: crate::config::ProviderKind::Pi,
+        binary: script,
+        args,
+        model: None,
+        effort: None,
+        cwd: directory.into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    }
+}
+
+fn pi_fixture_handler(session: &Session) {
+    session
+        .set_tool_handler(Arc::new(|_, _| Ok(serde_json::json!({"recorded":true}))))
+        .unwrap();
+}
+
+#[test]
+fn pi_and_unsloth_keep_context_across_cancel_failure_and_restart() {
+    for wrapped in [false, true] {
+        let dir = test_tempdir();
+        let core = core(dir.path());
+        let mut spec = pi_lifecycle_spec(&core, dir.path(), wrapped);
+        let session = core
+            .native
+            .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")
+            .unwrap();
+        pi_fixture_handler(&session);
+        let first = session
+            .run(&core.native, "first", "hello", &AtomicBool::new(false))
+            .unwrap();
+        spec.resume = first.session.clone();
+        let same = core
+            .native
+            .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")
+            .unwrap();
+        assert!(Arc::ptr_eq(&same, &session));
+        let attached = core
+            .terminal_open("pi-life", "worker:task", 80, 24, false)
+            .unwrap();
+        core.terminal_read("pi-life", "worker:task", &attached.handle, 0)
+            .unwrap();
+        core.terminal_detach("pi-life", "worker:task", &attached.handle)
+            .unwrap();
+        assert_eq!(session.identity(), spec.resume);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let worker = same.clone();
+        let worker_core = core.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(worker.run(
+                &worker_core.native,
+                "cancelled",
+                "fixture-delay-start fixture-wait",
+                &worker_cancel,
+            ));
+        });
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !terminal::tail(&session.screen, SCREEN_LINES).contains("queued cancelled") {
+            assert!(
+                Instant::now() < deadline,
+                "{}",
+                terminal::tail(&session.screen, SCREEN_LINES)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            receive
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err()
+                .to_string(),
+            mcp::CANCELLED
+        );
+        let following = session
+            .run(
+                &core.native,
+                "following",
+                "fixture-work-across-ticks",
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(following.session, first.session);
+        let error = session
+            .run(
+                &core.native,
+                "exit",
+                "fixture-exit",
+                &AtomicBool::new(false),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("process_exit") && error.contains('7'),
+            "{error}"
+        );
+        drop(same);
+        drop(session);
+        core.native.shutdown().unwrap();
+        // Reopen the actual durable store through Core's daemon recovery path.
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap();
+        let saved = core
+            .store
+            .start_turn(&conversation.id, "worker:recovery", "pi", 0, None)
+            .unwrap();
+        core.store
+            .set_session(&saved.id, spec.resume.as_deref().unwrap())
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation.id,
+                Some(&saved.id),
+                None,
+                "agent_final",
+                &serde_json::json!({"text":first.text}),
+            )
+            .unwrap();
+        core.store
+            .finish_turn(&saved.id, store::TurnStatus::Done, None)
+            .unwrap();
+        let interrupted = core
+            .store
+            .start_turn(&conversation.id, "worker:recovery", "pi", 0, None)
+            .unwrap();
+        drop(core);
+        let core = self::core(dir.path());
+        assert_eq!(
+            core.store
+                .last_turn(&conversation.id, "worker:recovery")
+                .unwrap()
+                .unwrap()
+                .status,
+            store::TurnStatus::Interrupted
+        );
+        assert!(
+            core.store
+                .events_since(&conversation.id, 0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "agent_final" && event.payload["text"] == first.text)
+        );
+        assert_ne!(saved.id, interrupted.id);
+        let restarted = core
+            .native
+            .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")
+            .unwrap();
+        pi_fixture_handler(&restarted);
+        let resumed = restarted
+            .run(&core.native, "resumed", "continue", &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(resumed.session, first.session);
+        let history = std::fs::read_to_string(first.session.unwrap()).unwrap();
+        for turn in ["first", "cancelled", "following", "exit", "resumed"] {
+            assert!(history.contains(turn), "missing {turn}");
+        }
+        let error = restarted
+            .run(
+                &core.native,
+                "malformed",
+                "fixture-malformed fixture-wait",
+                &AtomicBool::new(false),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Pi extension:"), "{error}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&first.text).unwrap()["report"],
+            "adapter result"
+        );
+    }
+}
+
+#[test]
+#[ignore = "runs installed unsloth and the exact requested model; requires ANTISLOP_PI_PROBE_DIRECTORY outside checkout"]
+fn installed_unsloth_exact_profile_lifecycle_probe() {
+    let directory =
+        std::env::var("ANTISLOP_PI_PROBE_DIRECTORY").expect("durable evidence directory required");
+    let directory = Path::new(&directory);
+    std::fs::create_dir_all(directory).unwrap();
+    let core = core(directory);
+    let args = [
+        "start",
+        "pi",
+        "--model",
+        "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL",
+        "--context-length",
+        "200000",
+        "--reasoning",
+        "auto",
+    ]
+    .map(str::to_owned)
+    .into();
+    let mut spec = agent::Spec {
+        provider: crate::config::ProviderKind::Pi,
+        binary: "unsloth".into(),
+        args,
+        model: None,
+        effort: None,
+        cwd: directory.into(),
+        runtime: core.state.clone(),
+        add_dirs: vec![],
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "probe", "worker:task", &spec, "")
+        .unwrap();
+    pi_fixture_handler(&session);
+    let result = session.run(
+        &core.native,
+        "probe-first",
+        "Call complete with report='probe passed' and commit_message='test: probe'.",
+        &AtomicBool::new(false),
+    );
+    let screen = terminal::tail(&session.screen, 40).replace(session.gateway.token(), "[REDACTED]");
+    std::fs::write(directory.join("terminal.txt"), &screen).unwrap();
+    let result = result.unwrap_or_else(|error| panic!("{error}; terminal:\n{screen}"));
+    spec.resume = result.session;
+    let same = core
+        .native
+        .prepare_scoped(&core, "probe", "worker:task", &spec, "")
+        .unwrap();
+    assert!(Arc::ptr_eq(&session, &same));
+    let second = same
+        .run(
+            &core.native,
+            "probe-second",
+            "Call complete again with report='followup passed' and commit_message='test: probe'.",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(second.session, spec.resume);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let worker = same.clone();
+    let worker_core = core.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(worker.run(
+            &worker_core.native,
+            "probe-cancel",
+            "Write a long numbered list of 1000 unique test ideas before calling complete.",
+            &worker_cancel,
+        ));
+    });
+    while !same.executing.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Deliberate manual cancellation of the probe, independent of progress.
+    std::thread::sleep(Duration::from_secs(1));
+    cancel.store(true, Ordering::SeqCst);
+    assert_eq!(
+        receive.recv().unwrap().unwrap_err().to_string(),
+        mcp::CANCELLED
+    );
+    let after_cancel = same
+        .run(
+            &core.native,
+            "probe-after-cancel",
+            "Call complete with report='abort confirmed' and commit_message='test: probe'.",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(after_cancel.session, spec.resume);
+    drop(same);
+    drop(session);
+    core.native.shutdown().unwrap();
+    let resumed = core
+        .native
+        .prepare_scoped(&core, "probe", "worker:task", &spec, "")
+        .unwrap();
+    pi_fixture_handler(&resumed);
+    resumed
+        .run(
+            &core.native,
+            "probe-resumed",
+            "Call complete with report='resume passed' and commit_message='test: probe'.",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+}
+
+#[test]
+fn pi_and_unsloth_report_start_failure_and_disconnection_without_erasing_history() {
+    for wrapped in [false, true] {
+        let dir = test_tempdir();
+        let core = core(dir.path());
+        let mut spec = pi_lifecycle_spec(&core, dir.path(), wrapped);
+        spec.args.push("--fixture-start-failure".into());
+        let startup = core
+            .native
+            .prepare_scoped(&core, "startup", "worker:task", &spec, "")
+            .unwrap();
+        let error = startup
+            .run(
+                &core.native,
+                "not-submitted",
+                "hello",
+                &AtomicBool::new(false),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("missing backend") && error.contains("13"),
+            "{error}"
+        );
+        assert!(startup.failed_before_start());
+        assert!(!startup.primed.load(Ordering::SeqCst));
+        spec.args.pop();
+        let session = core
+            .native
+            .prepare_scoped(&core, "startup", "worker:task", &spec, "")
+            .unwrap();
+        pi_fixture_handler(&session);
+        let accepted = session
+            .run(&core.native, "accepted", "hello", &AtomicBool::new(false))
+            .unwrap();
+        let error = session
+            .run(
+                &core.native,
+                "disconnected",
+                "fixture-disconnect fixture-wait",
+                &AtomicBool::new(false),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("connection reset by peer"), "{error}");
+        let history = std::fs::read_to_string(accepted.session.unwrap()).unwrap();
+        assert!(history.contains("accepted") && history.contains("disconnected"));
+        assert!(!session.executing.load(Ordering::SeqCst));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&accepted.text).unwrap()["report"],
+            "adapter result"
+        );
+    }
+}
+
+#[test]
+fn pi_recovery_does_not_claim_a_foreign_wrapper_by_command_substring() {
+    use std::os::unix::process::CommandExt;
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let foreign = dir.path().join("pi-foreign");
+    std::fs::write(&foreign, "#!/bin/sh\nsleep 30\n").unwrap();
+    std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut child = std::process::Command::new(&foreign)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO native_processes(pid,started_ms,provider) VALUES(?1,?2,'pi')",
+            rusqlite::params![child.id(), store::now_ms()],
+        )
+        .unwrap();
+    recover(&core.store, &core.state).unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    // This test owns the foreign process too; clean it after the assertion.
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGTERM);
+    }
+    child.wait().unwrap();
 }

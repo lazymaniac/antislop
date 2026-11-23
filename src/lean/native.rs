@@ -59,6 +59,8 @@ pub struct Session {
     stop: AtomicBool,
     executing: AtomicBool,
     primed: AtomicBool,
+    /// Completed Pi turn whose idle state must be confirmed before another prompt.
+    finished_pi_turn: Mutex<Option<String>>,
     /// The CLI died or never connected before any prompt was typed into it,
     /// so the turn did nothing and can be started again without loss.
     startup_failed: AtomicBool,
@@ -115,7 +117,11 @@ pub(crate) fn recover(store: &store::Store, state: &Path) -> Result<()> {
             .collect::<std::result::Result<Vec<_>, _>>()?
     };
     for (pid, started, provider) in rows {
-        agent::reap(pid, started, &provider);
+        // Pi may be a fork/wait or exec wrapper. Its runtime ownership marker
+        // below is authoritative; a command substring such as "pi" is not.
+        if provider != "pi" {
+            agent::reap(pid, started, &provider);
+        }
         store
             .db()
             .execute("DELETE FROM native_processes WHERE pid=?1", [pid])?;

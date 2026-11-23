@@ -11,6 +11,10 @@ impl Registry {
                 .filter(|(_, session)| {
                     Arc::strong_count(session) == 1
                         && !session.executing.load(Ordering::SeqCst)
+                        && session
+                            .pi
+                            .as_ref()
+                            .is_none_or(|pi| pi.idle_confirmed().unwrap_or(false))
                         && session.touched.lock().is_ok_and(|at| at.elapsed() > IDLE)
                         && session
                             .terminal
@@ -195,6 +199,15 @@ impl Registry {
             && session.check_alive().is_ok()
         {
             return Ok(session);
+        }
+        if let Some(session) = self.get(conversation, role)?
+            && session.spec.provider == crate::config::ProviderKind::Pi
+            && session.primed.load(Ordering::SeqCst)
+            && spec.resume.is_none()
+        {
+            return Err(invalid(
+                "Pi session already has context; resume its recorded JSONL explicitly",
+            ));
         }
         let retired = self.sessions.lock().map_err(invalid)?.remove(&key);
         drop(retired);
