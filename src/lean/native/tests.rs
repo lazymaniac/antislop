@@ -1561,6 +1561,15 @@ fn pi_and_unsloth_keep_context_across_cancel_failure_and_restart() {
         let first = session
             .run(&core.native, "first", "hello", &AtomicBool::new(false))
             .unwrap();
+        let error = core
+            .native
+            .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")
+            .err()
+            .expect("the same execution scope requires its recorded Pi identity");
+        assert!(
+            error.to_string().contains("resume its recorded JSONL"),
+            "{error}"
+        );
         spec.resume = first.session.clone();
         let same = core
             .native
@@ -1704,6 +1713,135 @@ fn pi_and_unsloth_keep_context_across_cancel_failure_and_restart() {
             serde_json::from_str::<serde_json::Value>(&first.text).unwrap()["report"],
             "adapter result"
         );
+    }
+}
+
+#[test]
+fn pi_core_rounds_rotate_and_startup_retry_binds_only_the_ready_session() {
+    use crate::config::{RoleKind, WorkKind};
+    use crate::lean::{SessionPolicy, TurnSetup};
+    for wrapped in [false, true] {
+        let dir = test_tempdir();
+        let core = core(dir.path());
+        let spec = pi_lifecycle_spec(&core, dir.path(), wrapped);
+        let attempts = dir.path().join("launches.jsonl");
+        let marker = dir.path().join("first-launch-failed");
+        let script = std::fs::read_to_string(&spec.binary).unwrap();
+        let retry = format!(
+            "printf '%s\\n' \"$ANTISLOP_PI_EXPECTED\" >> {attempts:?}\nif [ ! -e {marker:?} ]; then touch {marker:?}; printf 'Pi startup failed before prompt\\n'; exit 19; fi\n"
+        );
+        std::fs::write(
+            &spec.binary,
+            script.replacen("#!/bin/sh\n", &format!("#!/bin/sh\n{retry}"), 1),
+        )
+        .unwrap();
+        let conversation = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let mut task = core.store.add_plan(&conversation, &[serde_json::json!({"id":"pi-rounds","title":"Pi rounds","goal":"Preserve round isolation and startup recovery","kind":"analysis","change_kind":"none","acceptance_criteria":[{"id":"C1","text":"The fixture reports its result"}]})]).unwrap().remove(0);
+        let role = format!("worker:{}", task.id);
+        let mut profile = core
+            .config_snapshot()
+            .resolve(WorkKind::Analysis, RoleKind::Executor)
+            .unwrap();
+        profile.provider = crate::config::ProviderKind::Pi;
+        profile.binary = spec.binary.clone();
+        profile.args = spec.args.clone();
+        profile.model = None;
+        let mut histories = Vec::new();
+        for round in 1..=2 {
+            task.round = round;
+            core.store.update_task(&task).unwrap();
+            let mut previous = None;
+            for _ in 0..2 {
+                let setup = TurnSetup {
+                    session_policy: SessionPolicy::TaskRound {
+                        task: task.id.clone(),
+                        round,
+                    },
+                    conversation: &conversation,
+                    plan_id: Some(task.plan_id.clone()),
+                    role: role.clone(),
+                    profile: Ok(profile.clone()),
+                    cwd: dir.path().into(),
+                    add_dirs: vec![],
+                    upto_message: 0,
+                };
+                let answer = core
+                    .turn(setup, &AtomicBool::new(false), |_| {
+                        "Complete the fixture task".into()
+                    })
+                    .unwrap()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "startup retry failed: {:?}",
+                            core.store
+                                .last_turn(&conversation, &role)
+                                .unwrap()
+                                .unwrap()
+                                .error
+                        )
+                    });
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&answer).unwrap()["report"],
+                    "adapter result"
+                );
+                let turn = core.store.last_turn(&conversation, &role).unwrap().unwrap();
+                assert_eq!(turn.status, store::TurnStatus::Done);
+                let context = core
+                    .store
+                    .run_context(&conversation, &turn.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(context.provider_session_id, turn.session_id);
+                if let Some(previous) = previous.replace(turn.session_id.clone()) {
+                    assert_eq!(previous, turn.session_id);
+                }
+            }
+            histories.push(previous.unwrap().unwrap());
+        }
+        assert_ne!(histories[0], histories[1]);
+        for path in &histories {
+            assert!(
+                std::fs::read_to_string(path)
+                    .unwrap()
+                    .contains("Complete the fixture task")
+            );
+        }
+        let launches = std::fs::read_to_string(attempts)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            launches.len(),
+            3,
+            "one failed startup and one successful process per round"
+        );
+        assert_eq!(launches[1]["session_file"], histories[0]);
+        assert_eq!(launches[2]["session_file"], histories[1]);
+        let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "planning_progress"
+                    && event.payload["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("attempt 1")))
+                .count(),
+            1
+        );
+        assert!(
+            !core
+                .store
+                .sessions(&conversation)
+                .unwrap()
+                .iter()
+                .any(|turn| turn.status == "running")
+        );
+        core.native.shutdown().unwrap();
     }
 }
 

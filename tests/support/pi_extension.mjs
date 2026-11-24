@@ -117,7 +117,7 @@ if (lifecycle) {
                 assert.equal(aborted, false, 'previous cancellation aborted the following turn');
                 assert.equal(idle, false, 'following turn became idle before completing');
             }
-            await request('tools/call', {name:'complete', arguments:{turn, report:'adapter result', commit_message:'test: lifecycle'}});
+            await request('tools/call', {name:'complete', arguments:{turn, summary:'Completed the fixture task', report:'adapter result', commit_message:'test: lifecycle'}});
             idle = true;
         }
         handlers.get('agent_end')({}, ctx);

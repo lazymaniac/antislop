@@ -61,7 +61,14 @@ fn prepare_agent(
         state,
         &spec,
         &profile_name,
-        native.identity().or_else(|| state.resume.clone()),
+        if spec.provider == crate::config::ProviderKind::Pi {
+            // A fresh Pi path is allocated before startup can succeed. Bind
+            // it only once this process is ready to receive the prompt;
+            // a startup retry may still allocate another path.
+            state.resume.clone()
+        } else {
+            native.identity().or_else(|| state.resume.clone())
+        },
     )?;
     Ok(PreparedAgent {
         spec,
@@ -266,7 +273,9 @@ fn run_cli(
             if is_rejected_session(error, state.resume.as_deref()) {
                 core.store
                     .retire_session(&state.turn.id, &agent::persisted_error(&error.to_string()))?;
-            } else if let Some(identity) = prepared.native.identity()
+            } else if (prepared.spec.provider != crate::config::ProviderKind::Pi
+                || !prepared.native.failed_before_start())
+                && let Some(identity) = prepared.native.identity()
                 && state
                     .resume
                     .as_deref()

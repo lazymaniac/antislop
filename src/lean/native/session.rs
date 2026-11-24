@@ -348,6 +348,14 @@ impl Session {
                 |row| row.get::<_, bool>(0),
             )?
         {
+            // Pi already knows its JSONL path at launch, but a failed startup
+            // must not bind a path from a process that never took the turn.
+            // Persist the ready process's identity before any prompt is sent.
+            if self.pi.is_some()
+                && let Some(identity) = self.identity()
+            {
+                core.store.set_session(turn, &identity)?;
+            }
             core.store.append_event(&self.conversation, Some(turn), None, "prompt_transport", &serde_json::json!({"body_bytes":prompt.len(),"footer_bytes":transmitted.len() - prompt.len(),"measurement":"UTF-8 transport bytes; excludes provider context and billed tokens"}))?;
         }
         if let Some(pi) = &self.pi {

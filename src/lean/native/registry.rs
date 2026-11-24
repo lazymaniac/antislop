@@ -202,6 +202,7 @@ impl Registry {
         }
         if let Some(session) = self.get(conversation, role)?
             && session.spec.provider == crate::config::ProviderKind::Pi
+            && session.signature == signature
             && session.primed.load(Ordering::SeqCst)
             && spec.resume.is_none()
         {
