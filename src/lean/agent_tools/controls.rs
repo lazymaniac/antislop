@@ -188,6 +188,9 @@ impl Core {
             )?;
         }
         self.check_submitted_plan(conversation, tasks, &keep, team)?;
+        if role == PLANNER {
+            self.require_planning_inputs(conversation, turn)?;
+        }
         if saved_origin.is_none() {
             self.store.select_planned_team(conversation, team, reason)?;
         }

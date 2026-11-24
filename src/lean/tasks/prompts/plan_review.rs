@@ -37,6 +37,7 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
 fn append_plan_review_rules(prompt: &mut String, plan: &[TaskContract]) {
     prompt.push_str("\n\n");
     prompt.push_str(super::instructions::PLAN_DECOMPOSITION);
+    prompt.push_str("\nPREPARATION REVIEW: Read the planning specialist references cited in the plan with read_planning_result. Check that architecture decisions and test scenarios inform concrete tasks and observable acceptance criteria. Reject execution tasks that merely repeat completed preparation; further specialist tasks must answer a distinct unresolved question or deliver an explicitly requested result. Require requirement-to-task and verification ownership, including cross-component behavior. Preparation findings do not prove implementation acceptance.\n");
     prompt.push_str("\nDECOMPOSITION REVIEW: Judge the planner-authored tasks, excluding generated options, quality gates and final integration nodes. Reject an umbrella implementation task when it combines separable deliverables with different owners or failure modes and hides meaningful dependencies or separately verifiable outcomes. Name the concrete boundaries and missing producer/consumer edges in the finding; do not merely ask for more tasks. A single task is valid for an inseparable, cohesive change, and a larger task count alone does not prove a good plan. Review only remaining work when prior results are already approved; granularity alone is not grounds to redo completed work.\n");
     if plan
         .iter()

@@ -1,4 +1,4 @@
-//! Required authored work for a code-producing feature. No new runtime task states.
+//! Feature preparation roles and execution-time delivery checks.
 use super::*;
 
 pub const FEATURE_SPECIALISTS: &[PredefinedAgent] = &[
@@ -46,7 +46,7 @@ pub const FEATURE_SPECIALISTS: &[PredefinedAgent] = &[
     },
 ];
 
-pub const FEATURE_PLANNING_RULES: &str = "FEATURE PIPELINE: For remaining code-producing feature work, author concrete Research, Analysis, Dependencies, Architecture, Test Design and final Delivery tasks. Research and Analysis can start independently. Dependencies consumes Research; Architecture consumes Analysis and Dependencies; Test Design consumes Analysis and can run alongside Architecture. Every remaining code writer consumes Architecture and Test Design, as well as its real producers. Keep focused implementation tests with their writer. The runtime supplies Options and all six final quality gates. Delivery consumes integration-gate and every remaining deliverable. Specialists use change_kind=none and report through MCP unless the user's scope explicitly requires a report artifact. Each specialist runs and is independently reviewed; where no work applies, inspect relevant evidence and submit a brief justified N/A report, without unnecessary files or extra requirements. Do not add a Writing stage or repeat the requirements interview. Do not modify already approved contracts to add retroactive prerequisites: retained work is input for remaining specialists and writers. A replan preserves approved results and checkpoints. Preliminary security/performance work never replaces the runtime's final audits. Missing roles or edges are plan errors, not requests to skip agents.";
+pub const FEATURE_PLANNING_RULES: &str = "FEATURE PIPELINE: Before drafting, call consult_planning for Research, Analysis, Dependencies, Architecture and Test Design. These consultations feed the plan and are not execution tasks. Reuse retained reports; use read_planning_result and reference their decisions in the plan and relevant worker goals. Do not re-author completed preparation as tasks or ask workers to repeat it. Add further specialist work only for an explicit deliverable or a new unresolved question, with its distinct result and dependencies. Keep focused implementation tests with their writer. Author final Delivery to consume integration-gate and every remaining deliverable. The runtime supplies Options and all six final quality gates; those verify implemented results and are not replaced by preparation. Preserve approved results and checkpoints on replans. Do not add a Writing stage or repeat the requirements interview.";
 
 /// Check the selected feature's actual graph, excluding unchanged approved writers.
 pub fn validate_feature_pipeline(
@@ -78,23 +78,12 @@ pub fn validate_feature_pipeline(
                     .any(|writer| depends_transitively(tasks, &task.id, &writer.id))
         })
         .collect();
-    for agent in FEATURE_SPECIALISTS {
-        let present = if agent.kind == WorkKind::Delivery {
-            tasks
-                .iter()
-                .any(|t| t.kind == agent.kind && !t.changes_code())
-        } else {
-            preparation.iter().any(|t| t.kind == agent.kind)
-        };
-        crate::require(
-            present,
-            &format!(
-                "feature pipeline is missing {}; add an authored {} report task before its consumers",
-                work_kind_name(agent.kind),
-                work_kind_name(agent.kind)
-            ),
-        )?;
-    }
+    crate::require(
+        tasks
+            .iter()
+            .any(|task| task.kind == WorkKind::Delivery && !task.changes_code()),
+        "feature pipeline is missing delivery; add a final delivery report after all deliverables and checks",
+    )?;
     for kind in GATE_KINDS {
         crate::require(
             tasks
@@ -231,17 +220,33 @@ mod tests {
         assert_eq!(plan.iter().filter(|t| t.quality_gate).count(), 6);
     }
     #[test]
-    fn missing_roles_and_producer_edges_are_actionable_errors() {
+    fn preparation_is_optional_in_execution_but_delivery_and_declared_edges_are_required() {
         let plan = fixture();
-        for agent in FEATURE_SPECIALISTS {
-            let reduced: Vec<_> = plan.iter().filter(|t| t.id != agent.id).cloned().collect();
-            assert!(
-                validate_feature_pipeline(&reduced, &BTreeSet::new())
-                    .unwrap_err()
-                    .to_string()
-                    .contains(work_kind_name(agent.kind))
-            );
+        let without_delivery: Vec<_> = plan
+            .iter()
+            .filter(|t| t.kind != WorkKind::Delivery)
+            .cloned()
+            .collect();
+        assert!(
+            validate_feature_pipeline(&without_delivery, &BTreeSet::new())
+                .unwrap_err()
+                .to_string()
+                .contains("delivery")
+        );
+        let mut execution: Vec<_> = plan
+            .iter()
+            .filter(|t| {
+                !FEATURE_SPECIALISTS
+                    .iter()
+                    .any(|a| a.kind != WorkKind::Delivery && a.kind == t.kind)
+            })
+            .cloned()
+            .collect();
+        let ids: BTreeSet<_> = execution.iter().map(|t| t.id.clone()).collect();
+        for task in &mut execution {
+            task.depends_on.retain(|id| ids.contains(id));
         }
+        validate_feature_pipeline(&execution, &BTreeSet::new()).unwrap();
         for (consumer, producer) in [
             ("feature-dependencies", "feature-research"),
             ("feature-architecture", "feature-dependencies"),

@@ -10,6 +10,19 @@ fn plain_reviewer(role: &str) -> bool {
 }
 
 pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
+    let mut names = role_tools(role);
+    if names.contains(&"current_turn") {
+        names.extend([
+            "prepare_validation",
+            "complete_validation",
+            "invalidate_validation",
+            "read_validations",
+        ]);
+    }
+    names
+}
+
+fn role_tools(role: &str) -> Vec<&'static str> {
     if let Some((_, reviewer)) = crate::lean::task_role(role) {
         return task_tools(reviewer);
     }
@@ -17,7 +30,9 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
         "planner" => vec![
             SUBMIT_PLAN,
+            "consult_planning",
             "read_dependency_result",
+            "read_planning_result",
             "read_plan_context",
             "read_audit",
             TOOL,
@@ -31,15 +46,20 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
             "read_plan_context",
             "read_audit",
             "read_dependency_result",
+            "read_planning_result",
             "get_images",
             "read_evidence",
             "current_turn",
             "read_task_contract",
         ],
+        _ if role.starts_with("planning-") => {
+            vec![TOOL, "current_turn", "read_planning_result", "get_images"]
+        }
         _ if plain_reviewer(role) => vec![
             REVIEW,
             "get_images",
             "read_dependency_result",
+            "read_planning_result",
             "read_evidence",
             "current_turn",
             "read_plan_context",
@@ -106,6 +126,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
             ASK,
             WAIT,
             "read_dependency_result",
+            "read_planning_result",
             "get_images",
             "read_evidence",
             "current_turn",
@@ -119,6 +140,7 @@ fn task_tools(reviewer: bool) -> Vec<&'static str> {
             ASK,
             WAIT,
             "read_dependency_result",
+            "read_planning_result",
             "get_images",
             "record_evidence",
             "read_evidence",
@@ -137,6 +159,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         SUBMIT_REQUIREMENTS,
         SUBMIT_PLAN,
         "read_dependency_result",
+        "read_planning_result",
         "read_plan_context",
         "read_task_contract",
         "read_audit",
@@ -200,6 +223,12 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         "read_plan_context" => ("Read the complete scope, source references and task index of this turn's bound plan in pages. Use read_task_contract for full contracts. Reuse cursor until complete=true; a revision change requires reading again without cursor.".into(), json!({"cursor":{"type":"string"}}), vec!["turn"]),
         "read_task_contract" => ("Read a full contract in this turn's bound plan in pages. Task roles may read only their own contract or their options owner. Reuse cursor until complete=true; on revision change reread without cursor.".into(), json!({"task":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","task"]),
         "read_audit" => ("Read one retained auditor report in pages, separate from aggregate plan results. Copy audit_ref from the audit index; reuse cursor until complete=true. Legacy missing reports are reported explicitly.".into(), json!({"audit_ref":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","audit_ref"]),
+        "prepare_validation" => ("Before running a build, test, lint, static analysis or other validation, claim its exact command and scope. Reuse a successful predecessor result for identical files and declared environment; action=reuse means do not rerun. action=wait means another live turn owns it; continue independent work and poll. action=run gives the receipt to complete after execution in your own CLI. Code identity includes tracked and nonignored uncommitted/untracked files, not just HEAD. Environment must identify toolchain, relevant settings, fixtures, seeds, services and ignored/external inputs; refresh it when they change. Never include secrets. For a needed physical artifact, retrieve retained outputs first; a validation report alone is not an executable. For non-Git directories the observation is retained but cannot be reused.".into(), json!({"command":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Executable followed by exact argv, including targets, flags and filters; use a shell executable and -c when shell syntax is needed"},"directory":{"type":"string","description":"Working directory relative to your allocated checkout; defaults to ."},"scope":{"type":"string","description":"Exact behavior/targets covered by this command"},"environment":{"type":"string","description":"Stable, nonsecret identity of toolchain/configuration/fixtures and external or ignored inputs; copy a compatible predecessor spec from read_validations"}}),vec!["turn","command","scope","environment"]),
+        "complete_validation" => ("Complete your prepare_validation receipt after executing the command. Supply the actual exit code and decisive raw output, including errors and test totals; output is retained as immutable read_evidence evidence. problems must name any errors or unreliable execution even when exit_code=0; use an empty string only when none were reported. Failed, interrupted, unversioned or code-changing executions are never reused. This does not complete the agent turn or approve its task.".into(),json!({"validation":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"problems":{"type":"string"}}),vec!["turn","validation","exit_code","output","problems"]),
+        "invalidate_validation" => ("Invalidate an earlier validation when concrete evidence shows its success was misleading, relevant external inputs changed without an identity update, or a required physical output is unavailable. Give the specific problem; do not invalidate just to repeat a predecessor's successful check. Retains the original evidence. The next prepare_validation must arrange a fresh execution.".into(),json!({"validation":{"type":"string"},"reason":{"type":"string"}}),vec!["turn","validation","reason"]),
+        "read_validations" => ("Read validation attempts in pages of up to 32, newest first; continue with the returned cursor. Records include exact command/environment/scope and evidence IDs. This index is historical, not proof of the current code: copy a compatible spec into prepare_validation before reusing it. Full raw output is available with read_evidence.".into(),json!({"cursor":{"type":"string"}}),vec!["turn"]),
+        "consult_planning" => ("Planner only: request a read-only specialist before drafting. Returns immediately with a reference and state; poll read_planning_result until done and read every page. Repeated calls reuse the retained consultation for the current requirements. Set refresh=true only for changed evidence, a concrete correction or a failed/interrupted consultation. Research and analysis precede dependencies (research), architecture (analysis + dependencies), then test_design (analysis + architecture). Do not schedule this preparation again as execution tasks.".into(), json!({"kind":{"enum":["research","analysis","dependencies","architecture","test_design"]},"question":{"type":"string"},"refresh":{"type":"boolean"}}), vec!["turn","kind","question"]),
+        "read_planning_result" => ("Read a retained planning specialist report by exact reference. Returns state and raw error on failure; poll while running and continue cursor until complete=true. These are preparation findings, not implementation or acceptance evidence. Reports are immutable and scoped to this conversation.".into(), json!({"reference":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","reference"]),
         "current_turn" => ("Read this gateway's current agent role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
         "report_blocker" => ("End a worker turn when missing input or an unsatisfied prerequisite prevents all further permitted work. Record the concrete external blocker, evidence, and actionable condition for resuming. An implementation, test, fixture or output this task is assigned to create is work to perform, not a missing prerequisite; do not ask another actor to supply your own deliverable or block merely because that work is unfinished or large. Preserve completed work and checkpoints. The task stays unapproved and its dependents do not run; the orchestrator must resolve the blocker or revise the contract. Do not claim success or repeat a question already answered without new evidence.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string","description":"An actionable prerequisite another actor can resolve, with evidence; never completion of this task's own assigned deliverable"},"unblocked_work_remaining":{"type":"boolean","description":"True if ANY independent permitted edits or analysis remain, even when a later validation is blocked. A true value is rejected so you can continue that work within this turn. Report a blocker only after no permitted independent work remains."}}), vec!["turn", "report", "resume_condition", "unblocked_work_remaining"]),
         "record_evidence" => ("Persist the decisive part of a command/measurement result as immutable MCP execution evidence before completing: the command, exit code and the relevant lines (errors, failures, totals), not the whole build/test/event stream and not repository source contents. Keep records under 16 KiB; filter first. Disk-backed content survives worktree cleanup. Hard limit 256 KiB UTF-8 per labelled record. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),

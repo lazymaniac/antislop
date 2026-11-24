@@ -9,10 +9,12 @@ mod context;
 mod controls;
 mod dependencies;
 mod evidence;
+mod planning;
 mod questions;
 mod references;
 mod results;
 mod session_actions;
+mod validations;
 
 /// The tasks of `submit_plan` or `revise_plan`, with an error that names the
 /// task and field the agent must fix.
@@ -54,6 +56,12 @@ impl Core {
             "read_plan_context" | "read_task_contract" => {
                 self.read_plan_context(conversation, role, turn, tool, args)
             }
+            "prepare_validation"
+            | "complete_validation"
+            | "invalidate_validation"
+            | "read_validations" => self.validation_tool(conversation, turn, tool, args),
+            "consult_planning" => self.consult_planning(conversation, role, turn, args),
+            "read_planning_result" => self.read_planning_result(conversation, role, turn, args),
             "read_audit" => self.read_audit(conversation, role, turn, args),
             "get_images" => self.conversation_images(conversation, turn, args),
             "record_evidence" | "read_evidence" => {

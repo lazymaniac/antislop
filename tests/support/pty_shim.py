@@ -322,6 +322,29 @@ def call(params, thread):
     return None
 
 
+def planning_inputs(turn):
+    """A deterministic planner consumes completed specialist results before drafting."""
+    reports = []
+    for kind in ("research", "analysis", "dependencies", "architecture", "test_design"):
+        response = rpc("tools/call", {"name":"consult_planning", "arguments":{
+            "turn":turn, "kind":kind, "question":"Establish the inputs and checks needed for this scope"}}, 41)["result"]
+        if response.get("isError"):
+            raise RuntimeError(response)
+        result = json.loads(response["content"][0]["text"])
+        reference = result["reference"]
+        while result["state"] == "running":
+            time.sleep(0.02)
+            response = rpc("tools/call", {"name":"read_planning_result", "arguments":{
+                "turn":turn, "reference":reference}}, 42)["result"]
+            if response.get("isError"):
+                raise RuntimeError(response)
+            result = json.loads(response["content"][0]["text"])
+        if result["state"] != "done":
+            raise RuntimeError(result)
+        reports.append(result)
+    return reports
+
+
 def finish(turn, text, thread, prompt):
     """Ends the turn with `text`; `(tool, error)` when the gateway refuses
     it, so the fixture can be asked again like an agent told what to fix."""
@@ -473,6 +496,14 @@ def main():
             # Typed into a running turn (steering): the CLI takes it in as
             # more input for the work in progress.
             continue
+        if "PLANNING CONSULTATION:" in prompt:
+            report = "Fixture preparation: inspect existing interfaces; preserve accepted behavior; verify observable success and failure scenarios."
+            result = call({"name":"finish_turn", "arguments":{"turn":turn, "text":report}}, None)
+            if result is not None:
+                raise RuntimeError(result)
+            continue
+        if "consult_planning" in tools:
+            prompt += "\nPlanning findings consumed before drafting:\n" + json.dumps(planning_inputs(turn))
         done = run_fixture(prompt, turn)
         text, seen = answer_of(done.stdout)
         if done.returncode != 0 or text is None:

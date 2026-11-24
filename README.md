@@ -241,7 +241,8 @@ and the others watch until they take control from the palette.
 
 1. The orchestrator gathers the scope and asks only for missing product decisions.
    The confirmed scope and original sources stay attached to the plan.
-2. A dedicated planner drafts tasks with explicit `change_kind` (`none`, `artifact`,
+2. The planner calls Research, Analysis, Dependencies, Architecture and Test Design
+   before drafting, then uses their retained findings to draft tasks with explicit `change_kind` (`none`, `artifact`,
    or `code`), goals, dependencies and task-local acceptance criteria. These describe
    deliverables, not permissions.
 3. Independent plan review checks coverage and dependencies. You accept the checked
@@ -255,6 +256,13 @@ and the others watch until they take control from the palette.
 7. One independent final audit checks the integrated result against the scope, original
    sources and task criteria before the request is reported complete.
 
+Agents reuse successful builds, tests and static analysis when the command,
+covered targets, declared environment and source files match. Validation receipts
+include uncommitted/untracked source changes, retained raw evidence and execution
+ownership, so successors do not rerun identical checks or start parallel duplicates.
+Failures, changed inputs and invalid evidence require fresh execution. Reviewers
+still inspect implementation and acceptance coverage independently.
+
 Scope changes appear alongside the reviewed plan for your acceptance. Technical
 revisions within the accepted scope keep independent review. There is no separate
 requirements extraction, ledger browser or ledger approval step.
@@ -265,17 +273,18 @@ containing `core.db`, and restart both client and daemon to create fresh state.
 
 ## Feature rigor and configuration
 
-For code-producing work, `feature` runs Research and impact Analysis in parallel.
-Dependencies consumes Research; Architecture consumes Analysis and Dependencies;
-Test Design consumes Analysis. Each implementation writer consumes Architecture,
-Test Design and its actual producers, then gets its own Options selection and review.
-Focused implementation tests stay with the writer.
+The planner calls Research and impact Analysis before drafting. Dependencies uses
+Research; Architecture uses Analysis and Dependencies; Test Design uses Analysis
+and Architecture. Reports are retained and reused for corrections and replans when
+requirements stay the same. The plan cites their references and maps requirements
+to implementation owners and observable checks. Workers consume those findings;
+completed preparation is not scheduled again as execution tasks.
 
-The runtime always adds six final checks: Refactoring, then parallel Static Analysis,
-Testing, Security and Performance, then Integration. Final Delivery reconciles the
-requirements, observed results, usage and limitations after all deliverables and checks.
-Every specialist runs and receives independent review. When an area does not apply,
-it reports a brief evidence-based N/A. This adds no Writing stage or requirements interview.
+Each implementation writer gets its own Options selection and review, with focused
+tests alongside the code. Feature rigor adds six final checks: Refactoring, parallel
+Static Analysis, Testing, Security and Performance, then Integration. Final Delivery
+reconciles requirements, observed results, usage and limitations after all deliverables
+and checks. These checks verify the implemented result rather than repeating design.
 
 Configuration now requires `schema_version = 5`. Remove `policy.required_gates` and
 `policy.local_options`; the selected rigor alone defines gates and Options.
@@ -284,7 +293,7 @@ instructions and are never rewritten automatically. Keep routes for the speciali
 kinds as shown in `examples/antislop.toml`.
 
 Accepted older graphs remain unchanged on restart. Selecting Feature for an existing
-graph queues a reviewed replan when its specialist stages are missing, preserving
+graph queues a reviewed replan when its delivery or final checks are missing, preserving
 approved results and retained checkpoints.
 
 ## Build and test

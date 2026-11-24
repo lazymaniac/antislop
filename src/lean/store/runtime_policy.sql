@@ -101,3 +101,18 @@ CREATE TABLE IF NOT EXISTS message_images(
   message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
   image_id TEXT NOT NULL, mime_type TEXT NOT NULL, bytes INTEGER NOT NULL,
   name TEXT NOT NULL, PRIMARY KEY(message_seq,image_id));
+
+CREATE TABLE IF NOT EXISTS validation_runs(
+ id TEXT PRIMARY KEY,
+ conversation TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+ identity TEXT NOT NULL, tree TEXT, spec TEXT NOT NULL CHECK(json_valid(spec)),
+ status TEXT NOT NULL CHECK(status IN ('running','passed','failed','changed','interrupted','invalidated','uncacheable')),
+ exit_code INTEGER, problem TEXT NOT NULL DEFAULT '',
+ evidence_id TEXT REFERENCES agent_evidence(id) ON DELETE SET NULL,
+ created_ms INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS validation_runs_by_identity ON validation_runs(conversation,identity);
+CREATE TABLE IF NOT EXISTS validation_uses(
+ turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+ validation_id TEXT NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
+ PRIMARY KEY(turn_id,validation_id));

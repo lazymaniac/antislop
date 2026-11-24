@@ -10,8 +10,7 @@ pub(crate) use gateway::Gateway;
 #[cfg(test)]
 use gateway::TOOL;
 pub(crate) use gateway::{CANCELLED, Handler, ProtocolObserver, SERVER};
-#[cfg(test)]
-use tools::allowed_tools;
+pub(crate) use tools::allowed_tools;
 #[cfg(test)]
 use tools::tool_list;
 pub use transport::bridge;

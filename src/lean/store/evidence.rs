@@ -108,7 +108,7 @@ impl Store {
 
     pub(in crate::lean) fn result_evidence(&self, turn: &str) -> Result<Vec<EvidenceReference>> {
         let db = self.db();
-        Ok(db.prepare("SELECT id,label,bytes,sha256,turn_id FROM agent_evidence WHERE turn_id=?1 OR id IN (SELECT evidence_id FROM result_evidence WHERE turn_id=?1) ORDER BY label,id")?.query_map([turn], evidence_row)?.collect::<std::result::Result<_,_>>()?)
+        Ok(db.prepare("SELECT id,label,bytes,sha256,turn_id FROM agent_evidence WHERE turn_id=?1 OR id IN (SELECT evidence_id FROM result_evidence WHERE turn_id=?1) OR id IN (SELECT v.evidence_id FROM validation_uses u JOIN validation_runs v ON v.id=u.validation_id WHERE u.turn_id=?1 AND v.status='passed') ORDER BY label,id")?.query_map([turn], evidence_row)?.collect::<std::result::Result<_,_>>()?)
     }
 }
 

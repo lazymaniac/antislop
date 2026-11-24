@@ -82,7 +82,7 @@ impl Core {
                         conversation,
                         RUNTIME,
                         &format!(
-                            "The user selected feature rigor: {reason}. Upgrade the accepted plan {} with revise_plan, adding the missing specialist contracts and dependencies for remaining work. Preserve approved work and checkpoints; do not create a replacement draft with request_replan or submit_plan. Include scope only if requirements change.",
+                            "The user selected feature rigor: {reason}. Upgrade the accepted plan {} with revise_plan, adding missing final delivery and quality-check dependencies for remaining work; reuse established preparation findings. Preserve approved work and checkpoints; do not create a replacement draft with request_replan or submit_plan. Include scope only if requirements change.",
                             plan.plan_id
                         ),
                     )?;
@@ -91,7 +91,7 @@ impl Core {
                 self.ensure_replacement_plan_allowed(conversation)?;
                 self.store.select_team(conversation, team, reason)?;
                 drop(_graph);
-                self.request_replan(conversation, &format!("Upgrade to the full feature pipeline: {reason}. Preserve approved work and checkpoints; author the missing specialist contracts and dependencies for remaining work."))?;
+                self.request_replan(conversation, &format!("Upgrade to the full feature pipeline: {reason}. Preserve approved work and checkpoints; reuse retained preparation and add the missing final delivery and quality-check dependencies."))?;
                 return Ok(true);
             }
             if self.store.team(conversation)? == team
@@ -1608,7 +1608,7 @@ mod tests {
             )
             .unwrap();
         let error = core.revised_specs(&revision, &baseline).unwrap_err();
-        assert!(error.to_string().contains("research"), "{error}");
+        assert!(error.to_string().contains("delivery"), "{error}");
     }
 
     #[test]

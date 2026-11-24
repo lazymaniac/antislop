@@ -85,7 +85,10 @@ elif 'Task: ' in prompt:
 elif 'The plan finished. Results of each task follow.' in prompt and 'SESSION PHASE: planning' not in prompt:
     answer = 'Implementation results received.'
 else:
-    answer = '## Inspection\nReview the inspection task.\n' + plan
+    assert 'Planning findings consumed before drafting:' in prompt
+    references = re.findall(r'planning:[a-f0-9-]+', prompt)
+    assert len(set(references)) == 5
+    answer = '## Inspection\nUse established findings: ' + ', '.join(dict.fromkeys(references)) + '\nVerify the inspection task against observable findings.\n' + plan
 if 'Address each new user comment' in prompt:
     ids = sorted(set(int(i) for i in re.findall(r'\[user comment #(\d+)', prompt)))
     answer += '\n```comments\n' + json.dumps({'addressed':[{'id':i,'how':'Clarified inspection scope'} for i in ids]}) + '\n```'
@@ -302,6 +305,41 @@ fn checked_plan_starts_only_after_the_user_accepts_the_reviewed_plan() {
                 && event.payload["role"] == antislop::lean::PLANNER)
     );
     assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
+    let events = core
+        .store
+        .events_since(&conversation.id, 0, 10_000)
+        .unwrap();
+    let preparation: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "planning_consultation")
+        .collect();
+    assert_eq!(
+        preparation.len(),
+        5,
+        "preparation must run once per specialist"
+    );
+    for request in preparation {
+        let role = request.payload["role"].as_str().unwrap();
+        let specialist = core
+            .store
+            .last_turn(&conversation.id, role)
+            .unwrap()
+            .unwrap();
+        assert_eq!(specialist.status, antislop::lean::store::TurnStatus::Done);
+        assert!(
+            proposed["document"]
+                .as_str()
+                .unwrap()
+                .contains(request.payload["reference"].as_str().unwrap())
+        );
+        let finished = events
+            .iter()
+            .find(|e| e.kind == "turn_finished" && e.turn_id.as_deref() == Some(&specialist.id))
+            .unwrap();
+        let proposed_event = events.iter().find(|e| e.kind == "plan_proposed").unwrap();
+        assert!(finished.seq < proposed_event.seq);
+    }
+
     assert_eq!(
         core.store
             .accepted_plan(&conversation.id)

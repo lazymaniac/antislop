@@ -97,7 +97,7 @@ fn worker_prompt_opening(
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Read the files you need yourself within your role and the CLI permission policy.\n\n\
-         Task: {}\nTask id: {}\nKind: {}\n\n{continuation}\nGoal: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nKind: {}\n\n{continuation}\nGoal: {}\n{checks}\n{binding}\n\nUse the planning report references in your contract with read_planning_result. Reuse established facts, interfaces and test scenarios; perform your assigned deliverable and its verification. Investigate an established question again only when concrete changed evidence, a contradiction or a missing detail affects this task, and report that reason.\n\n{}{PROJECT_RULES}\n\n\
          ",
         task.title,
         task.id,

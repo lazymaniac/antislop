@@ -1,5 +1,7 @@
 use super::*;
 
+const VALIDATION_REUSE: &str = "VALIDATION REUSE: Before any build, tests, lint, static analysis or other validation command, inspect predecessor results with read_validations and call prepare_validation with the exact command, directory, scope and environment. With action=reuse, read the retained raw evidence and cite it; do not execute the command again or claim you ran it. With action=wait, do independent work while the current owner finishes; never start a duplicate. With action=run, execute through your own CLI policy, then complete_validation with the real exit code, decisive raw output and all reported errors. Reuse requires the same code, command, targets, flags, toolchain, configuration, fixtures and relevant external/ignored inputs. Update the environment identity when those inputs change; include Git revision when the command depends on it. A failed check, changed source or a concrete defect in the earlier evidence needs fresh execution. Use invalidate_validation to record such a defect before repeating; do not invalidate merely because another agent produced the result or because you are an independent reviewer. Independent review still inspects files, diffs and acceptance coverage, and adds checks for genuinely uncovered behavior. Reuse successful commands, not task approvals, unsupported claims or absent executable artifacts. If an executable/output is needed, inspect the predecessor's retained artifacts first; rebuild only when the required output is actually unavailable or incompatible. After changing code, repeat the checks affected by that change, using a fresh prepare_validation receipt.";
+
 pub(super) fn prepare_prompt(
     core: &Core,
     state: &TurnState<'_>,
@@ -39,6 +41,17 @@ pub(super) fn prepare_prompt(
         ),
     );
     context.section("Role policy", execution_policy(&state.role));
+    if crate::lean::mcp::allowed_tools(&state.role).contains(&"prepare_validation") {
+        context.section("Validation reuse", VALIDATION_REUSE);
+        let history = core.store.validation_index(state.conversation, None)?;
+        if !history.is_empty() {
+            let index: Vec<_> = history.iter().take(8).map(|run| json!({
+                "validation":run.id,"spec":run.spec,"status":run.status,"evidence":run.evidence,
+            })).collect();
+            context.section("Prior validation index", format!("Historical references, not current-code attestation. Confirm applicability through prepare_validation; read_validations lists more attempts.\n{}",
+                crate::lean::prompt_context::untrusted("Validation index", &crate::lean::prompt_context::markdown(&index))));
+        }
+    }
     context.section("Inbox", inbox_text(state));
     let assignment = prompt(session);
     let findings_in_assignment =
@@ -66,7 +79,9 @@ fn execution_policy(role: &str) -> String {
         || role.starts_with("code-review:")
     {
         tasks::READ_ONLY_REVIEW
-    } else if matches!(role, "planner" | "orchestrator" | "comment-orchestrator") {
+    } else if role.starts_with("planning-")
+        || matches!(role, "planner" | "orchestrator" | "comment-orchestrator")
+    {
         "Plan and coordinate read-only. Do not modify project files or perform implementation repairs; task workers deliver changes."
     } else {
         "Perform the work and checks your task requires. Repairs must follow its delivery rules and scope; report-only and options roles preserve the inspected source."

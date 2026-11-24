@@ -926,7 +926,7 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
     let plan = serde_json::json!({"tasks": [
         {"id":"t11", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
         {"id":"t12", "title":"Review", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Review change", "change_kind": "none", "kind":"analysis", "depends_on":["t11"]},
-        {"id":"t13", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checked results", "change_kind": "none", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
+        {"id":"t13", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checked results", "change_kind": "none", "kind":"delivery", "depends_on":["t12","quality-refactoring","static-analyzer","integration-gate"]}
     ]});
     let source = std::fs::read_to_string(&codex).unwrap().replace(
         "if \"The plan finished. Results of each task follow.\" in prompt and \"Address each new user comment\" not in prompt:",

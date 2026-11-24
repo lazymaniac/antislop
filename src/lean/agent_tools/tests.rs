@@ -299,6 +299,7 @@ fn submitting_a_plan_records_implicit_and_explicit_feature_choices() {
 
     for explicit_team in [None, Some("feature"), Some("small-change")] {
         let (_directory, core, conversation) = core();
+        super::planning::prepared(&core, &conversation);
         core.store
             .db()
             .execute(
@@ -372,6 +373,7 @@ fn submit_plan_preserves_a_user_selected_small_change_team() {
     use crate::lean::tasks::Team;
 
     let (_directory, core, conversation) = core();
+    super::planning::prepared(&core, &conversation);
     core.store
         .db()
         .execute(
@@ -451,6 +453,7 @@ fn submit_plan_preserves_an_unknown_legacy_team_until_the_user_reselects() {
     use crate::lean::tasks::Team;
 
     let (_directory, core, conversation) = core();
+    super::planning::prepared(&core, &conversation);
     core.store
         .db()
         .execute(
@@ -852,3 +855,6 @@ fn answer_delivery_commits_while_integration_is_held_and_rejects_a_closed_caller
 
 #[path = "tests/context.rs"]
 mod context;
+
+#[path = "tests/validations.rs"]
+mod validations;

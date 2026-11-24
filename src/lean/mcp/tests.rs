@@ -185,9 +185,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "get_images", "record_evidence", "read_evidence", "current_turn", "read_task_contract"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "record_evidence", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"],
             ),
-            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "get_images", "read_evidence", "current_turn", "read_task_contract"]),
+            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -213,7 +213,7 @@ mod role_tests {
                 "ask_user",
                 "submit_requirements",
                 "submit_plan",
-                "read_dependency_result",
+                "read_dependency_result", "read_planning_result",
                 "read_plan_context",
                 "read_task_contract",
                 "read_audit",
@@ -227,6 +227,7 @@ mod role_tests {
                 "request_replan",
                 "create_session_pr",
                 "merge_session_with_main",
+                "prepare_validation", "complete_validation", "invalidate_validation", "read_validations",
             ]
         );
         let merge = tool_list("orchestrator")
@@ -237,12 +238,12 @@ mod role_tests {
         assert!(merge["description"].as_str().unwrap().contains("session_action_result"));
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "read_dependency_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract"]
+            vec!["submit_plan", "consult_planning", "read_dependency_result", "read_planning_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result","get_images","read_evidence","current_turn","read_task_contract"]} else {vec!["review", "get_images", "read_dependency_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit"]},
+                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result", "read_planning_result","get_images","read_evidence","current_turn","read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]} else {vec!["review", "get_images", "read_dependency_result", "read_planning_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];
