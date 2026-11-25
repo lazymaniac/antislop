@@ -49,6 +49,15 @@ fn compound_target_name(rest: &str, label: &str, fallback: &str) -> String {
 
 /// A human name for an agent key.
 pub fn agent_name(key: &str) -> String {
+    if let Some((kind, _)) = key
+        .strip_prefix("planning-")
+        .and_then(|role| role.split_once(':'))
+        && let Some(specialist) = crate::lean::tasks::FEATURE_SPECIALISTS
+            .iter()
+            .find(|specialist| crate::lean::tasks::work_kind_name(specialist.kind) == kind)
+    {
+        return specialist.title.into();
+    }
     match key.split_once(':') {
         Some(("worker", id)) => format!("{id} worker"),
         Some(("reviewer", id)) => format!("{id} reviewer"),

@@ -1104,6 +1104,26 @@ fn a_detour_turns_out_from_under_its_card_with_its_label_in_sight() {
 }
 
 #[test]
+fn planning_specialist_card_uses_its_role_title() {
+    let mut view = View::default();
+    let key = "planning-analysis:181b2d5b-8ff1-4526-8b5f-649f09e2672c";
+    view.agents.insert(key.into(), Default::default());
+    let graph = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((100, 40)),
+    );
+    assert!(graph.node(key).is_some());
+    let mut canvas = Canvas::new(graph.width, graph.height);
+    graph.render(&view, &mut canvas, Relations::all(), key);
+    let shown = canvas.lines().join("\n");
+    assert!(shown.contains("Feature Impact Analysis"), "{shown}");
+    assert!(!shown.contains("planning-analysis"), "{shown}");
+}
+
+#[test]
 fn rows_stay_centred_and_lanes_on_either_side_stay_within_the_viewport() {
     // t1 → t2 → t3 → t4 is a chain; t5 starts a second one, and t6 waits
     // for both chains' ends, t7 for a root and the chain's middle.
