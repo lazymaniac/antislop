@@ -81,7 +81,9 @@ pub(super) fn prepare(
     let session = session_path(&sessions, &launch_id, spec.resume.as_deref())?;
     let expected = json!({
         "launch_id": launch_id,
-        "alias": format!("antislop_{launch_id}"),
+        // Pi hashes qualified MCP names longer than 64 characters.
+        // Keep room for the tool name so it matches the advertised namespace.
+        "alias": format!("antislop_{}", &launch_id[..24]),
         "session_file": session,
         "cwd": spec.cwd.canonicalize()?.to_str().ok_or_else(|| invalid("Pi cwd is not UTF-8"))?,
         "model": model,
