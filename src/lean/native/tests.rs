@@ -1723,6 +1723,9 @@ fn pi_core_rounds_rotate_and_startup_retry_binds_only_the_ready_session() {
     for wrapped in [false, true] {
         let dir = test_tempdir();
         let core = core(dir.path());
+        let mut config = (*core.config_snapshot()).clone();
+        config.policy.single_agent = true;
+        core.replace_config(config);
         let spec = pi_lifecycle_spec(&core, dir.path(), wrapped);
         let attempts = dir.path().join("launches.jsonl");
         let marker = dir.path().join("first-launch-failed");

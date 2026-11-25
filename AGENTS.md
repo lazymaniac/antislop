@@ -205,6 +205,20 @@ src
    Reference(C{id,bytes})
    = {CHUNK,MAX_IMAGE}_BYTES
   core
+   execution
+    Execution(C{state,changed})
+     new(serial):Arc<Self> > State
+     configure(serial)
+     enter(&Arc<Self>,turn,cancel):Result<Lease> > Lease,acquire
+     suspend(&Arc<Self>,turn):Option<Suspension> > Suspension
+     active(turn):bool
+     while_active(turn,action):Option<T>
+    Lease(C{execution,turn}) : Drop
+     - drop
+    Suspension(C{execution,turn,pending}) : Drop
+     resume(cancelled):Result<()> > unpause
+     - drop
+    - Turn
    integration
     conflicts/repair
      Repair(C{core,conversation,task,spec,worktree,onto,change,files,outcome,cancel,base,attempts})
@@ -396,7 +410,9 @@ src
        VerdictSave(C{core,task,spec,verdict,report,changes,summary_effect,repairs})
        - ReviewTurn,run_review_turn
       rounds
+       Execution: run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,gate_approval,{review,settle}_round
        - FinishedWorker
+       - Execution: worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress
       worker/completion
        commit_round(task,spec,worktree,_round,report,summary,commit_message):Result<Option<String>> > validate_change_paths
        complete_report(core,conversation,task,spec,worktree,raw):Result<Option<WorkerCompletion>> > update_task,finish_report
@@ -411,11 +427,9 @@ src
        - artifact_checkpoint_base,checkpoint_delta_is_applied,run_worker_turn,worker_{setup,dirs},continuation
      task_execution.rs
       Execution(C{core,conversation,task,cancel,spec,config,project,worktree,_worktree_lease,workdir,project_text,add_dirs,upstream,worker,reviewer,integration_repairs})
-       run_round(round,state):Result<bool> > prepare_round,worker_or_stop,finish_worker_report,gate_approval,{review,settle}_round
        new(core,conversation,task,cancel,worktree_lease):Result<Self> > Prepared.load
        run():Result<()> > run_batch_integration,resume_approved_writer,integrate_approved,round_state,run_round,exhausted
-       - worker_report,save_round_verdict,sweep_runtime,incomplete,approve_round,update_progress,load_spec,assemble_batch,
-         repair_batch_conflict,dependents_invalidated,resumed_progress
+       - load_spec,assemble_batch,repair_batch_conflict,dependents_invalidated,resumed_progress
       - RoundState,Prepared,BatchDelta,apply_batch_delta
     feedback_helpers
      event_files(files):Vec<String>
@@ -662,7 +676,7 @@ src
     prepare_owned_artifacts(project,base,change,original,expected,backups):Result<PreparedArtifacts> > lock_path,index_stamp,require_{added_files,owned_outputs},prepare_publication,PreparedArtifacts
     require_owned_outputs(project,outputs,expected):Result<()> > require_untracked,Parent.at,artifact_file,require_new_outputs
     PreparedArtifacts(C{paths,blobs,index,index_stamp,conflict})
-     publish(project):Result<Integration> > acquire_at,index_stamp,Parent.at,publish_prepared
+     publish(project):Result<Integration> > index_stamp,Parent.at,publish_prepared
     - Publication,deliver_owned_artifacts,recover,publish
    artifacts
     artifact_files(directory,outputs,require_all):Result<Vec<String>>
@@ -929,7 +943,7 @@ src
     direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~121 > add_message,{start,finish}_turn,create_scope,TaskContract,add_plan,bind_plan_scope,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
-    settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> > automatic_choice,wait_for_approval
+    settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> > automatic_choice,suspend,wait_for_approval
     decide_approval_tool(conversation,args):Result<Value> > approval_state,escalate_approval,notice,answer_approval
     answer_approval(conversation,request,choice):Result<()>
     approval_mode(conversation):Result<String>
@@ -949,7 +963,7 @@ src
     busy():bool ~44
     task_freshness_token(conversation,{plan,task}_id):Result<String> > task_unscoped,freshness_for_task
     config_snapshot():Arc<Config>
-    replace_config(config)
+    replace_config(config) > configure
     send(&Arc<Self>,conversation,text):Result<Message> > create_session_branch
     send_with_images(&Arc<Self>,conversation,text,images):Result<Message> > create_session_branch
     start(project):Result<Conversation> > operation,{project,record_project}_identity,create_conversation
@@ -1034,7 +1048,7 @@ src
     record_check(conversation,task,update) > assert_task_inputs,{set,publish}_check
     run_plan(&Arc<Self>,conversation,plan_id,cancel) > scheduler.run
     run_task(&Arc<Self>,conversation,task,cancel):Result<()> > {task_worktree,run_task_with}_lease
-    run_task_with_lease(&Arc<Self>,conversation,task,cancel,lease):Result<()> > Execution.new
+    run_task_with_lease(&Arc<Self>,conversation,task,cancel,lease):Result<()>
     freshness_for_task(conversation,plan_id,task):Result<String> > freshness_seed,append_run_revision
     task_unscoped(plan,id):Result<Task> > task_in_plan_by_id
     task(plan,id):Result<Task> > task_unscoped,plan_conversation,freshness_for_task
@@ -1122,7 +1136,7 @@ src
    registry.rs
     - recorded_round,validate_profile,restored_agent_spec
    session
-    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,token,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,invalid,while_open,require,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
+    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,token,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,invalid,while_{open,active},require,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
                remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
@@ -3260,6 +3274,8 @@ work/visualizations
     bootstrap
      tests:*fixture,fail
    core
+    execution
+     tests:*queued
     integration/land
      tests
     orchestration/approvals
@@ -3401,6 +3417,6 @@ work/visualizations
    run_test.py:*main
    task_cli.py:*_fixture_{tool,emit,block,contract}
    wrapping_stream
-· 184,745 LOC · input 1,718,655 · output 51,219 tokens · state 2f398967dcf0 · targets AGENTS.md
+· 185,081 LOC · input 1,721,353 · output 51,348 tokens · state 2cd03d2bd080 · targets AGENTS.md
 ```
 <!-- hologram:end -->
