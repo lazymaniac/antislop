@@ -153,7 +153,7 @@ pub fn confirm_scope_store(
         "user",
         &format!("Interview answer ({})\nAnswer: Confirm scope", question.id),
     )?;
-    if !store.finish_interview(conversation)? {
+    if !store.workflow(conversation)?.planning() {
         return Err(antislop::Error::Invalid(
             "confirmed scope did not enter planning".into(),
         ));

@@ -44,7 +44,7 @@ impl Store {
             &format!("Interview answer ({})\nAnswer: Confirm scope", question.id),
         )
         .unwrap();
-        assert!(self.finish_interview(conversation).unwrap());
+        assert!(self.workflow(conversation).unwrap().planning());
     }
 
     pub fn workflow(&self, conversation: &str) -> Result<Workflow> {
@@ -289,6 +289,9 @@ impl Store {
             "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'scope_confirmed',?2,?3)",
             params![conversation,serde_json::json!({"question_id":question.id,"title":title,"summary":summary,"upto_message":seq,"answer_message":seq}).to_string(),now_ms()],
         )?;
+        if promote_current_interview(tx, conversation)? {
+            queue_planning_message(tx, conversation)?;
+        }
         Ok(())
     }
 }
