@@ -1,6 +1,7 @@
 //! Mechanical checks that task contracts describe a consistent delivery and
 //! dependency graph. Every agent has full tool access; a task without a file
 //! delivery may still run commands to gather evidence.
+use crate::lean::prompts;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::WorkKind;
@@ -179,16 +180,14 @@ fn descendants(specs: &[TaskContract]) -> BTreeMap<&str, BTreeSet<&str>> {
 pub fn message(findings: &[&Finding]) -> String {
     let lines: Vec<String> = findings
         .iter()
-        .map(|f| format!("- {} [{}]: {}", f.task, f.rule, f.detail))
+        .map(|f| {
+            format!(
+                prompts::template!(INFEASIBLE_TASK_ENTRY),
+                f.task, f.rule, f.detail
+            )
+        })
         .collect();
-    format!(
-        "The runtime checked the proposed plan before any agent started and found tasks that \
-         cannot be carried out as written:\n{}\n\nSubmit the complete corrected plan for \
-         the same requirements, changing only what these findings require: fix the delivery, \
-         `change_kind`, dependencies or the goal's wording, or assign the prerequisite to a task that \
-         runs first.",
-        lines.join("\n")
-    )
+    format!(prompts::template!(INFEASIBLE_PLAN), lines.join("\n"))
 }
 
 #[cfg(test)]

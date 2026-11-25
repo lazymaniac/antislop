@@ -1,6 +1,7 @@
 use super::prompt::{PromptContext, orchestrator_prompt_text};
 use crate::lean::core::orchestration::planning_context::planning_scope_context;
 use crate::lean::core::orchestration::unanswered::includes_comment;
+use crate::lean::prompts;
 use crate::lean::*;
 
 #[path = "context/plan_view.rs"]
@@ -41,7 +42,7 @@ pub(super) struct AuditResponse {
 }
 
 /// Starts every reminder the runtime sends for an unanswered audit report.
-pub(super) const AUDIT_REMINDER: &str = "The auditor report is still awaiting your response:";
+pub(super) const AUDIT_REMINDER: &str = prompts::AUDIT_REMINDER;
 
 pub(super) fn prepare<'a>(
     core: &Core,

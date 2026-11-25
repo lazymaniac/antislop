@@ -1,3 +1,4 @@
+use crate::lean::prompts;
 use crate::lean::*;
 
 pub(super) struct Repair<'a> {
@@ -119,16 +120,7 @@ impl<'a> Repair<'a> {
 
     fn prompt(&self) -> String {
         format!(
-            "Automatic integration conflict in {}. Resolve it in your allocated worktree. \
-             Original base: {}; your result: {}; current project snapshot: {}.\n\
-             Inspect git diff {} {} and git diff {} {}, plus the relevant files and tests. \
-             Combine both intentions, preserving current local user edits and the task's behavior. \
-             Edit only task paths in this worktree; never modify the primary working tree or another \
-             worktree. The runtime will use {} as the new base and independently review your \
-             repaired result before landing. Do not merge unrelated snapshot paths into your result.\n\
-             Resolve mechanical conflicts yourself. If the versions represent an unclear product or \
-             behavior choice, do not guess or silently pick ours/theirs. Use ask with the conflicting intentions and alternatives, and end with wait_for_answer when the decision remains pending. Otherwise resolve the \
-             files and report what you preserved and how you tested it.",
+            prompts::template!(CONFLICT_REPAIR_PROMPT),
             self.files.join(", "),
             self.base,
             self.change,
@@ -239,7 +231,7 @@ impl<'a> Repair<'a> {
 
     fn review_prompt(&self) -> String {
         format!(
-            "Review the conflict resolution independently. Compare original task delta: git diff {} {}; concurrent project edits: git diff {} {}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If the repair leaves a behavior choice unresolved, ask the orchestrator.",
+            prompts::template!(CONFLICT_REVIEW_PROMPT),
             self.base,
             self.change,
             self.base,

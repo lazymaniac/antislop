@@ -1,52 +1,53 @@
 //! Feature preparation roles and execution-time delivery checks.
 use super::*;
+use crate::lean::prompts;
 
 pub const FEATURE_SPECIALISTS: &[PredefinedAgent] = &[
     PredefinedAgent {
         id: "feature-research",
         kind: WorkKind::Research,
-        title: "Feature Research",
-        focus: "Establish relevant existing behavior, evidence and technical unknowns",
+        title: prompts::FEATURE_RESEARCH_TITLE,
+        focus: prompts::FEATURE_RESEARCH_FOCUS,
         required_for_code_changes: false,
     },
     PredefinedAgent {
         id: "feature-analysis",
         kind: WorkKind::Analysis,
-        title: "Feature Impact Analysis",
-        focus: "Analyze requirements, state transitions, failures and affected consumers",
+        title: prompts::FEATURE_ANALYSIS_TITLE,
+        focus: prompts::FEATURE_ANALYSIS_FOCUS,
         required_for_code_changes: false,
     },
     PredefinedAgent {
         id: "feature-dependencies",
         kind: WorkKind::Dependencies,
-        title: "Feature Dependencies",
-        focus: "Assess required libraries, compatibility and constraints using research evidence",
+        title: prompts::FEATURE_DEPENDENCIES_TITLE,
+        focus: prompts::FEATURE_DEPENDENCIES_FOCUS,
         required_for_code_changes: false,
     },
     PredefinedAgent {
         id: "feature-architecture",
         kind: WorkKind::Architecture,
-        title: "Feature Architecture",
-        focus: "Define component responsibilities and interfaces from impact and dependency analysis",
+        title: prompts::FEATURE_ARCHITECTURE_TITLE,
+        focus: prompts::FEATURE_ARCHITECTURE_FOCUS,
         required_for_code_changes: false,
     },
     PredefinedAgent {
         id: "feature-test-design",
         kind: WorkKind::TestDesign,
-        title: "Feature Test Design",
-        focus: "Define observable acceptance scenarios, edge cases and failure checks from impact analysis",
+        title: prompts::FEATURE_TEST_DESIGN_TITLE,
+        focus: prompts::FEATURE_TEST_DESIGN_FOCUS,
         required_for_code_changes: false,
     },
     PredefinedAgent {
         id: "feature-delivery",
         kind: WorkKind::Delivery,
-        title: "Feature Delivery",
-        focus: "Reconcile requirements, actual results, evidence, usage and limitations after integration",
+        title: prompts::FEATURE_DELIVERY_TITLE,
+        focus: prompts::FEATURE_DELIVERY_FOCUS,
         required_for_code_changes: false,
     },
 ];
 
-pub const FEATURE_PLANNING_RULES: &str = "FEATURE PIPELINE: Before drafting, call consult_planning for Research, Analysis, Dependencies, Architecture and Test Design. These consultations feed the plan and are not execution tasks. Reuse retained reports; use read_planning_result and reference their decisions in the plan and relevant worker goals. Do not re-author completed preparation as tasks or ask workers to repeat it. Add further specialist work only for an explicit deliverable or a new unresolved question, with its distinct result and dependencies. Keep focused implementation tests with their writer. Author final Delivery to consume integration-gate and every remaining deliverable. The runtime supplies Options and all six final quality gates; those verify implemented results and are not replaced by preparation. Preserve approved results and checkpoints on replans. Do not add a Writing stage or repeat the requirements interview.";
+pub const FEATURE_PLANNING_RULES: &str = prompts::FEATURE_PLANNING_RULES;
 
 /// Check the selected feature's actual graph, excluding unchanged approved writers.
 pub fn validate_feature_pipeline(

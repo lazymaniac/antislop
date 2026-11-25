@@ -1,4 +1,5 @@
 use crate::lean::core::task::feedback_helpers::review_json;
+use crate::lean::prompts;
 use crate::lean::*;
 
 impl Core {
@@ -18,7 +19,7 @@ impl Core {
             return Ok(report_intro(&results));
         }
         let mut text = if code_review {
-            format!("# Code review results\n\nReviewed scope and candidate reports:\n{results}")
+            format!(prompts::template!(PLAN_REPORT), results = results)
         } else {
             report_intro(&results)
         };
@@ -77,7 +78,15 @@ impl Core {
             audit_report.as_deref(),
             &verdict,
         )?;
-        text.push_str(&format!("\n## Independent audit\nVerdict: {}. Auditor report and findings: read_audit audit_ref=audit:{audit_ref}.\n", match &verdict { Ok(v) if v.approved => "approved", Ok(_) => "not approved", Err(_) => "unaudited" }));
+        text.push_str(&format!(
+            prompts::template!(PLAN_AUDIT_RESULT),
+            match &verdict {
+                Ok(v) if v.approved => "approved",
+                Ok(_) => prompts::AUDIT_NOT_APPROVED,
+                Err(_) => "unaudited",
+            },
+            audit_ref = audit_ref
+        ));
         Ok(())
     }
 
@@ -172,7 +181,7 @@ impl Core {
         };
         let project_text = integrated.to_string_lossy().into_owned();
         let sources = format!(
-            "{}\nAudit the integrated result at {}. Artifacts with delivery=untracked are delivered at the original project {} instead; inspect their declared output paths there.\n",
+            prompts::template!(INTEGRATED_AUDIT_SCOPE),
             self.plan_scope_context(conversation, plan_id)?,
             integrated.display(),
             project.display()
@@ -185,7 +194,11 @@ impl Core {
             &integrated,
             cancel,
             |first, request| {
-                let audit_request = format!("{sources}\nNew messages:\n{request}");
+                let audit_request = format!(
+                    prompts::template!(AUDIT_NEW_MESSAGES),
+                    sources = sources,
+                    request = request
+                );
                 if first {
                     if code_review {
                         tasks::final_scope_audit_prompt(&project_text, &audit_request, results)
@@ -221,7 +234,7 @@ fn task_results(store: &Store, tasks: &[Task]) -> Result<String> {
                 Ok(summary) => summary,
                 Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows)) => task.spec["summary"]
                     .as_str()
-                    .unwrap_or("Read the full result through MCP")
+                    .unwrap_or(crate::lean::prompts::FULL_RESULT_REFERENCE)
                     .to_owned(),
                 Err(error) => return Err(error),
             };
@@ -231,23 +244,21 @@ fn task_results(store: &Store, tasks: &[Task]) -> Result<String> {
 }
 
 fn report_intro(results: &str) -> String {
-    format!(
-        "The plan finished. Results of each task follow. Answer the user's \
-         request using them; review anything doubtful in the files yourself.\n{results}"
-    )
+    format!(prompts::template!(REPORT_INTRO), results = results)
 }
 
 fn task_result(task: &Task, summary: &str) -> String {
     let findings = task_findings(task);
     format!(
-        "\n## {} — {} ({}, {} round(s))\nSummary: {}\nFull contract: read_task_contract task={}. Full worker report: read_dependency_result dependency={}; use report_history for earlier input generations.\nOpen reviewer findings:\n{findings}\n",
+        prompts::template!(TASK_RESULT),
         task.spec["id"].as_str().unwrap_or_default(),
         task.spec["title"].as_str().unwrap_or_default(),
         task.status,
         task.round,
         summary,
         task.id,
-        task.id
+        task.id,
+        findings = findings
     )
 }
 
@@ -260,11 +271,11 @@ fn task_findings(task: &Task) -> String {
         .as_ref()
         .and_then(|value| serde_json::from_value::<Verdict>(value.clone()).ok())
     else {
-        return format!("task ended as {} without approval", task.status);
+        return format!(prompts::template!(UNAPPROVED_TASK_RESULT), task.status);
     };
     if verdict.approved {
         format!(
-            "the reviewer approved this task's worktree, but the task ended as {}",
+            prompts::template!(APPROVED_WORKTREE_UNFINISHED_TASK),
             task.status
         )
     } else {

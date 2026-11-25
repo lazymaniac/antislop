@@ -243,7 +243,7 @@ src
        finish(core,outcome,events,cancel):Result<Option<String>> > finish_{success,failure}
        - record_failed_mail
       prompt
-       prepare_prompt(core,state,spec,prompt):Result<String> ~65 > role_introduction,SessionContext,execution_policy,validation_index,inbox_text,prompt,task_role,append_{allocation_context,task_context,round_handoff}
+       prepare_prompt(core,state,spec,prompt):Result<String> ~72 > role_introduction,SessionContext,execution_policy,validation_index,inbox_text,prompt,task_role,append_{allocation_context,task_context,round_handoff}
        - append_questions
       setup
        begin(core,setup):Result<TurnState<'a>> > TurnStart.new,pending_{inbox,comments},start_turn,attribute_inbox
@@ -268,7 +268,7 @@ src
     orchestrator_turn
      context
       answer
-       finish(core,context,answer,cancel):Result<()> ~69 > TurnResult.decode,submitted_graph,audit_response_error,remediation_requested,add_message,submitted_plan,record_answer_progress,finish_interview,PlanAnswer
+       finish(core,context,answer,cancel):Result<()> ~70 > TurnResult.decode,submitted_graph,audit_response_error,remediation_requested,add_message,submitted_plan,record_answer_progress,finish_interview,PlanAnswer
        - AuditGap
        - AuditGap: reason
       comments
@@ -289,7 +289,7 @@ src
       orchestrator_prompt_text(context):String > orchestrator_prompt,introduce,append_{history,decision,graph},prepend_phase,append_audit_response
       PromptContext(C{project,session,answered,asked,open,history,comment_context,editable_graph,graph,graph_json,interviewing,workflow,scope_context,decision,audit_response})
     planner_turn/prompt
-     planner_prompt_text(context):String ~57 > format_messages
+     planner_prompt_text(context):String ~65 > format_messages
      PlannerPrompt(C{project,first,requirements,team_guidance,asked,replaced,keepable,scope_context})
     planner_turn.rs
      - PlannerTurnContext,authored_contracts,planner_{setup,prompt},announce_planner_draft,record_planner_result
@@ -917,7 +917,7 @@ src
     await_agent_answer(conversation,turn,request):Result<Value> > agent_question,require
     validate_agent_result(conversation,role,turn,result):Result<()> > task_{role,by_id},assert_task_inputs,validate_task,agent_question
     merge_session_with_main_tool(conversation,turn):Result<Value> ~64 > db,as_str
-    validation_tool(conversation,turn,tool,args):Result<Value> ~142 > validation_index,flatten,required_text,ok,require,all,ValidationSpec,validation_tree,prepare_validation,evidence,evidence_text,invalidate_validation,validation_response,validation,record_evidence,complete_validation
+    validation_tool(conversation,turn,tool,args):Result<Value> ~145 > validation_index,flatten,required_text,ok,require,all,ValidationSpec,validation_tree,prepare_validation,evidence,evidence_text,invalidate_validation,validation_response,validation,record_evidence,complete_validation
     agent_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> ~44 > require_open_agent_turn,read_plan_context,validation_tool,consult_planning,read_audit,conversation_images,evidence_tool,read_dependency_result,{task_result,finish,interview,orchestrator,merge_session_with_main,submit_plan,revision}_tool
     repair_integration(&Arc<Self>,conversation,task,spec,worktree,onto,change,outcome,files,cancel):Result<()> > Repair.new
     integrate(&Arc<Self>,conversation,task,spec,project,worktree,config,cancel):Result<()> > operation,lock_cancellable,defer_agent_work
@@ -998,7 +998,7 @@ src
     accept_scope_revision(&Arc<Self>,conversation,plan):Result<Vec<Task>> > {pending_scope,plan}_revision,revised_specs,apply_direct_revision,publish_scope_resolution,maybe_continue_plan
     reject_scope_revision(&Arc<Self>,conversation,plan,reason):Result<bool> > discard_scope_revision
     supersede_scope_revision(&Arc<Self>,conversation,plan,key):Result<()> > {pending,discard}_scope_revision
-    select_rigor(&Arc<Self>,conversation,team,reason):Result<bool> ~80 > select_team,accepted_plan,request_replan,team,checked_team_plan,config_snapshot,PlanRevision,{plan,apply_direct}_revision,maybe_continue_plan
+    select_rigor(&Arc<Self>,conversation,team,reason):Result<bool> ~84 > select_team,accepted_plan,request_replan,team,checked_team_plan,config_snapshot,PlanRevision,{plan,apply_direct}_revision,maybe_continue_plan
     submit_revision(&Arc<Self>,conversation,request_key,revision):Result<serde_json::Value> > include_scope_sources,{supersede_scope,reserve}_revision,revision_job,process_fresh_revision
     apply_user_revision(&Arc<Self>,conversation,request_key,revision,request_ai_review):Result<serde_json::Value> ~61 > normalize_user_revision_tasks,{submit,plan}_revision,ensure_accepted_plan,revised_specs,revision_checkpoints,apply_direct_revision,finish_revision_job,maybe_continue_plan,wake
     finish_blocked_plan(&Arc<Self>,conversation,tasks,cancel) > blocked_report,add_message,wake
@@ -1184,7 +1184,7 @@ src
     remember(project):Result<()> > read,truncate
    - Stored
   prompt_context
-   markdown(value):String ~43
+   markdown(value):String ~60
    untrusted(label,text):String
    Continuation(E{Role,IndependentReview,TaskRound})
    PromptContext(C{sections})
@@ -3339,6 +3339,6 @@ work/visualizations
    run_test.py:*main
    task_cli.py:*_fixture_{tool,emit,block,contract}
    wrapping_stream
-· 182,949 LOC · input 1,693,653 · output 49,482 tokens · state f9bb4930dc2a · targets AGENTS.md
+· 183,127 LOC · input 1,670,937 · output 49,482 tokens · state 70b0ed7ea234 · targets AGENTS.md
 ```
 <!-- hologram:end -->

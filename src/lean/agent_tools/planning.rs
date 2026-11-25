@@ -1,6 +1,7 @@
 //! Planner-owned preparation. Reports are retained once as ordinary agent turns.
 use super::dependencies::page_text;
 use super::*;
+use crate::lean::prompts;
 
 fn planning_kinds() -> impl Iterator<Item = WorkKind> {
     tasks::FEATURE_SPECIALISTS
@@ -230,13 +231,22 @@ impl Core {
             add_dirs: vec![],
             upto_message,
         };
-        let answer = self.turn(setup, cancel, |_| format!(
-            "PLANNING CONSULTATION: {}. The planner owns this request. Inspect relevant files read-only; do not implement, draft the plan, or repeat other specialists' work. Read prerequisite reports with read_planning_result, continuing pages until complete. Return concise findings with source locations, decisions/constraints, unresolved questions and concrete implications for the plan. Research establishes facts and unknowns; Analysis maps impact and failure modes; Dependencies checks compatibility using research; Architecture defines interfaces and ownership using analysis and dependencies; Test Design maps observable acceptance scenarios, fixtures, failure cases and verification methods to requirements and architecture. For areas that do not apply, explain why from evidence. Distinguish observations from proposals; do not claim tests ran unless you ran them. Finish with finish_turn.\n{}\n{}\n{}\n{}",
-            tasks::work_kind_name(kind),
-            crate::lean::prompt_context::untrusted("Confirmed requirements", &requirements), scope,
-            crate::lean::prompt_context::untrusted("Planner question", question),
-            crate::lean::prompt_context::untrusted("Prerequisite report references", &crate::lean::prompt_context::markdown(&inputs)),
-        ))?;
+        let answer = self.turn(setup, cancel, |_| {
+            format!(
+                prompts::template!(RUN_PLANNING_CONSULTATION),
+                tasks::work_kind_name(kind),
+                crate::lean::prompt_context::untrusted(
+                    prompts::CONFIRMED_REQUIREMENTS_LABEL,
+                    &requirements
+                ),
+                scope,
+                crate::lean::prompt_context::untrusted(prompts::PLANNER_QUESTION_LABEL, question),
+                crate::lean::prompt_context::untrusted(
+                    prompts::PLANNING_PREREQUISITES_LABEL,
+                    &crate::lean::prompt_context::markdown(&inputs)
+                ),
+            )
+        })?;
         if answer.is_none() {
             let error = self
                 .store

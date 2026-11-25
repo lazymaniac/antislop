@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::prompts;
 
 impl Session {
     pub(super) fn start(
@@ -420,8 +421,8 @@ impl Session {
                     return Ok(());
                 }
                 let mut context = crate::lean::prompt_context::PromptContext::default();
-                context.section("Continuation", "Your response appears complete, but this MCP turn is still open. Continue any remaining work, then call the required result tool now. Do not finish in terminal prose.");
-                context.section("Required result", &footer);
+                context.section(prompts::CONTINUATION_LABEL, prompts::RESULT_TOOL_REMINDER);
+                context.section(prompts::REQUIRED_RESULT_LABEL, &footer);
                 terminal::Session::submit(&self.screen, &context.render())
             })?;
         }

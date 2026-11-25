@@ -4,6 +4,7 @@
 
 use super::{GATE_KINDS, TaskContract};
 use crate::config::WorkKind;
+use crate::lean::prompts;
 use serde::{Deserialize, Serialize};
 
 /// Bumped when a template's gates or options change, so a recorded choice
@@ -13,12 +14,11 @@ pub const TEAM_VERSION: u32 = 4;
 /// Runtime-owned marker used to specialize workers and reviewers for the
 /// report-only code-review workflow. Planner-authored summaries cannot enable
 /// this mode; plan validation installs it from the selected team.
-pub(crate) const CODE_REVIEW_REVIEWER_SUMMARY: &str =
-    "Code review: independently validate findings and report scope, verdict, evidence and limits.";
+pub(crate) const CODE_REVIEW_REVIEWER_SUMMARY: &str = prompts::CODE_REVIEW_REVIEWER_SUMMARY;
 
-pub(crate) const CODE_REVIEW_PLANNING_RULES: &str = "\nSelected rigor: `code-review`. Plan a read-only review of the exact target derived from the user's request. Use an explicitly named commit/range, files, symbols or component when provided; use the current working-tree diff only when the request clearly asks to review current/uncommitted changes; use repository-wide scope only when explicitly requested. If no target or diff can be inferred, do not guess or submit a plan: finish_turn with the missing scope and ask the orchestrator to clarify it with the user. Plan only report-only review and validation tasks with change_kind=none. Every task must inspect the same declared target, must not modify/create/delete project files, and must not repair findings. Do not add implementation, refactoring, options, artifact/report-writing, quality-gate, or code-changing tasks. The final report task, if any, must depend on all review and validation tasks. Require results to state reviewed scope, overall verdict, prioritized confirmed findings (severity, path and line, trigger, impact, evidence, remediation), unresolved questions, commands/checks with actual outcomes, limitations and coverage gaps. No confirmed findings is a valid outcome.";
+pub(crate) const CODE_REVIEW_PLANNING_RULES: &str = prompts::CODE_REVIEW_PLANNING_RULES;
 
-pub(crate) const NO_QUALITY_GATES_PLANNING_RULES: &str = "\nSelected rigor: `no-quality-gates`. Plan the requested code and artifact work as ordinary tasks with meaningful acceptance criteria and real dependency edges. Do not add quality-gate tasks or options tasks; the selected rigor defines this behavior. The runtime adds one final integration task after all code-producing tasks and integrates their accepted results on the branch. Do not add another integration task or a final quality audit. Task-local acceptance and any explicitly requested validation remain ordinary planned work.";
+pub(crate) const NO_QUALITY_GATES_PLANNING_RULES: &str = prompts::NO_QUALITY_GATES_PLANNING_RULES;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -103,7 +103,7 @@ impl Team {
     /// What the planner reads about the template.
     pub fn summary(self) -> String {
         let gates = if self.gates().is_empty() {
-            "no gates".to_owned()
+            prompts::TEAM_NO_GATES.to_owned()
         } else {
             self.gates()
                 .iter()
@@ -112,27 +112,25 @@ impl Team {
                 .join(", ")
         };
         let use_for = match self {
-            Team::SmallChange => "a contained fix or tweak in a few files",
-            Team::Feature => {
-                "new behaviour with mandatory Research, Analysis, Dependencies, Architecture, Test Design and final Delivery"
-            }
-            Team::Refactoring => "structure changed, behaviour kept",
-            Team::SecurityFix => "closing a vulnerability",
-            Team::CodeReview => "reviewing code changes without generated gates",
-            Team::NoQualityGates => {
-                "requested work with ordinary acceptance and final integration only"
-            }
-            Team::Research => "findings without code changes",
-            Team::Document => "a document or other artifact, no code",
+            Team::SmallChange => prompts::SMALL_CHANGE_USE_CASE,
+            Team::Feature => prompts::FEATURE_USE_CASE,
+            Team::Refactoring => prompts::REFACTORING_USE_CASE,
+            Team::SecurityFix => prompts::SECURITY_FIX_USE_CASE,
+            Team::CodeReview => prompts::CODE_REVIEW_USE_CASE,
+            Team::NoQualityGates => prompts::NO_QUALITY_GATES_USE_CASE,
+            Team::Research => prompts::RESEARCH_USE_CASE,
+            Team::Document => prompts::DOCUMENT_USE_CASE,
         };
         format!(
-            "`{}`: {use_for}; gates: {gates}; options: {}",
+            prompts::template!(TEAM_SUMMARY),
             self.name(),
             if self.options() {
-                "before each eligible code writer"
+                prompts::TEAM_OPTIONS_DESCRIPTION
             } else {
                 "no"
-            }
+            },
+            use_for = use_for,
+            gates = gates
         )
     }
 
@@ -188,14 +186,14 @@ pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<Tas
         integration_batch: true,
         options_for: None,
         id,
-        checkout_name: Some(super::checkout_slug("Integrate delivered changes")),
+        checkout_name: Some(super::checkout_slug(prompts::INTEGRATION_TASK_TITLE)),
         acceptance_criteria: vec![super::AcceptanceCriterion {
             id: "C1".into(),
-            text: "All accepted code changes from this plan are integrated on the branch".into(),
+            text: prompts::INTEGRATION_ACCEPTANCE_CRITERION.into(),
         }],
-        title: "Integrate delivered changes".into(),
-        goal: "Integrate every accepted code change from this plan on the branch, resolving actual conflicts through the existing repair flow and reporting failures.".into(),
-        summary: Some("Integrate accepted code changes after all producers finish.".into()),
+        title: prompts::INTEGRATION_TASK_TITLE.into(),
+        goal: prompts::INTEGRATION_TASK_GOAL.into(),
+        summary: Some(prompts::INTEGRATION_TASK_SUMMARY.into()),
         section: None,
         deferred,
         change_kind: super::ChangeKind::Code,
@@ -212,6 +210,11 @@ pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<Tas
 /// The teams, one line each, for planner instructions.
 pub fn team_catalog() -> String {
     Team::ALL
-        .map(|team| format!("- {}", team.summary()))
+        .map(|team| {
+            format!(
+                crate::lean::prompts::template!(TEAM_CATALOG_ENTRY),
+                team.summary()
+            )
+        })
         .join("\n")
 }

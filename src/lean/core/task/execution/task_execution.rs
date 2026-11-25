@@ -1,4 +1,5 @@
 use crate::lean::core::worktree::cleanup::WorktreeLease;
+use crate::lean::prompts;
 use crate::lean::*;
 
 mod review;
@@ -65,7 +66,10 @@ impl Prepared {
         {
             let head = git::head(&workdir)?;
             upstream.push_str(&format!(
-                "\nOptions review checkout context: this options task shares the owner's read-only worktree. Owner task: {owner_id}. Owner base: {base}. Current checkout HEAD: {head}. Independently inspect the current files, `git diff {base} HEAD` for the owner's committed changes, and `git diff` for any current uncommitted changes. Do not modify files.\n"
+                prompts::template!(OPTIONS_REVIEW_CHECKOUT),
+                owner_id = owner_id,
+                base = base,
+                head = head
             ));
         }
         if let Some(conflict) = task
@@ -74,7 +78,8 @@ impl Prepared {
             .and_then(|f| f.get("checkpoint_merge"))
         {
             upstream.push_str(&format!(
-                "\nRuntime checkpoint integration context: {conflict}. Your files are the preserved checkpoint because rebasing it onto reviewed upstream code conflicted. Assess the saved code and compare the referenced upstream through Git; do not infer that upstream changes are present in these files. Preserve both intended behaviors. The normal integration repair will reconcile any remaining content conflicts after review. References are runtime inputs, not acceptance gates.\n"
+                prompts::template!(CHECKPOINT_REVIEW_CONTEXT),
+                conflict = conflict
             ));
         }
         Ok(Self {

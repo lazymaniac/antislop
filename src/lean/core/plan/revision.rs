@@ -1,4 +1,5 @@
 //! Reviewed revisions are applied behind a short scheduler barrier.
+use crate::lean::prompts;
 use crate::lean::store::PlanRevision;
 use crate::lean::*;
 use rusqlite::OptionalExtension;
@@ -82,8 +83,9 @@ impl Core {
                         conversation,
                         RUNTIME,
                         &format!(
-                            "The user selected feature rigor: {reason}. Upgrade the accepted plan {} with revise_plan, adding missing final delivery and quality-check dependencies for remaining work; reuse established preparation findings. Preserve approved work and checkpoints; do not create a replacement draft with request_replan or submit_plan. Include scope only if requirements change.",
-                            plan.plan_id
+                            prompts::template!(FEATURE_UPGRADE_REVISION),
+                            plan.plan_id,
+                            reason = reason
                         ),
                     )?;
                     return Ok(true);
@@ -91,7 +93,10 @@ impl Core {
                 self.ensure_replacement_plan_allowed(conversation)?;
                 self.store.select_team(conversation, team, reason)?;
                 drop(_graph);
-                self.request_replan(conversation, &format!("Upgrade to the full feature pipeline: {reason}. Preserve approved work and checkpoints; reuse retained preparation and add the missing final delivery and quality-check dependencies."))?;
+                self.request_replan(
+                    conversation,
+                    &format!(prompts::template!(FEATURE_UPGRADE_REPLAN), reason = reason),
+                )?;
                 return Ok(true);
             }
             if self.store.team(conversation)? == team

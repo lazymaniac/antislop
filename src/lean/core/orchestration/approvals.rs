@@ -2,6 +2,7 @@
 //! into a question that the user answers, or, in an autonomous conversation,
 //! that the orchestrator decides, and the chosen key goes back to the CLI.
 use crate::lean::native::approvals::{self, Approval, Decision, Kind, Verdict};
+use crate::lean::prompts;
 use crate::lean::{Core, store};
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -184,7 +185,7 @@ impl Core {
             .iter()
             .map(|choice| {
                 format!(
-                    "- {}: {} ({})",
+                    prompts::template!(APPROVAL_CHOICE),
                     choice.id,
                     choice.label,
                     decision_name(choice.decision)
@@ -193,8 +194,13 @@ impl Core {
             .collect::<Vec<_>>()
             .join("\n");
         let text = format!(
-            "Approval request {request}, source {}, turn {}: the {} CLI of this agent asks:\n{}\n{choices}\nDecide with decide_approval (request, choice). Allow what the agent's task needs and nothing broader; deny the rest. Choose escalate_to_user, with an explanation, when you cannot judge it or it goes beyond what the user asked.",
-            seat.role, seat.turn, seat.provider, approval.summary
+            prompts::template!(APPROVAL_REQUEST),
+            seat.role,
+            seat.turn,
+            seat.provider,
+            approval.summary,
+            request = request,
+            choices = choices
         );
         self.store
             .add_message(&seat.conversation, crate::lean::RUNTIME, &text)?;

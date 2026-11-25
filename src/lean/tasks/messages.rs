@@ -1,3 +1,4 @@
+use crate::lean::prompts;
 /// Messages delivered into a turn, before its own prompt.
 pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
     inbox_text_from(mail.iter())
@@ -6,18 +7,18 @@ pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
 pub(crate) fn inbox_text_from<'a>(
     mail: impl IntoIterator<Item = &'a crate::lean::store::Mail>,
 ) -> String {
-    let mut text = String::from("Messages for you:\n");
+    let mut text = String::from(prompts::INBOX_HEADING);
     for message in mail {
         use std::fmt::Write as _;
         let _ = writeln!(
             text,
-            "- from {} ({}): {}",
+            prompts::template!(INBOX_MESSAGE),
             message.sender,
             message.kind,
             if message.sender == crate::lean::RUNTIME && message.kind == "agent_work" {
                 message.text.clone()
             } else {
-                crate::lean::prompt_context::untrusted("Message", &message.text)
+                crate::lean::prompt_context::untrusted(prompts::INBOX_MESSAGE_LABEL, &message.text)
             }
         );
     }

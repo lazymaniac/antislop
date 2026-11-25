@@ -6,27 +6,7 @@ use crate::config::WorkKind;
 use std::sync::OnceLock;
 
 /// `id<TAB>kind<TAB>problem<TAB>how to detect it`, one risk per line.
-const CATALOGS: &[&str] = &[
-    include_str!("risks/analysis.tsv"),
-    include_str!("risks/architecture.tsv"),
-    include_str!("risks/context.tsv"),
-    include_str!("risks/delivery.tsv"),
-    include_str!("risks/dependencies.tsv"),
-    include_str!("risks/implementation.tsv"),
-    include_str!("risks/integration.tsv"),
-    include_str!("risks/options.tsv"),
-    include_str!("risks/orchestration.tsv"),
-    include_str!("risks/performance.tsv"),
-    include_str!("risks/planning.tsv"),
-    include_str!("risks/refactoring.tsv"),
-    include_str!("risks/requirements.tsv"),
-    include_str!("risks/research.tsv"),
-    include_str!("risks/security.tsv"),
-    include_str!("risks/static_analysis.tsv"),
-    include_str!("risks/test_design.tsv"),
-    include_str!("risks/testing.tsv"),
-    include_str!("risks/writing.tsv"),
-];
+const CATALOGS: &[&str] = crate::lean::prompts::RISK_CATALOGS;
 
 struct Risk {
     id: &'static str,
@@ -52,7 +32,11 @@ fn risks() -> &'static [Risk] {
                     id,
                     kind: serde_json::from_value(kind.into())
                         .unwrap_or_else(|_| panic!("risk catalog: unknown kind {kind:?} for {id}")),
-                    text: format!("{problem} How to check: {detect}"),
+                    text: format!(
+                        crate::lean::prompts::template!(RISK_CHECK),
+                        problem = problem,
+                        detect = detect
+                    ),
                 }
             })
             .collect()

@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::prompts;
 
 /// The id of the obligation to meet the task's own goal.
 pub const GOAL_CHECK: &str = "goal";
@@ -12,7 +13,7 @@ pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
     normalize_options_presentation(&mut presented);
     std::iter::once((
         GOAL_CHECK.to_owned(),
-        format!("The goal is met: {}", presented.goal),
+        format!(prompts::template!(OBLIGATIONS), presented.goal),
     ))
     .chain(
         task.acceptance_criteria
@@ -27,9 +28,9 @@ pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
 /// not as deliverables. Read literally, a context task's thirty risks ask for
 /// every graph, matrix and map in the project, and its rounds never end.
 pub(super) fn risks_note(task: &TaskContract) -> String {
-    let mut note = "The catalog risks are ways this kind of work goes wrong, not extra deliverables. A risk is n/a when it does not bear on the goal, ok when the work shows no sign of it, and an issue only when the work exhibits that failure in something the goal needs. Its \"How to check\" says how to look for the failure; it never asks for an exhaustive graph, matrix, table or reconciliation.".to_owned();
+    let mut note = prompts::RISK_CATALOG_RULES.to_owned();
     if task.kind == crate::config::WorkKind::Context {
-        note.push_str(" This is a context task: it maps what the tasks that depend on it need, so judge its completeness by what they need, not by enumerating every path, callable or claim in the project; name what was not inspected instead of covering it.");
+        note.push_str(prompts::CONTEXT_RISK_RULES);
     }
     note
 }
@@ -37,7 +38,7 @@ pub(super) fn risks_note(task: &TaskContract) -> String {
 pub(super) fn obligations_text(obligations: &[(String, String)]) -> String {
     obligations
         .iter()
-        .map(|(id, text)| format!("- {id}: {text}"))
+        .map(|(id, text)| format!(prompts::template!(OBLIGATIONS_TEXT), id = id, text = text))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -151,11 +152,7 @@ pub fn check_comments_text(comments: &[(String, String)]) -> String {
     }
     let list: Vec<String> = comments
         .iter()
-        .map(|(id, text)| format!("- on {id}: {text}"))
+        .map(|(id, text)| format!(prompts::template!(CHECK_COMMENT), id = id, text = text))
         .collect();
-    format!(
-        "The user commented on your checks. Take each into account and answer it in \
-         that check's evidence:\n{}\n\n",
-        list.join("\n")
-    )
+    format!(prompts::template!(CHECK_COMMENTS), list.join("\n"))
 }

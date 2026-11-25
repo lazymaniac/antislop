@@ -1,5 +1,6 @@
 use super::*;
 use crate::lean::core::plan::answer::PlanAnswer;
+use crate::lean::prompts;
 
 pub(super) fn finish(
     core: &Arc<Core>,
@@ -29,8 +30,9 @@ pub(super) fn finish(
                 context.conversation,
                 RUNTIME,
                 &format!(
-                    "{AUDIT_REMINDER} {} Re-read the report and provide the required finding-by-finding Audit response before proceeding.",
-                    error.reason()
+                    prompts::template!(MISSING_AUDIT_RESPONSE),
+                    error.reason(),
+                    AUDIT_REMINDER = AUDIT_REMINDER
                 ),
             )?;
             return Ok(());

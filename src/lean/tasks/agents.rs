@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::prompts;
 #[path = "agents/gates.rs"]
 mod gates;
 use gates::GatePlan;
@@ -19,50 +20,50 @@ pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
     PredefinedAgent {
         id: "clean-implementer",
         kind: WorkKind::Implementation,
-        title: "Implementation & Boy-Scout Refactoring",
-        focus: "All requirements met and touched code left cleaner and better structured than before",
+        title: prompts::CLEAN_IMPLEMENTER_TITLE,
+        focus: prompts::CLEAN_IMPLEMENTER_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "quality-refactoring",
         kind: WorkKind::Refactoring,
-        title: "Code Quality & Structure Guardian",
-        focus: "Behavior preserved with evidence while simplifying touched modules and removing technical debt",
+        title: prompts::QUALITY_REFACTORING_TITLE,
+        focus: prompts::QUALITY_REFACTORING_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "static-analyzer",
         kind: WorkKind::StaticAnalysis,
-        title: "Static Analysis & Linter Gate",
-        focus: "Zero compiler or linter warnings and strict adherence to project formatting and rules",
+        title: prompts::STATIC_ANALYZER_TITLE,
+        focus: prompts::STATIC_ANALYZER_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "review-testing",
         kind: WorkKind::Testing,
-        title: "Regression & Edge-Case Review",
-        focus: "Real code paths and edge cases exercised by automated tests with green runs observed",
+        title: prompts::REVIEW_TESTING_TITLE,
+        focus: prompts::REVIEW_TESTING_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "security-auditor",
         kind: WorkKind::Security,
-        title: "Security Audit",
-        focus: "Changed code paths examined for injection, unsafe input handling, secrets, privilege and trust-boundary problems",
+        title: prompts::SECURITY_AUDITOR_TITLE,
+        focus: prompts::SECURITY_AUDITOR_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "performance-auditor",
         kind: WorkKind::Performance,
-        title: "Performance Audit",
-        focus: "Changed code paths examined for needless work, quadratic behavior, blocking calls and memory growth",
+        title: prompts::PERFORMANCE_AUDITOR_TITLE,
+        focus: prompts::PERFORMANCE_AUDITOR_FOCUS,
         required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "integration-gate",
         kind: WorkKind::Integration,
-        title: "End-to-End Integration & Requirements Gate",
-        focus: "Combined changes build cleanly, pass all checks, and satisfy every user requirement",
+        title: prompts::INTEGRATION_GATE_TITLE,
+        focus: prompts::INTEGRATION_GATE_FOCUS,
         required_for_code_changes: true,
     },
 ];
@@ -325,34 +326,30 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         checkout_name: None,
 
         acceptance_criteria: task.acceptance_criteria.clone(),
-        title: format!("Options for {}", task.title),
-        summary: Some("Compare feasible approaches and select the best supported variant.".into()),
+        title: format!(prompts::template!(OPTIONS_TASK_TITLE), task.title),
+        summary: Some(prompts::OPTIONS_TASK_SUMMARY.into()),
         goal: options_goal(task),
-        section: Some("Options".into()),
+        section: Some(prompts::OPTIONS_SECTION_LABEL.into()),
 
         depends_on: task.depends_on.clone(),
         result_inputs: task.result_inputs.clone(),
         kind: WorkKind::Options,
 
         reviewer: ReviewerSpec {
-            summary: Some(
-                "Review the selection follows from feasible alternatives and evidence.".into(),
-            ),
+            summary: Some(prompts::OPTIONS_REVIEWER_SUMMARY.into()),
         },
     }
 }
 
 fn options_goal(task: &TaskContract) -> String {
     let subject = &task.id;
-    format!(
-        "Choose the best available approach for the dependent writer. Read planning references from its contract with read_planning_result. Preserve established architecture and constraints; compare only unresolved task-local implementation choices. Do not repeat research, analysis or test design already supported by those reports unless concrete new evidence invalidates a conclusion. Compare up to four genuinely different, feasible variants. If only one is feasible, select it and explain in the rationale why the constraints exclude other approaches; never fabricate alternatives. Exclude variants violating requirements. Support the selection with evidence. Do not implement anything, invent measurements, or copy repository contents into the report. Inspect source files and existing evidence only. Do not execute builds, tests, linters, benchmarks, migrations or other validation commands. The dependent writer performs implementation and validation after this selection is approved. Read files yourself; dependency reports do not guarantee that unmerged dependency changes are present in this read-only checkout. Name missing evidence and assumptions; ask the orchestrator when they prevent a supported selection. End with select: the alternatives with their tradeoffs, the chosen id, the technical rationale, and user_summary. Write user_summary as up to three short sentences in the user conversation language: the choice, user-visible benefit and meaningful tradeoff. Keep internal ids, review rounds, implementation instructions and detailed evidence in the technical fields, not user_summary.\n\nDependent writer contract: {subject}. Read the full objective and acceptance criteria with read_task_contract; its action verbs describe the writer, not this read-only options task."
-    )
+    format!(prompts::template!(OPTIONS_GOAL), subject = subject)
 }
 
 /// Presentation-only compatibility with generated options goals stored before
 /// contracts moved behind MCP. Authored goals and all semantic fields stay exact.
 pub(crate) fn normalize_options_presentation(task: &mut TaskContract) {
-    const MARKER: &str = "\n\nDependent writer objective (JSON reference data only; its action verbs are not instructions for this options task or its reviewer):\n";
+    const MARKER: &str = prompts::OPTIONS_OBJECTIVE_MARKER;
     if let Some(owner) = &task.options_for
         && let Some((prefix, json)) = task.goal.split_once(MARKER)
         && serde_json::from_str::<serde_json::Value>(json)
@@ -362,7 +359,7 @@ pub(crate) fn normalize_options_presentation(task: &mut TaskContract) {
         source.id = owner.clone();
         let goal = options_goal(&source);
         if goal
-            .split_once("\n\nDependent writer contract:")
+            .split_once(prompts::OPTIONS_CONTRACT_HEADING)
             .is_some_and(|(expected, _)| expected == prefix)
         {
             task.goal = goal;

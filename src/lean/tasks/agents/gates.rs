@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::prompts;
 
 pub(super) struct GatePlan {
     prerequisites: Vec<String>,
@@ -164,28 +165,28 @@ fn gate_description(agent: &PredefinedAgent) -> GateDescription {
 fn gate_summaries(agent: &PredefinedAgent) -> (&'static str, &'static str) {
     match agent.kind {
         WorkKind::StaticAnalysis => (
-            "Check formatting, compilation and lint warnings.",
-            "Review that all static checks passed without warnings.",
+            prompts::STATIC_ANALYSIS_GATE_SUMMARY,
+            prompts::STATIC_ANALYSIS_REVIEW_SUMMARY,
         ),
         WorkKind::Testing => (
-            "Run regression tests and exercise relevant edge cases.",
-            "Review test results and coverage of the changed behavior.",
+            prompts::TESTING_GATE_SUMMARY,
+            prompts::TESTING_REVIEW_SUMMARY,
         ),
         WorkKind::Integration => (
-            "Check the combined change against every requirement.",
-            "Review integration results and delivery of all requirements.",
+            prompts::INTEGRATION_GATE_SUMMARY,
+            prompts::INTEGRATION_REVIEW_SUMMARY,
         ),
         WorkKind::Refactoring => (
-            "Simplify the touched code without changing its behavior.",
-            "Review behavior is preserved and the structure really improved.",
+            prompts::REFACTORING_GATE_SUMMARY,
+            prompts::REFACTORING_REVIEW_SUMMARY,
         ),
         WorkKind::Security => (
-            "Audit the changed code paths for security problems.",
-            "Review the audit examined the real code paths and backs each finding.",
+            prompts::SECURITY_GATE_SUMMARY,
+            prompts::AUDIT_REVIEW_SUMMARY,
         ),
         WorkKind::Performance => (
-            "Audit the changed code paths for performance problems.",
-            "Review the audit examined the real code paths and backs each finding.",
+            prompts::PERFORMANCE_GATE_SUMMARY,
+            prompts::AUDIT_REVIEW_SUMMARY,
         ),
         _ => (agent.title, agent.focus),
     }
@@ -235,15 +236,8 @@ fn gate_task(
 
 fn gate_goal(focus: &str, audit: bool) -> String {
     if audit {
-        format!(
-            "Required audit of the whole change: {focus}. Read the changed code and \
-             report every problem found with file, line and evidence, ranked by \
-             severity; change nothing."
-        )
+        format!(prompts::template!(AUDIT_GATE_GOAL), focus = focus)
     } else {
-        format!(
-            "Required quality gate for the whole change: {focus}. Report every problem \
-             found with evidence; fix only what is needed to pass the gate."
-        )
+        format!(prompts::template!(QUALITY_GATE_GOAL), focus = focus)
     }
 }

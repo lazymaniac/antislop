@@ -1,3 +1,4 @@
+use crate::lean::prompts;
 use crate::lean::*;
 
 impl Core {
@@ -110,10 +111,7 @@ impl Core {
         let Some(session) = self.native.get(&message.conversation, &message.recipient)? else {
             return Ok(None);
         };
-        let text = format!(
-            "Message from the user while you work on this turn:\n{}\n\nTake it into account, keep working, and end the turn with its result tool as before.",
-            message.text
-        );
+        let text = format!(prompts::template!(STEER), message.text);
         let interrupt = message.delivery == store::Delivery::Interrupt;
         let Some(turn) = session.steer(&text, interrupt)? else {
             return Ok(None);

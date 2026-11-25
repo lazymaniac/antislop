@@ -1,4 +1,5 @@
 use crate::lean::core::orchestration::comment_helpers::{comment_label, is_plan_target};
+use crate::lean::prompts;
 use crate::lean::*;
 
 impl Core {
@@ -57,7 +58,7 @@ impl Core {
                 expected_run: None,
                 delivery: Default::default(),
                 text: format!(
-                    "Diff comment #{} at {} (task round {}):\n{}\nAddress this location-specific feedback in your changes.",
+                    prompts::template!(COMMENT_AT_WITH_OPERATION),
                     comment.id, target, task.round, text
                 ),
             };
@@ -161,8 +162,11 @@ impl Core {
     pub fn restart_orchestrator(self: &Arc<Self>, conversation: &str) -> Result<()> {
         self.store.conversation(conversation)?;
         let running = self.activity.running.lock().expect("running mutex");
-        self.store.add_message(conversation, RUNTIME,
-            "Continue orchestration in this same session after interrupting the current response. Continue the user's request from the current accepted plan, task_states, full recorded results and durable project state. Preserve worktrees, input generations and retained evidence. The runtime imposes no access limits or execution budgets on agents. A restart alone does not require a plan revision. Use the current runtime tools: resume_task for a resolved blocker or remaining independent authorized work under the unchanged contract, retry_task for a transient failed CLI, and revise_plan only for actual contract/dependency changes. Keep steps with unavailable prerequisites and deferred work held; never fabricate missing historical data or ask again for an answered decision. Record new experiments as new evidence.")?;
+        self.store.add_message(
+            conversation,
+            RUNTIME,
+            prompts::ORCHESTRATOR_RESTART_GUIDANCE,
+        )?;
         if let Some(cancel) = running.get(conversation) {
             cancel.store(true, Ordering::SeqCst);
         }

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::lean::prompts;
 
 pub(super) struct PlanView {
     pub workflow: store::Workflow,
@@ -78,15 +79,15 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
     let states = graph.iter().map(|task| json!({
         "task":task.spec["id"], "summary":task.spec["summary"].as_str().or(task.spec["title"].as_str()), "depends_on":task.spec["depends_on"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
         "reason":task.current_reason().map(|text| tasks::bound(text, 2000)),
-        "recovery":if task.spec["deferred"] == true { "deliberate scheduling hold; release by reviewed revision when its prerequisite is resolved" } else { match task.status.as_str() {
-            status::FAILED => "retry_task for a transient CLI failure; revise_plan for a contract change",
-            status::COORDINATING => "resume_task with current round/input_generation for a resolved blocker or independent authorized work; keep unresolved steps held; revise_plan for contract/dependency changes",
-            status::WAITING => "answer_agent for the existing question, respecting its disposition",
-            _ => "do not retry; preserve approved work and let queued/running tasks proceed",
+        "recovery":if task.spec["deferred"] == true { prompts::DEFERRED_TASK_GUIDANCE } else { match task.status.as_str() {
+            status::FAILED => prompts::FAILED_TASK_GUIDANCE,
+            status::COORDINATING => prompts::COORDINATING_TASK_GUIDANCE,
+            status::WAITING => prompts::WAITING_TASK_GUIDANCE,
+            _ => prompts::SETTLED_TASK_GUIDANCE,
         }}
     })).collect::<Vec<_>>();
     Ok(crate::lean::prompt_context::untrusted(
-        "Current plan index (read_task_contract for full contracts; read_plan_context for scope)",
+        prompts::CURRENT_PLAN_INDEX_LABEL,
         &crate::lean::prompt_context::markdown(
             &json!({"plan":graph.first().map(|task|&task.plan_id),"base_revision":base_revision,"task_states":states,"unfinished_checkpoints":checkpoints}),
         ),

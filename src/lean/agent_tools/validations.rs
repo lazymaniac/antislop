@@ -1,5 +1,6 @@
 //! Agents keep execution in their own CLI; the runtime checks reuse against file state.
 use super::*;
+use crate::lean::prompts;
 use store::{ValidationRun, ValidationSpec};
 
 impl Core {
@@ -18,7 +19,7 @@ impl Core {
                 .then(|| runs.last().map(|run| run.id.clone()))
                 .flatten();
             return Ok(
-                json!({"validations":runs,"complete":cursor.is_none(),"cursor":cursor,"note":"Historical index only. Call prepare_validation with the same spec to establish whether it applies to your current files. Read raw output with read_evidence."}),
+                json!({"validations":runs,"complete":cursor.is_none(),"cursor":cursor,"note":prompts::VALIDATION_HISTORY_GUIDANCE}),
             );
         }
         if tool == "invalidate_validation" {
@@ -115,12 +116,15 @@ impl Core {
         })?;
         let output = required_text(args, "output")?;
         let text = format!(
-            "Command: {}\nDirectory: {}\nScope: {}\nEnvironment: {}\nSource tree: {:?}\nExit code: {exit_code}\nReported problems: {problem}\n\n{output}",
+            prompts::template!(VALIDATION_EVIDENCE),
             serde_json::to_string(&run.spec.command)?,
             run.spec.directory,
             run.spec.scope,
             run.spec.environment,
-            run.tree
+            run.tree,
+            exit_code = exit_code,
+            problem = problem,
+            output = output
         );
         let evidence =
             self.store
@@ -155,18 +159,10 @@ impl Core {
 
 fn validation_response(run: ValidationRun, action: &str) -> Value {
     let instruction = match action {
-        "reuse" => {
-            "Do not rerun this command. Read its retained evidence and cite the validation/evidence IDs as reused; you did not execute it yourself. Reuse proves the check, not task approval or availability of a compiled artifact in this checkout."
-        }
-        "wait" => {
-            "Another turn owns this identical validation. Continue independent work; call prepare_validation again for its result. Do not launch a duplicate command."
-        }
-        "run" => {
-            "Execute this exact command in your own CLI with its existing permission policy, then call complete_validation with the exit code, decisive raw output and any reported errors. If files, environment or external inputs change before execution, prepare again. Reuse is disabled for unversioned directories."
-        }
-        _ => {
-            "The observation and evidence are retained. Only passed, unchanged, completed observations can be reused by another turn; this result never grants task approval."
-        }
+        "reuse" => prompts::VALIDATION_REUSE_RESULT,
+        "wait" => prompts::VALIDATION_WAIT_RESULT,
+        "run" => prompts::VALIDATION_RUN_RESULT,
+        _ => prompts::VALIDATION_RECORDED_RESULT,
     };
     json!({"action":action,"validation":run,"instruction":instruction})
 }

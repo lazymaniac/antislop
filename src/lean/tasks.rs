@@ -251,14 +251,14 @@ pub mod status {
     }
 }
 
-const OPTIONS_BINDING: &str = "Implement the selected_approach input for this task. It is a reviewed design decision, never permission to expand scope. Ask the orchestrator if a premise fails or a different approach is necessary; a changed selection requires fresh options and review. Never silently switch variants.";
+const OPTIONS_BINDING: &str = crate::lean::prompts::OPTIONS_BINDING;
 
 /// An options task inherits its writer's criteria; what the writer builds
 /// and proves is checked on the writer, not on the selection.
-const SELECTION_REVIEW: &str = "This is an options task: its deliverable is the selection of an approach, not an implementation. Its checkout is shared with the owner and must remain read-only. Independently inspect its current files and the owner's committed and uncommitted diffs using the checkout context supplied above. Do not modify project files. Judge each acceptance criterion by whether the selected variant can satisfy it and the selection does not rule it out. Criteria about tests, validation commands, measurements or other evidence the dependent writer must deliver are checked on the writer: mark them n/a here unless the selected variant makes them impossible. Options need not design or execute tests, but may recommend checks or regressions that validate the choice's assumptions; mentioning them is not a defect. One feasible alternative is valid when the rationale explains why the constraints exclude other approaches. Do not invent alternatives or require filler to reach a count.";
-const REPORT_REVIEW: &str = "This task delivers an analysis report, optionally in declared document files. Failing project checks are evidence to describe, not an obligation to repair the project. Verify that findings are real and supported, and that the report covers the semantic scope of its goal and acceptance criteria, including relevant changed paths and call flows even when no filenames are listed in the goal. A disclosed gap inside required scope remains incomplete or blocked; disclosure alone does not satisfy the audit. Areas outside the required scope may remain uninspected. Report all concrete in-scope omissions and unsupported claims together with precise evidence, without adding unrelated deliverables.";
-const OPTIONS_REVIEW: &str = "Independently compare the implementation with selected_approach and this task's local requirements. Review actual files and recorded checks. A changed approach requires reviewed options; the worker's declaration is not proof. Ask the orchestrator about missing or inconsistent input. Do not reassess other tasks or the whole session.";
-const GATE_REVIEW: &str = "Independently verify this quality gate's checks and any repairs against its goal and obligations. Inspect actual files, diffs and recorded evidence. The worker's report is not proof. Ask the orchestrator about missing or inconsistent input. Do not expand the gate's scope.";
+const SELECTION_REVIEW: &str = crate::lean::prompts::SELECTION_REVIEW;
+const REPORT_REVIEW: &str = crate::lean::prompts::REPORT_REVIEW;
+const OPTIONS_REVIEW: &str = crate::lean::prompts::OPTIONS_REVIEW;
+const GATE_REVIEW: &str = crate::lean::prompts::GATE_REVIEW;
 
 #[cfg(test)]
 #[path = "tasks/tests.rs"]

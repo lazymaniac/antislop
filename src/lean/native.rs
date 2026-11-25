@@ -5,6 +5,7 @@
 //! session's MCP gateway (`mcp.rs`).
 use super::terminal::{self, State};
 use super::{Core, agent, launch, mcp, store};
+use crate::lean::prompts;
 use crate::{Error, Result, invalid, require};
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
@@ -72,9 +73,11 @@ pub struct Session {
 /// shape of the result for the agent's role is the tool's own schema.
 fn turn_text(turn: &str, prompt: &str, result_instructions: &str, server: &str) -> String {
     format!(
-        "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
-         result tool of the MCP server `{server}`, with turn = \"{turn}\". \
-         {result_instructions} Never finish only in terminal prose.",
+        prompts::template!(TURN_TEXT),
+        prompt = prompt,
+        server = server,
+        turn = turn,
+        result_instructions = result_instructions
     )
 }
 

@@ -1,6 +1,7 @@
 //! Approval dialogs of agent CLIs, asked as questions and answered with the
 //! id of one of the dialog's choices.
 use super::*;
+use crate::lean::prompts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::lean) enum TeamOrigin {
@@ -30,15 +31,9 @@ impl TeamGuidance {
     /// Render trusted policy separately from serialized, planner-controlled data.
     pub(in crate::lean) fn write_guidance_section(&self, prompt: &mut String) {
         let policy = match self.origin {
-            TeamOrigin::User => {
-                "The user explicitly selected this rigor team. Preserve it; do not change it in submit_plan or add agents from other rigor teams."
-            }
-            TeamOrigin::Unknown => {
-                "This legacy team has an unverified origin. Preserve it; do not replace it without a new explicit user selection."
-            }
-            TeamOrigin::Planner => {
-                "The orchestrator already selected this rigor team. Preserve it across plan changes; only an explicit user selection may change it. Review within its gates; do not require agents from another rigor team."
-            }
+            TeamOrigin::User => prompts::USER_SELECTED_TEAM_POLICY,
+            TeamOrigin::Unknown => prompts::LEGACY_TEAM_POLICY,
+            TeamOrigin::Planner => prompts::PRESERVE_TEAM_POLICY,
         };
         let metadata = serde_json::json!({
             "team": self.team.name(),
@@ -49,10 +44,10 @@ impl TeamGuidance {
             prompt.push('\n');
             prompt.push_str(crate::lean::tasks::FEATURE_PLANNING_RULES);
         }
-        prompt.push_str("\n\nTrusted team policy: ");
+        prompt.push_str(prompts::TEAM_POLICY_HEADING);
         prompt.push_str(policy);
         prompt.push_str(&crate::lean::prompt_context::untrusted(
-            "Selected rigor metadata",
+            prompts::TEAM_METADATA_LABEL,
             &crate::lean::prompt_context::markdown(&metadata),
         ));
     }

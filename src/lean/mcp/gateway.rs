@@ -1,3 +1,4 @@
+use crate::lean::prompts;
 // The one channel back from an interactive agent: a loopback MCP server
 // with role-scoped tools. The daemon types the prompt into the
 // agent's terminal; the agent ends the turn by calling the tool with the
@@ -177,16 +178,18 @@ impl Gateway {
         let results = names
             .iter()
             .filter(|name| is_terminal(name))
-            .map(|name| format!("`{name}`"))
+            .map(|name| format!(prompts::template!(INLINE_TOOL_NAME), name = name))
             .collect::<Vec<_>>()
             .join(", ");
         let recover = if names.contains(&"current_turn") {
-            " After a stale-turn rejection, call current_turn with an empty object and copy its active id exactly."
+            prompts::STALE_TURN_RECOVERY
         } else {
             ""
         };
         Ok(format!(
-            "Available result tools: {results}. Choose according to your task and the tool schemas. Stop only after recorded=true; if rejected, correct the reported error and call again.{recover}"
+            prompts::template!(RESULT_TOOLS_FOOTER),
+            results = results,
+            recover = recover
         ))
     }
 

@@ -1,5 +1,6 @@
 use super::gateway::{ASK, ASK_USER, REVIEW, SUBMIT_PLAN, SUBMIT_REQUIREMENTS, TOOL, WAIT};
 use super::schema;
+use crate::lean::prompts;
 use serde_json::{Value, json};
 
 type ToolSpec = (String, Value, Vec<&'static str>);
@@ -176,7 +177,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
     ]
 }
 
-const RETRY: &str = "Use the exact turn UUID from the current prompt, never a session, task or plan id. Stop only after recorded=true; if rejected, fix what the error names and call again in this turn.";
+const RETRY: &str = prompts::RETRY;
 
 pub(crate) fn tool_list(role: &str) -> Vec<Value> {
     let orchestrator = matches!(role, "orchestrator" | "comment-orchestrator");
@@ -190,13 +191,13 @@ fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
     let (description, fields, required) = tool_contract(name, role, orchestrator);
     let mut properties = fields.as_object().unwrap().clone();
     if matches!(name, "complete" | "select") {
-        properties.insert("evidence".into(),json!({"type":"array","maxItems":64,"items":{"type":"string"},"description":"Optional existing MCP evidence ids to retain in this result. Evidence recorded this turn is attached automatically; use this for earlier evidence when amending a report. The 64-reference limit includes automatic and explicit retained references together."}));
+        properties.insert("evidence".into(),json!({"type":"array","maxItems":64,"items":{"type":"string"},"description":prompts::RESULT_EVIDENCE_DESCRIPTION}));
     }
     if name != "current_turn" {
         let description = if allowed_tools(role).contains(&"current_turn") {
-            "Exact active turn id from the latest prompt; call current_turn if uncertain. Never reuse a previous turn id."
+            prompts::ACTIVE_TURN_WITH_RECOVERY_DESCRIPTION
         } else {
-            "Exact active turn id from the latest prompt. Never reuse a previous turn id."
+            prompts::ACTIVE_TURN_DESCRIPTION
         };
         properties.insert(
             "turn".into(),
@@ -208,9 +209,17 @@ fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
 
 fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
-        "get_images" => ("Retrieve the next image attached to a user message in this conversation as an image block. Start at offset 0 and use the returned next offset until all images are inspected.".into(), json!({"offset":{"type":"integer","minimum":0,"default":0}}), vec!["turn"]),
+        "get_images" => (
+            prompts::TOOL_GET_IMAGES.into(),
+            json!({"offset":{"type":"integer","minimum":0,"default":0}}),
+            vec!["turn"],
+        ),
         "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
-        "answer_agent" | "defer_to_user" | "decide_approval" | "retry_task" | "resume_task"
+        "answer_agent"
+        | "defer_to_user"
+        | "decide_approval"
+        | "retry_task"
+        | "resume_task"
         | "create_session_pr"
         | "merge_session_with_main"
         | "request_replan" => control_contract(name),
@@ -220,59 +229,215 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
-        "read_plan_context" => ("Read the complete scope, source references and task index of this turn's bound plan in pages. Use read_task_contract for full contracts. Reuse cursor until complete=true; a revision change requires reading again without cursor.".into(), json!({"cursor":{"type":"string"}}), vec!["turn"]),
-        "read_task_contract" => ("Read a full contract in this turn's bound plan in pages. Task roles may read only their own contract or their options owner. Reuse cursor until complete=true; on revision change reread without cursor.".into(), json!({"task":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","task"]),
-        "read_audit" => ("Read one retained auditor report in pages, separate from aggregate plan results. Copy audit_ref from the audit index; reuse cursor until complete=true. Legacy missing reports are reported explicitly.".into(), json!({"audit_ref":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","audit_ref"]),
-        "prepare_validation" => ("Before running a build, test, lint, static analysis or other validation, claim its exact command and scope. Reuse a successful predecessor result for identical files and declared environment; action=reuse means do not rerun. action=wait means another live turn owns it; continue independent work and poll. action=run gives the receipt to complete after execution in your own CLI. Code identity includes tracked and nonignored uncommitted/untracked files, not just HEAD. Environment must identify toolchain, relevant settings, fixtures, seeds, services and ignored/external inputs; refresh it when they change. Never include secrets. For a needed physical artifact, retrieve retained outputs first; a validation report alone is not an executable. For non-Git directories the observation is retained but cannot be reused.".into(), json!({"command":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Executable followed by exact argv, including targets, flags and filters; use a shell executable and -c when shell syntax is needed"},"directory":{"type":"string","description":"Working directory relative to your allocated checkout; defaults to ."},"scope":{"type":"string","description":"Exact behavior/targets covered by this command"},"environment":{"type":"string","description":"Stable, nonsecret identity of toolchain/configuration/fixtures and external or ignored inputs; copy a compatible predecessor spec from read_validations"}}),vec!["turn","command","scope","environment"]),
-        "complete_validation" => ("Complete your prepare_validation receipt after executing the command. Supply the actual exit code and decisive raw output, including errors and test totals; output is retained as immutable read_evidence evidence. problems must name any errors or unreliable execution even when exit_code=0; use an empty string only when none were reported. Failed, interrupted, unversioned or code-changing executions are never reused. This does not complete the agent turn or approve its task.".into(),json!({"validation":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"problems":{"type":"string"}}),vec!["turn","validation","exit_code","output","problems"]),
-        "invalidate_validation" => ("Invalidate an earlier validation when concrete evidence shows its success was misleading, relevant external inputs changed without an identity update, or a required physical output is unavailable. Give the specific problem; do not invalidate just to repeat a predecessor's successful check. Retains the original evidence. The next prepare_validation must arrange a fresh execution.".into(),json!({"validation":{"type":"string"},"reason":{"type":"string"}}),vec!["turn","validation","reason"]),
-        "read_validations" => ("Read validation attempts in pages of up to 32, newest first; continue with the returned cursor. Records include exact command/environment/scope and evidence IDs. This index is historical, not proof of the current code: copy a compatible spec into prepare_validation before reusing it. Full raw output is available with read_evidence.".into(),json!({"cursor":{"type":"string"}}),vec!["turn"]),
-        "consult_planning" => ("Planner only: request a read-only specialist before drafting. Returns immediately with a reference and state; poll read_planning_result until done and read every page. Repeated calls reuse the retained consultation for the current requirements. Set refresh=true only for changed evidence, a concrete correction or a failed/interrupted consultation. Research and analysis precede dependencies (research), architecture (analysis + dependencies), then test_design (analysis + architecture). Do not schedule this preparation again as execution tasks.".into(), json!({"kind":{"enum":["research","analysis","dependencies","architecture","test_design"]},"question":{"type":"string"},"refresh":{"type":"boolean"}}), vec!["turn","kind","question"]),
-        "read_planning_result" => ("Read a retained planning specialist report by exact reference. Returns state and raw error on failure; poll while running and continue cursor until complete=true. These are preparation findings, not implementation or acceptance evidence. Reports are immutable and scoped to this conversation.".into(), json!({"reference":{"type":"string"},"cursor":{"type":"string"}}), vec!["turn","reference"]),
-        "current_turn" => ("Read this gateway's current agent role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
-        "report_blocker" => ("End a worker turn when missing input or an unsatisfied prerequisite prevents all further permitted work. Record the concrete external blocker, evidence, and actionable condition for resuming. An implementation, test, fixture or output this task is assigned to create is work to perform, not a missing prerequisite; do not ask another actor to supply your own deliverable or block merely because that work is unfinished or large. Preserve completed work and checkpoints. The task stays unapproved and its dependents do not run; the orchestrator must resolve the blocker or revise the contract. Do not claim success or repeat a question already answered without new evidence.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string","description":"An actionable prerequisite another actor can resolve, with evidence; never completion of this task's own assigned deliverable"},"unblocked_work_remaining":{"type":"boolean","description":"True if ANY independent permitted edits or analysis remain, even when a later validation is blocked. A true value is rejected so you can continue that work within this turn. Report a blocker only after no permitted independent work remains."}}), vec!["turn", "report", "resume_condition", "unblocked_work_remaining"]),
-        "record_evidence" => ("Persist the decisive part of a command/measurement result as immutable MCP execution evidence before completing: the command, exit code and the relevant lines (errors, failures, totals), not the whole build/test/event stream and not repository source contents. Keep records under 16 KiB; filter first. Disk-backed content survives worktree cleanup. Hard limit 256 KiB UTF-8 per labelled record. Repeating a label with identical text returns the same id; different text needs a new label. Every record is attached to your completion automatically.".into(),json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),vec!["turn","label","text"]),
-        "read_evidence" => ("Read immutable MCP execution evidence recorded in this conversation, in pages of at most 16 KiB. Discover ids in read_dependency_result.evidence, the report's MCP evidence section, or task instructions. Reuse cursor until complete=true. This never ends the turn and does not grant filesystem access.".into(),json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),vec!["turn","evidence"]),
-        "read_dependency_result" => ("Read complete scoped worker reports in pages up to 16 KiB. dependency=self reads your own earlier worker results (also for reviewers). The orchestrator may inspect unapproved and blocked producers within its bound plan; task_status/task_approved remain explicit and inspection never approves the task or releases its dependents. available_rounds contains current-input rounds. report_history lists immutable result_ref values including blocked reports and older input generations. result_type=blocked is an unapproved blocker report, never a successful result; self may read it without completing or approving the task. available_rounds includes completed reports only: to read an older report, pass its exact result_ref. Historical=true means obsolete inputs: preserve the evidence but do not use it to claim current acceptance. Amendments never replace the original; read the earlier report and apply later corrections. Evidence metadata provides ids for read_evidence. This does not end the turn.".into(), json!({"view":{"enum":["report","review"],"description":"Read the worker report (default) or the retained reviewer verdict for the selected round"},"dependency":{"type":"string","description":"Dependency name, explicit result_inputs alias, scoped producer task id, or self"},"result_ref":{"type":"string","description":"Exact immutable reference from report_history; enables explicitly marked historical-input reports"},"round":{"type":"integer","minimum":0,"description":"Optional current-input worker round; when result_ref is present it must match"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
-        "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn", "text"]),
-        "finish_turn" if role == "planner" => (format!("Only after submit_plan or the plan reviewer refused a plan and you cannot correct it within the agreed requirements: end the turn without a plan and name the blocker and decision needed; the orchestrator receives it. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),
-        "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn", "text"]),
-        "ask_user" => (format!("Ask the user one question with 2–6 choices; this ends your turn and the answer arrives as the user's next message. {RETRY}"), schema::question(), vec!["turn", "context", "question", "options"]),
-        "submit_requirements" => (format!("Interview only: end the turn with the requirements summary for the user to approve: the goal and its acceptance criteria. {RETRY}"), json!({"markdown":{"type":"string","description":"The summary in Markdown"},"title":{"type":"string","description":"Short title of the confirmed scope; used for the session branch"}}), vec!["turn", "markdown"]),
-        "complete" => (format!("Finish your task once its whole goal is done, not after a part of it; this ends your turn. {RETRY}"), json!({"summary":{"type":"string","description":"A few sentences on what was delivered; tasks that depend on this one receive only this"},"report":{"type":"string","description":"The full result your reviewer checks: what you did, where, and how you checked it"},"commit_message":{"type":"string","description":"For delivery tasks, a specific one-line Conventional Commits subject describing the changes actually made: type: summary or type(scope): summary. Choose an appropriate type such as feat, fix, docs, refactor, or test. Do not reuse generic wording across different tasks. For non-delivery tasks this may be empty."}}), vec!["turn", "summary", "report", "commit_message"]),
-        "select" => (format!("Options tasks only: record the approach you chose among 1–4 feasible alternatives; justify a single option when constraints exclude others; this ends your turn. {RETRY}"), schema::selection(), vec!["turn", "alternatives", "selected", "rationale", "user_summary"]),
-        "review" if plain_reviewer(role) => (format!("Record your review; this ends your turn. The runtime approves when no finding is critical, high or medium. {RETRY}"), schema::plain_review(), vec!["turn", "report", "findings"]),
-        "review" => (format!("Record your review of the task; this ends your turn. The runtime approves the task when every check is ok or n/a and no finding is critical, high or medium. {RETRY}"), schema::review(), vec!["turn", "report", "checks", "findings"]),
-        "ask" => ("Ask the orchestrator a question about your task without ending your turn. Waits up to 25 seconds and returns the answer if one came; asking the same question again returns its state.".into(), json!({"question":{"type":"string"}}), vec!["turn", "question"]),
-        "wait_for_answer" => ("End your turn until the question you asked is answered; your work so far is kept and the task resumes with the answer.".into(), json!({"note":{"type":"string","description":"Where you stopped, for when the answer arrives"}}), vec!["turn"]),
-        _ => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn", "text"]),
+        "read_plan_context" => (
+            prompts::TOOL_READ_PLAN_CONTEXT.into(),
+            json!({"cursor":{"type":"string"}}),
+            vec!["turn"],
+        ),
+        "read_task_contract" => (
+            prompts::TOOL_READ_TASK_CONTRACT.into(),
+            json!({"task":{"type":"string"},"cursor":{"type":"string"}}),
+            vec!["turn", "task"],
+        ),
+        "read_audit" => (
+            prompts::TOOL_READ_AUDIT.into(),
+            json!({"audit_ref":{"type":"string"},"cursor":{"type":"string"}}),
+            vec!["turn", "audit_ref"],
+        ),
+        "prepare_validation" => (
+            prompts::TOOL_PREPARE_VALIDATION.into(),
+            json!({"command":{"type":"array","minItems":1,"items":{"type":"string"},"description":prompts::VALIDATION_COMMAND_DESCRIPTION},"directory":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_DIRECTORY},"scope":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_SCOPE},"environment":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_ENVIRONMENT}}),
+            vec!["turn", "command", "scope", "environment"],
+        ),
+        "complete_validation" => (
+            prompts::TOOL_COMPLETE_VALIDATION.into(),
+            json!({"validation":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"problems":{"type":"string"}}),
+            vec!["turn", "validation", "exit_code", "output", "problems"],
+        ),
+        "invalidate_validation" => (
+            prompts::TOOL_INVALIDATE_VALIDATION.into(),
+            json!({"validation":{"type":"string"},"reason":{"type":"string"}}),
+            vec!["turn", "validation", "reason"],
+        ),
+        "read_validations" => (
+            prompts::TOOL_READ_VALIDATIONS.into(),
+            json!({"cursor":{"type":"string"}}),
+            vec!["turn"],
+        ),
+        "consult_planning" => (
+            prompts::TOOL_CONSULT_PLANNING.into(),
+            json!({"kind":{"enum":["research","analysis","dependencies","architecture","test_design"]},"question":{"type":"string"},"refresh":{"type":"boolean"}}),
+            vec!["turn", "kind", "question"],
+        ),
+        "read_planning_result" => (
+            prompts::TOOL_READ_PLANNING_RESULT.into(),
+            json!({"reference":{"type":"string"},"cursor":{"type":"string"}}),
+            vec!["turn", "reference"],
+        ),
+        "current_turn" => (prompts::TOOL_CURRENT_TURN.into(), json!({}), vec![]),
+        "report_blocker" => (
+            prompts::TOOL_REPORT_BLOCKER.into(),
+            json!({"report":{"type":"string"},"resume_condition":{"type":"string","description":prompts::TOOL_REPORT_BLOCKER_RESUME_CONDITION},"unblocked_work_remaining":{"type":"boolean","description":prompts::TOOL_REPORT_BLOCKER_UNBLOCKED_WORK_REMAINING}}),
+            vec![
+                "turn",
+                "report",
+                "resume_condition",
+                "unblocked_work_remaining",
+            ],
+        ),
+        "record_evidence" => (
+            prompts::TOOL_RECORD_EVIDENCE.into(),
+            json!({"label":{"type":"string","maxLength":160},"text":{"type":"string","maxLength":262144}}),
+            vec!["turn", "label", "text"],
+        ),
+        "read_evidence" => (
+            prompts::TOOL_READ_EVIDENCE.into(),
+            json!({"evidence":{"type":"string"},"cursor":{"type":"string"}}),
+            vec!["turn", "evidence"],
+        ),
+        "read_dependency_result" => (
+            prompts::TOOL_READ_DEPENDENCY_RESULT.into(),
+            json!({"view":{"enum":["report","review"],"description":prompts::TOOL_READ_DEPENDENCY_RESULT_VIEW},"dependency":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_DEPENDENCY},"result_ref":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_RESULT_REF},"round":{"type":"integer","minimum":0,"description":prompts::TOOL_READ_DEPENDENCY_RESULT_ROUND},"cursor":{"type":"string"}}),
+            vec!["turn", "dependency"],
+        ),
+        "finish_turn" if orchestrator => (
+            format!(prompts::template!(ORCHESTRATOR_FINISH_TURN), RETRY = RETRY),
+            json!({"text":{"type":"string","description":prompts::TOOL_FINISH_TURN_TEXT},"addressed":schema::addressed()}),
+            vec!["turn", "text"],
+        ),
+        "finish_turn" if role == "planner" => (
+            format!(prompts::template!(PLANNER_FINISH_TURN), RETRY = RETRY),
+            json!({"text":{"type":"string","description":prompts::PLANNER_BLOCKER_DESCRIPTION}}),
+            vec!["turn", "text"],
+        ),
+        "finish_turn" => (
+            format!(prompts::template!(FINISH_TURN), RETRY = RETRY),
+            json!({"text":{"type":"string","description":prompts::TOOL_FINISH_TURN_TEXT}}),
+            vec!["turn", "text"],
+        ),
+        "ask_user" => (
+            format!(prompts::template!(TOOL_ASK_USER), RETRY = RETRY),
+            schema::question(),
+            vec!["turn", "context", "question", "options"],
+        ),
+        "submit_requirements" => (
+            format!(prompts::template!(TOOL_SUBMIT_REQUIREMENTS), RETRY = RETRY),
+            json!({"markdown":{"type":"string","description":prompts::TOOL_SUBMIT_REQUIREMENTS_MARKDOWN},"title":{"type":"string","description":prompts::TOOL_SUBMIT_REQUIREMENTS_TITLE}}),
+            vec!["turn", "markdown"],
+        ),
+        "complete" => (
+            format!(prompts::template!(TOOL_COMPLETE), RETRY = RETRY),
+            json!({"summary":{"type":"string","description":prompts::TOOL_COMPLETE_SUMMARY},"report":{"type":"string","description":prompts::TOOL_COMPLETE_REPORT},"commit_message":{"type":"string","description":prompts::TOOL_COMPLETE_COMMIT_MESSAGE}}),
+            vec!["turn", "summary", "report", "commit_message"],
+        ),
+        "select" => (
+            format!(prompts::template!(TOOL_SELECT), RETRY = RETRY),
+            schema::selection(),
+            vec![
+                "turn",
+                "alternatives",
+                "selected",
+                "rationale",
+                "user_summary",
+            ],
+        ),
+        "review" if plain_reviewer(role) => (
+            format!(prompts::template!(PLAIN_REVIEW_TOOL), RETRY = RETRY),
+            schema::plain_review(),
+            vec!["turn", "report", "findings"],
+        ),
+        "review" => (
+            format!(prompts::template!(TASK_REVIEW_TOOL), RETRY = RETRY),
+            schema::review(),
+            vec!["turn", "report", "checks", "findings"],
+        ),
+        "ask" => (
+            prompts::TOOL_ASK.into(),
+            json!({"question":{"type":"string"}}),
+            vec!["turn", "question"],
+        ),
+        "wait_for_answer" => (
+            prompts::TOOL_WAIT_FOR_ANSWER.into(),
+            json!({"note":{"type":"string","description":prompts::TOOL_WAIT_FOR_ANSWER_NOTE}}),
+            vec!["turn"],
+        ),
+        _ => (
+            format!(prompts::template!(FINISH_TURN), RETRY = RETRY),
+            json!({"text":{"type":"string","description":prompts::TOOL_FINISH_TURN_TEXT}}),
+            vec!["turn", "text"],
+        ),
     }
 }
 
 fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
     if name == "submit_plan" {
-        let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a redeclared task retains existing work and is assessed before executor continuation; use revise_plan.replacements for unfinished successors"}});
-        fields["team"] = json!({"enum": crate::lean::tasks::Team::ALL.map(crate::lean::tasks::Team::name), "description": format!("The team template that runs the plan (default feature):\n{}", crate::lean::tasks::team_catalog())});
-        fields["scope"] = json!({"type":"string","description":"Complete proposed scope in Markdown; omit to inherit the confirmed scope. Do not invent user obligations."});
-        fields["team_reason"] = json!({"type": "string", "description": "Why this team fits the work; required for any team but feature"});
+        let mut fields = json!({"document":{"type":"string","description":prompts::PLAN_DOCUMENT_DESCRIPTION},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":prompts::PLAN_KEPT_TASKS_DESCRIPTION}});
+        fields["team"] = json!({"enum": crate::lean::tasks::Team::ALL.map(crate::lean::tasks::Team::name), "description": format!(prompts::template!(PLAN_TEAM_DESCRIPTION), crate::lean::tasks::team_catalog())});
+        fields["scope"] = json!({"type":"string","description":prompts::PLAN_SCOPE_DESCRIPTION});
+        fields["team_reason"] =
+            json!({"type": "string", "description": prompts::PLAN_TEAM_REASON_DESCRIPTION});
         if orchestrator {
             fields["addressed"] = schema::addressed();
         }
-        return ("Submit the complete task plan; this ends your turn. The runtime checks it at once: if it is rejected, fix what the error names and submit the whole plan again in this turn. Stop only after recorded=true.".into(), fields, vec!["turn", "document", "tasks"]);
+        return (
+            prompts::SUBMIT_PLAN_TOOL.into(),
+            fields,
+            vec!["turn", "document", "tasks"],
+        );
     }
-    ("Change the running plan you were shown. Give only the tasks that change or are added, in full; the others stay as they are. The revision is reviewed independently before it applies.".into(), schema::revision(), vec!["turn", "reason", "tasks", "retire"])
+    (
+        prompts::REVISE_PLAN_TOOL.into(),
+        schema::revision(),
+        vec!["turn", "reason", "tasks", "retire"],
+    )
 }
 
 fn control_contract(name: &str) -> ToolSpec {
     match name {
-        "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":"Full revision request or dependency task UUID required for waiting dispositions"}}), vec!["turn", "request", "answer"]),
-        "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn", "request", "explanation"]),
-        "decide_approval" => ("Decide an agent CLI's approval dialog that the runtime put to you. Pick the id of the choice that lets the agent do what its task needs and nothing broader; refuse (the denying choice) what the task does not need. Use choice \"escalate_to_user\" only when you cannot judge it or it is outside the user's request; give the user the reason in explanation. Never ask the agent: the dialog is the agent CLI's own.".into(), json!({"request":{"type":"string","description":"The approval request id the runtime message names"},"choice":{"type":"string","description":"A choice id from the message, or escalate_to_user"},"explanation":{"type":"string","description":"Why, for the user; required with escalate_to_user"}}), vec!["turn", "request", "choice"]),
-        "retry_task" => ("Retry a failed task in its allocated worktree with concrete guidance. There is no recovery-count limit or permission question. Read current task_states first. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"guidance":{"type":"string"}}), vec!["turn","task","guidance"]),
-        "resume_task" => ("Continue a coordinating task after resolving its blocker or identifying independent work. No recovery-count limit or permission question applies. Preserve unresolved factual prerequisites; never restart an active task. Contract or dependency changes use revise_plan.".into(), json!({"task":{"type":"string"},"round":{"type":"integer","minimum":0},"input_generation":{"type":"integer","minimum":0},"resolution":{"type":"string"}}),vec!["turn","task","round","input_generation","resolution"]),
-        "create_session_pr" => ("Create a pull request for the branch recorded by this completed session. The branch is resolved from the session completion event; do not supply a branch. Returns and durably records a session_action_result with succeeded, failed (raw gh output), or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
-        "merge_session_with_main" => ("Merge the completed session branch with main through the existing orchestrator conversation. Returns and durably records a session_action_result with succeeded, failed, or missing_inputs; queued is never success.".into(), json!({}), vec!["turn"]),
-        "request_replan" => ("Ask the planner to redraft the whole plan when no plan is running. While a plan runs, use revise_plan for contract/dependency changes and include the complete scope for changed requirements; affected tasks wait for user acceptance of the reviewed scope revision. Worker answers do not apply proposed contracts.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),
-        _ => ("Change the running plan you were shown.".into(), schema::revision(), vec!["turn", "reason", "tasks", "retire"]),
+        "answer_agent" => (
+            prompts::TOOL_ANSWER_AGENT.into(),
+            json!({"request":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_REQUEST},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_TARGET}}),
+            vec!["turn", "request", "answer"],
+        ),
+        "defer_to_user" => (
+            prompts::TOOL_DEFER_TO_USER.into(),
+            json!({"request":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_REQUEST},"explanation":{"type":"string","description":prompts::TOOL_DEFER_TO_USER_EXPLANATION}}),
+            vec!["turn", "request", "explanation"],
+        ),
+        "decide_approval" => (
+            prompts::TOOL_DECIDE_APPROVAL.into(),
+            json!({"request":{"type":"string","description":prompts::TOOL_DECIDE_APPROVAL_REQUEST},"choice":{"type":"string","description":prompts::TOOL_DECIDE_APPROVAL_CHOICE},"explanation":{"type":"string","description":prompts::TOOL_DECIDE_APPROVAL_EXPLANATION}}),
+            vec!["turn", "request", "choice"],
+        ),
+        "retry_task" => (
+            prompts::TOOL_RETRY_TASK.into(),
+            json!({"task":{"type":"string"},"guidance":{"type":"string"}}),
+            vec!["turn", "task", "guidance"],
+        ),
+        "resume_task" => (
+            prompts::TOOL_RESUME_TASK.into(),
+            json!({"task":{"type":"string"},"round":{"type":"integer","minimum":0},"input_generation":{"type":"integer","minimum":0},"resolution":{"type":"string"}}),
+            vec!["turn", "task", "round", "input_generation", "resolution"],
+        ),
+        "create_session_pr" => (
+            prompts::TOOL_CREATE_SESSION_PR.into(),
+            json!({}),
+            vec!["turn"],
+        ),
+        "merge_session_with_main" => (
+            prompts::TOOL_MERGE_SESSION_WITH_MAIN.into(),
+            json!({}),
+            vec!["turn"],
+        ),
+        "request_replan" => (
+            prompts::TOOL_REQUEST_REPLAN.into(),
+            json!({"reason":{"type":"string","description":prompts::TOOL_REQUEST_REPLAN_REASON}}),
+            vec!["turn", "reason"],
+        ),
+        _ => (
+            prompts::LEGACY_REVISE_PLAN_TOOL.into(),
+            schema::revision(),
+            vec!["turn", "reason", "tasks", "retire"],
+        ),
     }
 }
