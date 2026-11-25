@@ -42,6 +42,9 @@ pub(super) fn prepare_prompt(
         ),
     );
     context.section(prompts::ROLE_POLICY_LABEL, execution_policy(&state.role));
+    if core.config_snapshot().policy.single_agent {
+        context.section(prompts::EXECUTION_MODE_LABEL, prompts::SINGLE_AGENT_POLICY);
+    }
     if crate::lean::mcp::allowed_tools(&state.role).contains(&"prepare_validation") {
         context.section(prompts::VALIDATION_REUSE_LABEL, VALIDATION_REUSE);
         let history = core.store.validation_index(state.conversation, None)?;

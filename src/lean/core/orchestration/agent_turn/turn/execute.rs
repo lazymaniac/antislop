@@ -25,6 +25,8 @@ fn execute_profile(
     prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
+    let _execution = enter_execution(core, state, cancel)?;
+    check_task_inputs(core, &state.role)?;
     let mut prepared = prepare_agent(core, state, profile)?;
     let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt)?;
     events.prompt_bytes.set(Some(text.len()));
@@ -32,6 +34,26 @@ fn execute_profile(
     events.announce("agent", json!({"type":"prompt", "text": text}));
     let handler = tool_handler(core, state);
     run_cli(core, state, &mut prepared, &text, &handler, cancel, events)
+}
+
+fn enter_execution(
+    core: &Core,
+    state: &TurnState<'_>,
+    cancel: &AtomicBool,
+) -> Result<crate::lean::core::execution::Lease> {
+    loop {
+        setup::wait_until_resumed(core, state.conversation, &state.role, cancel)?;
+        let lease = core.execution.enter(&state.turn.id, cancel)?;
+        if ORCHESTRATION_ROLES.contains(&state.role.as_str())
+            || state.role == PLAN_REVIEWER
+            || !core.store.paused(state.conversation)?
+        {
+            return Ok(lease);
+        }
+        // The conversation was paused while this turn queued. Do not reserve
+        // the only execution slot while waiting for the user to resume it.
+        drop(lease);
+    }
 }
 
 fn clone_error(error: &Error) -> Error {
@@ -182,10 +204,36 @@ fn tool_handler(core: &Core, state: &TurnState<'_>) -> Arc<crate::lean::mcp::Han
         let core = weak
             .upgrade()
             .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
+        let suspension = coordination_tool(tool)
+            .then(|| core.execution.suspend(&turn))
+            .flatten();
         let outcome = core.agent_tool(&conversation, &role, &turn, tool, args);
+        if let Some(suspension) = suspension {
+            suspension.resume(|| false)?;
+        }
         record_rejected_tool(&core, &conversation, &turn, tool, &outcome)?;
         outcome
     })
+}
+
+// Only coordination can need another agent before this turn finishes. Ordinary
+// file/evidence tools retain the slot to avoid needless local-model context swaps.
+fn coordination_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "ask"
+            | "consult_planning"
+            | "read_planning_result"
+            | "prepare_validation"
+            | "revise_plan"
+            | "request_replan"
+            | "resume_task"
+            | "retry_task"
+            | "answer_agent"
+            | "decide_approval"
+            | "defer_to_user"
+            | "wait_for_answer"
+    )
 }
 
 fn protocol_observer(

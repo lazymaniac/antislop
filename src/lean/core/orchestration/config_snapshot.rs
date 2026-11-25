@@ -12,11 +12,13 @@ impl Core {
     }
 
     pub fn replace_config(&self, config: Config) {
-        *self
+        let mut current = self
             .config
             .current
             .write()
-            .unwrap_or_else(|error| error.into_inner()) = Arc::new(config);
+            .unwrap_or_else(|error| error.into_inner());
+        self.execution.configure(config.policy.single_agent);
+        *current = Arc::new(config);
     }
 
     /// Records the message at once; the orchestrator answers in the background.

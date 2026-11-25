@@ -86,7 +86,7 @@ impl TurnState<'_> {
         setup: TurnSetup<'a>,
         cancel: &AtomicBool,
     ) -> Result<Option<TurnState<'a>>> {
-        setup::wait_until_resumed(core, &setup, cancel)?;
+        setup::wait_until_resumed(core, setup.conversation, &setup.role, cancel)?;
         setup::begin(core, setup).map(Some)
     }
 }

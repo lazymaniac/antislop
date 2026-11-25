@@ -143,6 +143,9 @@ pub struct OrchestratorConfig {
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub local_commits: bool,
+    /// Queue agent turns across roles and conversations instead of running them concurrently.
+    #[serde(default)]
+    pub single_agent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

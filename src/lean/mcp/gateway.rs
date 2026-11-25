@@ -258,12 +258,17 @@ impl Gateway {
 
     /// Runs `action` while some turn is open and returns that turn; `None`
     /// when no turn is open, and then nothing runs.
-    pub(crate) fn while_open(&self, action: impl FnOnce() -> Result<()>) -> Result<Option<String>> {
+    pub(crate) fn while_open(
+        &self,
+        action: impl FnOnce(&str) -> Result<bool>,
+    ) -> Result<Option<String>> {
         let state = self.shared.state.lock().map_err(invalid)?;
         let Some(turn) = state.expected.clone().filter(|_| state.finished.is_none()) else {
             return Ok(None);
         };
-        action()?;
+        if !action(&turn)? {
+            return Ok(None);
+        }
         Ok(Some(turn))
     }
 

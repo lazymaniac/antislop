@@ -35,7 +35,7 @@ impl Field {
                 .map(|v| serde_json::json!(v))
                 .map_err(|e| e.to_string()),
             "args" => Ok(serde_json::json!([])),
-            "local_commits" => text
+            "local_commits" | "single_agent" => text
                 .parse::<bool>()
                 .map(Value::Bool)
                 .map_err(|e| e.to_string()),

@@ -278,20 +278,29 @@ impl Session {
         if !self.executing.load(Ordering::SeqCst) || self.approval().is_some() {
             return Ok(None);
         }
-        self.gateway.while_open(|| {
-            if interrupt {
-                require(
-                    self.pi.is_none(),
-                    "Pi interrupt steering requires cancelling the current turn first",
-                )?;
-                terminal::Session::interrupt(&self.screen)?;
-            }
-            let mut context = crate::lean::prompt_context::PromptContext::default();
-            context.section(
-                "Steering",
-                crate::lean::prompt_context::untrusted("Message", text),
-            );
-            terminal::Session::submit(&self.screen, &context.render())
+        let core = self
+            .core
+            .upgrade()
+            .ok_or_else(|| invalid("agent session lost its core"))?;
+        self.gateway.while_open(|turn| {
+            core.execution
+                .while_active(turn, || {
+                    if interrupt {
+                        require(
+                            self.pi.is_none(),
+                            "Pi interrupt steering requires cancelling the current turn first",
+                        )?;
+                        terminal::Session::interrupt(&self.screen)?;
+                    }
+                    let mut context = crate::lean::prompt_context::PromptContext::default();
+                    context.section(
+                        "Steering",
+                        crate::lean::prompt_context::untrusted("Message", text),
+                    );
+                    terminal::Session::submit(&self.screen, &context.render())
+                })
+                .transpose()
+                .map(|submitted| submitted.is_some())
         })
     }
 
@@ -324,6 +333,14 @@ impl Session {
         let finish = self.wait_for_result(turn, cancel)?;
         if self.pi.is_some() {
             *self.finished_pi_turn.lock().map_err(invalid)? = Some(turn.to_owned());
+        }
+        if self
+            .core
+            .upgrade()
+            .is_some_and(|core| core.config_snapshot().policy.single_agent)
+        {
+            // A serial successor must wait for Pi's explicit idle acknowledgement.
+            self.wait_ready(cancel)?;
         }
         self.learn_identity(registry);
         Ok(agent::Outcome {
@@ -403,6 +420,9 @@ impl Session {
             .core
             .upgrade()
             .ok_or_else(|| invalid("agent session lost its core"))?;
+        if !core.execution.active(turn) {
+            return Ok(());
+        }
         let paused = core.store.paused(&self.conversation)?;
         let mut tracker = readiness.lock().map_err(invalid)?;
         let ready = if let Some(pi) = &self.pi {
@@ -423,7 +443,12 @@ impl Session {
                 let mut context = crate::lean::prompt_context::PromptContext::default();
                 context.section(prompts::CONTINUATION_LABEL, prompts::RESULT_TOOL_REMINDER);
                 context.section(prompts::REQUIRED_RESULT_LABEL, &footer);
-                terminal::Session::submit(&self.screen, &context.render())
+                core.execution
+                    .while_active(turn, || {
+                        terminal::Session::submit(&self.screen, &context.render())
+                    })
+                    .transpose()?;
+                Ok(())
             })?;
         }
         Ok(())

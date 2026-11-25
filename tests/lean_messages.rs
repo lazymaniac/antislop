@@ -413,9 +413,9 @@ else:
 }
 
 /// Two independent read-only tasks whose workers log when they start and end.
-fn timed_plan(dir: &Path) -> Vec<(f64, f64)> {
+fn timed_plan(dir: &Path, single_agent: bool) -> Vec<(f64, f64)> {
     let log = dir.join("times.log");
-    let core = open(
+    let core = open_edited(
         dir,
         r#"
 answer = plan(task("t1", "One"), task("t2", "Two")) if "The plan finished. Results of each task follow." not in prompt else "done"
@@ -429,6 +429,14 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "The plan finished. Resul
     answer = "report""#,
             log = log.to_string_lossy()
         ),
+        &[(
+            "single_agent = false",
+            if single_agent {
+                "single_agent = true"
+            } else {
+                "single_agent = false"
+            },
+        )],
     );
     let conversation = support::fixture_conversation(&core, &dir.join("project"))
         .unwrap()
@@ -457,12 +465,24 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "The plan finished. Resul
 #[test]
 fn independent_tasks_overlap_without_a_configured_concurrency_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let mut spans = timed_plan(dir.path());
+    let mut spans = timed_plan(dir.path(), false);
     spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     assert_eq!(spans.len(), 2);
     assert!(
         spans[1].0 < spans[0].1,
         "the second started before the first ended: {spans:?}"
+    );
+}
+
+#[test]
+fn independent_tasks_run_sequentially_when_single_agent_is_selected() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut spans = timed_plan(dir.path(), true);
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert_eq!(spans.len(), 2);
+    assert!(
+        spans[1].0 >= spans[0].1,
+        "workers overlapped in single-agent mode: {spans:?}"
     );
 }
 
@@ -1179,6 +1199,9 @@ else:
     assert late['state']=='answered' and late['answer']=='Use UTF-8',late
     answer='Inspected encoding: UTF-8'"#,
     );
+    let mut config = (*core.config_snapshot()).clone();
+    config.policy.single_agent = true;
+    core.replace_config(config);
     let conversation = run(&core, dir.path());
     wait_until(
         "worker received live answer and passed independent review",

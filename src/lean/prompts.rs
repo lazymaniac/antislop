@@ -1387,3 +1387,7 @@ pub(crate) const REFERENCE_DATA_MARKER: &str = "ANTISLOP_REFERENCE_DATA";
 pub(crate) const FULL_RESULT_REFERENCE: &str = "Read the full result through MCP";
 
 pub(crate) const NONE: &str = "none";
+
+/// Explicit user scheduling preference takes precedence over generic parallel-work guidance.
+pub(crate) const SINGLE_AGENT_POLICY: &str = "The user selected single-agent execution. This overrides generic concurrency guidance: separate workers, reviewers, planners and the orchestrator take turns; only one agent is active at a time. Preserve independent review and task dependencies. Use the runtime MCP tools for coordination; never launch additional agent CLIs to bypass this setting. Queued work is not a failed task or a missing prerequisite.";
+pub(crate) const EXECUTION_MODE_LABEL: &str = "Execution mode";

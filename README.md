@@ -111,6 +111,25 @@ set `[orchestrator].profile = "pi_direct"` and
 `[routing.orchestration].executor = "pi_direct"` together. Reviewer sessions stay
 separate even when they use the same profile.
 
+For a local LLM backend, set `single_agent = true` in `[policy]` to run one
+agent turn at a time across all conversations in this project's daemon:
+
+```toml
+[policy]
+local_commits = true
+single_agent = true
+```
+
+Workers, reviewers, the orchestrator and planning specialists keep their separate
+roles and contexts, but execute sequentially. An agent waiting for another
+agent's answer or a CLI approval yields its place so coordination can continue.
+Other ready work waits without a time limit and can still be cancelled or paused.
+The TUI configuration editor also exposes `policy.single_agent`; its default is
+`false`. Enabling it during concurrent work lets active agents finish or yield
+before the next one starts; disabling it releases the queue. This setting applies
+to agent activity managed by this daemon, not other projects' daemons, external
+CLI sessions or manual terminal input.
+
 `antislop doctor` and plan preflight check that the configured Pi or wrapper
 executable is available. The native session then verifies the extension, actual
 session settings and authenticated Gateway connection before submitting a prompt;

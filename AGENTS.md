@@ -65,7 +65,7 @@ When modifying or adding UI components in `src/lean/tui/`:
 - **Working Directory**: The process working directory is the repository root supplied by the user. Do not hardcode absolute system paths.
 - **Runtime State**: Store runtime state, databases, logs, checkpoints and per-session settings outside disposable checkouts: `ANTISLOP_STATE_ROOT`, else `$XDG_STATE_HOME/antislop`, else `~/.local/state/antislop`. Project directories are keyed by the canonical common Git directory (canonical project root without Git), so worktrees share durable state. Do not put runtime files in the source tree. The runtime keeps no directory trust registry; a CLI's trust dialog for a directory the runtime allocated is answered automatically, any other dialog goes through the approval flow.
 - **Git Worktree Isolation**: Task workers must only modify files inside their allocated task worktrees. Never mutate the user's primary working tree outside approved merges.
-- **External CLI Processes**: Launch every CLI with no permission, sandbox or approval flags: the CLI's own policy applies, and the approval dialogs it shows are recognized on the PTY screen, put to the user (supervised, the default per conversation) or to the orchestrator (autonomous) and answered with the CLI's own keys. Do not impose task, concurrency, execution-time, idle-time, memory, cost or retry budgets. Honor manual pause/cancellation, surface raw failures and terminal tails, and report missing progress without automatically killing work. Preserve roles, dependency ordering, quality review, evidence and user changes. Pass the gateway per launch; never write into a CLI's own configuration files (Agy's one-time bridge registration, `antislop setup agy`, is run by the user).
+- **External CLI Processes**: Launch every CLI with no permission, sandbox or approval flags: the CLI's own policy applies, and the approval dialogs it shows are recognized on the PTY screen, put to the user (supervised, the default per conversation) or to the orchestrator (autonomous) and answered with the CLI's own keys. Do not impose task, execution-time, idle-time, memory, cost or retry budgets. Keep agent concurrency unrestricted unless the user selects `policy.single_agent`; that mode queues separate roles and yields for coordination. Honor manual pause/cancellation, surface raw failures and terminal tails, and report missing progress without automatically killing work. Preserve roles, dependency ordering, quality review, evidence and user changes. Pass the gateway per launch; never write into a CLI's own configuration files (Agy's one-time bridge registration, `antislop setup agy`, is run by the user).
 
 <!-- hologram:start — generated, do not edit; refreshed by git hooks -->
 Hologram project map: exact files, signatures, fields, and retained call paths. Read it before searching source. Line 2 is the legend; omissions are marked. Before adding tests/helpers, check `? tests` and `*` helpers. Address `hologram review` findings before finishing; reuse named originals and consolidate duplicate coverage.
@@ -92,7 +92,7 @@ src
    Config(C{schema_version,providers,profiles,orchestrator,routing,policy})
    Effort(E{Low,Medium,High,Xhigh})
    OrchestratorConfig(C{profile})
-   Policy(C{local_commits})
+   Policy(C{local_commits,single_agent})
    Profile(C{provider,binary,args,command,model,effort})
    ProviderConfig(C{binary,args,command})
    ProviderKind(E{Agy,Codex,Claude,Gemini,Opencode,Pi})
@@ -236,18 +236,18 @@ src
      turn
       execute
        execute(core,state,cancel,prompt,events):Result<agent::Outcome> > execute_profile
-       - PreparedAgent,clone_error,prepare_agent,agent_spec,session_scope,{record_run,run}_context,check_task_inputs,
-         tool_handler,protocol_observer,record_rejected_tool,run_cli,is_rejected_session,{should,announce_startup}_retry,
-         restart_native
+       - PreparedAgent,enter_execution,clone_error,prepare_agent,agent_spec,session_scope,{record_run,run}_context,
+         check_task_inputs,tool_handler,coordination_tool,protocol_observer,record_rejected_tool,run_cli,is_rejected_session,
+         {should,announce_startup}_retry,restart_native
       finish
        finish(core,outcome,events,cancel):Result<Option<String>> > finish_{success,failure}
        - record_failed_mail
       prompt
-       prepare_prompt(core,state,spec,prompt):Result<String> ~72 > role_introduction,SessionContext,execution_policy,validation_index,inbox_text,prompt,task_role,append_{allocation_context,task_context,round_handoff}
+       prepare_prompt(core,state,spec,prompt):Result<String> ~75 > role_introduction,SessionContext,execution_policy,config_snapshot,validation_index,inbox_text,prompt,task_role,append_{allocation_context,task_context,round_handoff}
        - append_questions
       setup
        begin(core,setup):Result<TurnState<'a>> > TurnStart.new,pending_{inbox,comments},start_turn,attribute_inbox
-       wait_until_resumed(core,setup,cancel):Result<()> > as_str,paused
+       wait_until_resumed(core,conversation,role,cancel):Result<()> > paused
        - TurnStart,SetupParts,profile_provider,resume_session
        - SetupParts: from_setup
        - TurnStart: finish
@@ -258,7 +258,7 @@ src
     approvals
      approver(core,conversation,role,turn,spec):Arc<approvals::Approver> > ApprovalSeat,name,settle_approval
      ApprovalSeat(C{conversation,role,turn,provider,directories})
-     - {parse_trust,same_directory}_target,decision_name
+     - {parse_trust,same_directory}_target,{decision,kind}_name
     comment_helpers
      comment_label(target,plan):String > {plan,check,finding,artifact,addressed_target}_label
      is_plan_target(target):bool
@@ -881,7 +881,7 @@ src
    task_role(key):Option<(&str,bool)>
    task_state_digest(tasks):String
    ConversationSummary(C{id,goal,project,created_ms,status,status_error,active_plan,tasks_{total,done},revision_token})
-   Core(C{store,native,weak,_lock,opened_ms,config,state,runtime_activation_{lock,cancels},activity,revisions,worktrees,locks}) : Drop
+   Core(C{store,native,weak,_lock,opened_ms,config,state,runtime_activation_{lock,cancels},execution,activity,revisions,worktrees,locks}) : Drop
     read_plan_context(conversation,role,turn,tool,args):Result<Value> ~75 > task_role,dependency_plan,plan_revision,required_text,task_in_plan_by_id,markdown,page_text
     read_audit(conversation,role,turn,args):Result<Value> > dependency_plan,required_text,events_since,page_text
     orchestrator_tool(&Arc<Self>,conversation,role,turn,tool,args):Result<Value> > {answer_agent,decide_approval}_tool,{retry_failed,resume_coordinating}_task,create_session_pr
@@ -929,7 +929,7 @@ src
     direct_execute(&Arc<Self>,conversation,prompt):Result<serde_json::Value> ~121 > add_message,{start,finish}_turn,create_scope,TaskContract,add_plan,bind_plan_scope,plan_revision_token,activate_reviewed_plan
     open(state,config):Result<Arc<Self>> > state_lock,recover_agents_and_turns,make_core,restore_startup
     turn_inner(setup,cancel,prompt):Result<Option<String>> > turn_lock,lock_cancellable,TurnState.begin,TurnEvents.new,announce_started,execute.execute,finish.finish
-    settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> ~64 > automatic_choice,approval_mode,open_approval,kind_name,ask_orchestrator_to_decide,close_approval,approval_state,shown
+    settle_approval(&Arc<Self>,seat,approval,cancel,shown):Result<Verdict> > automatic_choice,wait_for_approval
     decide_approval_tool(conversation,args):Result<Value> > approval_state,escalate_approval,notice,answer_approval
     answer_approval(conversation,request,choice):Result<()>
     approval_mode(conversation):Result<String>
@@ -1085,13 +1085,14 @@ src
     terminal_input(conversation,role,handle,sequence,input):Result<()> > invalid
     terminal_resize(conversation,role,handle,columns,rows):Result<()> > size,invalid,require
     terminal_detach(conversation,role,handle):Result<()> > remove
-    - revision_view,run_planning_consultation,plan_base_path,refresh_delivered_tasks,{conversation,approved_plan}_status,
-      replaced_graph,planner_submitted_plan,record_{comment_reply,plan_lint},{persist_plan,run_report}_audit,
-      require_revision_review,{spawn,finish}_revision_worker,prepare_{revision,revision_contents},ensure_revision_accepted,
-      prepared_revision,wait_for_revision_jobs,finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},
-      publish_plan_report,{clear_agent,reserve,run_code}_review,session_completion_summary,preserve_final_result,
-      unchanged_recovery_request,release_task_views_with_hook,cleanup_{view_path,task_worktrees_with_hook},primary_project,
-      session_matches_context,execution_signature
+    - revision_view,run_planning_consultation,plan_base_path,ask_orchestrator_to_decide,refresh_delivered_tasks,
+      {conversation,approved_plan}_status,replaced_graph,planner_submitted_plan,record_{comment_reply,plan_lint},
+      {persist_plan,run_report}_audit,require_revision_review,{spawn,finish}_revision_worker,
+      prepare_{revision,revision_contents},ensure_revision_accepted,prepared_revision,wait_for_revision_jobs,
+      finish_{plan_run,audited_plan},audited_plan_{snapshot,changed},publish_plan_report,
+      {clear_agent,reserve,run_code}_review,session_completion_summary,preserve_final_result,unchanged_recovery_request,
+      release_task_views_with_hook,cleanup_{view_path,task_worktrees_with_hook},primary_project,session_matches_context,
+      execution_signature
    RecoveryAction(E{IntegrateWithConsent,KeepOnBranch,ReviewManualSnapshot,RetryWithGuidance,RestartAgent,CancelTask})
    TaskRecoveryRequest(C{conversation,plan,task,action,consent_files,freshness_token,message})
    TaskRecoveryResponse(C{task,status,round,integrated_files,preserved_branch,new_freshness_token,notice})
@@ -1121,7 +1122,7 @@ src
    registry.rs
     - recorded_round,validate_profile,restored_agent_spec
    session
-    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,token,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,while_open,require,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
+    Session: start(core,conversation,spec,signature,role):Result<Self>; identity():Option<String>; touch(); check_alive():Result<()> > diagnostic,token,screen_stop,approval; run(registry,turn,prompt,cancel):Result<agent::Outcome> > check_alive,require,execute,identity,session,store,touch,invalid; steer(text,interrupt):Result<Option<String>> > check_alive,invalid,while_open,require,untrusted; failed_before_start():bool; set_tool_handler(handler):Result<()> > set_handler; set_approver(approver):Result<()>; set_protocol_observer(observer):Result<()>
     - Session: build,serve_approval,dialog_gone,wait_{ready,for_connection,for_settle},submit_turn,wait_for_result,
                remind_if_ready,describe_result_error,learn_identity,opencode_session
    stops
@@ -1195,6 +1196,67 @@ src
     introduce():bool
     fresh():bool
    SessionStart(E{Initial,Resumed,Reintroduced})
+  prompts
+   = CONFIRMED_REQUIREMENTS_LABEL="Confirmed requirements",PLANNER_QUESTION_LABEL="Planner question",
+     PLANNING_PREREQUISITES_LABEL,VALIDATION_{HISTORY_GUIDANCE,REUSE_RESULT,WAIT_RESULT,RUN_RESULT,RECORDED_RESULT,REUSE},
+     CURRENT_TURN_LABEL="Current turn",ROLE_POLICY_LABEL="Role policy",VALIDATION_REUSE_LABEL="Validation reuse",
+     PRIOR_VALIDATIONS_LABEL="Prior validation index",VALIDATION_INDEX_LABEL="Validation index",INBOX_LABEL="Inbox",
+     EARLIER_FINDINGS_HEADING,ASSIGNMENT_LABEL="Assignment",ALLOCATION_LABEL="Allocation",
+     INPUTS_AND_EVIDENCE_LABEL="Inputs and evidence",CONTINUATION_LABEL="Continuation",{COORDINATOR,WORKER}_EXECUTION_RULES,
+     LANGUAGE_SAMPLE_LABEL="Language sample",RUNTIME_SOURCES_LABEL="Runtime sources",EVIDENCE_INDEX_LABEL="Evidence index",
+     HISTORICAL_REPORT_INPUTS,QUESTION_HISTORY_LABEL="Question history",ORCHESTRATOR_RESTART_GUIDANCE,AUDIT_REMINDER,
+     APPEND_COMMENT_INSTRUCTIONS,{DEFERRED,FAILED,COORDINATING,WAITING,SETTLED}_TASK_GUIDANCE,CURRENT_PLAN_INDEX_LABEL,
+     {ORCHESTRATOR_REVISION,AUDIT_RESPONSE}_RULES,AUDIT_FAILED_STATUS,AUDIT_NOT_APPROVED="not approved",
+     AUDITOR_VERDICT_LABEL,CONVERSATION_HISTORY_HEADING,USER_DECISION_RULE,CURRENT_REQUIREMENTS_GUIDANCE,
+     INTERVIEW_INSTRUCTIONS,PLANNER_{CURRENT_SCOPE_GUIDANCE,PREPARATION_RULES,CAPABILITY_RULES},
+     CURRENT_BLOCKERS_LABEL="Current blockers",COORDINATION_GUIDANCE,OPEN_COMMENT_HEADER,
+     INTEGRATED_CHANGE_NOTE=", change integrated",PRESERVED_COORDINATION_LABEL,OPTIONS_OBJECTIVE_MARKER,STALE_TURN_RECOVERY,
+     ADDRESSED_ID="The comment number",ADDRESSED_HOW,ADDRESSED_COMMENTS_DESCRIPTION,
+     QUESTION_DESCRIPTION="What choosing it means",QUESTION_CONTEXT,SELECTION_ID="Short id, e.g. A",SELECTION_TRADEOFFS,
+     SELECTION_SELECTED,SELECTION_RATIONALE,SELECTION_USER_SUMMARY,
+     REVIEW_{NOTE,CHECK,SEVERITY,WHERE,REPORT,CHECKS,RESOLVED_DESCRIPTION},PLAIN_REVIEW_{SEVERITY,WHERE,REPORT,FINDINGS},
+     PLANNED_TASK_{ID,GOAL,DEPENDENCIES_DESCRIPTION,RESULT_REF,DEFERRED,CHANGE_KIND,OUTPUTS_DESCRIPTION,DELIVERY},
+     ACCEPTANCE_CRITERION_ID_DESCRIPTION,
+     REVISION_{SCOPE,REASON,TASKS,RETIRE_DESCRIPTION,REPLACEMENTS_DESCRIPTION,REDO_DESCRIPTION},RETRY,
+     {RESULT_EVIDENCE,ACTIVE_TURN_WITH_RECOVERY,ACTIVE_TURN}_DESCRIPTION,TOOL_GET_IMAGES,
+     TOOL_READ_{PLAN_CONTEXT,TASK_CONTRACT,AUDIT},TOOL_PREPARE_VALIDATION,VALIDATION_COMMAND_DESCRIPTION,
+     TOOL_{PREPARE_VALIDATION_DIRECTORY,PREPARE_VALIDATION_SCOPE,PREPARE_VALIDATION_ENVIRONMENT,COMPLETE_VALIDATION,INVALIDATE_VALIDATION,READ_VALIDATIONS,CONSULT_PLANNING,READ_PLANNING_RESULT,CURRENT_TURN,REPORT_BLOCKER,REPORT_BLOCKER_RESUME_CONDITION,REPORT_BLOCKER_UNBLOCKED_WORK_REMAINING,RECORD_EVIDENCE,READ_EVIDENCE,READ_DEPENDENCY_RESULT,READ_DEPENDENCY_RESULT_VIEW,READ_DEPENDENCY_RESULT_DEPENDENCY,READ_DEPENDENCY_RESULT_RESULT_REF,READ_DEPENDENCY_RESULT_ROUND,FINISH_TURN_TEXT},
+     PLANNER_BLOCKER_DESCRIPTION,
+     TOOL_{SUBMIT_REQUIREMENTS_MARKDOWN,SUBMIT_REQUIREMENTS_TITLE,COMPLETE_SUMMARY,COMPLETE_REPORT,COMPLETE_COMMIT_MESSAGE,ASK,WAIT_FOR_ANSWER,WAIT_FOR_ANSWER_NOTE},
+     {PLAN_DOCUMENT,PLAN_KEPT_TASKS,PLAN_SCOPE,PLAN_TEAM_REASON}_DESCRIPTION,{SUBMIT,REVISE}_PLAN_TOOL,
+     TOOL_{ANSWER_AGENT,ANSWER_AGENT_REQUEST,ANSWER_AGENT_TARGET,DEFER_TO_USER,DEFER_TO_USER_EXPLANATION,DECIDE_APPROVAL,DECIDE_APPROVAL_REQUEST,DECIDE_APPROVAL_CHOICE,DECIDE_APPROVAL_EXPLANATION,RETRY_TASK,RESUME_TASK,CREATE_SESSION_PR,MERGE_SESSION_WITH_MAIN,REQUEST_REPLAN,REQUEST_REPLAN_REASON},
+     LEGACY_REVISE_PLAN_TOOL,RESULT_TOOL_REMINDER,REQUIRED_RESULT_LABEL="Required result",
+     {USER_SELECTED,LEGACY,PRESERVE}_TEAM_POLICY,TEAM_{POLICY_HEADING,METADATA_LABEL},CLEAN_IMPLEMENTER_{TITLE,FOCUS},
+     QUALITY_REFACTORING_{TITLE,FOCUS},STATIC_ANALYZER_{TITLE,FOCUS},REVIEW_TESTING_{TITLE,FOCUS},
+     SECURITY_AUDITOR_TITLE="Security Audit",SECURITY_AUDITOR_FOCUS,PERFORMANCE_AUDITOR_TITLE="Performance Audit",
+     PERFORMANCE_AUDITOR_FOCUS,INTEGRATION_GATE_{TITLE,FOCUS},OPTIONS_TASK_SUMMARY,OPTIONS_SECTION_LABEL="Options",
+     OPTIONS_REVIEWER_SUMMARY,OPTIONS_CONTRACT_HEADING,
+     {STATIC_ANALYSIS_GATE,STATIC_ANALYSIS_REVIEW,TESTING_GATE,TESTING_REVIEW,INTEGRATION_GATE,INTEGRATION_REVIEW,REFACTORING_GATE,REFACTORING_REVIEW,SECURITY_GATE,AUDIT_REVIEW,PERFORMANCE_GATE}_SUMMARY,
+     FEATURE_RESEARCH_TITLE="Feature Research",FEATURE_RESEARCH_FOCUS,FEATURE_ANALYSIS_{TITLE,FOCUS},
+     FEATURE_DEPENDENCIES_TITLE="Feature Dependencies",FEATURE_DEPENDENCIES_FOCUS,
+     FEATURE_ARCHITECTURE_TITLE="Feature Architecture",FEATURE_ARCHITECTURE_FOCUS,
+     FEATURE_TEST_DESIGN_TITLE="Feature Test Design",FEATURE_TEST_DESIGN_FOCUS,FEATURE_DELIVERY_TITLE="Feature Delivery",
+     FEATURE_DELIVERY_FOCUS,FEATURE_PLANNING_RULES,INBOX_HEADING="Messages for you:\n",INBOX_MESSAGE_LABEL="Message",
+     OPTIONS_NOTE,{FILESYSTEM,ACTIVATION}_GUIDANCE,TARGET_IDENTITY,ORCHESTRATOR_WORKFLOW,PLAN_{DECOMPOSITION,FORMAT},
+     PLANNER_ROLE,{TEAM,PLAN_REVIEW}_NOTE,ORCHESTRATOR_{TAIL,INSTRUCTIONS},PRESERVE_SELECTED_TEAM,REQUEST_LABEL="Request",
+     {PREPARATION,DECOMPOSITION}_REVIEW_RULES,CODE_REVIEW_PLAN_RULES,PLAN_CHECKS,PROPOSED_PLAN_LABEL="Proposed plan",
+     GENERATED_NODES,EARLIER_CONTRACTS_LABEL="Earlier contracts",AUDIT_REQUEST_LABEL="Audit request",
+     TASK_RESULT_INDEX_LABEL="Task result index",REVIEW_SCOPE_LABEL="Review scope",
+     CANDIDATE_RESULT_INDEX_LABEL="Candidate result index",AUDIT_CONTINUATION_LABEL="Audit continuation",AUDIT_CHECKS,
+     REVIEW_FORMAT,READ_ONLY_REVIEW,PROJECT_RULES,OUTSIDE,REVIEW_RULES,COVERAGE_FORMAT,NO_WORKER_REPORT,
+     PREVIOUS_REVIEW_FINDINGS,UNRESOLVED_FINDINGS_LABEL="Unresolved findings",OPEN_COMMENTS_LABEL="Open comments",
+     WORKER_REPORT_LABEL="Worker report",REVIEWER_BLOCKER_GUIDANCE,IMPLEMENTATION_REVIEW_BINDING,CODE_REVIEW_{RULES,REVIEW},
+     EARLIER_FINDINGS_LABEL="Earlier findings",UPDATED_WORKER_REPORT_LABEL="Updated worker report",GOAL_CHECK_DESCRIPTION,
+     {READ_ONLY_CODE_REVIEW_WORKER,WRITER_CHANGE,OPTIONS_WORKER,CONTEXT_WORKER,ANALYSIS_WORKER,DELIVERY_COMMIT_MESSAGE,REPORT_COMMIT_MESSAGE}_RULES,
+     INTERRUPTED_WORKER_CONTINUATION,UNRESOLVED_FINDINGS_REFERENCE,
+     WORKER_{RESULT_TOOL_RULES,COMMUNICATION_RULES,BLOCKER_RULES},CODE_REVIEW_REVIEWER_SUMMARY,
+     {CODE_REVIEW,NO_QUALITY_GATES}_PLANNING_RULES,TEAM_NO_GATES="no gates",
+     {SMALL_CHANGE,FEATURE,REFACTORING,SECURITY_FIX,CODE_REVIEW,NO_QUALITY_GATES,RESEARCH,DOCUMENT}_USE_CASE,
+     TEAM_OPTIONS_DESCRIPTION,INTEGRATION_{ACCEPTANCE_CRITERION,TASK_TITLE,TASK_GOAL,TASK_SUMMARY},
+     {RISK_CATALOG,CONTEXT_RISK}_RULES,RISK_CATALOGS,OPTIONS_BINDING,{SELECTION,REPORT,OPTIONS,GATE}_REVIEW,
+     KIND_NAMES_PLACEHOLDER="{KIND_NAMES}",AGENT_POOL_PLACEHOLDER="{AGENT_POOL}",TEAMS_PLACEHOLDER="{TEAMS}",
+     {DEPENDENCY,REFERENCE}_DATA_MARKER,FULL_RESULT_REFERENCE,NONE="none",SINGLE_AGENT_POLICY,
+     EXECUTION_MODE_LABEL="Execution mode"
   risks
    for_kind(kind):impl Iterator<Item = (String,String)> > risks
    - Risk
@@ -3339,6 +3401,6 @@ work/visualizations
    run_test.py:*main
    task_cli.py:*_fixture_{tool,emit,block,contract}
    wrapping_stream
-· 183,127 LOC · input 1,670,937 · output 49,482 tokens · state 70b0ed7ea234 · targets AGENTS.md
+· 184,745 LOC · input 1,718,655 · output 51,219 tokens · state 2f398967dcf0 · targets AGENTS.md
 ```
 <!-- hologram:end -->

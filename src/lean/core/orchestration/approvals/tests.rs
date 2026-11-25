@@ -93,11 +93,26 @@ fn a_supervised_approval_waits_for_the_user_and_presses_their_choice() {
 #[test]
 fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
     let (_directory, core, conversation) = setup();
+    let mut config = (*core.config_snapshot()).clone();
+    config.policy.single_agent = true;
+    core.replace_config(config);
+    // This test supplies the orchestrator's decisions directly. Reserve its
+    // activity so wake() cannot also launch an unrelated provider process.
+    assert!(core.activity.start_orchestrator(&conversation).is_some());
     core.set_approval_mode(&conversation, "autonomous").unwrap();
     let seat = seat(&core, &conversation, "worker:t1");
+    let worker = core
+        .execution
+        .enter(&seat.turn, &AtomicBool::new(false))
+        .unwrap();
     let done = settle(&core, &seat, dialog(COMMAND), true);
     let (request, decider) = open_request(&core, &conversation);
     assert_eq!(decider, "orchestrator");
+    // The worker must yield the single slot so its approval can be decided.
+    let coordinator = core
+        .execution
+        .enter("approval-decider", &AtomicBool::new(false))
+        .unwrap();
     let mut told = None;
     for _ in 0..200 {
         told = core
@@ -135,8 +150,10 @@ fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
         "{stale_at_store}"
     );
     core.answer_approval(&conversation, &request, "4").unwrap();
+    drop(coordinator);
     let (verdict, _) = done.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(verdict.unwrap(), Verdict::Choose("4".into()));
+    drop(worker);
 
     // The orchestrator's own decision answers the agent.
     let seat = self::seat(&core, &conversation, "worker:t2");
@@ -146,6 +163,7 @@ fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
         .unwrap();
     let (verdict, _) = done.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(verdict.unwrap(), Verdict::Choose("1".into()));
+    core.activity.running.lock().unwrap().remove(&conversation);
 }
 
 #[test]

@@ -121,6 +121,22 @@ impl Core {
             )?;
             return Ok(Verdict::Choose(choice));
         }
+        let suspension = self.execution.suspend(&seat.turn);
+        let outcome = self.wait_for_approval(seat, approval, cancel, shown);
+        if let Some(suspension) = suspension {
+            suspension.resume(|| cancel.load(Ordering::SeqCst))?;
+        }
+        outcome
+    }
+
+    fn wait_for_approval(
+        self: &Arc<Self>,
+        seat: &ApprovalSeat,
+        approval: &Approval,
+        cancel: &AtomicBool,
+        shown: &dyn Fn() -> bool,
+    ) -> Result<Verdict> {
+        let conversation = &seat.conversation;
         let options: Vec<Value> = approval
             .choices
             .iter()

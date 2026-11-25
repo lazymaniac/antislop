@@ -2,13 +2,14 @@ use super::*;
 
 pub(super) fn wait_until_resumed(
     core: &Core,
-    setup: &TurnSetup<'_>,
+    conversation: &str,
+    role: &str,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    if ORCHESTRATION_ROLES.contains(&setup.role.as_str()) || setup.role == PLAN_REVIEWER {
+    if ORCHESTRATION_ROLES.contains(&role) || role == PLAN_REVIEWER {
         return Ok(());
     }
-    while !cancel.load(Ordering::SeqCst) && core.store.paused(setup.conversation)? {
+    while !cancel.load(Ordering::SeqCst) && core.store.paused(conversation)? {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     Ok(())

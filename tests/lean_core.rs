@@ -2016,3 +2016,59 @@ fn retained_store_queries_remain_publicly_callable() {
     assert!(ran(&store, "absent", "except").unwrap().is_none());
     assert!(approved(&store, "absent", None).unwrap().is_empty());
 }
+
+#[test]
+fn single_agent_serializes_conversations_before_starting_another_cli_turn() {
+    let dir = common::tempdir();
+    let project = dir.path().join("project");
+    init_project(&project);
+    let codex = fake_codex(dir.path());
+    let source = std::fs::read_to_string(&codex).unwrap();
+    let probe = format!(
+        "if mkdir '{0}/active-agent' 2>/dev/null; then\n  trap \"rmdir '{0}/active-agent'\" EXIT\nelse\n  touch '{0}/overlap'\nfi\n",
+        dir.path().display()
+    );
+    assert!(source.contains("for last; do :; done"));
+    std::fs::write(
+        &codex,
+        source.replace("for last; do :; done", &(probe + "for last; do :; done")),
+    )
+    .unwrap();
+    let mut config = config(&codex);
+    config.policy.single_agent = true;
+    let core = Core::open(&dir.path().join("state"), config).unwrap();
+    let first = core.start(&project).unwrap();
+    let second = core.start(&project).unwrap();
+    std::fs::write(dir.path().join("hold-agent"), "hold").unwrap();
+    let release = common::ReleaseOnDrop(dir.path().join("release-agent"));
+    core.send(&first.id, "sleepy").unwrap();
+    common::wait_until("first agent started", || {
+        dir.path().join("agent-entered").exists()
+    });
+    core.send(&second.id, "fast").unwrap();
+    common::wait_until("second conversation registered its turn", || {
+        core.sessions(&second.id)
+            .unwrap()
+            .iter()
+            .any(|turn| turn.status == "running")
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!dir.path().join("overlap").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("calls.log"))
+            .unwrap()
+            .matches("\n---\n")
+            .count(),
+        1
+    );
+    std::fs::write(&release.0, "continue").unwrap();
+    wait_idle(&core, &first.id);
+    wait_idle(&core, &second.id);
+    assert!(!dir.path().join("overlap").exists());
+    assert!(
+        core.sessions(&second.id)
+            .unwrap()
+            .iter()
+            .all(|turn| turn.status == "done")
+    );
+}

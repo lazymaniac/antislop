@@ -187,6 +187,7 @@ pub struct Core {
     state: PathBuf,
     runtime_activation_lock: Mutex<()>,
     runtime_activation_cancels: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
+    execution: Arc<core::execution::Execution>,
     activity: core::state::Activity,
     revisions: core::state::RevisionState,
     worktrees: core::state::WorktreeState,

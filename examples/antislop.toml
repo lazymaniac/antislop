@@ -11,6 +11,8 @@ schema_version = 5
 # This setting controls delivery commits only.
 [policy]
 local_commits = true
+# Run separate agent roles sequentially for local LLM backends.
+single_agent = false
 
 [providers.codex]
 binary = "codex"

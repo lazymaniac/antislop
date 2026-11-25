@@ -6320,6 +6320,7 @@ mod config_editor_acceptance {
             schema_version: config.schema_version,
             policy: Policy {
                 local_commits: config.policy.local_commits,
+                single_agent: config.policy.single_agent,
             },
             providers: config
                 .providers
@@ -6426,7 +6427,7 @@ mod config_editor_acceptance {
                 let old = field.input.text.clone();
                 let key = path.last().unwrap().as_str();
                 let (new, cycle) = match key {
-                    "local_commits" => (json!(old != "true"), true),
+                    "local_commits" | "single_agent" => (json!(old != "true"), true),
                     "provider" => (json!(if old == "codex" { "agy" } else { "codex" }), true),
                     "effort" => (json!(if old == "low" { "medium" } else { "low" }), true),
                     "binary" => (json!("/tmp/config-editor-test-binary"), false),

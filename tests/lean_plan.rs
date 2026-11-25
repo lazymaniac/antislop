@@ -566,7 +566,9 @@ fn a_plan_runs_worker_reviewer_pairs_and_reports_back() {
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join("src")).unwrap();
     let (codex, agy) = fake_clis(dir.path());
-    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let mut config = config(&codex, &agy);
+    config.policy.single_agent = true;
+    let core = Core::open(&dir.path().join("state"), config).unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
 
     core.send(&conversation.id, "analyze the project architecture")

@@ -546,3 +546,21 @@ fn pi_invalid_settings_keep_existing_configuration_diagnostics() {
         assert!(!error.contains("secret-value"), "{error}");
     }
 }
+
+#[test]
+fn single_agent_is_optional_and_rejects_non_boolean_values() {
+    let example = include_str!("../../examples/antislop.toml");
+    let legacy = example.replace("single_agent = false", "");
+    assert!(!Config::from_toml(&legacy).unwrap().policy.single_agent);
+    let serial = example.replace("single_agent = false", "single_agent = true");
+    let config = Config::from_toml(&serial).unwrap();
+    assert!(config.policy.single_agent);
+    assert_eq!(
+        serde_json::from_value::<Config>(serde_json::to_value(&config).unwrap()).unwrap(),
+        config
+    );
+    let error = Config::from_toml(&example.replace("single_agent = false", "single_agent = 1"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("expected a boolean"), "{error}");
+}

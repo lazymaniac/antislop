@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) mod execution;
+
 pub(in crate::lean) mod integration;
 mod messages;
 mod open;

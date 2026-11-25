@@ -80,6 +80,7 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         native: native::Registry::default(),
         weak: std::sync::OnceLock::new(),
         _lock: lock,
+        execution: core::execution::Execution::new(config.policy.single_agent),
         config: core::state::ConfigState::new(config),
         state: state.canonicalize()?,
         runtime_activation_lock: Mutex::new(()),

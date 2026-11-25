@@ -3,6 +3,7 @@ schema_version = 5
 
 [policy]
 local_commits = true
+single_agent = true
 
 [providers.pi]
 command = ["unsloth", "start", "pi", "--model", "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL", "--context-length", "200000"]
