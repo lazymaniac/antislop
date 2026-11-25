@@ -1,99 +1,87 @@
-# Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and reviews.
+# Codex Sol 6.1 handles orchestration and planning; Unsloth Pi handles tasks.
 schema_version = 5
-
 
 [policy]
 local_commits = true
 
-[providers.codex]
-command = ["codex", "--sandbox", "danger-full-access"]
+[providers.pi]
+command = ["unsloth", "start", "pi", "--model", "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL", "--context-length", "200000"]
 
-[providers.agy]
-binary = "agy"
-
-[providers.claude]
-binary = "claude"
-
-[providers.opencode]
-command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp", "--"]
-
-# Profiles select the provider, optional model and reasoning effort.
-# Effort: low, medium, high, xhigh (availability depends on the selected model).
-[profiles.orchestrator]
-provider = "codex"
-model = "gpt-6.1-sol"
-effort = "low"
-
-[profiles.reasoning]
-provider = "codex"
-model = "gpt-6-luna"
+[profiles.pi]
+provider = "pi"
 effort = "high"
-
-[profiles.execution]
-provider = "codex"
-model = "gpt-6-luna"
-effort = "high"
-
-[profiles.review]
-provider = "codex"
-model = "gpt-6-luna"
-effort = "high"
-
-[routing.requirements]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.options]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.planning]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.architecture]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.dependencies]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.implementation]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.refactoring]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.static_analysis]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.test_design]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.testing]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.security]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.performance]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.integration]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.research]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.writing]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.analysis]
-executor = "orchestrator"
-reviewer = "orchestrator"
-[routing.delivery]
-executor = "orchestrator"
-reviewer = "orchestrator"
 
 [orchestrator]
-profile = "orchestrator"
+profile = "pi"
+
+[routing.requirements]
+executor = "pi"
+reviewer = "pi"
+
+[routing.options]
+executor = "pi"
+reviewer = "pi"
+
+[routing.planning]
+executor = "pi"
+reviewer = "pi"
+
+[routing.architecture]
+executor = "pi"
+reviewer = "pi"
+
+[routing.dependencies]
+executor = "pi"
+reviewer = "pi"
+
+[routing.implementation]
+executor = "pi"
+reviewer = "pi"
+
+[routing.refactoring]
+executor = "pi"
+reviewer = "pi"
+
+[routing.static_analysis]
+executor = "pi"
+reviewer = "pi"
+
+[routing.test_design]
+executor = "pi"
+reviewer = "pi"
+
+[routing.testing]
+executor = "pi"
+reviewer = "pi"
+
+[routing.security]
+executor = "pi"
+reviewer = "pi"
+
+[routing.performance]
+executor = "pi"
+reviewer = "pi"
+
+[routing.integration]
+executor = "pi"
+reviewer = "pi"
+
+[routing.research]
+executor = "pi"
+reviewer = "pi"
+
+[routing.writing]
+executor = "pi"
+reviewer = "pi"
+
+[routing.analysis]
+executor = "pi"
+reviewer = "pi"
+
+[routing.delivery]
+executor = "pi"
+reviewer = "pi"
 
 [routing.orchestration]
-executor = "orchestrator"
-reviewer = "orchestrator"
+executor = "pi"
+reviewer = "pi"
