@@ -112,7 +112,7 @@ set `[orchestrator].profile = "pi_direct"` and
 separate even when they use the same profile.
 
 For a local LLM backend, set `single_agent = true` in `[policy]` to run one
-agent turn at a time across all conversations in this project's daemon:
+agent CLI process at a time across all conversations in this project's daemon:
 
 ```toml
 [policy]
@@ -120,15 +120,17 @@ local_commits = true
 single_agent = true
 ```
 
-Workers, reviewers, the orchestrator and planning specialists keep their separate
-roles and contexts, but execute sequentially. An agent waiting for another
-agent's answer or a CLI approval yields its place so coordination can continue.
-Other ready work waits without a time limit and can still be cancelled or paused.
-The TUI configuration editor also exposes `policy.single_agent`; its default is
-`false`. Enabling it during concurrent work lets active agents finish or yield
-before the next one starts; disabling it releases the queue. This setting applies
-to agent activity managed by this daemon, not other projects' daemons, external
-CLI sessions or manual terminal input.
+Workers, reviewers, the orchestrator and planning specialists keep separate
+saved sessions. The daemon stops the previous CLI before starting another role.
+The runtime collects specialist reports before starting the planner and includes
+them in its prompt. A worker waiting for another agent checkpoints and ends its
+turn. Live CLI approval dialogs go to the user in this mode so the orchestrator
+does not need a second process to decide them. Queued work can still be paused
+or cancelled. Enabling the setting during concurrent work lets active turns
+finish before switching roles. The setting applies to the current daemon;
+other projects' daemons and external CLI sessions have their own policies.
+The TUI configuration editor exposes `policy.single_agent`, which defaults to
+`false`.
 
 `antislop doctor` and plan preflight check that the configured Pi or wrapper
 executable is available. The native session then verifies the extension, actual

@@ -93,9 +93,6 @@ fn a_supervised_approval_waits_for_the_user_and_presses_their_choice() {
 #[test]
 fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
     let (_directory, core, conversation) = setup();
-    let mut config = (*core.config_snapshot()).clone();
-    config.policy.single_agent = true;
-    core.replace_config(config);
     // This test supplies the orchestrator's decisions directly. Reserve its
     // activity so wake() cannot also launch an unrelated provider process.
     assert!(core.activity.start_orchestrator(&conversation).is_some());
@@ -108,7 +105,7 @@ fn an_autonomous_approval_goes_to_the_orchestrator_who_may_escalate() {
     let done = settle(&core, &seat, dialog(COMMAND), true);
     let (request, decider) = open_request(&core, &conversation);
     assert_eq!(decider, "orchestrator");
-    // The worker must yield the single slot so its approval can be decided.
+    // Coordination yields while the approval is decided.
     let coordinator = core
         .execution
         .enter("approval-decider", &AtomicBool::new(false))

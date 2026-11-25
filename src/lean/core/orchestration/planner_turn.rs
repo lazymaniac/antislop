@@ -45,7 +45,6 @@ impl Core {
         let asked = self.asked_since(conversation, answered, upto)?;
         let requirements = self.store.workflow(conversation)?.summary;
         let team_guidance = self.store.team_guidance(conversation)?;
-        announce_planner_draft(&self.store, conversation)?;
         let scope_context = planning_scope_context(self, conversation)?;
         let keepable = self.keepable_tasks_note(conversation)?;
         let replaced = self.replaced_graph(conversation, &asked)?;
@@ -84,6 +83,22 @@ impl Core {
         context: &PlannerTurnContext<'_>,
         cancel: &AtomicBool,
     ) -> Result<Option<String>> {
+        let reports = if context.config.policy.single_agent {
+            match self.collect_serial_planning_reports(context.conversation, context.upto, cancel) {
+                Ok(reports) => reports,
+                Err(_) if cancel.load(Ordering::SeqCst) => return Ok(None),
+                Err(error) => {
+                    let text = format!("Planning preparation failed: {error}");
+                    record_planner_result(&self.store, context.conversation, false)?;
+                    self.store
+                        .add_message(context.conversation, PLANNER_BLOCKER, &text)?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            String::new()
+        };
+        announce_planner_draft(&self.store, context.conversation)?;
         let mut setup = planner_setup(context);
         setup.plan_id = self
             .store
@@ -91,7 +106,9 @@ impl Core {
             .first()
             .map(|task| task.plan_id.clone());
         self.turn(setup, cancel, |session| {
-            planner_prompt(context, session.introduce())
+            let mut prompt = planner_prompt(context, session.introduce());
+            prompt.push_str(&reports);
+            prompt
         })
     }
 

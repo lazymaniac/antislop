@@ -258,8 +258,11 @@ fn mouse_button(button: MouseButton) -> wezterm_term::MouseButton {
     }
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
+impl Session {
+    pub(in crate::lean) fn terminate(&mut self) -> Result<()> {
+        if self.marker.is_empty() {
+            return Ok(());
+        }
         let alive = self.child.try_wait().ok().flatten().is_none();
         // Before the CLI dies and its commands lose their parent link.
         let pid = self.child.process_id().filter(|_| alive);
@@ -276,15 +279,23 @@ impl Drop for Session {
             }
             let _ = self.child.kill();
         }
-        let _ = self.child.wait();
-        if let Some((core, pid)) = &self.registration
+        self.child.wait()?;
+        self.marker.clear();
+        if let Some((core, pid)) = self.registration.take()
             && let Some(core) = core.upgrade()
         {
             let _ = core
                 .store
                 .db()
-                .execute("DELETE FROM native_processes WHERE pid=?1", [*pid]);
+                .execute("DELETE FROM native_processes WHERE pid=?1", [pid]);
         }
+        Ok(())
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.terminate();
     }
 }
 

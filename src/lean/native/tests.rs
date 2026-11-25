@@ -1548,6 +1548,36 @@ fn pi_fixture_handler(session: &Session) {
 }
 
 #[test]
+fn single_agent_closes_the_previous_cli_before_launching_another_role() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let mut config = (*core.config_snapshot()).clone();
+    config.policy.single_agent = true;
+    core.replace_config(config);
+    let spec = pi_lifecycle_spec(&core, dir.path(), false);
+
+    let planner = core
+        .native
+        .prepare_scoped(&core, "serial", "planner", &spec, "")
+        .unwrap();
+    let research = core
+        .native
+        .prepare_scoped(&core, "serial", "planning-research:fixture", &spec, "")
+        .unwrap();
+
+    assert!(planner.check_alive().is_err());
+    assert!(research.check_alive().is_ok());
+    let processes: i64 = core
+        .store
+        .db()
+        .query_row("SELECT COUNT(*) FROM native_processes", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(processes, 1);
+}
+
+#[test]
 fn pi_and_unsloth_keep_context_across_cancel_failure_and_restart() {
     for wrapped in [false, true] {
         let dir = test_tempdir();

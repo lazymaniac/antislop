@@ -121,7 +121,9 @@ impl Core {
             )?;
             return Ok(Verdict::Choose(choice));
         }
-        let suspension = self.execution.suspend(&seat.turn);
+        let suspension = (!self.config_snapshot().policy.single_agent)
+            .then(|| self.execution.suspend(&seat.turn))
+            .flatten();
         let outcome = self.wait_for_approval(seat, approval, cancel, shown);
         if let Some(suspension) = suspension {
             suspension.resume(|| cancel.load(Ordering::SeqCst))?;
@@ -144,7 +146,9 @@ impl Core {
                 json!({"id":choice.id,"label":choice.label,"decision":decision_name(choice.decision)})
             })
             .collect();
-        let decider = if self.store.approval_mode(conversation)? == store::AUTONOMOUS
+        // A CLI awaiting an answer to its live dialog still occupies the only slot.
+        let decider = if !self.config_snapshot().policy.single_agent
+            && self.store.approval_mode(conversation)? == store::AUTONOMOUS
             && !crate::lean::ORCHESTRATION_ROLES.contains(&seat.role.as_str())
         {
             "orchestrator"

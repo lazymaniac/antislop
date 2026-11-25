@@ -204,7 +204,7 @@ fn tool_handler(core: &Core, state: &TurnState<'_>) -> Arc<crate::lean::mcp::Han
         let core = weak
             .upgrade()
             .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
-        let suspension = coordination_tool(tool)
+        let suspension = (!core.config_snapshot().policy.single_agent && coordination_tool(tool))
             .then(|| core.execution.suspend(&turn))
             .flatten();
         let outcome = core.agent_tool(&conversation, &role, &turn, tool, args);

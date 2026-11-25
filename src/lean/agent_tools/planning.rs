@@ -96,6 +96,73 @@ impl Core {
             !self.store.workflow(conversation)?.interviewing(),
             "confirm scope before consulting planning specialists",
         )?;
+        require(
+            !self.config_snapshot().policy.single_agent,
+            "the runtime collects planning reports before starting the planner in single-agent mode",
+        )?;
+        self.request_planning_consultation(conversation, turn, args, None)
+    }
+
+    pub(in crate::lean) fn collect_serial_planning_reports(
+        self: &Arc<Self>,
+        conversation: &str,
+        upto: u64,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let mut reports = Vec::new();
+        for kind in planning_kinds() {
+            require(!cancel.load(Ordering::SeqCst), crate::lean::mcp::CANCELLED)?;
+            let result = self.request_planning_consultation(
+                conversation,
+                "",
+                &json!({
+                    "kind": kind,
+                    "question": "Identify findings and concrete planning implications for the confirmed scope.",
+                    "refresh": true
+                }),
+                Some((upto, cancel)),
+            )?;
+            let reference = required_text(&result, "reference")?;
+            let mut page = result;
+            let mut report = String::new();
+            loop {
+                require(
+                    page["state"] == "done",
+                    &format!(
+                        "{} consultation is {}: {}",
+                        tasks::work_kind_name(kind),
+                        page["state"],
+                        page["error"].as_str().unwrap_or("no report was produced")
+                    ),
+                )?;
+                report.push_str(page["report"].as_str().ok_or_else(|| {
+                    Error::Invalid("completed planning consultation has no report text".into())
+                })?);
+                let Some(cursor) = page["cursor"].as_str() else {
+                    break;
+                };
+                page = self.read_planning_result(
+                    conversation,
+                    PLANNER,
+                    "",
+                    &json!({"reference":reference,"cursor":cursor}),
+                )?;
+            }
+            reports.push(json!({"kind":kind,"reference":reference,"report":report}));
+        }
+        Ok(crate::lean::prompt_context::untrusted(
+            "Completed planning reports collected by the runtime",
+            &crate::lean::prompt_context::markdown(&reports),
+        ))
+    }
+
+    fn request_planning_consultation(
+        self: &Arc<Self>,
+        conversation: &str,
+        turn: &str,
+        args: &Value,
+        serial: Option<(u64, &AtomicBool)>,
+    ) -> Result<Value> {
         let kind: WorkKind = serde_json::from_value(args["kind"].clone())?;
         require(
             planning_kinds().any(|candidate| candidate == kind),
@@ -111,11 +178,14 @@ impl Core {
         if let Some(request) = self.planning_request(conversation, &basis, kind)? {
             let result = self.read_planning_result(
                 conversation,
-                role,
+                PLANNER,
                 turn,
                 &json!({"reference":request["reference"]}),
             )?;
-            if args["refresh"] != true || result["state"] == "running" {
+            if args["refresh"] != true
+                || result["state"] == "running"
+                || serial.is_some() && result["state"] == "done"
+            {
                 return Ok(result);
             }
         }
@@ -128,7 +198,7 @@ impl Core {
                 })?;
             let result = self.read_planning_result(
                 conversation,
-                role,
+                PLANNER,
                 turn,
                 &json!({"reference":request["reference"]}),
             )?;
@@ -147,9 +217,38 @@ impl Core {
             tasks::work_kind_name(kind),
             reference.trim_start_matches("planning:")
         );
-        self.store.append_event(conversation, Some(turn), None, "planning_consultation", &json!({
+        let parent = (!turn.is_empty()).then_some(turn);
+        self.store.append_event(conversation, parent, None, "planning_consultation", &json!({
             "reference":reference,"basis":basis,"kind":tasks::work_kind_name(kind),"role":specialist,"inputs":inputs
         }))?;
+        if let Some((upto_message, cancel)) = serial {
+            if let Err(error) = self.run_planning_consultation(
+                Consultation {
+                    conversation,
+                    role: &specialist,
+                    kind,
+                    upto_message,
+                    question: &question,
+                    inputs: &inputs,
+                },
+                cancel,
+            ) {
+                self.store.append_event(
+                    conversation,
+                    parent,
+                    None,
+                    "planning_consultation_failed",
+                    &json!({"reference":reference,"error":error.to_string()}),
+                )?;
+                return Err(error);
+            }
+            return self.read_planning_result(
+                conversation,
+                PLANNER,
+                turn,
+                &json!({"reference":reference}),
+            );
+        }
         let core = self.clone();
         let conversation = conversation.to_owned();
         let parent = turn.to_owned();
@@ -377,6 +476,26 @@ pub(super) fn prepared(core: &Core, conversation: &str) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_planning_delivers_retained_reports_without_starting_a_planner() {
+        let (_dir, core, conversation) = super::super::tests::core();
+        let requests = prepared(&core, &conversation);
+        let reports = core
+            .collect_serial_planning_reports(&conversation, 0, &AtomicBool::new(false))
+            .unwrap();
+
+        for request in requests {
+            assert!(reports.contains(request["reference"].as_str().unwrap()));
+        }
+        assert_eq!(reports.matches("Established facts").count(), 5);
+        assert!(
+            core.store
+                .last_turn(&conversation, PLANNER)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn planning_requires_completed_inputs_and_reuses_them_across_corrections() {

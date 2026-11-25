@@ -4,7 +4,7 @@ use history_view::restore_view_directory;
 
 impl Registry {
     pub(crate) fn reap_idle(&self) -> Result<()> {
-        let retired = {
+        {
             let mut sessions = self.sessions.lock().map_err(invalid)?;
             let keys = sessions
                 .iter()
@@ -23,11 +23,10 @@ impl Registry {
                 })
                 .map(|(key, _)| key.clone())
                 .collect::<Vec<_>>();
-            keys.into_iter()
-                .filter_map(|key| sessions.remove(&key))
-                .collect::<Vec<_>>()
-        };
-        drop(retired);
+            for key in keys {
+                drop(sessions.remove(&key));
+            }
+        }
         Ok(())
     }
 
@@ -75,7 +74,7 @@ impl Registry {
 
     /// Releases completed, unattached CLIs before their directory is removed.
     pub(crate) fn retire_directory(&self, path: &std::path::Path) -> Result<bool> {
-        let retired = {
+        {
             let mut sessions = match self.sessions.try_lock() {
                 Ok(sessions) => sessions,
                 Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
@@ -101,30 +100,28 @@ impl Registry {
                 .into_iter()
                 .map(|(key, _)| key.clone())
                 .collect::<Vec<_>>();
-            keys.into_iter()
-                .filter_map(|key| sessions.remove(&key))
-                .collect::<Vec<_>>()
-        };
-        drop(retired);
+            for key in keys {
+                drop(sessions.remove(&key));
+            }
+        }
         Ok(true)
     }
 
     /// End an interrupted CLI while keeping its recorded provider session for resumption.
     pub(crate) fn retire_role(&self, conversation: &str, role: &str) -> Result<()> {
-        let retired = self
-            .sessions
-            .lock()
-            .map_err(invalid)?
-            .remove(&(conversation.to_owned(), role.to_owned()));
-        if let Some(session) = retired {
+        let mut sessions = self.sessions.lock().map_err(invalid)?;
+        let key = (conversation.to_owned(), role.to_owned());
+        if let Some(session) = sessions.get(&key) {
             session.stop.store(true, Ordering::SeqCst);
+            session.terminal.lock().map_err(invalid)?.terminate()?;
+            sessions.remove(&key);
         }
         Ok(())
     }
 
     /// Completion releases only this conversation's idle CLIs, including attached terminals.
     pub(crate) fn retire_conversation(&self, conversation: &str) -> Result<bool> {
-        let retired = {
+        {
             let mut sessions = self.sessions.lock().map_err(invalid)?;
             if sessions.iter().any(|((owner, _), session)| {
                 owner == conversation
@@ -137,14 +134,12 @@ impl Registry {
                 .filter(|(owner, _)| owner == conversation)
                 .cloned()
                 .collect::<Vec<_>>();
-            keys.into_iter()
-                .filter_map(|key| sessions.remove(&key))
-                .collect::<Vec<_>>()
-        };
-        for session in &retired {
-            session.stop.store(true, Ordering::SeqCst);
+            for key in keys {
+                if let Some(session) = sessions.remove(&key) {
+                    session.stop.store(true, Ordering::SeqCst);
+                }
+            }
         }
-        drop(retired);
         Ok(true)
     }
 
@@ -183,8 +178,24 @@ impl Registry {
             .locks
             .turn(conversation, &format!("native-launch:{role}"));
         let _launch = launch_lock.lock().map_err(invalid)?;
+        let serial = core.config_snapshot().policy.single_agent;
+        let _serial = serial
+            .then(|| self.serial_launch.lock().map_err(invalid))
+            .transpose()?;
         let signature = session_signature(role, spec, scope);
         let key = (conversation.to_owned(), role.to_owned());
+        if serial {
+            let mut sessions = self.sessions.lock().map_err(invalid)?;
+            for (other, session) in sessions.iter().filter(|(other, _)| *other != &key) {
+                require(
+                    !session.executing.load(Ordering::SeqCst),
+                    &format!("single-agent execution: {} is still active", other.1),
+                )?;
+                session.stop.store(true, Ordering::SeqCst);
+                session.terminal.lock().map_err(invalid)?.terminate()?;
+            }
+            sessions.retain(|other, _| other == &key);
+        }
         let (existing, generation) = {
             let sessions = self.sessions.lock().map_err(invalid)?;
             (
@@ -210,8 +221,18 @@ impl Registry {
                 "Pi session already has context; resume its recorded JSONL explicitly",
             ));
         }
-        let retired = self.sessions.lock().map_err(invalid)?.remove(&key);
-        drop(retired);
+        {
+            let mut sessions = self.sessions.lock().map_err(invalid)?;
+            if serial && let Some(session) = sessions.get(&key) {
+                require(
+                    !session.executing.load(Ordering::SeqCst),
+                    "single-agent execution: this agent is still active",
+                )?;
+                session.stop.store(true, Ordering::SeqCst);
+                session.terminal.lock().map_err(invalid)?.terminate()?;
+            }
+            drop(sessions.remove(&key));
+        }
         require(
             !operation.cancel.load(Ordering::SeqCst),
             "native session launch cancelled",

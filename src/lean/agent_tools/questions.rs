@@ -70,6 +70,11 @@ impl Core {
             .store
             .ask_agent_question(conversation, turn, &key, &question)?;
         self.wake(conversation);
+        if self.config_snapshot().policy.single_agent {
+            return self
+                .store
+                .agent_question(conversation, &request, Some(turn));
+        }
         self.await_agent_answer(conversation, turn, &request)
     }
 

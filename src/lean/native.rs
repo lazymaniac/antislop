@@ -43,6 +43,7 @@ pub(crate) const APPROVAL_LINES: usize = 40;
 pub struct Registry {
     sessions: Mutex<HashMap<(String, String), Arc<Session>>>,
     generation: AtomicU64,
+    serial_launch: Mutex<()>,
 }
 
 pub struct Session {
