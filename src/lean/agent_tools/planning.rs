@@ -30,15 +30,9 @@ fn prerequisites(kind: WorkKind) -> &'static [WorkKind] {
 
 impl Core {
     fn planning_basis(&self, conversation: &str) -> Result<String> {
-        // Rejection wording and replan requests do not invalidate established facts.
-        // Scope identity is semantic: attaching an unchanged scope preserves reports.
-        // Changed repository evidence is handled by an explicit role refresh.
+        // Draft revisions can reword scope without changing confirmed requirements.
         let requirements = self.store.workflow(conversation)?.summary;
         let db = self.store.db();
-        let scope: Option<String> = db.query_row(
-            "SELECT s.summary FROM plan_scopes p JOIN scopes s ON s.id=p.scope_id WHERE p.plan_id=(SELECT plan_id FROM tasks WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1) ORDER BY p.revision DESC LIMIT 1",
-            [conversation], |row| row.get(0),
-        ).optional()?;
         let sources = db
             .prepare(
                 "SELECT hash FROM conversation_sources WHERE conversation_id=?1 ORDER BY hash",
@@ -47,7 +41,8 @@ impl Core {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(crate::hash(serde_json::to_vec(&(
             &requirements,
-            scope.as_deref().unwrap_or(&requirements),
+            // Preserve the key used before the first draft in existing conversations.
+            &requirements,
             sources,
         ))?))
     }
@@ -571,12 +566,15 @@ mod tests {
             core.require_planning_inputs(&conversation, &turn.id)
                 .is_err()
         );
-        prepared(&core, &conversation);
+        let refreshed = prepared(&core, &conversation);
         core.require_planning_inputs(&conversation, &turn.id)
             .unwrap();
         let changed = core
             .store
-            .create_scope(&conversation, "Expanded accepted scope")
+            .create_scope(
+                &conversation,
+                "Preserve unsent drafts during conversation switching",
+            )
             .unwrap();
         let next = core
             .store
@@ -585,10 +583,14 @@ mod tests {
         core.store
             .bind_plan_scope(&conversation, &next[0].plan_id, &changed.id)
             .unwrap();
-        assert!(
-            core.require_planning_inputs(&conversation, &turn.id)
-                .is_err()
-        );
+        core.require_planning_inputs(&conversation, &turn.id)
+            .unwrap();
+        let reports = core
+            .collect_serial_planning_reports(&conversation, 0, &AtomicBool::new(false))
+            .unwrap();
+        for request in refreshed {
+            assert!(reports.contains(request["reference"].as_str().unwrap()));
+        }
         core.store
             .db()
             .execute(
