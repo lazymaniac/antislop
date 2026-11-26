@@ -392,7 +392,7 @@ fn evidence_tools_are_nonterminal_and_completion_links_the_wire_record() {
     let spec: TaskContract = serde_json::from_value(tasks[0].spec.clone()).unwrap();
     let prompt = tasks::reviewer_prompt(".", &spec, &result.text(), None);
     assert!(prompt.contains("read_evidence"));
-    assert!(prompt.contains("not whether it was pasted inline"));
+    assert!(prompt.contains("retained command output"));
 }
 
 #[test]

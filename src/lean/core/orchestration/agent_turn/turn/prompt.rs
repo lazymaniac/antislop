@@ -42,10 +42,19 @@ pub(super) fn prepare_prompt(
         ),
     );
     context.section(prompts::ROLE_POLICY_LABEL, execution_policy(&state.role));
-    if core.config_snapshot().policy.single_agent {
+    if task_role(&state.role).is_some() && core.config_snapshot().policy.single_agent {
         context.section(prompts::EXECUTION_MODE_LABEL, prompts::SINGLE_AGENT_POLICY);
     }
-    if crate::lean::mcp::allowed_tools(&state.role).contains(&"prepare_validation") {
+    if crate::lean::mcp::allowed_tools(&state.role).contains(&"prepare_validation")
+        && !matches!(
+            state.role.as_str(),
+            ORCHESTRATOR | COMMENT_ORCHESTRATOR | PLANNER
+        )
+        && !state
+            .profile
+            .as_ref()
+            .is_ok_and(|profile| profile.work_kind == WorkKind::Options)
+    {
         context.section(prompts::VALIDATION_REUSE_LABEL, VALIDATION_REUSE);
         let history = core.store.validation_index(state.conversation, None)?;
         if !history.is_empty() {

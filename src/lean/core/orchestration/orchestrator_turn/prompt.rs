@@ -41,14 +41,6 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     );
     prompt.push_str(context.comment_context);
     append_decision(&mut prompt, context.decision);
-    if !context.session.introduce()
-        && context.answered != 0
-        && context.editable_graph
-        && !context.interviewing
-    {
-        prompt.push_str(tasks::PLAN_DECOMPOSITION);
-        prompt.push('\n');
-    }
     append_graph(
         &mut prompt,
         context.editable_graph && !context.interviewing,
@@ -57,8 +49,27 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     );
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
     append_audit_response(&mut prompt, context.audit_response);
-    prompt.push_str(context.scope_context.unwrap_or_default());
-    prompt.insert_str(0, prompts::ORCHESTRATOR_REVISION_RULES);
+    if !context.interviewing {
+        let scope = context.scope_context.unwrap_or(&context.workflow.summary);
+        prompt.push('\n');
+        prompt.push_str(&crate::lean::prompt_context::untrusted(
+            "Current scope and sources",
+            scope,
+        ));
+    }
+    if !context.interviewing {
+        prompt.insert_str(
+            0,
+            &format!(
+                "{}\n{}\n",
+                tasks::PLAN_DECOMPOSITION,
+                prompts::ORCHESTRATOR_REVISION_RULES
+            ),
+        );
+        if context.workflow.phase == "implementation" {
+            prompt.insert_str(0, &format!("{}\n", prompts::COORDINATION_GUIDANCE));
+        }
+    }
     prompt
 }
 
@@ -143,7 +154,11 @@ fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: &Workflow) {
         &format!(
             prompts::template!(SESSION_PHASE),
             workflow.phase,
-            prompts::CURRENT_REQUIREMENTS_GUIDANCE
+            if workflow.planning() {
+                prompts::ORCHESTRATOR_PLANNING_PHASE
+            } else {
+                prompts::CURRENT_REQUIREMENTS_GUIDANCE
+            }
         ),
     );
 }
@@ -197,19 +212,24 @@ mod tests {
             assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
             assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
             assert!(prompt.contains("CURRENT CONTRACTS"));
-            assert!(prompt.contains(
-                "do not invalidate approved results merely to make historical tasks smaller"
-            ));
+            assert!(
+                prompt.contains(
+                    "Preserve criteria, selected rigor, approved results and checkpoints"
+                )
+            );
+            for tool in ["retry_task", "resume_task", "revise_plan"] {
+                assert!(prompt.contains(tool));
+            }
             assert!(prompt.contains("use replacements to inherit its checkpoint"));
         }
     }
 
     #[test]
-    fn implementation_phase_requires_orchestrator_to_handle_audit_before_advancing() {
+    fn interview_asks_for_confirmation_without_execution_or_audit_rules() {
         let mut prompt = String::new();
         prepend_phase(
             &mut prompt,
-            false,
+            true,
             &Workflow {
                 phase: "implementation".into(),
                 summary: "deliver the request".into(),
@@ -217,15 +237,13 @@ mod tests {
             },
         );
 
-        assert!(
-            prompt
-                .contains("final independent auditor report is addressed to you, the orchestrator")
-        );
-        assert!(prompt.contains("explicitly answer them"));
-        assert!(prompt.contains(
-            "do not advance the workflow or claim completion until you have recorded this response"
-        ));
-        assert!(prompt.contains("planner drafts plans and corrects plan reviewer findings"));
+        assert!(prompt.contains("highest-impact unresolved scenario"));
+        assert!(prompt.contains("one concrete question at a time with ask_user"));
+        assert!(prompt.contains("submit_requirements"));
+        assert!(prompt.contains("explicitly confirms that scope"));
+        for tool in ["retry_task", "resume_task", "revise_plan", "read_audit"] {
+            assert!(!prompt.contains(tool));
+        }
     }
 
     #[test]

@@ -29,9 +29,9 @@ fn options_inherit_writer_context_and_precede_it() {
     assert_eq!(options.depends_on, writer.depends_on);
     assert_eq!(options.acceptance_criteria, writer.acceptance_criteria);
     assert_eq!(full[2].depends_on, ["context", "writer-options"]);
-    assert!(options.goal.contains("If only one is feasible"));
-    assert!(options.goal.contains("End with select"));
-    assert!(options.goal.contains("Do not implement"));
+    assert!(options.goal.contains("explain if only one is feasible"));
+    assert!(options.goal.contains("Submit select"));
+    assert!(options.goal.contains("Work read-only"));
 }
 
 #[test]
@@ -196,13 +196,6 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
     let reviewer = reviewer_prompt("project", &tasks[1], "report", None);
     assert!(reviewer.contains("Independently compare the implementation"));
     assert!(reviewer.contains("the worker's declaration is not proof"));
-    assert!(
-        orchestrator_instructions()
-            .contains("Small-change, feature and refactoring always use them")
-    );
-    for text in [planner_instructions(), orchestrator_instructions()] {
-        assert!(text.contains("other teams do not"), "{text}");
-    }
     let plan = with_options(with_required_agents(vec![options_test_task(
         "writer", true,
     )]));
@@ -358,11 +351,7 @@ fn options_keep_writer_instructions_in_reference_data_only() {
     let options = &tasks[0];
     assert!(!options.goal.contains(&writer.goal));
     assert!(!options.goal.contains("Edit src/store.rs"));
-    assert!(
-        options
-            .goal
-            .contains("Do not execute builds, tests, linters")
-    );
+    assert!(options.goal.contains("without running validation commands"));
     assert!(options.goal.contains("read_task_contract"));
     assert!(
         options
@@ -375,42 +364,19 @@ fn options_keep_writer_instructions_in_reference_data_only() {
         reviewer_prompt(".", options, "selection", None),
     ] {
         assert!(prompt.contains("read_task_contract"));
-        assert!(prompt.contains("not this read-only options task"));
+        assert!(prompt.contains("describe the writer’s work"));
         assert!(!prompt.contains("\nRun cargo test"));
     }
-}
-
-#[test]
-fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
-    let planner = planner_instructions();
-    let orchestrator = orchestrator_instructions();
-    for text in [&planner, &orchestrator] {
-        assert!(text.contains("submit_plan"));
-        assert!(!text.contains("```plan") && !text.contains("task_risks"));
-        assert!(text.contains("Small-change, feature and refactoring always use them"));
-        assert!(!text.contains("{KIND_NAMES}") && !text.contains("{AGENT_POOL}"));
-    }
-    for orchestrator_only in [
-        "answer_agent",
-        "revise_plan",
-        "request_replan",
-        "**Interview**",
-    ] {
-        assert!(orchestrator.contains(orchestrator_only));
-        assert!(!planner.contains(orchestrator_only), "{orchestrator_only}");
-    }
-    assert!(planner.contains("You are the planner"));
-    assert!(orchestrator.contains("a dedicated planner drafts the plan"));
 }
 
 #[test]
 fn worker_completion_distinguishes_success_interruptions_and_external_prerequisites() {
     let tasks = with_options(vec![options_test_task("writer", true)]);
     let worker = worker_prompt("project", &tasks[1]);
-    assert!(worker.contains("Complete the whole assigned goal before reporting success"));
-    assert!(worker.contains("Preserve checkpoints"));
-    assert!(worker.contains("report its reproduction to the orchestrator"));
-    assert!(worker.contains("unblocked_work_remaining"));
+    assert!(worker.contains("Complete the assigned goal"));
+    assert!(worker.contains("Preserve progress"));
+    assert!(worker.contains("report_blocker"));
+    assert!(worker.contains("resume condition"));
     assert!(!worker.contains("costs a round") && !worker.contains("no short limit"));
 }
 

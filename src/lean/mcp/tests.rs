@@ -566,7 +566,7 @@ fn the_planner_chooses_a_team_with_submit_plan() {
     assert_eq!(team["enum"].as_array().unwrap().len(), crate::lean::tasks::Team::ALL.len());
     assert!(team["description"].as_str().unwrap().contains("small-change"));
     assert!(submit["inputSchema"]["properties"]["team_reason"].is_object());
-    assert!(crate::lean::tasks::planner_instructions().contains("`security-fix`"));
+    assert!(team["enum"].as_array().unwrap().contains(&json!("security-fix")));
 }
 
 #[test]

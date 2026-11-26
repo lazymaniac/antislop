@@ -222,9 +222,7 @@ fn a_reviewer_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     assert!(prompt.contains("List in resolved"));
     assert!(prompt.contains("When it fixed part of one, list that id too"));
     assert!(prompt.contains("new finding for only what remains"));
-    assert!(prompt.contains(
-        "list every violation, each with its location and size, in one finding; never give examples"
-    ));
+    assert!(prompt.contains("List all measured violations of an assigned bound"));
     let first = reviewer_turn_prompt("/p", &task, "report", None, true, "", &[]);
     assert!(!first.contains("List in resolved"));
 }
@@ -290,7 +288,7 @@ fn on_demand_review_keeps_task_local_criteria_and_preserves_the_reviewed_source(
         "C4: After a provider error the draft text and usable attachments remain recoverable"
     ));
     assert!(prompt.contains(READ_ONLY_REVIEW));
-    assert!(prompt.contains("when success is acknowledged"));
+    assert!(prompt.contains("Trace real call paths to observable success"));
 }
 
 #[test]

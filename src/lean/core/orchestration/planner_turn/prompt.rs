@@ -16,28 +16,23 @@ pub(super) struct PlannerPrompt<'a> {
     pub(super) scope_context: Option<&'a str>,
 }
 
-/// The requirements always lead, so a resumed session drafts from the current
-/// ones; the role and plan format are told once, while task-boundary guidance
-/// also reaches sessions resumed from an older prompt.
+/// Resumed turns use the same planning rules and the current confirmed scope.
 pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     let mut prompt = String::new();
     if context.first {
         prompt.push_str(&format!(
             prompts::template!(PLANNER_INTRODUCTION),
-            tasks::planner_instructions(),
             context.project.display()
         ));
-    } else {
-        prompt.push_str(tasks::PLAN_DECOMPOSITION);
-        prompt.push('\n');
     }
+    prompt.push_str(&tasks::planner_instructions());
+    let confirmed_scope = match context.scope_context {
+        Some(_) => prompts::PLANNER_CURRENT_SCOPE_GUIDANCE.into(),
+        None => crate::lean::prompt_context::untrusted("Confirmed scope", context.requirements),
+    };
     prompt.push_str(&format!(
         prompts::template!(PLANNER_SESSION_PHASE),
-        if context.scope_context.is_some() {
-            prompts::PLANNER_CURRENT_SCOPE_GUIDANCE
-        } else {
-            context.requirements
-        }
+        confirmed_scope,
     ));
     prompt.push_str(prompts::PLANNER_PREPARATION_RULES);
     prompt.push_str(&format_messages(context.asked));
@@ -48,6 +43,11 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         } else if guidance.team == tasks::Team::NoQualityGates {
             prompt.push_str(tasks::NO_QUALITY_GATES_PLANNING_RULES);
         }
+    }
+    if context.team_guidance.is_none() {
+        prompt.push_str(
+            &prompts::TEAM_NOTE.replace(prompts::TEAMS_PLACEHOLDER, &tasks::team_catalog()),
+        );
     }
     let team = context
         .team_guidance
@@ -80,7 +80,14 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     if let Some(keepable) = context.keepable {
         prompt.push_str(keepable);
     }
-    prompt.push_str(context.scope_context.unwrap_or_default());
+    if let Some(scope) = context.scope_context {
+        prompt.push('\n');
+        prompt.push_str("Read any original source documents named in the scope.\n");
+        prompt.push_str(&crate::lean::prompt_context::untrusted(
+            "Current scope and sources",
+            scope,
+        ));
+    }
     prompt.push_str(prompts::PLANNER_CAPABILITY_RULES);
     prompt
 }
@@ -147,13 +154,16 @@ mod tests {
                     assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
                     assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
                     assert!(prompt.contains(requirements));
+                    assert!(prompt.contains("first affected task"));
+                    assert!(prompt.contains("exact verification command"));
+                    assert!(prompt.contains("submit_plan"));
                     assert!(prompt.contains(
                         "Approved storage work and retained checkpoints remain available."
                     ));
                     assert!(prompt.contains(&format!("team: {}", team.name())));
-                    assert!(prompt.contains("small-change is not a one-task instruction"));
+                    assert!(prompt.contains("Keep a cohesive small change together"));
                     assert!(prompt.contains(
-                        "Runtime-generated options and gates do not count as decomposition"
+                        "runtime-generated options and gates do not count as decomposition"
                     ));
                     if let Some(previous) = replaced {
                         assert!(prompt.contains(previous));

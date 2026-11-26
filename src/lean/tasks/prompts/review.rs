@@ -8,6 +8,15 @@ pub fn reviewer_prompt(
     changes: Option<&str>,
 ) -> String {
     let report = crate::lean::prompt_context::untrusted(prompts::WORKER_REPORT_LABEL, report);
+    render_reviewer_prompt(project, task, &report, changes)
+}
+
+fn render_reviewer_prompt(
+    project: &str,
+    task: &TaskContract,
+    report: &str,
+    changes: Option<&str>,
+) -> String {
     let task_context = reviewer_task_context(task);
     let blocker = prompts::REVIEWER_BLOCKER_GUIDANCE;
     let obligations = obligations_text(&obligations(task));
@@ -19,7 +28,6 @@ pub fn reviewer_prompt(
         change_note(changes),
         project = project,
         REVIEW_RULES = REVIEW_RULES,
-        PROJECT_RULES = PROJECT_RULES,
         task_context = task_context,
         binding = binding,
         code_review_rules = code_review_rules,
@@ -129,6 +137,10 @@ fn format_earlier_finding(finding: &Value) -> String {
 pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
     let report =
         crate::lean::prompt_context::untrusted(prompts::UPDATED_WORKER_REPORT_LABEL, report);
+    render_reviewer_followup(task, &report, changes)
+}
+
+fn render_reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
     let blocker = prompts::REVIEWER_BLOCKER_GUIDANCE;
     let binding = reviewer_binding(task);
     let code_review_rules = code_review_rules(task);
@@ -140,11 +152,9 @@ pub fn reviewer_followup(task: &TaskContract, report: &str, changes: Option<&str
         obligations_text(&obligations(task)),
         risks_note(task),
         report = report,
-        READ_ONLY_REVIEW = READ_ONLY_REVIEW,
         binding = binding,
         code_review_rules = code_review_rules,
         REVIEW_RULES = REVIEW_RULES,
-        PROJECT_RULES = PROJECT_RULES,
         COVERAGE_FORMAT = COVERAGE_FORMAT,
         blocker = blocker
     )

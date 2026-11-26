@@ -342,28 +342,34 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
 }
 
 fn options_goal(task: &TaskContract) -> String {
-    let subject = &task.id;
+    options_objective(&task.id)
+}
+
+fn options_objective(subject: &str) -> String {
     format!(prompts::template!(OPTIONS_GOAL), subject = subject)
 }
 
 /// Presentation-only compatibility with generated options goals stored before
 /// contracts moved behind MCP. Authored goals and all semantic fields stay exact.
 pub(crate) fn normalize_options_presentation(task: &mut TaskContract) {
-    const MARKER: &str = prompts::OPTIONS_OBJECTIVE_MARKER;
-    if let Some(owner) = &task.options_for
-        && let Some((prefix, json)) = task.goal.split_once(MARKER)
-        && serde_json::from_str::<serde_json::Value>(json)
-            .is_ok_and(|data| data["task"] == *owner && data["owner_contract"]["id"] == *owner)
-    {
-        let mut source = task.clone();
-        source.id = owner.clone();
-        let goal = options_goal(&source);
-        if goal
-            .split_once(prompts::OPTIONS_CONTRACT_HEADING)
-            .is_some_and(|(expected, _)| expected == prefix)
-        {
-            task.goal = goal;
-        }
+    let Some(subject) = &task.options_for else {
+        return;
+    };
+    let legacy = format!(prompts::template!(LEGACY_OPTIONS_GOAL), subject = subject);
+    let current = options_objective(subject);
+    let legacy_embedded = task
+        .goal
+        .split_once(prompts::OPTIONS_OBJECTIVE_MARKER)
+        .is_some_and(|(prefix, json)| {
+            [&legacy, &current].iter().any(|goal| {
+                goal.split_once(prompts::OPTIONS_CONTRACT_HEADING)
+                    .is_some_and(|(expected, _)| expected == prefix)
+            }) && serde_json::from_str::<Value>(json).is_ok_and(|data| {
+                data["task"] == *subject && data["owner_contract"]["id"] == *subject
+            })
+        });
+    if task.goal == legacy || legacy_embedded {
+        task.goal = current;
     }
 }
 

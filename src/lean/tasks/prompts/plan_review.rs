@@ -37,9 +37,7 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
 
 fn append_plan_review_rules(prompt: &mut String, plan: &[TaskContract]) {
     prompt.push_str("\n\n");
-    prompt.push_str(super::instructions::PLAN_DECOMPOSITION);
     prompt.push_str(prompts::PREPARATION_REVIEW_RULES);
-    prompt.push_str(prompts::DECOMPOSITION_REVIEW_RULES);
     if plan
         .iter()
         .any(crate::lean::tasks::is_report_only_review_task)

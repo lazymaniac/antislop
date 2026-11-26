@@ -15,7 +15,7 @@ struct Consultation<'a> {
     role: &'a str,
     kind: WorkKind,
     upto_message: u64,
-    question: &'a str,
+    question: Option<&'a str>,
     inputs: &'a [Value],
 }
 
@@ -124,7 +124,6 @@ impl Core {
                 "",
                 &json!({
                     "kind": kind,
-                    "question": "Identify findings and concrete planning implications for the confirmed scope.",
                     "refresh": true
                 }),
                 Some((upto, cancel)),
@@ -175,7 +174,11 @@ impl Core {
             planning_kinds().any(|candidate| candidate == kind),
             "kind: expected research, analysis, dependencies, architecture or test_design",
         )?;
-        let question = required_text(args, "question")?;
+        let question = if serial.is_some() {
+            None
+        } else {
+            Some(required_text(args, "question")?)
+        };
         let basis = self.planning_basis(conversation)?;
         let lock = self.locks.turn(
             conversation,
@@ -235,7 +238,7 @@ impl Core {
                     role: &specialist,
                     kind,
                     upto_message,
-                    question: &question,
+                    question: question.as_deref(),
                     inputs: &inputs,
                 },
                 cancel,
@@ -281,7 +284,7 @@ impl Core {
                         role: &specialist,
                         kind,
                         upto_message,
-                        question: &question,
+                        question: question.as_deref(),
                         inputs: &inputs,
                     },
                     &operation.cancel,
@@ -370,7 +373,10 @@ impl Core {
                     &requirements
                 ),
                 scope,
-                crate::lean::prompt_context::untrusted(prompts::PLANNER_QUESTION_LABEL, question),
+                crate::lean::prompt_context::untrusted(
+                    prompts::PLANNER_QUESTION_LABEL,
+                    question.unwrap_or_default()
+                ),
                 prerequisite_reports,
             )
         })?;

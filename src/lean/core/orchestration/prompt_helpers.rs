@@ -87,8 +87,8 @@ pub(in crate::lean) fn orchestrator_prompt(
 fn initial_orchestrator_prompt(project: &Path) -> String {
     format!(
         prompts::template!(INITIAL_ORCHESTRATOR_PROMPT),
-        project.display(),
-        tasks::orchestrator_instructions()
+        tasks::orchestrator_instructions(),
+        project.display()
     )
 }
 

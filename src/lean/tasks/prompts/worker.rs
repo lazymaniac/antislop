@@ -102,17 +102,12 @@ fn worker_prompt_opening(
         project = project,
         continuation = continuation,
         checks = checks,
-        binding = binding,
-        PROJECT_RULES = PROJECT_RULES
+        binding = binding
     )
 }
 
-fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
-    format!(
-        prompts::template!(WORKER_PROMPT_CLOSING),
-        blocker = blocker,
-        team_note = team_note
-    )
+fn worker_prompt_closing(blocker: &str) -> String {
+    format!(prompts::template!(WORKER_PROMPT_CLOSING), blocker = blocker)
 }
 
 /// What the independent reviewer will check, so the worker meets it up front.
@@ -131,8 +126,10 @@ fn worker_checks(task: &TaskContract) -> String {
 fn worker_change_rules(task: &TaskContract) -> &'static str {
     if is_report_only_review_task(task) {
         prompts::READ_ONLY_CODE_REVIEW_WORKER_RULES
-    } else if task.change_kind.has_delivery() {
+    } else if task.changes_code() {
         prompts::WRITER_CHANGE_RULES
+    } else if task.change_kind() == ChangeKind::Artifact {
+        ""
     } else if task.kind == WorkKind::Options {
         prompts::OPTIONS_WORKER_RULES
     } else if task.kind == WorkKind::Context {
@@ -153,7 +150,7 @@ pub fn worker_turn_prompt(
     let mut presented = task.clone();
     normalize_options_presentation(&mut presented);
     let task = &presented;
-    let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
+    let (change_rules, blocker, binding, checks) = worker_prompt_parts(task);
     let prompt = worker_prompt_opening(
         project,
         task,
@@ -175,12 +172,18 @@ pub fn worker_turn_prompt(
     } else {
         prompts::REPORT_COMMIT_MESSAGE_RULES
     };
+    let delivery = if task.kind == WorkKind::Delivery {
+        prompts::DELIVERY_WORKER_RULES
+    } else {
+        ""
+    };
     prompt
+        + delivery
         + &artifact
         + upstream
         + "\n\n"
         + commit_instruction
-        + &worker_prompt_closing(blocker, team_note)
+        + &worker_prompt_closing(blocker)
 }
 
 /// The reason for resuming a task, alongside its explicit round handoff.
@@ -239,16 +242,7 @@ pub fn changes_text(base: &str, result: &str, stat: &str) -> String {
     )
 }
 
-fn worker_prompt_parts(
-    task: &TaskContract,
-) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    String,
-) {
-    let team = prompts::WORKER_COMMUNICATION_RULES;
+fn worker_prompt_parts(task: &TaskContract) -> (&'static str, &'static str, &'static str, String) {
     let blocker = prompts::WORKER_BLOCKER_RULES;
     let binding = if task.changes_code() && has_options_prerequisite(task) {
         OPTIONS_BINDING
@@ -256,7 +250,6 @@ fn worker_prompt_parts(
         ""
     };
     (
-        team,
         worker_change_rules(task),
         blocker,
         binding,

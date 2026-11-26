@@ -51,8 +51,8 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
     // Review independence does not restrict CLI access.
     assert!(!prompt.contains(FILESYSTEM_GUIDANCE));
     assert!(!prompt.contains("never by execution or edits"));
-    assert!(prompt.contains(PLAN_DECOMPOSITION));
-    assert!(prompt.contains("A single task is valid for an inseparable, cohesive change"));
+    assert!(prompt.contains("coverage of the confirmed scope"));
+    assert!(prompt.contains("distinct outcomes need independently checkable owners"));
 }
 
 #[test]
@@ -71,8 +71,8 @@ fn plan_review_options_guidance_excludes_quality_gates() {
         plan_review_followup("", &plan),
     ] {
         assert!(prompt.contains("eligible non-gate code-changing tasks"));
-        assert!(prompt.contains("Judge the planner-authored tasks, excluding generated options, quality gates and final integration nodes"));
-        assert!(prompt.contains("Reject an umbrella implementation task"));
+        assert!(prompt.contains("added_by_runtime: true"));
+        assert!(prompt.contains("Verify the resulting dependency order"));
         assert!(prompt.contains("quality gates do not receive options"));
         assert!(prompt.contains("do not require selected_approach"));
         assert!(!prompt.contains("generates options for code-changing tasks"));
@@ -120,30 +120,15 @@ fn no_quality_gates_plan_checks_preserve_rigor_through_initial_and_revision_revi
             false,
         ),
     ] {
-        assert!(prompt.contains("For `no-quality-gates`, the absence of quality tasks, options and a final quality audit is intentional"));
-        assert!(prompt.contains("never reject the plan for their absence"));
-        assert!(prompt.contains(
-            "ordinary per-task acceptance, independent task review, dependency ordering"
-        ));
         assert!(
-            prompt.contains(
-                "only for change_kind=code under a rigor team that permits quality gates"
-            )
+            prompt
+                .contains("no-quality-gates final integration node depends on all code producers")
         );
-        assert!(!prompt.contains("only change_kind=code requires quality"));
+        assert!(prompt.contains("it does not run quality checks"));
         assert!(prompt.contains("integration_batch: true"));
-        assert!(prompt.contains(PLAN_DECOMPOSITION));
         assert!(
-            prompt.contains("Name the concrete boundaries and missing producer/consumer edges")
+            prompt.contains("preserve approved work") || prompt.contains("Preserve approved work")
         );
-        assert!(prompt.contains("granularity alone is not grounds to redo completed work"));
-    }
-    {
-        let prompt = planner_instructions();
-        assert!(prompt.contains("For `no-quality-gates`, plan the requested work with ordinary task acceptance and dependencies"));
-        assert!(prompt.contains("do not add quality gates, options, a separate integration task or a final quality audit"));
-        assert!(prompt.contains("For other code-changing rigor teams, include key quality agents"));
-        assert!(!prompt.contains("Always include key quality agents"));
     }
 }
 
@@ -159,7 +144,7 @@ fn selected_code_review_plan_review_reinforces_scope_and_no_write_graph() {
         plan_review_followup("", std::slice::from_ref(&task)),
     ] {
         assert!(prompt.contains("CODE-REVIEW PLAN SAFEGUARDS"));
-        assert!(prompt.contains(PLAN_DECOMPOSITION));
+        assert!(prompt.contains("coverage of the confirmed scope"));
         assert!(prompt.contains("same scope"));
         assert!(prompt.contains("Reject implementation, refactoring, options"));
         assert!(prompt.contains("A review with no findings is valid"));
@@ -212,8 +197,8 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
         "reason",
         false,
     );
-    assert!(resumed.contains("approved, whose work is done and kept: a."));
-    assert!(resumed.contains("are reassessed first") && resumed.ends_with(": b."));
+    assert!(resumed.contains("Approved tasks kept: a."));
+    assert!(resumed.contains("Approved tasks being reassessed") && resumed.ends_with(": b."));
     assert!(!resumed.contains("You review a plan"));
     assert!(resumed.contains("Reason: reason"));
 }
@@ -297,19 +282,16 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
             initial,
         );
         assert!(!prompt.contains("dedicated options for every writer"));
+        assert!(prompt.contains("eligible non-gate code-changing tasks"));
         assert!(
-            prompt.contains("Only eligible non-gate change_kind=code tasks receive code options")
+            prompt.contains(
+                "quality gates do not receive options and do not require selected_approach"
+            )
         );
-        assert!(
-            prompt.contains("quality gates do not receive options or require selected_approach")
-        );
-        assert!(prompt.contains("not authored in a revision"));
-        assert!(
-            prompt.contains("Never demand manual options or code gates for none/artifact tasks")
-        );
-        assert!(prompt.contains("separate path grant"));
+        assert!(prompt.contains("planner cannot author, edit or remove them"));
         assert!(prompt.contains("ASDF_RUST_VERSION"));
-        assert!(prompt.contains("Writers stay within their worktrees"));
+        assert!(prompt.contains("outputs:"));
+        assert!(prompt.contains("results/validation.json"));
     }
     assert!(
         crate::lean::feasibility::check(std::slice::from_ref(&report))
@@ -317,9 +299,7 @@ fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
             .all(|finding| finding.rule != "writer-scope-outside-project")
     );
     assert!(!worker_prompt("/project", &report).contains(FILESYSTEM_GUIDANCE));
-    for prompt in [planner_instructions(), orchestrator_instructions()] {
-        assert!(!prompt.contains(FILESYSTEM_GUIDANCE));
-    }
+    assert!(!planner_instructions().contains(FILESYSTEM_GUIDANCE));
 }
 
 #[test]

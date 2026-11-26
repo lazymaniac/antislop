@@ -28,11 +28,9 @@ fn explicit_ignored_reports_are_valid_without_code_gates() {
         assert_eq!(tasks[0].outputs, [output]);
         let worker = worker_turn_prompt("project", &tasks[0], None, "");
         let reviewer = reviewer_prompt("project", &tasks[0], "Report", None);
-        assert!(
-            worker.contains("Explicit artifact outputs declared in your contract are retained")
-        );
+        assert!(worker.contains("Declared artifact outputs reach the reviewer"));
         assert!(reviewer.contains(output));
-        assert!(reviewer.contains("inspect those documents"));
+        assert!(reviewer.contains("Inspect declared artifact outputs directly"));
     }
 }
 

@@ -620,13 +620,13 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
         "{}",
         calls[0]
     );
-    assert!(calls[0].contains("Nothing from it is pasted here"));
+    assert!(calls[0].contains("You are the orchestrator of a team of coding agents"));
     assert!(
         calls[1].contains("resume"),
         "follow-up resumes: {}",
         calls[1]
     );
-    assert!(!calls[1].contains("Nothing from it is pasted here"));
+    assert!(!calls[1].contains("You are the orchestrator of a team of coding agents"));
     assert!(
         !calls[1].contains("analyze"),
         "answered text is not re-sent"
@@ -656,9 +656,9 @@ fn a_session_resumed_after_a_restart_is_told_its_role_again() {
     let calls: Vec<_> = calls.split("\n---\n").filter(|c| !c.is_empty()).collect();
     assert_eq!(calls.len(), 3);
     assert!(calls[1].contains("resume"), "{}", calls[1]);
-    assert!(calls[1].contains("Nothing from it is pasted here"));
+    assert!(calls[1].contains("You are the orchestrator of a team of coding agents"));
     assert!(calls[2].contains("resume"), "{}", calls[2]);
-    assert!(!calls[2].contains("Nothing from it is pasted here"));
+    assert!(!calls[2].contains("You are the orchestrator of a team of coding agents"));
 }
 
 #[test]
