@@ -325,10 +325,23 @@ impl Core {
             add_dirs: vec![],
             upto_message,
         };
+        let report_requirements = match kind {
+            WorkKind::Research => prompts::PLANNING_RESEARCH_REPORT,
+            WorkKind::Analysis => prompts::PLANNING_ANALYSIS_REPORT,
+            WorkKind::Dependencies => prompts::PLANNING_DEPENDENCIES_REPORT,
+            WorkKind::Architecture => prompts::PLANNING_ARCHITECTURE_REPORT,
+            WorkKind::TestDesign => prompts::PLANNING_TEST_DESIGN_REPORT,
+            _ => {
+                return Err(Error::Invalid(
+                    "unsupported planning consultation kind".into(),
+                ));
+            }
+        };
         let answer = self.turn(setup, cancel, |_| {
             format!(
                 prompts::template!(RUN_PLANNING_CONSULTATION),
                 tasks::work_kind_name(kind),
+                report_requirements,
                 crate::lean::prompt_context::untrusted(
                     prompts::CONFIRMED_REQUIREMENTS_LABEL,
                     &requirements
