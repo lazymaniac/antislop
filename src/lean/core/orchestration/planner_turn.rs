@@ -107,7 +107,14 @@ impl Core {
             .map(|task| task.plan_id.clone());
         self.turn(setup, cancel, |session| {
             let mut prompt = planner_prompt(context, session.introduce());
-            prompt.push_str(&reports);
+            if !reports.is_empty() {
+                prompt.push_str(if context.replaced.is_some() {
+                    crate::lean::prompts::PLANNER_REREAD_REPORTS
+                } else {
+                    crate::lean::prompts::PLANNER_READ_REPORTS
+                });
+                prompt.push_str(&reports);
+            }
             prompt
         })
     }

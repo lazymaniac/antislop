@@ -128,36 +128,19 @@ impl Core {
                 }),
                 Some((upto, cancel)),
             )?;
-            let reference = required_text(&result, "reference")?;
-            let mut page = result;
-            let mut report = String::new();
-            loop {
-                require(
-                    page["state"] == "done",
-                    &format!(
-                        "{} consultation is {}: {}",
-                        tasks::work_kind_name(kind),
-                        page["state"],
-                        page["error"].as_str().unwrap_or("no report was produced")
-                    ),
-                )?;
-                report.push_str(page["report"].as_str().ok_or_else(|| {
-                    Error::Invalid("completed planning consultation has no report text".into())
-                })?);
-                let Some(cursor) = page["cursor"].as_str() else {
-                    break;
-                };
-                page = self.read_planning_result(
-                    conversation,
-                    PLANNER,
-                    "",
-                    &json!({"reference":reference,"cursor":cursor}),
-                )?;
-            }
-            reports.push(json!({"kind":kind,"reference":reference,"report":report}));
+            require(
+                result["state"] == "done",
+                &format!(
+                    "{} consultation is {}: {}",
+                    tasks::work_kind_name(kind),
+                    result["state"],
+                    result["error"].as_str().unwrap_or("no report was produced")
+                ),
+            )?;
+            reports.push(json!({"kind":kind,"reference":required_text(&result, "reference")?}));
         }
         Ok(crate::lean::prompt_context::untrusted(
-            "Completed planning reports collected by the runtime",
+            prompts::PLANNING_REPORT_INDEX_LABEL,
             &crate::lean::prompt_context::markdown(&reports),
         ))
     }
@@ -468,6 +451,15 @@ impl Core {
 
 #[cfg(test)]
 pub(super) fn prepared(core: &Core, conversation: &str) -> Vec<Value> {
+    prepared_with_report(
+        core,
+        conversation,
+        "Established facts and concrete verification scenarios",
+    )
+}
+
+#[cfg(test)]
+fn prepared_with_report(core: &Core, conversation: &str, report: &str) -> Vec<Value> {
     let basis = core.planning_basis(conversation).unwrap();
     let mut requests: Vec<Value> = Vec::new();
     for kind in planning_kinds() {
@@ -496,7 +488,7 @@ pub(super) fn prepared(core: &Core, conversation: &str) -> Vec<Value> {
                 Some(&turn.id),
                 None,
                 "agent_final",
-                &json!({"text":"Established facts and concrete verification scenarios"}),
+                &json!({"text":report}),
             )
             .unwrap();
         core.store
@@ -512,23 +504,79 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serial_planning_delivers_retained_reports_without_starting_a_planner() {
+    fn serial_planning_indexes_five_large_reports_and_reuses_them_for_corrections() {
         let (_dir, core, conversation) = super::super::tests::core();
-        let requests = prepared(&core, &conversation);
-        let reports = core
-            .collect_serial_planning_reports(&conversation, 0, &AtomicBool::new(false))
-            .unwrap();
-
-        for request in requests {
-            assert!(reports.contains(request["reference"].as_str().unwrap()));
-        }
-        assert_eq!(reports.matches("Established facts").count(), 5);
+        let body = "Established fact e\u{301} 👩‍💻 and verification scenario.\n".repeat(700);
+        let requests = prepared_with_report(&core, &conversation, &body);
+        let collect = || {
+            core.collect_serial_planning_reports(&conversation, 0, &AtomicBool::new(false))
+                .unwrap()
+        };
+        let index = collect();
+        let old_reports: Vec<_> = requests
+            .iter()
+            .map(|request| {
+                json!({
+                    "kind":request["kind"], "reference":request["reference"], "report":body,
+                })
+            })
+            .collect();
+        let previous = crate::lean::prompt_context::untrusted(
+            "Completed planning reports collected by the runtime",
+            &crate::lean::prompt_context::markdown(&old_reports),
+        );
+        assert!(index.len() < 1024);
+        assert!(previous.len() > 100_000);
+        assert!(!index.contains("Established fact"));
         assert!(
             core.store
                 .last_turn(&conversation, PLANNER)
                 .unwrap()
                 .is_none()
         );
+        for scenario in ["draft", "correction"] {
+            assert_eq!(collect(), index);
+            let turn = core
+                .store
+                .start_turn(&conversation, PLANNER, "fixture", 0, None)
+                .unwrap();
+            let mut response_bytes = 0;
+            for request in &requests {
+                let reference = &request["reference"];
+                assert!(index.contains(reference.as_str().unwrap()));
+                let mut actual = String::new();
+                let mut cursor = Value::Null;
+                loop {
+                    let page = core
+                        .agent_tool(
+                            &conversation,
+                            PLANNER,
+                            &turn.id,
+                            "read_planning_result",
+                            &json!({
+                                "reference":reference, "cursor":cursor,
+                            }),
+                        )
+                        .unwrap();
+                    response_bytes += page.to_string().len();
+                    assert_eq!(&page["reference"], reference);
+                    actual.push_str(page["report"].as_str().unwrap());
+                    if page["complete"] == true {
+                        break;
+                    }
+                    cursor = page["cursor"].clone();
+                }
+                assert_eq!(actual, body);
+            }
+            core.store
+                .finish_turn(&turn.id, TurnStatus::Done, None)
+                .unwrap();
+            eprintln!(
+                "{scenario}: inline report index before={} after={} MCP response bytes={response_bytes}",
+                previous.len(),
+                index.len()
+            );
+        }
     }
 
     #[test]
