@@ -6,7 +6,7 @@ local_commits = true
 single_agent = true
 
 [providers.pi]
-command = ["unsloth", "start", "pi", "--model", "unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL", "--context-length", "200000"]
+command = ["omlx", "launch", "pi", "--model", "Qwen3.8-Flash-Next-oQ4-mtp"]
 
 [profiles.pi]
 provider = "pi"
