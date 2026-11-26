@@ -16,6 +16,7 @@ export default function antislop(pi) {
     let request;
     let settledNonce;
     let generation = 0;
+    let publishedIdle;
     function inspect(_event, ctx) {
         context = ctx;
         try {
@@ -38,6 +39,7 @@ export default function antislop(pi) {
             if (expected.effort && expected.effort !== effort && !thinkingDisabled)
                 throw new Error(`Pi thinking mismatch: requested ${expected.effort}, actual ${effort}`);
             const idle = ctx.isIdle() && !ctx.hasPendingMessages();
+            publishedIdle = idle;
             const acknowledged = request && generation > request.after_generation && idle;
             // Keep the acknowledgement readable, but consume its abort before any later agent_start.
             if (acknowledged) settledNonce = request.nonce;
@@ -59,7 +61,13 @@ export default function antislop(pi) {
             try {
                 let next;
                 try { next = JSON.parse(readFileSync(path.replace(/status\.json$/, 'control.json'), 'utf8')); }
-                catch (error) { if (error.code === 'ENOENT') return; throw error; }
+                catch (error) {
+                    if (error.code !== 'ENOENT') throw error;
+                    // agent_end can fire before Pi clears its busy state.
+                    if (publishedIdle === false && context.isIdle() && !context.hasPendingMessages())
+                        inspect({}, context);
+                    return;
+                }
                 if (next.version !== 1 || next.launch_id !== expected.launch_id ||
                     typeof next.turn !== 'string' || !next.turn || typeof next.nonce !== 'string' ||
                     !next.nonce || typeof next.abort !== 'boolean' || !Number.isSafeInteger(next.after_generation) || next.after_generation < 0)

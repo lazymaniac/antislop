@@ -11,7 +11,7 @@ fn turn_text_keeps_the_current_turn_and_gateway_completion_scope() {
     let text = turn_text(
         "current",
         body,
-        &gateway.completion_footer().unwrap(),
+        &gateway.completion_footer(None).unwrap(),
         mcp::SERVER,
     );
     assert!(text.starts_with(body));
@@ -1588,9 +1588,17 @@ fn pi_and_unsloth_keep_context_across_cancel_failure_and_restart() {
             .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")
             .unwrap();
         pi_fixture_handler(&session);
+        let cancel = AtomicBool::new(false);
+        let lease = core.execution.enter("first", &cancel).unwrap();
         let first = session
-            .run(&core.native, "first", "hello", &AtomicBool::new(false))
+            .run(
+                &core.native,
+                "first",
+                "fixture-finish-without-tool",
+                &cancel,
+            )
             .unwrap();
+        drop(lease);
         let error = core
             .native
             .prepare_scoped(&core, "pi-life", "worker:task", &spec, "")

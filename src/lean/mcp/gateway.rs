@@ -172,19 +172,25 @@ impl Gateway {
     }
 
     /// Use the actual tools/list scope for the native transport footer.
-    pub(crate) fn completion_footer(&self) -> Result<String> {
+    pub(crate) fn completion_footer(&self, pi_alias: Option<&str>) -> Result<String> {
         let state = self.shared.state.lock().map_err(invalid)?;
         let names = super::tools::scoped_tools(&state.role, state.contract.as_ref());
+        let prefix = pi_alias.map_or_else(String::new, |alias| format!("mcp__{alias}__"));
         let results = names
             .iter()
             .filter(|name| is_terminal(name))
-            .map(|name| format!(prompts::template!(INLINE_TOOL_NAME), name = name))
+            .map(|name| {
+                format!(
+                    prompts::template!(INLINE_TOOL_NAME),
+                    name = format_args!("{prefix}{name}")
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let recover = if names.contains(&"current_turn") {
-            prompts::STALE_TURN_RECOVERY
+            format!(prompts::template!(STALE_TURN_RECOVERY), prefix = prefix)
         } else {
-            ""
+            String::new()
         };
         Ok(format!(
             prompts::template!(RESULT_TOOLS_FOOTER),

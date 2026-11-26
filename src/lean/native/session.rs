@@ -356,9 +356,7 @@ impl Session {
             }
         })?;
         self.gateway.begin(turn)?;
-        let result_instructions = self.gateway.completion_footer()?;
-        let server = self.pi.as_ref().map_or(mcp::SERVER, |pi| pi.alias());
-        let transmitted = turn_text(turn, prompt, &result_instructions, server);
+        let transmitted = self.turn_prompt(turn, prompt)?;
         if let Some(core) = self.core.upgrade()
             && core.store.db().query_row(
                 "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1)",
@@ -382,6 +380,17 @@ impl Session {
         terminal::Session::submit(&self.screen, &transmitted)?;
         self.primed.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn turn_prompt(&self, turn: &str, prompt: &str) -> Result<String> {
+        let pi_alias = self.pi.as_ref().map(|pi| pi.alias());
+        let footer = self.gateway.completion_footer(pi_alias)?;
+        Ok(turn_text(
+            turn,
+            prompt,
+            &footer,
+            pi_alias.unwrap_or(mcp::SERVER),
+        ))
     }
 
     fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
@@ -435,18 +444,13 @@ impl Session {
         };
         drop(tracker);
         if ready && !cancel.load(Ordering::SeqCst) {
-            let footer = self.gateway.completion_footer()?;
+            let reminder = self.turn_prompt(turn, prompts::RESULT_TOOL_REMINDER)?;
             self.gateway.while_pending(turn, || {
                 if cancel.load(Ordering::SeqCst) {
                     return Ok(());
                 }
-                let mut context = crate::lean::prompt_context::PromptContext::default();
-                context.section(prompts::CONTINUATION_LABEL, prompts::RESULT_TOOL_REMINDER);
-                context.section(prompts::REQUIRED_RESULT_LABEL, &footer);
                 core.execution
-                    .while_active(turn, || {
-                        terminal::Session::submit(&self.screen, &context.render())
-                    })
+                    .while_active(turn, || terminal::Session::submit(&self.screen, &reminder))
                     .transpose()?;
                 Ok(())
             })?;

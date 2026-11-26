@@ -489,7 +489,7 @@ fn result_footer_matches_the_gateway_tool_scope() {
         task.kind = kind;
         gateway.set_role(role).unwrap();
         gateway.set_task_contract(task.clone()).unwrap();
-        let footer = gateway.completion_footer().unwrap();
+        let footer = gateway.completion_footer(None).unwrap();
         let tools = footer.split('`').skip(1).step_by(2).collect::<Vec<_>>();
         assert_eq!(tools, expected, "{role}: {footer}");
         for tool in tools {

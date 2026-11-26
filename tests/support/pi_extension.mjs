@@ -94,6 +94,7 @@ if (argv.includes('--tools-first')) {
     statusPublished = true;
 }
 if (lifecycle) {
+    let reminderDeadline;
     while (true) {
         if (!prompts.length) await new Promise(resolve => { wake = resolve; });
         const prompt = prompts.shift();
@@ -106,6 +107,21 @@ if (lifecycle) {
         handlers.get('agent_start')({}, ctx);
         appendFileSync(expected.session_file, JSON.stringify({type:'message', id:turn, message:{role:'user',content:prompt}}) + '\n');
         console.log(`working ${turn}`);
+        if (prompt.includes('fixture-finish-without-tool')) {
+            assert(prompt.includes('`mcp__antislop__complete`'));
+            handlers.get('agent_end')({}, ctx);
+            idle = true;
+            reminderDeadline = setTimeout(() => {
+                throw new Error('runtime did not remind Pi to submit its result');
+            }, 5000);
+            continue;
+        }
+        if (reminderDeadline) {
+            clearTimeout(reminderDeadline);
+            reminderDeadline = undefined;
+            assert(prompt.includes('this MCP turn is still open'));
+            assert(prompt.includes('`mcp__antislop__complete`'));
+        }
         if (prompt.includes('fixture-exit')) process.exit(7);
         if (prompt.includes('fixture-disconnect')) console.log(`${expected.alias}: failed: connection reset by peer`);
         if (prompt.includes('fixture-malformed')) writeFileSync(process.env.ANTISLOP_PI_STATUS_PATH.replace(/status\.json$/, 'control.json'), '{');
