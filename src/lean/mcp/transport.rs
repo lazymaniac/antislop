@@ -161,8 +161,5 @@ fn list_tools(shared: &Shared, id: Value) -> Result<Value> {
         state.listed = true;
     }
     let state = shared.state.lock().map_err(invalid)?;
-    Ok(result(
-        id,
-        json!({"tools": scoped_tool_list(&state.role, state.contract.as_ref())}),
-    ))
+    Ok(result(id, json!({"tools": scoped_tool_list(&state)})))
 }

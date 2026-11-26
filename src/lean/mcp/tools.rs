@@ -1,4 +1,4 @@
-use super::gateway::{ASK, ASK_USER, REVIEW, SUBMIT_PLAN, SUBMIT_REQUIREMENTS, TOOL, WAIT};
+use super::gateway::{ASK, ASK_USER, REVIEW, SUBMIT_PLAN, SUBMIT_REQUIREMENTS, State, TOOL, WAIT};
 use super::schema;
 use crate::lean::prompts;
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ fn plain_reviewer(role: &str) -> bool {
 
 pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     let mut names = role_tools(role);
-    if names.contains(&"current_turn") {
+    if names.contains(&"current_turn") && !role.starts_with("planning-") {
         names.extend([
             "prepare_validation",
             "complete_validation",
@@ -71,13 +71,18 @@ fn role_tools(role: &str) -> Vec<&'static str> {
     }
 }
 
-pub(super) fn scoped_tools(
-    role: &str,
-    contract: Option<&crate::lean::tasks::TaskContract>,
-) -> Vec<&'static str> {
+pub(super) fn scoped_tools(state: &State) -> Vec<&'static str> {
+    let role = &state.role;
     let mut names = allowed_tools(role);
+    if role.starts_with("planning-") {
+        names.retain(|name| match *name {
+            "read_planning_result" => state.planning_reports,
+            "get_images" => state.planning_images,
+            _ => true,
+        });
+    }
     if crate::lean::task_role(role).is_some_and(|(_, reviewer)| !reviewer)
-        && let Some(task) = contract
+        && let Some(task) = &state.contract
     {
         names.retain(|name| {
             if task.kind == crate::config::WorkKind::Options {
@@ -90,18 +95,15 @@ pub(super) fn scoped_tools(
     names
 }
 
-pub(super) fn scoped_tool_list(
-    role: &str,
-    contract: Option<&crate::lean::tasks::TaskContract>,
-) -> Vec<Value> {
-    let names = scoped_tools(role, contract);
-    let mut list = tool_list(role);
+pub(super) fn scoped_tool_list(state: &State) -> Vec<Value> {
+    let names = scoped_tools(state);
+    let mut list = tool_list(&state.role);
     list.retain(|tool| {
         tool["name"]
             .as_str()
             .is_some_and(|name| names.contains(&name))
     });
-    if let Some(task) = contract
+    if let Some(task) = &state.contract
         && let Some(review) = list.iter_mut().find(|tool| tool["name"] == "review")
     {
         let checks = &mut review["inputSchema"]["properties"]["checks"];

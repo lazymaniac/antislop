@@ -119,6 +119,8 @@ pub(super) struct State {
     pub(super) handler: Option<Arc<Handler>>,
     pub(super) protocol_observer: Option<Arc<ProtocolObserver>>,
     pub(super) role: String,
+    pub(super) planning_reports: bool,
+    pub(super) planning_images: bool,
     pub(super) contract: Option<crate::lean::tasks::TaskContract>,
     /// The turn a terminal call ended and that call, so a repeat is
     /// acknowledged instead of refused.
@@ -174,7 +176,7 @@ impl Gateway {
     /// Use the actual tools/list scope for the native transport footer.
     pub(crate) fn completion_footer(&self, pi_alias: Option<&str>) -> Result<String> {
         let state = self.shared.state.lock().map_err(invalid)?;
-        let names = super::tools::scoped_tools(&state.role, state.contract.as_ref());
+        let names = super::tools::scoped_tools(&state);
         let prefix = pi_alias.map_or_else(String::new, |alias| format!("mcp__{alias}__"));
         let results = names
             .iter()
@@ -217,6 +219,13 @@ impl Gateway {
         Ok(())
     }
 
+    pub(crate) fn set_planning_inputs(&self, reports: bool, images: bool) -> Result<()> {
+        let mut state = self.shared.state.lock().map_err(invalid)?;
+        state.planning_reports = reports;
+        state.planning_images = images;
+        Ok(())
+    }
+
     pub(crate) fn set_task_contract(
         &self,
         contract: crate::lean::tasks::TaskContract,
@@ -227,10 +236,10 @@ impl Gateway {
 
     #[cfg(test)]
     pub(crate) fn tool_names(&self) -> Vec<&'static str> {
-        self.shared.state.lock().map_or_else(
-            |_| vec![TOOL],
-            |s| super::tools::scoped_tools(&s.role, s.contract.as_ref()),
-        )
+        self.shared
+            .state
+            .lock()
+            .map_or_else(|_| vec![TOOL], |s| super::tools::scoped_tools(&s))
     }
 
     pub(crate) fn set_handler(&self, handler: Arc<Handler>) -> Result<()> {

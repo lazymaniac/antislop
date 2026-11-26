@@ -27,6 +27,63 @@ mod tests {
     }
 
     #[test]
+    fn planning_tools_follow_available_inputs_in_discovery_and_calls() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway
+            .set_handler(std::sync::Arc::new(|_, _| Ok(json!({"handled": true}))))
+            .unwrap();
+        for (role, reports, images) in [
+            ("planning-research:fixture", false, false),
+            ("planning-analysis:fixture", false, true),
+            ("planning-dependencies:fixture", true, false),
+            ("planning-test_design:fixture", true, true),
+        ] {
+            gateway.set_role(role).unwrap();
+            gateway.set_planning_inputs(reports, images).unwrap();
+            let (_, response) = post(
+                &gateway,
+                gateway.token(),
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            );
+            let listed: Vec<_> = response["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            let mut expected = vec!["finish_turn", "current_turn"];
+            if reports {
+                expected.push("read_planning_result");
+            }
+            if images {
+                expected.push("get_images");
+            }
+            assert_eq!(listed, expected, "{role}");
+            for (name, allowed) in [
+                ("read_planning_result", reports),
+                ("get_images", images),
+                ("read_validations", false),
+            ] {
+                let (_, response) = post(
+                    &gateway,
+                    gateway.token(),
+                    json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                        "params":{"name":name,"arguments":{"turn":"current"}}}),
+                );
+                let result = &response["result"];
+                let text = result["content"][0]["text"].as_str().unwrap();
+                if allowed {
+                    assert!(text.contains("handled"), "{role}: {name}: {response}");
+                } else {
+                    assert_eq!(result["isError"], true, "{role}: {name}");
+                    assert!(text.contains("unavailable"), "{response}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_agent_ends_exactly_the_open_turn() {
         let gateway = Gateway::start().unwrap();
         let token = gateway.token().to_owned();
@@ -456,11 +513,11 @@ fn task_schema_exposes_only_its_completion_and_actual_checks() {
     let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report","change_kind": "none", "kind":"analysis",})).unwrap();
     for (kind, tool, other) in [(crate::config::WorkKind::Analysis,"complete","select"),(crate::config::WorkKind::Options,"select","complete")] {
         task.kind = kind;
-        let list = scoped_tool_list("worker:t",Some(&task));
+        let list = scoped_tool_list(&State { role: "worker:t".into(), contract: Some(task.clone()), ..State::default() });
         assert!(list.iter().any(|entry|entry["name"]==tool));
         assert!(!list.iter().any(|entry|entry["name"]==other));
     }
-    let list = scoped_tool_list("reviewer:t",Some(&task));
+    let list = scoped_tool_list(&State { role: "reviewer:t".into(), contract: Some(task.clone()), ..State::default() });
     let review = list.iter().find(|entry|entry["name"]=="review").unwrap();
     let schema = &review["inputSchema"]["properties"]["checks"];
     assert_eq!(schema["additionalProperties"],false);

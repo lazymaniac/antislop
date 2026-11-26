@@ -113,6 +113,10 @@ fn elapsed_seconds(text: &str) -> Option<i64> {
     Some(days * 86_400 + seconds)
 }
 
+pub(super) fn supports_mcp_images(provider: &str) -> bool {
+    matches!(provider, "codex" | "claude" | "gemini")
+}
+
 pub fn name(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Agy => "agy",

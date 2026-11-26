@@ -21,6 +21,13 @@ impl Session {
     ) -> Result<Self> {
         let gateway = mcp::Gateway::start()?;
         gateway.set_role(role)?;
+        if role.starts_with("planning-") {
+            gateway.set_planning_inputs(
+                core.planning_has_prerequisites(&conversation, role)?,
+                agent::supports_mcp_images(agent::name(spec.provider))
+                    && !core.store.linked_images(&conversation)?.is_empty(),
+            )?;
+        }
         if let Some((id, _)) = super::super::task_role(role)
             && let Some(task) = core.store.task_by_id(id)?
         {

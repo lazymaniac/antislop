@@ -17,7 +17,7 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
                 state.expected.clone(),
                 state.protocol_observer.clone(),
                 state.role.clone(),
-                scoped_tools(&state.role, state.contract.as_ref()),
+                scoped_tools(&state),
             )
         })
         .unwrap_or_default();
@@ -37,16 +37,15 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
             {
                 let name = params["name"].as_str().unwrap_or_default();
                 if state.expected.as_deref() != params["arguments"]["turn"].as_str()
-                    || !scoped_tools(&state.role, state.contract.as_ref()).contains(&name)
+                    || !scoped_tools(&state).contains(&name)
                 {
                     state.protocol_rejected_at.get_or_insert_with(Instant::now);
                     reason.push_str(&format!(
                         "; role {} requires turn = {:?} and one of {:?}; correct the rejected call and continue",
                         state.role, state.expected.as_deref().unwrap(),
-                        scoped_tools(&state.role, state.contract.as_ref())
+                        scoped_tools(&state)
                     ));
-                    if scoped_tools(&state.role, state.contract.as_ref()).contains(&"current_turn")
-                    {
+                    if scoped_tools(&state).contains(&"current_turn") {
                         reason.push_str("; call current_turn({}) and copy its active turn id exactly; never guess or reuse a previous id");
                     }
                 }
@@ -121,7 +120,7 @@ fn prepare_dispatch(
 ) -> Result<Prepared> {
     let mut state = shared.state.lock().map_err(invalid)?;
     crate::require(
-        scoped_tools(&state.role, state.contract.as_ref()).contains(&name),
+        scoped_tools(&state).contains(&name),
         "tool is unavailable for this role",
     )?;
     remember_session(&mut state, params);
@@ -269,12 +268,12 @@ fn current_turn(shared: &Shared, args: &Value) -> Result<Value> {
     )?;
     let state = shared.state.lock().map_err(invalid)?;
     crate::require(
-        scoped_tools(&state.role, state.contract.as_ref()).contains(&"current_turn"),
+        scoped_tools(&state).contains(&"current_turn"),
         "tool is unavailable for this role",
     )?;
     Ok(
         json!({"turn":state.expected,"active":state.expected.is_some() && state.finished.is_none(),"role":state.role,
-        "tools":scoped_tools(&state.role, state.contract.as_ref()),"last_finished_turn":state.receipt.as_ref().map(|(turn,_)|turn)}),
+        "tools":scoped_tools(&state),"last_finished_turn":state.receipt.as_ref().map(|(turn,_)|turn)}),
     )
 }
 

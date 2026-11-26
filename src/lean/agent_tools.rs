@@ -102,7 +102,7 @@ impl Core {
             |row| row.get(0),
         )?;
         crate::require(
-            matches!(provider.as_str(), "codex" | "claude" | "gemini"),
+            agent::supports_mcp_images(&provider),
             &format!(
                 "image retrieval is not supported by the configured {provider} provider; the retained images remain available to a compatible provider"
             ),

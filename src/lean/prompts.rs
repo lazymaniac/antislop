@@ -780,7 +780,8 @@ macro_rules! template {
     (TEAM_CATALOG_ENTRY) => { "- {}" };
     (RISK_CHECK) => { "{problem} How to check: {detect}" };
     // agent_tools/planning.rs
-    (RUN_PLANNING_CONSULTATION) => { "PLANNING CONSULTATION: {}. The planner owns this request. Inspect relevant files read-only; do not implement, draft the plan, or repeat other specialists' work. Read prerequisite reports with read_planning_result, continuing pages until complete. Return concise findings with source locations, decisions/constraints, unresolved questions and concrete implications for the plan. {} For areas that do not apply, explain why from evidence. Distinguish observations from proposals; do not claim tests ran unless you ran them. Finish with finish_turn.\n{}\n{}\n{}\n{}" };
+    (PLANNING_PREREQUISITE_REPORTS) => { "Read prerequisite reports with read_planning_result, continuing pages until complete.\n{references}" };
+    (RUN_PLANNING_CONSULTATION) => { "PLANNING CONSULTATION: {}. The planner owns this request. Inspect relevant files read-only; do not implement, draft the plan, or repeat other specialists' work. Return concise findings with source locations, decisions/constraints, unresolved questions and concrete implications for the plan. {} For areas that do not apply, explain why from evidence. Distinguish observations from proposals; do not claim tests ran unless you ran them. Finish with finish_turn.\n{}\n{}\n{}\n{}" };
     // agent_tools/validations.rs
     (VALIDATION_EVIDENCE) => { "Command: {}\nDirectory: {}\nScope: {}\nEnvironment: {}\nSource tree: {:?}\nExit code: {exit_code}\nReported problems: {problem}\n\n{output}" };
     // core/integration/conflicts/repair.rs

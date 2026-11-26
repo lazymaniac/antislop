@@ -29,6 +29,18 @@ fn prerequisites(kind: WorkKind) -> &'static [WorkKind] {
 }
 
 impl Core {
+    pub(in crate::lean) fn planning_has_prerequisites(
+        &self,
+        conversation: &str,
+        role: &str,
+    ) -> Result<bool> {
+        Ok(self.store.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND kind='planning_consultation' AND json_extract(payload,'$.role')=?2 AND json_array_length(payload,'$.inputs')>0)",
+            rusqlite::params![conversation, role],
+            |row| row.get(0),
+        )?)
+    }
+
     fn planning_basis(&self, conversation: &str) -> Result<String> {
         // Draft revisions can reword scope without changing confirmed requirements.
         let requirements = self.store.workflow(conversation)?.summary;
@@ -337,6 +349,17 @@ impl Core {
                 ));
             }
         };
+        let prerequisite_reports = if inputs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                prompts::template!(PLANNING_PREREQUISITE_REPORTS),
+                references = crate::lean::prompt_context::untrusted(
+                    prompts::PLANNING_PREREQUISITES_LABEL,
+                    &crate::lean::prompt_context::markdown(&inputs)
+                )
+            )
+        };
         let answer = self.turn(setup, cancel, |_| {
             format!(
                 prompts::template!(RUN_PLANNING_CONSULTATION),
@@ -348,10 +371,7 @@ impl Core {
                 ),
                 scope,
                 crate::lean::prompt_context::untrusted(prompts::PLANNER_QUESTION_LABEL, question),
-                crate::lean::prompt_context::untrusted(
-                    prompts::PLANNING_PREREQUISITES_LABEL,
-                    &crate::lean::prompt_context::markdown(&inputs)
-                ),
+                prerequisite_reports,
             )
         })?;
         if answer.is_none() {
