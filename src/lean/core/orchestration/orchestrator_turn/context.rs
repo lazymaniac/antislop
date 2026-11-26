@@ -1,4 +1,5 @@
 use super::prompt::{PromptContext, orchestrator_prompt_text};
+use crate::lean::agent_tools::turn_inputs::TurnInputs;
 use crate::lean::core::orchestration::planning_context::planning_scope_context;
 use crate::lean::core::orchestration::unanswered::includes_comment;
 use crate::lean::prompts;
@@ -9,6 +10,7 @@ mod plan_view;
 
 #[path = "context/comments.rs"]
 mod comments;
+pub(super) use comments::CommentContext;
 use comments::comment_context;
 
 pub(super) struct OrchestrationContext<'a> {
@@ -20,7 +22,7 @@ pub(super) struct OrchestrationContext<'a> {
     config: Arc<Config>,
     project: PathBuf,
     open: Vec<Comment>,
-    comment_text: String,
+    comments: CommentContext,
     workflow: store::Workflow,
     interviewing: bool,
     graph: Vec<Task>,
@@ -53,7 +55,15 @@ pub(super) fn prepare<'a>(
     let config = core.config_snapshot();
     let project = PathBuf::from(core.store.conversation(conversation)?.project);
     let view = plan_view::load(core, conversation)?;
-    let (history, scope_context) = history_context(core, conversation, request.answered)?;
+    let history = core
+        .store
+        .recent_messages_through(conversation, request.answered)?;
+    let scope_context = planning_scope_context(
+        core,
+        conversation,
+        view.graph.first().map(|task| task.plan_id.as_str()),
+        &view.workflow.summary,
+    )?;
     let audit_response = audit_response(core, conversation)?;
     Ok(OrchestrationContext {
         conversation,
@@ -64,7 +74,7 @@ pub(super) fn prepare<'a>(
         config,
         project,
         open: request.open,
-        comment_text: request.comment_text,
+        comments: request.comments,
         interviewing: view.workflow.interviewing(),
         editable_graph: !view.graph.is_empty(),
         workflow: view.workflow,
@@ -126,7 +136,7 @@ struct RequestContext {
     asked: Vec<store::Message>,
     is_comment: bool,
     open: Vec<Comment>,
-    comment_text: String,
+    comments: CommentContext,
 }
 
 fn request_context(core: &Core, conversation: &str, upto: u64) -> Result<RequestContext> {
@@ -134,13 +144,13 @@ fn request_context(core: &Core, conversation: &str, upto: u64) -> Result<Request
     let asked = core.asked_since(conversation, answered, upto)?;
     let is_comment = includes_comment(&asked);
     let open = open_comments(core, conversation, answered)?;
-    let comment_text = comment_context(core, conversation, upto, is_comment)?;
+    let comments = comment_context(core, conversation, upto, is_comment)?;
     Ok(RequestContext {
         answered,
         asked,
         is_comment,
         open,
-        comment_text,
+        comments,
     })
 }
 
@@ -175,24 +185,28 @@ fn turn_setup<'a>(
 fn render_prompt(
     context: &OrchestrationContext<'_>,
     session: crate::lean::prompt_context::SessionContext,
+    inputs: &mut TurnInputs,
 ) -> String {
-    orchestrator_prompt_text(PromptContext {
-        project: &context.project,
-        session,
-        answered: context.answered,
-        asked: &context.asked,
-        open: &context.open,
-        history: &context.history,
-        comment_context: &context.comment_text,
-        editable_graph: context.editable_graph,
-        graph: &context.graph,
-        graph_json: &context.graph_json,
-        interviewing: context.interviewing,
-        workflow: &context.workflow,
-        scope_context: context.scope_context.as_deref(),
-        decision: context.decision.as_ref(),
-        audit_response: context.audit_response.as_ref(),
-    })
+    orchestrator_prompt_text(
+        PromptContext {
+            project: &context.project,
+            session,
+            answered: context.answered,
+            asked: &context.asked,
+            open: &context.open,
+            history: &context.history,
+            comment_context: &context.comments,
+            editable_graph: context.editable_graph,
+            graph: &context.graph,
+            graph_json: &context.graph_json,
+            interviewing: context.interviewing,
+            workflow: &context.workflow,
+            scope_context: context.scope_context.as_deref(),
+            decision: context.decision.as_ref(),
+            audit_response: context.audit_response.as_ref(),
+        },
+        inputs,
+    )
 }
 
 pub(super) fn ask(
@@ -207,7 +221,9 @@ pub(super) fn ask(
         &context.config,
     );
     setup.plan_id = context.graph.first().map(|task| task.plan_id.clone());
-    core.turn(setup, cancel, |session| render_prompt(context, session))
+    core.turn(setup, cancel, |session, inputs| {
+        render_prompt(context, session, inputs)
+    })
 }
 
 #[path = "context/answer.rs"]
@@ -219,14 +235,4 @@ pub(super) fn finish(
     cancel: &AtomicBool,
 ) -> Result<()> {
     answer::finish(core, context, answer, cancel)
-}
-
-fn history_context(
-    core: &Core,
-    conversation: &str,
-    answered: u64,
-) -> Result<(Vec<store::Message>, Option<String>)> {
-    let history = core.store.recent_messages_through(conversation, answered)?;
-    let scope = planning_scope_context(core, conversation)?;
-    Ok((history, scope))
 }

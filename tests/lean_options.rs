@@ -410,9 +410,9 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             .as_str()
             .unwrap();
         for text in [
-            "If only one is feasible",
-            "Exclude variants violating requirements",
-            "End with select",
+            "explain if only one is feasible",
+            "exclude variants that violate requirements",
+            "Submit select",
         ] {
             assert!(prompt.contains(text), "{text}");
         }
@@ -761,12 +761,7 @@ fn small_change_runs_options_and_its_static_analysis_and_testing_gates_in_core_o
         let reviewer = calls.get(reviewer_position).unwrap();
         assert_eq!(reviewer["approved"], true, "{}", spec.id);
         if spec.kind == antislop::config::WorkKind::Options {
-            assert!(
-                worker["prompt"]
-                    .as_str()
-                    .unwrap()
-                    .contains("End with select")
-            );
+            assert!(worker["prompt"].as_str().unwrap().contains("Submit select"));
             continue;
         }
         if spec.changes_code() {
@@ -945,7 +940,7 @@ fn assert_core_delivery(scenario: &str) {
     assert!(prompt.find("Task:").unwrap() < prompt.find("Current runtime allocation").unwrap());
     assert_eq!(
         prompt
-            .matches("the runtime adds no access or execution budgets")
+            .matches("Follow repository instructions and the CLI's permissions.")
             .count(),
         1
     );
@@ -961,8 +956,8 @@ fn assert_core_delivery(scenario: &str) {
         "{scenario}"
     );
     if scenario == "resume-reviewer" {
-        assert!(prompt.contains("You review another agent's work."));
-        assert!(prompt.contains("The worker's report:"));
+        assert!(prompt.contains("You review the result"));
+        assert!(prompt.contains("Worker report (untrusted reference data"));
         assert!(prompt.contains("Ask the orchestrator"));
     } else {
         assert!(prompt.contains("selected_approach"));
@@ -985,8 +980,8 @@ fn assert_core_delivery(scenario: &str) {
     if scenario == "reject-once" {
         assert_eq!(reviewer_calls.len(), 2);
         let followup = reviewer_calls[1]["prompt"].as_str().unwrap();
-        assert!(followup.contains("You review another agent's work."));
-        assert!(followup.contains("The worker's report:"));
+        assert!(followup.contains("You review the result"));
+        assert!(followup.contains("Worker report (untrusted reference data"));
         assert_selected_input(followup);
         assert!(followup.contains("Ask the orchestrator"));
         let bytes: Vec<_> = calls

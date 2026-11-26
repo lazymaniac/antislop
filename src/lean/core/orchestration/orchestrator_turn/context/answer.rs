@@ -426,6 +426,7 @@ mod tests {
                     start: crate::lean::prompt_context::SessionStart::Resumed,
                     continuation: crate::lean::prompt_context::Continuation::Role,
                 },
+                &mut Default::default(),
             );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("read_audit") && prompt.contains("audit_ref"));
@@ -486,6 +487,7 @@ mod tests {
                     start: crate::lean::prompt_context::SessionStart::Resumed,
                     continuation: crate::lean::prompt_context::Continuation::Role,
                 },
+                &mut Default::default(),
             );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));
@@ -528,6 +530,7 @@ mod tests {
                     start: crate::lean::prompt_context::SessionStart::Resumed,
                     continuation: crate::lean::prompt_context::Continuation::Role,
                 },
+                &mut Default::default(),
             );
             assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
             assert!(prompt.contains("Missing evidence for the delivered behavior"));

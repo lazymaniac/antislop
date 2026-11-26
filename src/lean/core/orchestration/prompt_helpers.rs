@@ -1,3 +1,4 @@
+use crate::lean::agent_tools::turn_inputs::{ReadFor, TurnInputs};
 use crate::lean::prompts;
 use crate::lean::*;
 
@@ -15,23 +16,13 @@ pub(in crate::lean) fn blocked_report(tasks: &[Task]) -> String {
                 | status::FAILED
         )
     });
-    format!(
-        prompts::template!(BLOCKED_REPORT),
-        blocked = blocked,
-        COORDINATION_GUIDANCE = COORDINATION_GUIDANCE
-    )
+    format!(prompts::template!(BLOCKED_REPORT), blocked = blocked)
 }
 
 /// Tasks that stopped for coordination while the rest of the plan runs on.
 pub(in crate::lean) fn stopped_report(tasks: &[Task]) -> Option<String> {
     let stopped = blocked_entries(tasks, stopped_for_coordination);
-    (stopped != "[]").then(|| {
-        format!(
-            prompts::template!(STOPPED_REPORT),
-            stopped = stopped,
-            COORDINATION_GUIDANCE = COORDINATION_GUIDANCE
-        )
-    })
+    (stopped != "[]").then(|| format!(prompts::template!(STOPPED_REPORT), stopped = stopped))
 }
 
 fn stopped_for_coordination(status: &str) -> bool {
@@ -66,21 +57,20 @@ fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
     }
 }
 
-const COORDINATION_GUIDANCE: &str = prompts::COORDINATION_GUIDANCE;
-
 pub(in crate::lean) fn orchestrator_prompt(
     project: &Path,
     first: bool,
     messages: &[Message],
     open: &[Comment],
+    inputs: &mut TurnInputs,
 ) -> String {
     let mut prompt = if first {
         initial_orchestrator_prompt(project)
     } else {
         String::new()
     };
-    prompt.push_str(&format_messages(messages));
-    append_open_comments(&mut prompt, open);
+    prompt.push_str(&format_messages(messages, inputs));
+    append_open_comments(&mut prompt, open, inputs);
     prompt
 }
 
@@ -92,10 +82,20 @@ fn initial_orchestrator_prompt(project: &Path) -> String {
     )
 }
 
-pub(in crate::lean) fn format_messages(messages: &[Message]) -> String {
+pub(in crate::lean) fn format_messages(messages: &[Message], inputs: &mut TurnInputs) -> String {
     messages
         .iter()
-        .map(format_message)
+        .map(|message| {
+            let required = if message.author == "user" {
+                ReadFor::Plan
+            } else {
+                ReadFor::Reference
+            };
+            let label = format!("Message {} from {}", message.seq, message.author);
+            inputs
+                .offload(&label, &message.text, required)
+                .unwrap_or_else(|| format_message(message))
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -115,7 +115,7 @@ fn format_message(message: &Message) -> String {
     }
 }
 
-fn append_open_comments(prompt: &mut String, open: &[Comment]) {
+fn append_open_comments(prompt: &mut String, open: &[Comment], inputs: &mut TurnInputs) {
     if open.is_empty() {
         return;
     }
@@ -123,7 +123,9 @@ fn append_open_comments(prompt: &mut String, open: &[Comment]) {
     for comment in open {
         prompt.push_str(&format!(
             prompts::template!(OPEN_COMMENT),
-            comment.id, comment.label, comment.text
+            comment.id,
+            comment.label,
+            inputs.block("Comment text", &comment.text, ReadFor::Plan)
         ));
     }
 }

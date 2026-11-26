@@ -86,7 +86,11 @@ elif 'The plan finished. Results of each task follow.' in prompt and 'SESSION PH
     answer = 'Implementation results received.'
 else:
     assert 'Planning findings consumed before drafting:' in prompt
-    references = re.findall(r'planning:[a-f0-9-]+', prompt)
+    reports = json.loads(prompt.split('Planning findings consumed before drafting:\n', 1)[1])
+    assert {report['kind'] for report in reports} == {'research', 'analysis', 'dependencies', 'architecture', 'test_design'}
+    for report in reports:
+        assert report['report'].startswith('Fixture preparation (' + report['kind'] + '):')
+    references = [report['reference'] for report in reports]
     assert len(set(references)) == 5
     answer = '## Inspection\nUse established findings: ' + ', '.join(dict.fromkeys(references)) + '\nVerify the inspection task against observable findings.\n' + plan
 if 'Address each new user comment' in prompt:
@@ -190,13 +194,20 @@ fn restart_resumes_scope_interview_and_starts_planning_after_confirmation() {
 
 #[test]
 fn checked_plan_starts_only_after_the_user_accepts_the_reviewed_plan() {
+    check_plan_acceptance(false);
+}
+
+#[test]
+fn serial_planning_reads_indexed_specialist_reports_before_drafting() {
+    check_plan_acceptance(true);
+}
+
+fn check_plan_acceptance(single_agent: bool) {
     let dir = tempfile::tempdir().unwrap();
     let source = guided_session_source(dir.path());
-    let core = Core::open(
-        &dir.path().join("state"),
-        Config::from_toml(&source).unwrap(),
-    )
-    .unwrap();
+    let mut config = Config::from_toml(&source).unwrap();
+    config.policy.single_agent = single_agent;
+    let core = Core::open(&dir.path().join("state"), config).unwrap();
     let conversation = core.start(dir.path()).unwrap();
     core.send(&conversation.id, "Inspect the project").unwrap();
     idle(&core, &conversation.id);

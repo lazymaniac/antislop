@@ -1,5 +1,6 @@
 //! Planner-owned preparation. Reports are retained once as ordinary agent turns.
 use super::dependencies::page_text;
+use super::turn_inputs::ReadFor;
 use super::*;
 use crate::lean::prompts;
 
@@ -311,6 +312,8 @@ impl Core {
         let scope = crate::lean::core::orchestration::planning_context::planning_scope_context(
             self,
             conversation,
+            None,
+            "",
         )?
         .unwrap_or_default();
         let setup = TurnSetup {
@@ -346,19 +349,20 @@ impl Core {
                 )
             )
         };
-        let answer = self.turn(setup, cancel, |_| {
+        let answer = self.turn(setup, cancel, |_, inputs| {
             format!(
                 prompts::template!(RUN_PLANNING_CONSULTATION),
                 tasks::work_kind_name(kind),
                 report_requirements,
-                crate::lean::prompt_context::untrusted(
+                inputs.block(
                     prompts::CONFIRMED_REQUIREMENTS_LABEL,
-                    &requirements
+                    &requirements,
+                    ReadFor::Reference
                 ),
-                scope,
+                inputs.block("Scope and sources", &scope, ReadFor::Reference),
                 crate::lean::prompt_context::untrusted(
                     prompts::PLANNER_QUESTION_LABEL,
-                    question.unwrap_or_default()
+                    question.unwrap_or_default(),
                 ),
                 prerequisite_reports,
             )

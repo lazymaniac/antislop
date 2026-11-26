@@ -58,10 +58,7 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
                 closing.contains("For complete, include commit_message"),
                 "{path}"
             );
-            assert!(
-                closing.contains("Complete the whole assigned goal before reporting success"),
-                "{path}"
-            );
+            assert!(closing.contains("Complete the assigned goal"), "{path}");
             assert!(closing.contains("record_evidence"), "{path}");
         }
     }
@@ -142,7 +139,7 @@ fn reviewers_never_block_on_path_or_revision_mismatches() {
     let task = task(false);
     let prompt = tasks::reviewer_prompt("project", &task, "report", None);
     assert!(
-        prompt.contains("path or changed-file mismatches alone are never blocking findings"),
+        prompt.contains("A finding needs a concrete defect or evidence gap"),
         "{prompt}"
     );
 }

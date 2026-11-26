@@ -206,7 +206,7 @@ fn review_comments(
 fn execute_code_review(core: &Core, work: &CodeReview) -> std::result::Result<Verdict, String> {
     let setup = review_turn_setup(core, work);
     let answer = core
-        .turn(setup, &work.cancel, |_| review_prompt(work))
+        .turn(setup, &work.cancel, |_, inputs| review_prompt(work, inputs))
         .map_err(|error| error.to_string())?;
     match answer {
         Some(answer) => crate::lean::turn_result::TurnResult::review_verdict(&answer)
@@ -231,10 +231,17 @@ fn review_turn_setup<'a>(core: &Core, work: &'a CodeReview) -> TurnSetup<'a> {
     }
 }
 
-fn review_prompt(work: &CodeReview) -> String {
+fn review_prompt(
+    work: &CodeReview,
+    inputs: &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+) -> String {
+    let spec = inputs.task_contract(
+        &work.spec,
+        crate::lean::agent_tools::turn_inputs::ReadFor::Review,
+    );
     tasks::code_review_prompt(
         &work.dir.to_string_lossy(),
-        &work.spec,
+        &spec,
         &work.base,
         work.result.as_deref(),
         &work.comments,

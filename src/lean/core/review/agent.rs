@@ -123,7 +123,14 @@ fn review_audit(
         None,
         project,
         cancel,
-        |_, request| tasks::audit_prompt(&project.to_string_lossy(), request, "No plan exists."),
+        |_, request, inputs| {
+            tasks::render_result_audit(
+                &project.to_string_lossy(),
+                request,
+                "No plan exists.",
+                inputs,
+            )
+        },
     )?
     .map_err(Error::Invalid)?;
     Ok(())
@@ -145,7 +152,15 @@ fn review_plan(
         plan,
         project,
         cancel,
-        |initial, request| plan_review_prompt(project, request, &specs, initial),
+        |initial, request, inputs| {
+            tasks::render_candidate_review(
+                &project.to_string_lossy(),
+                request,
+                &specs,
+                initial,
+                inputs,
+            )
+        },
     )?
     .map_err(Error::Invalid)?;
     Ok(())
@@ -157,19 +172,6 @@ fn task_contracts(tasks: &[Task]) -> Result<Vec<TaskContract>> {
         .map(|task| serde_json::from_value(task.spec.clone()))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
-}
-
-fn plan_review_prompt(
-    project: &Path,
-    request: &str,
-    specs: &[TaskContract],
-    initial: bool,
-) -> String {
-    if initial {
-        tasks::plan_review_prompt(&project.to_string_lossy(), request, specs)
-    } else {
-        tasks::plan_review_followup(request, specs)
-    }
 }
 
 #[cfg(test)]

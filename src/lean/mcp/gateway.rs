@@ -47,6 +47,7 @@ pub(crate) const TOOLS: &[&str] = &[
     "invalidate_validation",
     "read_validations",
     "read_planning_result",
+    "read_turn_input",
     "read_plan_context",
     "read_task_contract",
     "read_audit",
@@ -189,6 +190,11 @@ impl Gateway {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let input_reader = if names.contains(&"read_turn_input") {
+            format!(" Read indexed turn inputs with `{prefix}read_turn_input`.")
+        } else {
+            String::new()
+        };
         let recover = if names.contains(&"current_turn") {
             format!(prompts::template!(STALE_TURN_RECOVERY), prefix = prefix)
         } else {
@@ -197,7 +203,7 @@ impl Gateway {
         Ok(format!(
             prompts::template!(RESULT_TOOLS_FOOTER),
             results = results,
-            recover = recover
+            recover = format_args!("{input_reader}{recover}")
         ))
     }
 

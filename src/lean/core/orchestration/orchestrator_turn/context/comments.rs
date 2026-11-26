@@ -1,22 +1,33 @@
 use super::super::*;
 use crate::lean::prompts;
 
+#[derive(Default)]
+pub(in crate::lean::core::orchestration::orchestrator_turn) struct CommentContext {
+    pub guidance: String,
+    pub original_request: Option<String>,
+}
+
 pub(super) fn comment_context(
     core: &Core,
     conversation: &str,
     upto: u64,
     is_comment: bool,
-) -> Result<String> {
-    let mut context = String::new();
-    if is_comment {
-        append_comment_instructions(&mut context);
-        append_comment_plans(core, conversation, upto, &mut context)?;
+) -> Result<CommentContext> {
+    if !is_comment {
+        return Ok(CommentContext::default());
     }
-    Ok(context)
-}
-
-fn append_comment_instructions(context: &mut String) {
-    context.push_str(prompts::APPEND_COMMENT_INSTRUCTIONS);
+    let mut guidance = prompts::APPEND_COMMENT_INSTRUCTIONS.to_owned();
+    append_comment_plans(core, conversation, upto, &mut guidance)?;
+    let original_request = core
+        .store
+        .messages_by(conversation, "user", 0)?
+        .into_iter()
+        .find(|message| !message.text.starts_with(COMMENT_PREFIX))
+        .map(|message| message.text);
+    Ok(CommentContext {
+        guidance,
+        original_request,
+    })
 }
 
 fn append_comment_plans(
@@ -39,23 +50,7 @@ fn append_comment_plans(
             task.plan_id
         ));
     }
-    append_original_request(core, conversation, context)?;
     append_referenced_plans(core, conversation, plans, context)
-}
-
-fn append_original_request(core: &Core, conversation: &str, context: &mut String) -> Result<()> {
-    if let Some(request) = core
-        .store
-        .messages_by(conversation, "user", 0)?
-        .iter()
-        .find(|message| !message.text.starts_with(COMMENT_PREFIX))
-    {
-        context.push_str(&format!(
-            prompts::template!(APPEND_ORIGINAL_REQUEST),
-            request.text
-        ));
-    }
-    Ok(())
 }
 
 fn append_referenced_plans<'a>(

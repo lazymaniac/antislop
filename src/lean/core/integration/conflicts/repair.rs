@@ -136,9 +136,12 @@ impl<'a> Repair<'a> {
     fn worker_report(&self, prompt: &str) -> Result<Option<String>> {
         let worker = format!("worker:{}", self.task.id);
         let setup = self.worker_setup(worker.clone());
-        let Some(answer) = self.core.turn(setup, self.cancel, |session| {
-            let _ = session;
-            self.worker_prompt(prompt)
+        let Some(answer) = self.core.turn(setup, self.cancel, |_, inputs| {
+            let spec = inputs.task_contract(
+                self.spec,
+                crate::lean::agent_tools::turn_inputs::ReadFor::Work,
+            );
+            self.worker_prompt(prompt, &spec)
         })?
         else {
             return Ok(None);
@@ -166,13 +169,8 @@ impl<'a> Repair<'a> {
         }
     }
 
-    fn worker_prompt(&self, prompt: &str) -> String {
-        tasks::worker_turn_prompt(
-            &self.worktree.to_string_lossy(),
-            self.spec,
-            Some(prompt),
-            "",
-        )
+    fn worker_prompt(&self, prompt: &str, spec: &TaskContract) -> String {
+        tasks::worker_turn_prompt(&self.worktree.to_string_lossy(), spec, Some(prompt), "")
     }
 
     fn persist_repair(&mut self, report: String) -> Result<()> {

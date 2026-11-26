@@ -293,7 +293,12 @@ fn on_demand_review_keeps_task_local_criteria_and_preserves_the_reviewed_source(
 
 #[test]
 fn code_review_final_audit_has_valid_empty_and_finding_report_requirements() {
-    let prompt = final_scope_audit_prompt("/p", "Review src/lib.rs", "No findings were proposed.");
+    let prompt = final_scope_audit_prompt(
+        "/p",
+        "Review src/lib.rs",
+        "No findings were proposed.",
+        &mut Default::default(),
+    );
     for required in [
         "exact reviewed scope",
         "overall verdict",

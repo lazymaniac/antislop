@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::agent_tools::turn_inputs::{INLINE_BYTES, ReadFor, TurnInputs};
 use crate::lean::prompts;
 
 pub fn reviewer_prompt(
@@ -96,19 +97,99 @@ pub fn reviewer_turn_prompt(
     upstream: &str,
     earlier: &[Value],
 ) -> String {
-    let prompt = if fresh {
-        reviewer_prompt(project, task, report, changes)
+    reviewer_result_prompt(
+        project,
+        task,
+        ReviewReport::Text(report),
+        changes,
+        fresh,
+        upstream,
+        earlier,
+        &mut TurnInputs::embedded(),
+    )
+}
+
+pub(crate) enum ReviewReport<'a> {
+    Text(&'a str),
+    Retained(String),
+}
+
+impl<'a> ReviewReport<'a> {
+    pub(crate) fn for_task(
+        store: &crate::lean::Store,
+        task: &crate::lean::Task,
+        spec: &TaskContract,
+        report: &'a str,
+    ) -> Self {
+        if !spec.change_kind.has_delivery()
+            || spec.kind == WorkKind::Options
+            || report.len() <= INLINE_BYTES
+        {
+            return Self::Text(report);
+        }
+        let Ok(history) = store.dependency_reports(task) else {
+            return Self::Text(report);
+        };
+        let candidate = history.reports.iter().find(|entry| {
+            entry.bytes == report.len() as u64
+                && (entry.current_inputs || Some(&entry.result_ref) == history.retained.as_ref())
+                && entry.result_type == "completed"
+        });
+        if let Some(reference) = candidate
+            && let Ok(result) = store.referenced_worker_report(reference)
+            && result["report"].as_str() == Some(report)
+            && !result["selection"].is_object()
+        {
+            return Self::Retained(reference.result_ref.clone());
+        }
+        Self::Text(report)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reviewer_result_prompt(
+    project: &str,
+    task: &TaskContract,
+    report: ReviewReport<'_>,
+    changes: Option<&str>,
+    fresh: bool,
+    upstream: &str,
+    earlier: &[Value],
+    inputs: &mut TurnInputs,
+) -> String {
+    let task = inputs.task_contract(task, ReadFor::Review);
+    let label = if fresh {
+        prompts::WORKER_REPORT_LABEL
     } else {
-        reviewer_followup(task, report, changes)
+        prompts::UPDATED_WORKER_REPORT_LABEL
     };
-    prompt + &earlier_findings(earlier) + upstream
+    let report = match report {
+        ReviewReport::Text(report) => inputs.block(
+            label,
+            report,
+            if task.change_kind.has_delivery() && task.kind != WorkKind::Options {
+                ReadFor::Reference
+            } else {
+                ReadFor::Review
+            },
+        ),
+        ReviewReport::Retained(reference) => format!(
+            "{label}: use read_dependency_result with dependency=self and result_ref={reference}. Follow cursor until complete=true."
+        ),
+    };
+    let prompt = if fresh {
+        render_reviewer_prompt(project, &task, &report, changes)
+    } else {
+        render_reviewer_followup(&task, &report, changes)
+    };
+    prompt + &earlier_findings(earlier, inputs) + upstream
 }
 
 /// The blocking findings of the previous round, so the reviewer can name
 /// the ones the updated work fixes: their ids are the runtime's, not its own.
 /// A broad finding the round narrowed counts as fixed and comes back as a
 /// narrower one, or a large task that shrinks every round looks stalled.
-pub(crate) fn earlier_findings(earlier: &[Value]) -> String {
+pub(crate) fn earlier_findings(earlier: &[Value], inputs: &mut TurnInputs) -> String {
     let lines: Vec<String> = earlier
         .iter()
         .filter(|f| crate::lean::progress::blocks(f))
@@ -117,10 +198,20 @@ pub(crate) fn earlier_findings(earlier: &[Value]) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    format!(
-        prompts::template!(EARLIER_FINDINGS),
-        crate::lean::prompt_context::untrusted(prompts::EARLIER_FINDINGS_LABEL, &lines.join("\n"))
-    )
+    let body = lines.join("\n");
+    let findings = match inputs.offload(prompts::EARLIER_FINDINGS_LABEL, &body, ReadFor::Review) {
+        Some(reference) => {
+            let ids = earlier
+                .iter()
+                .filter(|finding| crate::lean::progress::blocks(finding))
+                .filter_map(|finding| finding["id"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Finding IDs: {ids}\n{reference}")
+        }
+        None => crate::lean::prompt_context::untrusted(prompts::EARLIER_FINDINGS_LABEL, &body),
+    };
+    format!(prompts::template!(EARLIER_FINDINGS), findings)
 }
 
 fn format_earlier_finding(finding: &Value) -> String {
@@ -211,4 +302,70 @@ fn review_comments(comments: &[crate::lean::store::Comment]) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reviewer_pages_large_previous_findings_and_keeps_ids_in_the_prompt() {
+        let issue = "Earlier report issue é👩‍💻".repeat(600);
+        let findings =
+            [json!({"id":"goal:previous", "severity":"high", "check":"goal", "issue":issue})];
+        let mut inputs = TurnInputs::default();
+        let prompt = earlier_findings(&findings, &mut inputs);
+        assert!(prompt.contains("Finding IDs: goal:previous"));
+        assert!(!prompt.contains("Earlier report issue"));
+        assert!(inputs.require_reads("review").is_err());
+        let page = inputs
+            .read("review-turn", &json!({"input":"input-1"}))
+            .unwrap();
+        assert!(
+            page["text"]
+                .as_str()
+                .unwrap()
+                .contains("Earlier report issue")
+        );
+    }
+
+    #[test]
+    fn reviewer_uses_retained_evidence_only_when_the_report_matches_the_reference() {
+        let (_dir, core, conversation) = crate::lean::agent_tools::tests::core();
+        let task = core.store.add_plan(&conversation, &[json!({
+            "id":"writer", "title":"Writer", "goal":"Preserve drafts", "kind":"implementation",
+            "change_kind":"code", "acceptance_criteria":[{"id":"C1","text":"Drafts survive switching"}],
+        })]).unwrap().remove(0);
+        let spec = serde_json::from_value::<TaskContract>(task.spec.clone()).unwrap();
+        let report = "Retained evidence é👩‍💻\n".repeat(600);
+        core.store.test_completion(&task, &report);
+        let changed = report.replacen("Retained", "Altered!", 1);
+        assert!(matches!(
+            ReviewReport::for_task(&core.store, &task, &spec, &changed),
+            ReviewReport::Text(_)
+        ));
+        let scoped = ReviewReport::for_task(&core.store, &task, &spec, &report);
+        let ReviewReport::Retained(reference) = scoped else {
+            panic!("expected a retained report reference")
+        };
+        let role = format!("reviewer:{}", task.id);
+        let turn = core
+            .store
+            .start_turn(&conversation, &role, "fixture", 0, Some(&task.plan_id))
+            .unwrap();
+        let result = core
+            .agent_tool(
+                &conversation,
+                &role,
+                &turn.id,
+                "read_dependency_result",
+                &json!({
+                    "dependency":"self", "result_ref":reference,
+                }),
+            )
+            .unwrap();
+        assert!(report.starts_with(result["report"].as_str().unwrap()));
+        assert_eq!(result["complete"], false);
+    }
 }

@@ -133,7 +133,29 @@ if (lifecycle) {
                 assert.equal(aborted, false, 'previous cancellation aborted the following turn');
                 assert.equal(idle, false, 'following turn became idle before completing');
             }
-            await request('tools/call', {name:'complete', arguments:{turn, summary:'Completed the fixture task', report:'adapter result', commit_message:'test: lifecycle'}});
+            const completion = {name:'complete', arguments:{turn, summary:'Completed the fixture task', report:'adapter result', commit_message:'test: lifecycle'}};
+            if (prompt.includes('fixture-read-input')) {
+                assert(tools.some(t => t.name === 'read_turn_input' && t.inputSchema.required.includes('input')));
+                assert(prompt.includes('`mcp__antislop__read_turn_input`'));
+                assert(prompt.includes('mcp__antislop__current_turn'));
+                const before = await request('tools/call', completion);
+                assert.equal(before.isError, true);
+                assert.match(before.content[0].text, /input-1/);
+                const text = [];
+                let cursor;
+                do {
+                    const response = await request('tools/call', {name:'read_turn_input', arguments:{turn, input:'input-1', cursor}});
+                    assert(!response.isError, response.content[0].text);
+                    const page = JSON.parse(response.content[0].text);
+                    text.push(page.text);
+                    cursor = page.cursor;
+                    assert.equal(page.complete, cursor === null);
+                } while (cursor);
+                assert(text.length > 1);
+                assert.equal(text.join(''), 'a👩‍💻é'.repeat(3000));
+            }
+            const accepted = await request('tools/call', completion);
+            assert.equal(JSON.parse(accepted.content[0].text).recorded, true);
             idle = true;
         }
         handlers.get('agent_end')({}, ctx);

@@ -322,8 +322,41 @@ def call(params, thread):
     return None
 
 
-def planning_inputs(turn):
+def read_planning_pages(turn, reference, first=None):
+    """Read a retained report to completion and preserve its reference."""
+    arguments = {"turn":turn, "reference":reference}
+
+    def read():
+        response = rpc("tools/call", {"name":"read_planning_result", "arguments":arguments}, 42)["result"]
+        if response.get("isError"):
+            raise RuntimeError(response)
+        return json.loads(response["content"][0]["text"])
+
+    result = read() if first is None else first
+    while result["state"] == "running":
+        time.sleep(0.02)
+        result = read()
+    if result["state"] != "done":
+        raise RuntimeError(result)
+    report = result["report"]
+    while result.get("cursor"):
+        arguments["cursor"] = result["cursor"]
+        result = read()
+        assert result["reference"] == reference and result["state"] == "done"
+        report += result["report"]
+    assert result["complete"] is True
+    result["report"] = report
+    return result
+
+
+def planning_inputs(turn, prompt):
     """A deterministic planner consumes completed specialist results before drafting."""
+    heading = "Completed planning report references"
+    if heading in prompt:
+        index = prompt.split(heading, 1)[1].split("END ANTISLOP_REFERENCE_DATA", 1)[0]
+        references = re.findall(r"planning:[a-f0-9-]+", index)
+        return [read_planning_pages(turn, reference) for reference in references]
+
     reports = []
     for kind in ("research", "analysis", "dependencies", "architecture", "test_design"):
         response = rpc("tools/call", {"name":"consult_planning", "arguments":{
@@ -331,17 +364,7 @@ def planning_inputs(turn):
         if response.get("isError"):
             raise RuntimeError(response)
         result = json.loads(response["content"][0]["text"])
-        reference = result["reference"]
-        while result["state"] == "running":
-            time.sleep(0.02)
-            response = rpc("tools/call", {"name":"read_planning_result", "arguments":{
-                "turn":turn, "reference":reference}}, 42)["result"]
-            if response.get("isError"):
-                raise RuntimeError(response)
-            result = json.loads(response["content"][0]["text"])
-        if result["state"] != "done":
-            raise RuntimeError(result)
-        reports.append(result)
+        reports.append(read_planning_pages(turn, result["reference"], result))
     return reports
 
 
@@ -497,13 +520,14 @@ def main():
             # more input for the work in progress.
             continue
         if "PLANNING CONSULTATION:" in prompt:
-            report = "Fixture preparation: inspect existing interfaces; preserve accepted behavior; verify observable success and failure scenarios."
+            kind = re.search(r"PLANNING CONSULTATION: ([a-z_]+)", prompt)[1]
+            report = f"Fixture preparation ({kind}): inspect existing interfaces; preserve accepted behavior; verify observable success and failure scenarios."
             result = call({"name":"finish_turn", "arguments":{"turn":turn, "text":report}}, None)
             if result is not None:
                 raise RuntimeError(result)
             continue
         if "consult_planning" in tools:
-            prompt += "\nPlanning findings consumed before drafting:\n" + json.dumps(planning_inputs(turn))
+            prompt += "\nPlanning findings consumed before drafting:\n" + json.dumps(planning_inputs(turn, prompt))
         done = run_fixture(prompt, turn)
         text, seen = answer_of(done.stdout)
         if done.returncode != 0 or text is None:

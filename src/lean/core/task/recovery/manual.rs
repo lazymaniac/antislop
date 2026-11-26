@@ -120,7 +120,7 @@ fn run_reviewer(
     let (setup, project) = reviewer_setup(core, work, snapshot)?;
     let upstream = core.upstream(&work.task.plan_id, &work.spec)?;
     let cancel = work.cancel.clone();
-    let answer = core.turn(setup, &cancel, |session| {
+    let answer = core.turn(setup, &cancel, |session, inputs| {
         let fresh = session.introduce();
         reviewer_prompt(
             &project,
@@ -129,6 +129,7 @@ fn run_reviewer(
             changes,
             fresh,
             &upstream,
+            inputs,
         )
     })?;
     require(!cancel.load(Ordering::SeqCst), "manual recovery cancelled")?;
@@ -585,8 +586,18 @@ fn reviewer_prompt(
     changes: &str,
     fresh: bool,
     upstream: &str,
+    inputs: &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
 ) -> String {
-    tasks::reviewer_turn_prompt(project, spec, report, Some(changes), fresh, upstream, &[])
+    tasks::reviewer_result_prompt(
+        project,
+        spec,
+        tasks::ReviewReport::Text(report),
+        Some(changes),
+        fresh,
+        upstream,
+        &[],
+        inputs,
+    )
 }
 
 fn decode_answer(

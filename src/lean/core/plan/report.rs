@@ -193,7 +193,7 @@ impl Core {
             Some(plan_id),
             &integrated,
             cancel,
-            |first, request| {
+            |first, request, inputs| {
                 let audit_request = format!(
                     prompts::template!(AUDIT_NEW_MESSAGES),
                     sources = sources,
@@ -201,15 +201,25 @@ impl Core {
                 );
                 if first {
                     if code_review {
-                        tasks::final_scope_audit_prompt(&project_text, &audit_request, results)
+                        tasks::final_scope_audit_prompt(
+                            &project_text,
+                            &audit_request,
+                            results,
+                            inputs,
+                        )
                     } else {
-                        tasks::audit_prompt(&project_text, &audit_request, results)
+                        tasks::render_result_audit(&project_text, &audit_request, results, inputs)
                     }
                 } else {
                     if code_review {
-                        tasks::final_scope_audit_prompt(&project_text, &audit_request, results)
+                        tasks::final_scope_audit_prompt(
+                            &project_text,
+                            &audit_request,
+                            results,
+                            inputs,
+                        )
                     } else {
-                        tasks::audit_followup(&audit_request, results)
+                        tasks::render_audit_continuation(&audit_request, results, inputs)
                     }
                 }
             },

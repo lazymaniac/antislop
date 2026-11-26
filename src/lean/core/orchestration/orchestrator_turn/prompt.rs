@@ -1,4 +1,5 @@
-use super::context::AuditResponse;
+use super::context::{AuditResponse, CommentContext};
+use crate::lean::agent_tools::turn_inputs::{ReadFor, TurnInputs};
 use crate::lean::core::orchestration::prompt_helpers::orchestrator_prompt;
 use crate::lean::prompt_context::SessionContext;
 use crate::lean::prompts;
@@ -13,7 +14,7 @@ pub(super) struct PromptContext<'a> {
     pub(super) asked: &'a [Message],
     pub(super) open: &'a [Comment],
     pub(super) history: &'a [Message],
-    pub(super) comment_context: &'a str,
+    pub(super) comment_context: &'a CommentContext,
     pub(super) editable_graph: bool,
     pub(super) graph: &'a [Task],
     pub(super) graph_json: &'a str,
@@ -25,12 +26,16 @@ pub(super) struct PromptContext<'a> {
     pub(super) audit_response: Option<&'a AuditResponse>,
 }
 
-pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
+pub(super) fn orchestrator_prompt_text(
+    context: PromptContext<'_>,
+    inputs: &mut TurnInputs,
+) -> String {
     let mut prompt = orchestrator_prompt(
         context.project,
         context.session.introduce() || context.answered == 0,
         context.asked,
         context.open,
+        inputs,
     );
     // A resumed session already holds the conversation.
     append_history(
@@ -39,7 +44,11 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
         context.answered,
         context.history,
     );
-    prompt.push_str(context.comment_context);
+    prompt.push_str(&context.comment_context.guidance);
+    if let Some(request) = &context.comment_context.original_request {
+        prompt.push('\n');
+        prompt.push_str(&inputs.block("Original user request", request, ReadFor::Plan));
+    }
     append_decision(&mut prompt, context.decision);
     append_graph(
         &mut prompt,
@@ -48,14 +57,11 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
         context.graph_json,
     );
     prepend_phase(&mut prompt, context.interviewing, context.workflow);
-    append_audit_response(&mut prompt, context.audit_response);
+    append_audit_response(&mut prompt, context.audit_response, inputs);
     if !context.interviewing {
         let scope = context.scope_context.unwrap_or(&context.workflow.summary);
         prompt.push('\n');
-        prompt.push_str(&crate::lean::prompt_context::untrusted(
-            "Current scope and sources",
-            scope,
-        ));
+        prompt.push_str(&inputs.block("Current scope and sources", scope, ReadFor::Plan));
     }
     if !context.interviewing {
         prompt.insert_str(
@@ -73,7 +79,11 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
     prompt
 }
 
-fn append_audit_response(prompt: &mut String, audit: Option<&AuditResponse>) {
+fn append_audit_response(
+    prompt: &mut String,
+    audit: Option<&AuditResponse>,
+    inputs: &mut TurnInputs,
+) {
     let Some(audit) = audit else { return };
     prompt.push_str(prompts::AUDIT_RESPONSE_RULES);
     if audit.error.is_some() {
@@ -95,10 +105,16 @@ fn append_audit_response(prompt: &mut String, audit: Option<&AuditResponse>) {
         "findings_in_report_order": audit.findings,
         "error": audit.error,
     });
-    prompt.push_str(&crate::lean::prompt_context::untrusted(
-        prompts::AUDITOR_VERDICT_LABEL,
-        &crate::lean::prompt_context::markdown(&data),
-    ));
+    let verdict = crate::lean::prompt_context::markdown(&data);
+    if verdict.len() > crate::lean::agent_tools::turn_inputs::INLINE_BYTES
+        && let Some(reference) = &audit.audit_ref
+    {
+        prompt.push_str(&format!(
+            "Audit {reference} has {} findings. The separate report is available through read_audit.\n",
+            audit.findings.len()
+        ));
+    }
+    prompt.push_str(&inputs.block(prompts::AUDITOR_VERDICT_LABEL, &verdict, ReadFor::Reference));
 }
 
 fn append_history(prompt: &mut String, first: bool, answered: u64, history: &[Message]) {
@@ -185,30 +201,33 @@ mod tests {
             upto_message: 1,
         };
         for first in [true, false] {
-            let prompt = orchestrator_prompt_text(PromptContext {
-                project: Path::new("project"),
-                session: SessionContext {
-                    start: if first {
-                        crate::lean::prompt_context::SessionStart::Initial
-                    } else {
-                        crate::lean::prompt_context::SessionStart::Resumed
+            let prompt = orchestrator_prompt_text(
+                PromptContext {
+                    project: Path::new("project"),
+                    session: SessionContext {
+                        start: if first {
+                            crate::lean::prompt_context::SessionStart::Initial
+                        } else {
+                            crate::lean::prompt_context::SessionStart::Resumed
+                        },
+                        continuation: crate::lean::prompt_context::Continuation::Role,
                     },
-                    continuation: crate::lean::prompt_context::Continuation::Role,
+                    answered: 1,
+                    asked: &[],
+                    open: &[],
+                    history: &[],
+                    comment_context: &CommentContext::default(),
+                    editable_graph: true,
+                    graph: &graph,
+                    graph_json: "CURRENT CONTRACTS",
+                    interviewing: false,
+                    workflow: &workflow,
+                    scope_context: None,
+                    decision: None,
+                    audit_response: None,
                 },
-                answered: 1,
-                asked: &[],
-                open: &[],
-                history: &[],
-                comment_context: "",
-                editable_graph: true,
-                graph: &graph,
-                graph_json: "CURRENT CONTRACTS",
-                interviewing: false,
-                workflow: &workflow,
-                scope_context: None,
-                decision: None,
-                audit_response: None,
-            });
+                &mut TurnInputs::default(),
+            );
             assert!(prompt.contains(tasks::PLAN_DECOMPOSITION));
             assert_eq!(prompt.matches("TASK DECOMPOSITION:").count(), 1);
             assert!(prompt.contains("CURRENT CONTRACTS"));
@@ -225,24 +244,95 @@ mod tests {
     }
 
     #[test]
-    fn interview_asks_for_confirmation_without_execution_or_audit_rules() {
-        let mut prompt = String::new();
-        prepend_phase(
-            &mut prompt,
-            true,
-            &Workflow {
-                phase: "implementation".into(),
-                summary: "deliver the request".into(),
-                upto_message: 0,
+    fn comment_turn_keeps_its_target_and_pages_the_exact_original_request() {
+        let original = "ORIGINAL REQUEST é👩‍💻".repeat(600);
+        let comment = CommentContext {
+            guidance: "Address comment #3 about persistence.".into(),
+            original_request: Some(original.clone()),
+        };
+        let workflow = Workflow {
+            phase: "planning".into(),
+            summary: "Preserve drafts".into(),
+            upto_message: 1,
+        };
+        let mut inputs = TurnInputs::default();
+        let prompt = orchestrator_prompt_text(
+            PromptContext {
+                project: Path::new("project"),
+                session: SessionContext {
+                    start: crate::lean::prompt_context::SessionStart::Resumed,
+                    continuation: crate::lean::prompt_context::Continuation::Role,
+                },
+                answered: 1,
+                asked: &[],
+                open: &[],
+                history: &[],
+                comment_context: &comment,
+                editable_graph: false,
+                graph: &[],
+                graph_json: "",
+                interviewing: false,
+                workflow: &workflow,
+                scope_context: None,
+                decision: None,
+                audit_response: None,
             },
+            &mut inputs,
         );
+        assert!(prompt.contains("Address comment #3 about persistence."));
+        assert!(prompt.contains("Preserve drafts"));
+        assert!(!prompt.contains("ORIGINAL REQUEST é"));
+        assert!(inputs.require_reads("submit_plan").is_err());
+        let page = inputs
+            .read("comment-turn", &json!({"input":"input-1"}))
+            .unwrap();
+        assert!(original.starts_with(page["text"].as_str().unwrap()));
+    }
 
-        assert!(prompt.contains("highest-impact unresolved scenario"));
-        assert!(prompt.contains("one concrete question at a time with ask_user"));
-        assert!(prompt.contains("submit_requirements"));
-        assert!(prompt.contains("explicitly confirms that scope"));
-        for tool in ["retry_task", "resume_task", "revise_plan", "read_audit"] {
-            assert!(!prompt.contains(tool));
+    #[test]
+    fn interview_asks_for_confirmation_without_execution_or_audit_rules() {
+        for phase in ["interview", "planning"] {
+            let workflow = Workflow {
+                phase: phase.into(),
+                summary: "Deliver the request".into(),
+                upto_message: 0,
+            };
+            let prompt = orchestrator_prompt_text(
+                PromptContext {
+                    project: Path::new("project"),
+                    session: SessionContext {
+                        start: crate::lean::prompt_context::SessionStart::Resumed,
+                        continuation: crate::lean::prompt_context::Continuation::Role,
+                    },
+                    answered: 1,
+                    asked: &[],
+                    open: &[],
+                    history: &[],
+                    comment_context: &CommentContext::default(),
+                    editable_graph: false,
+                    graph: &[],
+                    graph_json: "",
+                    interviewing: workflow.interviewing(),
+                    workflow: &workflow,
+                    scope_context: None,
+                    decision: None,
+                    audit_response: None,
+                },
+                &mut TurnInputs::default(),
+            );
+            for tool in ["retry_task", "resume_task", "read_audit"] {
+                assert!(!prompt.contains(tool), "{phase}: {tool}");
+            }
+            if workflow.interviewing() {
+                assert!(prompt.contains("highest-impact unresolved scenario"));
+                assert!(prompt.contains("one concrete question at a time with ask_user"));
+                assert!(prompt.contains("submit_requirements"));
+                assert!(prompt.contains("explicitly confirms that scope"));
+                assert!(!prompt.contains("revise_plan"));
+            } else {
+                assert!(prompt.contains("revise_plan"));
+                assert!(prompt.contains("request_replan"));
+            }
         }
     }
 
@@ -262,7 +352,7 @@ mod tests {
             reminders: 0,
         };
         let mut prompt = String::new();
-        append_audit_response(&mut prompt, Some(&audit));
+        append_audit_response(&mut prompt, Some(&audit), &mut TurnInputs::default());
 
         assert!(prompt.contains("AUTHORITATIVE AUDIT RESPONSE INSTRUCTIONS:"));
         assert!(prompt.contains("untrusted reference data"));

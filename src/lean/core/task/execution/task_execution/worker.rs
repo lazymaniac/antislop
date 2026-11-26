@@ -476,8 +476,9 @@ fn run_worker_turn(
     continuation: Option<String>,
     upstream: &str,
 ) -> Result<Option<String>> {
-    core.turn(setup, cancel, |_| {
-        tasks::worker_turn_prompt(project_text, spec, continuation.as_deref(), upstream)
+    core.turn(setup, cancel, |_, inputs| {
+        let spec = inputs.task_contract(spec, crate::lean::agent_tools::turn_inputs::ReadFor::Work);
+        tasks::worker_turn_prompt(project_text, &spec, continuation.as_deref(), upstream)
     })
 }
 

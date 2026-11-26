@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::agent_tools::turn_inputs::ReadFor;
 use crate::lean::prompts;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -20,6 +21,7 @@ pub(super) enum DirectRevision<'a> {
 struct ReviewData<'a> {
     context: &'a ReviewContext<'a>,
     approved: &'a ApprovedRevisionWork,
+    request: &'a str,
     checkpoints: &'a [Value],
 }
 
@@ -43,6 +45,7 @@ impl Core {
         self.review_revision(&ReviewData {
             context: &context,
             approved: &approved,
+            request: lease.request,
             checkpoints: &checkpoints,
         })?;
         require(!context.cancel.load(Ordering::SeqCst), "revision cancelled")?;
@@ -89,12 +92,6 @@ impl Core {
         );
         let scope_context =
             self.plan_scope_context(context.conversation, &context.revision.plan)?;
-        let reason = format!(
-            prompts::template!(REVISION_SCOPE_CONTEXT),
-            context.revision.scope.as_deref().unwrap_or("unchanged"),
-            reason = reason,
-            scope_context = scope_context
-        );
         let team_guidance = self.store.team_guidance(context.conversation)?;
         let review = self
             .review(
@@ -103,8 +100,12 @@ impl Core {
                 Some(&context.revision.plan),
                 &context.project,
                 context.cancel,
-                |initial, request| {
-                    let mut prompt = tasks::plan_revision_review_prompt(
+                |initial, request, inputs| {
+                    let previous_scope = inputs.block("Previous accepted scope", &scope_context, ReadFor::Review);
+                    let candidate_scope = inputs.block("Candidate scope", context.revision.scope.as_deref().unwrap_or("unchanged"), ReadFor::Review);
+                    let reason = format!("Revision {} for plan {} at base {}. {reason}\n{previous_scope}\n{candidate_scope}\nReassess preserved results against the candidate scope.", data.request, context.revision.plan, context.revision.base_revision);
+
+                    let mut prompt = tasks::render_revision_review(
                         &context.project.to_string_lossy(),
                         request,
                         context.specs,
@@ -115,6 +116,7 @@ impl Core {
                         },
                         &reason,
                         initial,
+                        inputs,
                     );
                     if let Some(guidance) = &team_guidance {
                         guidance.write_guidance_section(&mut prompt);

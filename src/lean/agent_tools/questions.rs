@@ -1,7 +1,7 @@
 use super::*;
 
 impl Core {
-    pub(super) fn require_open_agent_turn(
+    pub(in crate::lean) fn require_open_agent_turn(
         &self,
         conversation: &str,
         role: &str,

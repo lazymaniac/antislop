@@ -59,6 +59,7 @@ mod tests {
             if images {
                 expected.push("get_images");
             }
+            expected.push("read_turn_input");
             assert_eq!(listed, expected, "{role}");
             for (name, allowed) in [
                 ("read_planning_result", reports),
@@ -242,9 +243,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "record_evidence", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "record_evidence", "read_evidence", "current_turn", "read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"],
             ),
-            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]),
+            ("reviewer:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "read_planning_result", "get_images", "read_evidence", "current_turn", "read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -284,6 +285,7 @@ mod role_tests {
                 "request_replan",
                 "create_session_pr",
                 "merge_session_with_main",
+                "read_turn_input",
                 "prepare_validation", "complete_validation", "invalidate_validation", "read_validations",
             ]
         );
@@ -295,12 +297,12 @@ mod role_tests {
         assert!(merge["description"].as_str().unwrap().contains("session_action_result"));
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "consult_planning", "read_dependency_result", "read_planning_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]
+            vec!["submit_plan", "consult_planning", "read_dependency_result", "read_planning_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result", "read_planning_result","get_images","read_evidence","current_turn","read_task_contract", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]} else {vec!["review", "get_images", "read_dependency_result", "read_planning_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]},
+                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result", "read_planning_result","get_images","read_evidence","current_turn","read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]} else {vec!["review", "get_images", "read_dependency_result", "read_planning_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]},
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];
@@ -547,7 +549,8 @@ fn result_footer_matches_the_gateway_tool_scope() {
         gateway.set_role(role).unwrap();
         gateway.set_task_contract(task.clone()).unwrap();
         let footer = gateway.completion_footer(None).unwrap();
-        let tools = footer.split('`').skip(1).step_by(2).collect::<Vec<_>>();
+        let tools = footer.split_once(". Choose").unwrap().0.split('`').skip(1).step_by(2).collect::<Vec<_>>();
+        assert_eq!(footer.contains("`read_turn_input`"), gateway.tool_names().contains(&"read_turn_input"));
         assert_eq!(tools, expected, "{role}: {footer}");
         for tool in tools {
             assert!(gateway.tool_names().contains(&tool));

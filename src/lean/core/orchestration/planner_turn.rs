@@ -45,7 +45,7 @@ impl Core {
         let asked = self.asked_since(conversation, answered, upto)?;
         let requirements = self.store.workflow(conversation)?.summary;
         let team_guidance = self.store.team_guidance(conversation)?;
-        let scope_context = planning_scope_context(self, conversation)?;
+        let scope_context = planning_scope_context(self, conversation, None, &requirements)?;
         let keepable = self.keepable_tasks_note(conversation)?;
         let replaced = self.replaced_graph(conversation, &asked)?;
         Ok(PlannerTurnContext {
@@ -105,8 +105,8 @@ impl Core {
             .latest_plan(context.conversation)?
             .first()
             .map(|task| task.plan_id.clone());
-        self.turn(setup, cancel, |session| {
-            let mut prompt = planner_prompt(context, session.introduce());
+        self.turn(setup, cancel, |session, inputs| {
+            let mut prompt = planner_prompt(context, session.introduce(), inputs);
             if !reports.is_empty() {
                 prompt.push_str(if context.replaced.is_some() {
                     crate::lean::prompts::PLANNER_REREAD_REPORTS
@@ -237,17 +237,24 @@ fn planner_setup<'a>(context: &PlannerTurnContext<'a>) -> TurnSetup<'a> {
     }
 }
 
-fn planner_prompt(context: &PlannerTurnContext<'_>, first: bool) -> String {
-    planner_prompt_text(PlannerPrompt {
-        project: &context.project,
-        first,
-        requirements: &context.requirements,
-        team_guidance: context.team_guidance.as_ref(),
-        asked: &context.asked,
-        replaced: context.replaced.as_deref(),
-        keepable: context.keepable.as_deref(),
-        scope_context: context.scope_context.as_deref(),
-    })
+fn planner_prompt(
+    context: &PlannerTurnContext<'_>,
+    first: bool,
+    inputs: &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+) -> String {
+    planner_prompt_text(
+        PlannerPrompt {
+            project: &context.project,
+            first,
+            requirements: &context.requirements,
+            team_guidance: context.team_guidance.as_ref(),
+            asked: &context.asked,
+            replaced: context.replaced.as_deref(),
+            keepable: context.keepable.as_deref(),
+            scope_context: context.scope_context.as_deref(),
+        },
+        inputs,
+    )
 }
 
 fn announce_planner_draft(store: &Store, conversation: &str) -> Result<()> {
@@ -487,7 +494,7 @@ mod tests {
         );
         assert!(!core.planner_owns_turn(&id, comment.seq).unwrap());
         let context = core.planner_turn_context(&id, upto).unwrap();
-        let prompt = planner_prompt(&context, true);
+        let prompt = planner_prompt(&context, true, &mut Default::default());
         assert!(prompt.contains("The correction needs a user decision"));
         assert!(prompt.contains("task index") && prompt.contains("read_task_contract"));
         assert!(context.replaced.as_ref().unwrap().contains("t1"));

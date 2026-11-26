@@ -15,19 +15,6 @@ pub(super) fn record_plan_review_start(
     Ok(())
 }
 
-pub(super) fn plan_review_prompt(
-    project: &str,
-    request: &str,
-    specs: &[TaskContract],
-    first: bool,
-) -> String {
-    if first {
-        tasks::plan_review_prompt(project, request, specs)
-    } else {
-        tasks::plan_review_followup(request, specs)
-    }
-}
-
 pub(super) fn plan_event_payload(
     text: &str,
     plan: &PreparedPlan,

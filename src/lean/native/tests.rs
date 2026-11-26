@@ -949,7 +949,7 @@ fn a_provider_limit_is_reported_without_blocking_later_launches_or_restart() {
             upto_message: 0,
         };
         assert!(
-            core.turn(setup, &AtomicBool::new(false), |_| {
+            core.turn(setup, &AtomicBool::new(false), |_, _| {
                 "Synthetic limit probe".into()
             })
             .unwrap()
@@ -1811,8 +1811,14 @@ fn pi_core_rounds_rotate_and_startup_retry_binds_only_the_ready_session() {
                     upto_message: 0,
                 };
                 let answer = core
-                    .turn(setup, &AtomicBool::new(false), |_| {
-                        "Complete the fixture task".into()
+                    .turn(setup, &AtomicBool::new(false), |_, inputs| {
+                        let body = "a👩‍💻é".repeat(3000);
+                        let index = inputs.block(
+                            "Fixture contract",
+                            &body,
+                            crate::lean::agent_tools::turn_inputs::ReadFor::Work,
+                        );
+                        format!("Complete the fixture task. fixture-read-input\n{index}")
                     })
                     .unwrap()
                     .unwrap_or_else(|| {

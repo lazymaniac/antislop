@@ -12,6 +12,9 @@ fn plain_reviewer(role: &str) -> bool {
 
 pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     let mut names = role_tools(role);
+    if names.contains(&"current_turn") {
+        names.push("read_turn_input");
+    }
     if names.contains(&"current_turn") && !role.starts_with("planning-") {
         names.extend([
             "prepare_validation",
@@ -270,6 +273,11 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
             prompts::TOOL_CONSULT_PLANNING.into(),
             json!({"kind":{"enum":["research","analysis","dependencies","architecture","test_design"]},"question":{"type":"string"},"refresh":{"type":"boolean"}}),
             vec!["turn", "kind", "question"],
+        ),
+        "read_turn_input" => (
+            prompts::TOOL_READ_TURN_INPUT.into(),
+            json!({"input":{"type":"string"},"cursor":{"type":"string"}}),
+            vec!["turn", "input"],
         ),
         "read_planning_result" => (
             prompts::TOOL_READ_PLANNING_RESULT.into(),

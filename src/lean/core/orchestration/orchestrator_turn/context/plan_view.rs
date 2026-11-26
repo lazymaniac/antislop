@@ -79,12 +79,7 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
     let states = graph.iter().map(|task| json!({
         "task":task.spec["id"], "summary":task.spec["summary"].as_str().or(task.spec["title"].as_str()), "depends_on":task.spec["depends_on"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
         "reason":task.current_reason().map(|text| tasks::bound(text, 2000)),
-        "recovery":if task.spec["deferred"] == true { prompts::DEFERRED_TASK_GUIDANCE } else { match task.status.as_str() {
-            status::FAILED => prompts::FAILED_TASK_GUIDANCE,
-            status::COORDINATING => prompts::COORDINATING_TASK_GUIDANCE,
-            status::WAITING => prompts::WAITING_TASK_GUIDANCE,
-            _ => prompts::SETTLED_TASK_GUIDANCE,
-        }}
+        "waiting_request":task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
     })).collect::<Vec<_>>();
     Ok(crate::lean::prompt_context::untrusted(
         prompts::CURRENT_PLAN_INDEX_LABEL,
@@ -145,7 +140,7 @@ mod tests {
             assert!(snapshot.contains(&task.id));
         }
         assert!(snapshot.contains("round:") && snapshot.contains("input_generation:"));
-        assert!(snapshot.contains("revise_plan") && snapshot.contains("resume_task"));
+        assert!(!snapshot.contains("revise_plan") && !snapshot.contains("resume_task"));
         assert!(snapshot.contains("read_task_contract"));
     }
 }

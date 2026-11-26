@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::agent_tools::turn_inputs::{ReadFor, TurnInputs};
 use crate::lean::prompts;
 
 /// How a plan, audit or code reviewer ends its turn.
@@ -86,8 +87,9 @@ pub fn findings_text(findings: &[Value]) -> String {
 pub(crate) fn round_handoff_prompt(
     handoff: &crate::lean::rounds::RoundHandoff,
     reviewer: bool,
+    inputs: &mut TurnInputs,
 ) -> String {
-    let (protection, report, findings) = handoff_sections(handoff, reviewer);
+    let (protection, report, findings) = handoff_sections(handoff, reviewer, inputs);
     format!(
         prompts::template!(ROUND_HANDOFF_PROMPT),
         handoff.worktree.display(),
@@ -106,6 +108,7 @@ pub(crate) fn round_handoff_prompt(
 fn handoff_sections(
     handoff: &crate::lean::rounds::RoundHandoff,
     reviewer: bool,
+    inputs: &mut TurnInputs,
 ) -> (String, String, String) {
     let protection = handoff_protection(handoff);
     let report = handoff.report.as_ref().map_or_else(
@@ -122,9 +125,10 @@ fn handoff_sections(
                 if reviewer {
                     prompts::PREVIOUS_REVIEW_FINDINGS.into()
                 } else {
-                    crate::lean::prompt_context::untrusted(
+                    inputs.block(
                         prompts::UNRESOLVED_FINDINGS_LABEL,
                         &findings_text(items),
+                        ReadFor::Reference,
                     )
                 }
             },

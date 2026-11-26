@@ -16,7 +16,11 @@ impl Core {
         plan_id: Option<&str>,
         project: &Path,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(bool, &str) -> String,
+        prompt: impl FnOnce(
+            bool,
+            &str,
+            &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+        ) -> String,
     ) -> Result<std::result::Result<Verdict, String>> {
         self.review_with_report(conversation, role, plan_id, project, cancel, prompt)
             .map(|result| result.map(|outcome| outcome.verdict))
@@ -29,19 +33,24 @@ impl Core {
         plan_id: Option<&str>,
         project: &Path,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(bool, &str) -> String,
+        prompt: impl FnOnce(
+            bool,
+            &str,
+            &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+        ) -> String,
     ) -> Result<std::result::Result<ReviewOutcome, String>> {
         let config = self.config_snapshot();
         let answered = self.store.last_answered(conversation, role)?;
         let all = self.store.messages_by(conversation, "user", 0)?;
         let upto = all.last().map_or(0, |message| message.seq);
         let setup = review_setup(conversation, role, plan_id, project, &config, upto);
-        let answer = self.turn(setup, cancel, |session| {
+        let answer = self.turn(setup, cancel, |session, inputs| {
             let first = session.introduce();
             let initial = first || answered == 0;
             prompt(
                 initial,
                 &review_request(&all, if initial { 0 } else { answered }),
+                inputs,
             )
         })?;
         self.review_outcome(conversation, role, answer)
@@ -53,7 +62,10 @@ impl Core {
         &self,
         setup: TurnSetup<'_>,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
+        prompt: impl FnOnce(
+            crate::lean::prompt_context::SessionContext,
+            &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+        ) -> String,
     ) -> Result<Option<String>> {
         self.turn_inner(setup, cancel, prompt)
     }

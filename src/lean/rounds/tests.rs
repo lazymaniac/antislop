@@ -232,7 +232,7 @@ fn handoff_recovers_latest_report_after_interruption_without_older_reports() {
     let handoff = core.round_handoff(&task.id, 4, cwd).unwrap();
     assert!(handoff.interrupted);
     assert_eq!(handoff.report.as_ref().unwrap().0, 2);
-    let prompt = tasks::round_handoff_prompt(&handoff, false);
+    let prompt = tasks::round_handoff_prompt(&handoff, false, &mut Default::default());
     assert!(!prompt.contains("Latest complete report\n"));
     assert!(prompt.contains("read_dependency_result"));
     assert_eq!(
@@ -240,7 +240,10 @@ fn handoff_recovers_latest_report_after_interruption_without_older_reports() {
         "Latest complete report\n".repeat(2000)
     );
     assert!(prompt.contains("view=review"));
-    assert!(tasks::round_handoff_prompt(&handoff, true).contains("view=review"));
+    assert!(
+        tasks::round_handoff_prompt(&handoff, true, &mut Default::default())
+            .contains("view=review")
+    );
     assert!(!prompt.contains("OLD REPORT MUST NOT APPEAR"));
     assert!(!prompt.contains("HISTORICAL TOOL NEVER IN HANDOFF"));
     assert!(handoff.files.is_empty());
@@ -296,7 +299,7 @@ echo '{"type":"turn.completed"}'
                     upto_message: 0,
                 };
                 assert_eq!(
-                    core.turn(setup, &AtomicBool::new(false), |_| "Do the task".into())
+                    core.turn(setup, &AtomicBool::new(false), |_, _| "Do the task".into())
                         .unwrap()
                         .map(|s| serde_json::from_str::<turn_result::TurnResult>(&s)
                             .unwrap()
@@ -596,7 +599,7 @@ fn execute(
             upto_message: 0,
         },
         &AtomicBool::new(false),
-        |_| "Perform the task using the round handoff.".into(),
+        |_, _| "Perform the task using the round handoff.".into(),
     )
     .unwrap()
     .map(|s| {
@@ -777,7 +780,7 @@ fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh(
         if !after_report {
             assert!(handoff.interrupted)
         }
-        let context = tasks::round_handoff_prompt(&handoff, false);
+        let context = tasks::round_handoff_prompt(&handoff, false, &mut Default::default());
         assert!(context.contains("interrupted"));
         assert!(context.contains(&role));
         task.round = 3;
@@ -846,7 +849,7 @@ fn protection_data_is_formatted_for_the_actual_workspace_mode() {
     core.store.update_task(&task).unwrap();
     let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
     assert_eq!(handoff.protected_paths, ["user.txt"]);
-    let prompt = tasks::round_handoff_prompt(&handoff, false);
+    let prompt = tasks::round_handoff_prompt(&handoff, false, &mut Default::default());
     assert!(prompt.contains("Changes already present in the primary working tree"));
     assert!(!prompt.contains("You work directly in the user's directory"));
 }
@@ -906,7 +909,7 @@ fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() 
     let handoff = core
         .round_handoff(&task.id, 1, core.state.parent().unwrap())
         .unwrap();
-    let prompt = tasks::round_handoff_prompt(&handoff, false);
+    let prompt = tasks::round_handoff_prompt(&handoff, false, &mut Default::default());
     assert!(!prompt.contains(&full_report));
     assert!(!prompt.contains("UNRELATED REPORT"));
 }

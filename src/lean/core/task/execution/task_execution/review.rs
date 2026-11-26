@@ -23,7 +23,7 @@ struct ReviewTurn<'a> {
     setup: TurnSetup<'a>,
     reviewdir: &'a Path,
     spec: &'a TaskContract,
-    report: &'a str,
+    report: tasks::ReviewReport<'a>,
     changes: Option<&'a str>,
     round: u32,
     upstream: &'a str,
@@ -83,7 +83,12 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
         setup,
         reviewdir: input.workdir,
         spec: input.spec,
-        report: input.report,
+        report: tasks::ReviewReport::for_task(
+            &input.core.store,
+            input.task,
+            input.spec,
+            input.report,
+        ),
         changes: input.changes,
         round: input.round,
         upstream: input.upstream,
@@ -93,19 +98,22 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
 }
 
 fn run_review_turn(input: ReviewTurn<'_>) -> Result<Option<String>> {
-    input.core.turn(input.setup, input.cancel, |session| {
-        let first = session.introduce();
-        let prompt = tasks::reviewer_turn_prompt(
-            &input.reviewdir.to_string_lossy(),
-            input.spec,
-            input.report,
-            input.changes,
-            first || input.round == 1,
-            input.upstream,
-            input.findings,
-        );
-        format!("{}{prompt}", input.user_checks)
-    })
+    input
+        .core
+        .turn(input.setup, input.cancel, |session, inputs| {
+            let first = session.introduce();
+            let prompt = tasks::reviewer_result_prompt(
+                &input.reviewdir.to_string_lossy(),
+                input.spec,
+                input.report,
+                input.changes,
+                first || input.round == 1,
+                input.upstream,
+                input.findings,
+                inputs,
+            );
+            format!("{}{prompt}", input.user_checks)
+        })
 }
 
 fn parse_verdict(

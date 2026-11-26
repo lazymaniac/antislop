@@ -17,15 +17,24 @@ fn handoff_with_findings_repeats_neither_report_nor_task() {
         protected_paths: vec![],
         primary: "/primary".into(),
     };
-    let worker = super::round_handoff_prompt(&handoff, false);
+    let worker = super::round_handoff_prompt(&handoff, false, &mut Default::default());
     assert!(worker.contains("src/a.rs") && worker.contains("read_dependency_result"));
     assert!(worker.contains("f1"));
-    assert!(super::round_handoff_prompt(&handoff, true).contains("earlier findings"));
+    assert!(
+        super::round_handoff_prompt(&handoff, true, &mut Default::default())
+            .contains("earlier findings")
+    );
     assert!(!worker.contains("PREVIOUS REPORT BODY"));
     assert!(!worker.contains("Full task and working rules"));
     handoff.verdict = None;
-    assert!(!super::round_handoff_prompt(&handoff, false).contains("PREVIOUS REPORT BODY"));
-    assert!(!super::round_handoff_prompt(&handoff, true).contains("PREVIOUS REPORT BODY"));
+    assert!(
+        !super::round_handoff_prompt(&handoff, false, &mut Default::default())
+            .contains("PREVIOUS REPORT BODY")
+    );
+    assert!(
+        !super::round_handoff_prompt(&handoff, true, &mut Default::default())
+            .contains("PREVIOUS REPORT BODY")
+    );
 }
 
 fn contract(value: serde_json::Value) -> TaskContract {

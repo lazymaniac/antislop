@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::agent_tools::turn_inputs::TurnInputs;
 
 struct PreparedAgent {
     spec: agent::Spec,
@@ -10,7 +11,10 @@ pub(super) fn execute(
     core: &Core,
     state: TurnState<'_>,
     cancel: &AtomicBool,
-    prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
+    prompt: impl FnOnce(
+        crate::lean::prompt_context::SessionContext,
+        &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+    ) -> String,
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
     let profile = state.profile.as_ref().map_err(clone_error)?.clone();
@@ -22,18 +26,25 @@ fn execute_profile(
     state: &TurnState<'_>,
     profile: ResolvedProfile,
     cancel: &AtomicBool,
-    prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
+    prompt: impl FnOnce(
+        crate::lean::prompt_context::SessionContext,
+        &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+    ) -> String,
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
     let _execution = enter_execution(core, state, cancel)?;
     check_task_inputs(core, &state.role)?;
     let mut prepared = prepare_agent(core, state, profile)?;
-    let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt)?;
+    let mut inputs = TurnInputs::default();
+    let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt, &mut inputs)?;
     events.prompt_bytes.set(Some(text.len()));
     check_task_inputs(core, &state.role)?;
     events.announce("agent", json!({"type":"prompt", "text": text}));
-    let handler = tool_handler(core, state);
-    run_cli(core, state, &mut prepared, &text, &handler, cancel, events)
+    let inputs = Arc::new(std::sync::Mutex::new(inputs));
+    let handler = tool_handler(core, state, inputs.clone());
+    let outcome = run_cli(core, state, &mut prepared, &text, &handler, cancel, events);
+    *inputs.lock().expect("turn inputs mutex") = TurnInputs::default();
+    outcome
 }
 
 fn enter_execution(
@@ -193,7 +204,11 @@ fn check_task_inputs(core: &Core, role: &str) -> Result<()> {
     Ok(())
 }
 
-fn tool_handler(core: &Core, state: &TurnState<'_>) -> Arc<crate::lean::mcp::Handler> {
+fn tool_handler(
+    core: &Core,
+    state: &TurnState<'_>,
+    inputs: Arc<std::sync::Mutex<TurnInputs>>,
+) -> Arc<crate::lean::mcp::Handler> {
     let weak = core.weak.get().expect("core weak reference").clone();
     let (conversation, role, turn) = (
         state.conversation.to_owned(),
@@ -207,7 +222,17 @@ fn tool_handler(core: &Core, state: &TurnState<'_>) -> Arc<crate::lean::mcp::Han
         let suspension = (!core.config_snapshot().policy.single_agent && coordination_tool(tool))
             .then(|| core.execution.suspend(&turn))
             .flatten();
-        let outcome = core.agent_tool(&conversation, &role, &turn, tool, args);
+        let outcome = (|| {
+            if tool == "read_turn_input" {
+                core.require_open_agent_turn(&conversation, &role, &turn)?;
+                return inputs.lock().expect("turn inputs mutex").read(&turn, args);
+            }
+            inputs
+                .lock()
+                .expect("turn inputs mutex")
+                .require_reads(tool)?;
+            core.agent_tool(&conversation, &role, &turn, tool, args)
+        })();
         if let Some(suspension) = suspension {
             suspension.resume(|| false)?;
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::agent_tools::turn_inputs::{ReadFor, TurnInputs};
 use crate::lean::prompts;
 
 const VALIDATION_REUSE: &str = prompts::VALIDATION_REUSE;
@@ -7,7 +8,11 @@ pub(super) fn prepare_prompt(
     core: &Core,
     state: &TurnState<'_>,
     spec: &agent::Spec,
-    prompt: impl FnOnce(crate::lean::prompt_context::SessionContext) -> String,
+    prompt: impl FnOnce(
+        crate::lean::prompt_context::SessionContext,
+        &mut crate::lean::agent_tools::turn_inputs::TurnInputs,
+    ) -> String,
+    inputs: &mut TurnInputs,
 ) -> Result<String> {
     use crate::lean::prompt_context::{Continuation, PromptContext, SessionContext, SessionStart};
     let introduce = role_introduction(core, state)?;
@@ -74,19 +79,26 @@ pub(super) fn prepare_prompt(
         }
     }
     context.section(prompts::INBOX_LABEL, inbox_text(state));
-    let assignment = prompt(session);
+    let assignment = prompt(session, inputs);
     let findings_in_assignment = assignment.contains(prompts::EARLIER_FINDINGS_HEADING);
     context.section(prompts::ASSIGNMENT_LABEL, assignment);
     if task_role(&state.role).is_some() {
         let mut allocation = String::new();
         append_allocation_context(core, state, spec, &mut allocation)?;
         context.section(prompts::ALLOCATION_LABEL, allocation);
-        let mut inputs = String::new();
-        append_task_context(core, state, spec, &mut inputs)?;
-        context.section(prompts::INPUTS_AND_EVIDENCE_LABEL, inputs);
+        let mut task_context = String::new();
+        append_task_context(core, state, spec, &mut task_context, inputs)?;
+        context.section(prompts::INPUTS_AND_EVIDENCE_LABEL, task_context);
     }
     let mut handoff = String::new();
-    append_round_handoff(core, state, spec, findings_in_assignment, &mut handoff)?;
+    append_round_handoff(
+        core,
+        state,
+        spec,
+        findings_in_assignment,
+        &mut handoff,
+        inputs,
+    )?;
     context.section(prompts::CONTINUATION_LABEL, handoff);
     let text = context.render();
     core.store.append_event(state.conversation, Some(&state.turn.id), state.turn.plan_id.as_deref(), "prompt_sections", &json!({"body_bytes":text.len(),"sections":context.bytes(),"measurement":"UTF-8 prompt body bytes; excludes footer, provider context and tokens"}))?;
@@ -131,8 +143,9 @@ fn append_task_context(
     state: &TurnState<'_>,
     spec: &agent::Spec,
     text: &mut String,
+    inputs: &mut TurnInputs,
 ) -> Result<()> {
-    let Some((id, _)) = task_role(&state.role) else {
+    let Some((id, reviewer)) = task_role(&state.role) else {
         return Ok(());
     };
     let language_sample = core.store.workflow(state.conversation)?.summary;
@@ -180,6 +193,22 @@ fn append_task_context(
         ));
     }
     let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
+    if let Some(owner) = &contract.options_for
+        && let Some(owner) = core.store.task_in_plan_by_id(&task.plan_id, owner)?
+    {
+        let label = format!("Options owner contract for {}", owner.spec["id"]);
+        let required = if reviewer {
+            ReadFor::Review
+        } else {
+            ReadFor::Work
+        };
+        text.push_str(&inputs.block(
+            &label,
+            &crate::lean::prompt_context::markdown(&owner.spec),
+            required,
+        ));
+        text.push('\n');
+    }
     if !contract.result_inputs.is_empty() {
         text.push_str(prompts::HISTORICAL_REPORT_INPUTS);
         text.push_str(&crate::lean::prompt_context::markdown(
@@ -241,6 +270,7 @@ fn append_round_handoff(
     spec: &agent::Spec,
     findings_in_assignment: bool,
     text: &mut String,
+    inputs: &mut TurnInputs,
 ) -> Result<()> {
     let SessionPolicy::TaskRound { task, round } = &state.session_policy else {
         return Ok(());
@@ -253,11 +283,12 @@ fn append_round_handoff(
             .as_ref()
             .and_then(|v| v["findings"].as_array())
     {
-        text.push_str(&tasks::earlier_findings(findings));
+        text.push_str(&tasks::earlier_findings(findings, inputs));
     }
     text.push_str(&tasks::round_handoff_prompt(
         &handoff,
         task_role(&state.role).is_some_and(|(_, reviewer)| reviewer),
+        inputs,
     ));
     Ok(())
 }
@@ -376,27 +407,33 @@ mod tests {
                             add_dirs: vec![],
                             resume: state.resume.clone(),
                         };
-                        let prompt = prepare_prompt(&core, &state, &spec, |session| {
-                            assert_eq!(session.start, start);
-                            if reviewer {
-                                tasks::reviewer_turn_prompt(
-                                    &project.to_string_lossy(),
-                                    &contract,
-                                    "RESULT_SENTINEL",
-                                    None,
-                                    session.introduce(),
-                                    "",
-                                    &[],
-                                )
-                            } else {
-                                tasks::worker_turn_prompt(
-                                    &project.to_string_lossy(),
-                                    &contract,
-                                    None,
-                                    "",
-                                )
-                            }
-                        })
+                        let prompt = prepare_prompt(
+                            &core,
+                            &state,
+                            &spec,
+                            |session, _| {
+                                assert_eq!(session.start, start);
+                                if reviewer {
+                                    tasks::reviewer_turn_prompt(
+                                        &project.to_string_lossy(),
+                                        &contract,
+                                        "RESULT_SENTINEL",
+                                        None,
+                                        session.introduce(),
+                                        "",
+                                        &[],
+                                    )
+                                } else {
+                                    tasks::worker_turn_prompt(
+                                        &project.to_string_lossy(),
+                                        &contract,
+                                        None,
+                                        "",
+                                    )
+                                }
+                            },
+                            &mut TurnInputs::default(),
+                        )
                         .unwrap();
                         assert_eq!(
                             prompt.matches("GOAL_SENTINEL").count(),
