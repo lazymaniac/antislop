@@ -61,7 +61,20 @@ pub(super) fn orchestrator_prompt_text(
     if !context.interviewing {
         let scope = context.scope_context.unwrap_or(&context.workflow.summary);
         prompt.push('\n');
-        prompt.push_str(&inputs.block("Current scope and sources", scope, ReadFor::Plan));
+        if context.editable_graph
+            && context.workflow.phase == "implementation"
+            && let Some(reference) =
+                inputs.offload("Current scope and sources", scope, ReadFor::ScopeChange)
+        {
+            prompt.push_str(&crate::lean::prompt_context::untrusted(
+                "Accepted scope overview",
+                &tasks::bound(&context.workflow.summary, 2400),
+            ));
+            prompt.push_str(&reference);
+            prompt.push_str("\nRead exact scope and source pages for affected requirements. Read every page before submitting a new plan or changing the accepted scope.\n");
+        } else {
+            prompt.push_str(&inputs.block("Current scope and sources", scope, ReadFor::Plan));
+        }
     }
     if !context.interviewing {
         prompt.insert_str(

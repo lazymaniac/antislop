@@ -75,6 +75,7 @@ fn inserting_a_task_before_completed_work_reassesses_the_retained_result() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let specs = revision.merge(&baseline).unwrap();
     apply(
@@ -133,6 +134,7 @@ fn replacement_inherits_unfinished_work_but_cannot_replace_completed_work() {
         retire: vec!["b".into()],
         redo: vec![],
         replacements: std::collections::BTreeMap::from([("successor".into(), "b".into())]),
+        finding_actions: Vec::new(),
     };
     let specs = revision.merge(&baseline).unwrap();
     apply(
@@ -269,6 +271,7 @@ fn a_reviewed_successor_recovers_historical_code_without_approval_or_retirement(
         retire: vec![],
         redo: vec![],
         replacements: std::collections::BTreeMap::from([(successor.id.clone(), source.id.clone())]),
+        finding_actions: Vec::new(),
     };
     let candidates = store
         .unfinished_checkpoints(&conversation, &revision.plan)
@@ -374,6 +377,7 @@ fn a_checkpoint_that_changed_during_review_cannot_partially_apply_a_revision() {
         retire: vec![],
         redo: vec![],
         replacements: std::collections::BTreeMap::from([("recover".into(), old[1].id.clone())]),
+        finding_actions: Vec::new(),
     };
     let specs = revision.merge(&baseline).unwrap();
     store

@@ -3,8 +3,8 @@
 
 #[path = "plan_revision.rs"]
 mod plan_revision;
-pub use plan_revision::PlanRevision;
 pub(in crate::lean) use plan_revision::RevisionLease;
+pub use plan_revision::{FindingAction, FindingDestination, PlanRevision};
 #[path = "history.rs"]
 mod history;
 #[path = "run_context.rs"]
@@ -41,11 +41,15 @@ mod evidence;
 mod validations;
 pub(in crate::lean) use artifacts::ArtifactReceipt;
 pub(in crate::lean) use evidence::{EvidenceReference, MAX_RESULT_EVIDENCE};
-pub(in crate::lean) use validations::{ValidationObservation, ValidationRun, ValidationSpec};
+pub(in crate::lean) use validations::{
+    ValidationKind, ValidationObservation, ValidationRun, ValidationSpec,
+};
 #[path = "store/answer_waits.rs"]
 mod answer_waits;
 #[path = "store/plan_reviews.rs"]
 mod plan_reviews;
+#[path = "store/review_dispositions.rs"]
+pub(super) mod review_dispositions;
 #[path = "store/revision_jobs.rs"]
 mod revision_jobs;
 #[path = "store/task_progress.rs"]

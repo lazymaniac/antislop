@@ -623,11 +623,15 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
             .iter()
             .any(|(_, prompt)| prompt.contains("receipt-only"))
     );
+    let criterion = first.spec["acceptance_criteria"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(
         later[before..]
             .iter()
             .any(|(_, prompt)| prompt.contains("recheck correction")
-                && prompt.contains("Your obligations (the task's goal"))
+                && prompt.contains("Obligations:\n")
+                && prompt.contains(criterion))
     );
 }
 

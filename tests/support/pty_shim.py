@@ -92,15 +92,21 @@ def answer_of(output):
 
 def selection_args(selection):
     """`select` arguments from a fixture's selection, longer form or not."""
-    return {
+    selected = selection["selected"]
+    args = {
         "alternatives": [
             {"id": a["id"], "approach": a["approach"], "tradeoffs": a.get("tradeoffs") or "None noted"}
             for a in selection["alternatives"]
         ],
-        "selected": selection["selected"],
+        "selected": selected,
+        "ranking": selection.get("ranking", [selected] + [a["id"] for a in selection["alternatives"] if a["id"] != selected]),
+        "decisive_criterion": selection.get("decisive_criterion", "Preserve the requested behavior"),
         "rationale": selection["rationale"],
         "user_summary": selection.get("user_summary") or "Selected the approach that preserves the requested behavior with focused changes.",
     }
+    if "ranking_override" in selection:
+        args["ranking_override"] = selection["ranking_override"]
+    return args
 
 
 def review_args(text, verdict, prompt):
@@ -262,19 +268,19 @@ def task_result(text, prompt):
         verdict = json.loads(found.group(1)) if found else {"approved": True, "findings": []}
         return "review", review_args(text, verdict, prompt)
     if "Kind: options" in prompt or "Choose the best available approach" in prompt:
-        return "select", {
+        return "select", selection_args({
             "alternatives": [
                 {"id": "A", "approach": "Focused implementation", "tradeoffs": "Local changes"},
                 {"id": "B", "approach": "Broader restructuring", "tradeoffs": "More coordination"}],
             "selected": (re.findall(r"Selected:\s*([AB])", text) or ["A"])[-1],
             "rationale": "The focused approach satisfies this local contract",
             "user_summary": "Selected focused changes to preserve the requested behavior with less coordination.",
-        }
+        })
     return "complete", {"summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text,
                         "commit_message": COMMIT_MESSAGE}
 
 
-PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary", "acceptance_criteria", "result_inputs")
+PLANNED = ("id", "title", "goal", "kind", "change_kind", "depends_on", "deferred", "outputs", "delivery", "section", "summary", "acceptance_criteria", "result_inputs", "open_decisions")
 
 
 def planned_task(task):

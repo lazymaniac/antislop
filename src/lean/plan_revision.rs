@@ -20,6 +20,26 @@ pub struct PlanRevision {
     /// New task id -> retired local task id, or an unfinished historical task UUID.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub replacements: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finding_actions: Vec<FindingAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingAction {
+    pub source_task: String,
+    pub source_generation: i64,
+    pub review_turn: String,
+    pub finding: String,
+    pub reason: String,
+    pub destination: Option<FindingDestination>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingDestination {
+    pub task: String,
+    pub criterion: String,
 }
 
 impl PlanRevision {

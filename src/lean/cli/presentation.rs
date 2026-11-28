@@ -38,6 +38,10 @@ pub fn describe(event: &Value) -> Option<String> {
     let kind = event["kind"].as_str()?;
     match kind {
         "message" => describe_message(payload),
+        "turn_queued" => Some(format!(
+            "{} is waiting for execution",
+            value(payload, "role")
+        )),
         "turn_started" => Some(format!(
             "· {} ({}) is working…",
             value(payload, "role").split(':').next().unwrap_or_default(),

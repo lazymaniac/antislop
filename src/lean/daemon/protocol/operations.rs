@@ -428,7 +428,7 @@ operations! {
         conversation: String,
         #[serde(default)]
         operation_id: Option<String>,
-        revision: crate::lean::store::PlanRevision,
+        revision: Box<crate::lean::store::PlanRevision>,
         #[serde(default)]
         request_ai_review: bool,
     },

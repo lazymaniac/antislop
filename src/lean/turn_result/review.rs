@@ -58,6 +58,13 @@ fn selection_tool(args: &serde_json::Value) -> Result<TurnResult> {
         alternatives: serde_json::from_value(args["alternatives"].clone())
             .map_err(|error| crate::Error::Invalid(format!("alternatives: {error}")))?,
         selected: optional_text(args, "selected"),
+        ranking: serde_json::from_value(args["ranking"].clone())
+            .map_err(|error| crate::invalid(format!("ranking: {error}")))?,
+        decisive_criterion: super::tool_results::required_text(args, "decisive_criterion")?,
+        ranking_override: args
+            .get("ranking_override")
+            .map(|_| super::tool_results::required_text(args, "ranking_override"))
+            .transpose()?,
         rationale: optional_text(args, "rationale"),
         user_summary: super::tool_results::required_text(args, "user_summary")?,
     };

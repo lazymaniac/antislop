@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS runtime_activation_events(
 CREATE TABLE IF NOT EXISTS agent_answer_receipts(
  request TEXT PRIMARY KEY REFERENCES agent_questions(id) ON DELETE CASCADE, conversation TEXT NOT NULL,
  signature TEXT NOT NULL, result TEXT NOT NULL, resume_pending INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS agent_answer_history(
+ receipt TEXT PRIMARY KEY,
+ request TEXT NOT NULL REFERENCES agent_questions(id) ON DELETE CASCADE,
+ answer TEXT NOT NULL, result TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS session_titles(
  conversation TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
@@ -112,6 +116,7 @@ CREATE TABLE IF NOT EXISTS validation_runs(
  evidence_id TEXT REFERENCES agent_evidence(id) ON DELETE SET NULL,
  created_ms INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS validation_runs_by_identity ON validation_runs(conversation,identity);
+CREATE INDEX IF NOT EXISTS validation_claims_by_turn ON validation_runs(turn_id) WHERE status='running';
 CREATE TABLE IF NOT EXISTS validation_observations(
  validation_id TEXT PRIMARY KEY REFERENCES validation_runs(id) ON DELETE CASCADE,
  observation TEXT NOT NULL CHECK(json_valid(observation))
@@ -120,3 +125,13 @@ CREATE TABLE IF NOT EXISTS validation_uses(
  turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
  validation_id TEXT NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
  PRIMARY KEY(turn_id,validation_id));
+CREATE TABLE IF NOT EXISTS review_finding_dispositions(
+ task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ generation INTEGER NOT NULL, finding_id TEXT NOT NULL,
+ review_turn TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+ revision_request TEXT NOT NULL, reason TEXT NOT NULL,
+ destination_task TEXT, destination_criterion TEXT,
+ PRIMARY KEY(task_id,generation,finding_id)
+);
+CREATE INDEX IF NOT EXISTS review_dispositions_by_destination
+ ON review_finding_dispositions(destination_task,revision_request) WHERE destination_task IS NOT NULL;

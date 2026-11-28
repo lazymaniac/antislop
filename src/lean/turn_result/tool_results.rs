@@ -53,6 +53,33 @@ impl Selection {
             self.alternatives.iter().any(|a| a.id == self.selected),
             "selected: name one of the alternatives' ids",
         )?;
+        if !self.ranking.is_empty()
+            || !self.decisive_criterion.is_empty()
+            || self.ranking_override.is_some()
+        {
+            let ranked: std::collections::BTreeSet<_> = self.ranking.iter().collect();
+            require(
+                ranked == ids && self.ranking.len() == ids.len(),
+                "ranking: list every alternative ID exactly once, strongest first",
+            )?;
+            require(
+                !self.decisive_criterion.trim().is_empty(),
+                "decisive_criterion: name the criterion that determined the choice",
+            )?;
+            if self.ranking.first() != Some(&self.selected) {
+                require(
+                    self.ranking_override
+                        .as_deref()
+                        .is_some_and(|reason| !reason.trim().is_empty()),
+                    "selected differs from the first ranked alternative; supply ranking_override explaining why, or correct the ranking or selection",
+                )?;
+            } else {
+                require(
+                    self.ranking_override.is_none(),
+                    "ranking_override applies only when selected differs from first place",
+                )?;
+            }
+        }
         require(!self.rationale.trim().is_empty(), "rationale: required")
     }
 

@@ -36,6 +36,7 @@ fn execute_profile(
     check_task_inputs(core, &state.role)?;
     check_retained_inputs(core, state)?;
     let mut prepared = prepare_agent(core, state, profile)?;
+    announce_execution_started(state, events)?;
     let mut inputs = TurnInputs::default();
     let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt, &mut inputs)?;
     events.prompt_bytes.set(Some(text.len()));
@@ -253,10 +254,15 @@ fn tool_handler(
                 core.require_open_agent_turn(&conversation, &role, &turn)?;
                 return inputs.lock().expect("turn inputs mutex").read(&turn, args);
             }
+            let input_gate = if tool == "revise_plan" && !args["scope"].is_null() {
+                "revise_plan scope changes"
+            } else {
+                tool
+            };
             inputs
                 .lock()
                 .expect("turn inputs mutex")
-                .require_reads(tool)?;
+                .require_reads(input_gate)?;
             core.agent_tool(&conversation, &role, &turn, tool, args)
         })();
         if let Some(suspension) = suspension {

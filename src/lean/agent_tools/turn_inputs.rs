@@ -15,6 +15,7 @@ pub(crate) enum ReadFor {
     Work,
     Review,
     Reference,
+    ScopeChange,
 }
 
 impl ReadFor {
@@ -24,7 +25,15 @@ impl ReadFor {
             (Self::Plan, "submit_plan")
                 | (Self::Work, "complete" | "select")
                 | (Self::Review, "review")
+                | (
+                    Self::ScopeChange,
+                    "submit_plan" | "revise_plan scope changes"
+                )
         )
+    }
+
+    fn required(self) -> bool {
+        !matches!(self, Self::Reference | Self::ScopeChange)
     }
 }
 
@@ -61,6 +70,19 @@ impl TurnInputs {
         if self.inline_only || body.len() <= INLINE_BYTES {
             return None;
         }
+        Some(self.index_document(label, body, required))
+    }
+
+    /// Register exact material for selective reads even when it is small.
+    pub(crate) fn reference(&mut self, label: &str, body: &str, required: ReadFor) -> String {
+        if self.inline_only {
+            untrusted(label, body)
+        } else {
+            self.index_document(label, body, required)
+        }
+    }
+
+    fn index_document(&mut self, label: &str, body: &str, required: ReadFor) -> String {
         let reference = format!("input-{}", self.entries.len() + 1);
         self.entries.insert(
             reference.clone(),
@@ -73,10 +95,10 @@ impl TurnInputs {
                 complete: false,
             },
         );
-        Some(format!(
+        format!(
             "{label} ({bytes} UTF-8 bytes): read_turn_input with input={reference}. Follow cursor until complete=true.",
             bytes = body.len(),
-        ))
+        )
     }
 
     pub(crate) fn task_contract<'a>(
@@ -140,10 +162,14 @@ impl TurnInputs {
             ),
         };
         let replay = entry.served.contains(&cursor);
-        require(
-            replay || (!entry.complete && cursor == entry.next),
-            "cursor: use the next cursor returned for this input, or repeat a previously read page",
-        )?;
+        if !replay && (entry.complete || cursor != entry.next) {
+            let progress = match (entry.complete, entry.next.as_deref()) {
+                (true, _) => "complete=true. Omit cursor to reread the first page.".into(),
+                (false, Some(next)) => format!("complete=false. Continue with cursor={next}."),
+                (false, None) => "complete=false. Omit cursor to read the first page.".into(),
+            };
+            return Err(invalid(format!("cursor for input={reference}: {progress}")));
+        }
         let binding = crate::hash(format!("{turn}:{reference}").as_bytes());
         let (text, next) = page_text(&entry.body, &binding, &json!({"cursor":cursor}))?;
         if !replay {
@@ -165,7 +191,8 @@ impl TurnInputs {
             .iter()
             .map(|(id, entry)| {
                 json!({"input":id, "label":entry.label, "bytes":entry.body.len(),
-                "required":!matches!(entry.required, ReadFor::Reference),
+                "required":entry.required.required(),
+                "required_for_scope_change":matches!(entry.required, ReadFor::ScopeChange),
                 "complete":entry.complete,"next_cursor":entry.next})
             })
             .collect()
@@ -205,7 +232,7 @@ impl TurnInputs {
 
 impl Entry {
     fn pending(&self) -> bool {
-        !self.complete && !matches!(self.required, ReadFor::Reference)
+        !self.complete && self.required.required()
     }
 }
 
@@ -227,9 +254,14 @@ mod tests {
         assert!(!first["cursor"].is_null());
         let index = inputs.read("turn", &json!({})).unwrap();
         assert_eq!(index["inputs"][1]["next_cursor"], first["cursor"]);
+        let wrong = json!({"input":"input-2","cursor":"guess"});
+        let error = inputs.read("turn", &wrong).unwrap_err().to_string();
+        assert!(error.contains(first["cursor"].as_str().unwrap()), "{error}");
         let last = inputs.read("turn", &json!({"input":"next"})).unwrap();
         assert_eq!(last["complete"], true);
         assert_eq!(last["all_required_complete"], false);
+        let error = inputs.read("turn", &wrong).unwrap_err().to_string();
+        assert!(error.contains("complete=true"), "{error}");
         let second = inputs.read("turn", &json!({"input":"next"})).unwrap();
         assert_eq!(second["input"], "input-3");
         let last = inputs.read("turn", &json!({"input":"next"})).unwrap();

@@ -48,6 +48,7 @@ fn a_reworded_approved_task_takes_its_new_contract_and_keeps_its_result() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "reword", &revision)
@@ -91,6 +92,7 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let (request, fresh) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -176,6 +178,7 @@ fn changed_inputs_rollback_revision_and_restart_preserves_proposal() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -239,6 +242,7 @@ fn reviewed_revision_can_retire_tasks_but_cannot_introduce_a_cycle() {
         retire: vec!["a".into()],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let specs = revision.merge(&baseline).unwrap();
     let (request, _) = store
@@ -268,6 +272,7 @@ fn reviewed_revision_can_retire_tasks_but_cannot_introduce_a_cycle() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
         ..revision
     };
     assert!(revision.merge(&baseline).is_err());
@@ -287,6 +292,7 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let error = revision.merge(&baseline).unwrap_err().to_string();
     assert!(error.contains("nothing is pasted"), "{error}");
@@ -343,6 +349,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         retire: vec!["b".into()],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let specs = revision.merge(&tasks).unwrap();
     let (request, _) = store
@@ -398,6 +405,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let specs = next.merge(&baseline).unwrap();
     let (request, _) = store
@@ -704,6 +712,7 @@ fn adding_independent_analysis_preserves_a_coordinating_hold_and_its_generation(
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "construction", &revision)

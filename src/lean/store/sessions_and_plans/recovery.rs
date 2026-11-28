@@ -20,6 +20,7 @@ pub(super) fn record_turn_interruptions(tx: &rusqlite::Transaction<'_>) -> Resul
         "UPDATE turns SET status='interrupted',finished_ms=?1 WHERE status='running'",
         [now_ms()],
     )?;
+    crate::lean::store::validations::interrupt_validation_claims(tx, None)?;
     Ok(())
 }
 

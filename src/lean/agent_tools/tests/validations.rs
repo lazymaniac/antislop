@@ -92,6 +92,22 @@ fn a_successful_command_runs_once_and_is_reused_across_commits_worktrees_and_res
         "",
     );
     assert_eq!(finished["validation"]["status"], "passed");
+    let summaries = core
+        .store
+        .recent_validation_summaries(&conversation)
+        .unwrap();
+    assert_eq!(
+        summaries,
+        vec![json!({
+            "id":receipt["validation"]["id"],"command":"sh check.sh","status":"passed"
+        })]
+    );
+    assert!(
+        serde_json::to_string(&summaries).unwrap().len()
+            < serde_json::to_string(&finished["validation"]["spec"])
+                .unwrap()
+                .len()
+    );
     core.store
         .finish_turn(&turn.id, store::TurnStatus::Done, None)
         .unwrap();
@@ -112,13 +128,39 @@ fn a_successful_command_runs_once_and_is_reused_across_commits_worktrees_and_res
     )
     .unwrap();
     let (reviewer, review) = start(&core, &conversation, &task, &checkout, true);
+    let one = core
+        .agent_tool(
+            &conversation,
+            &reviewer,
+            &review.id,
+            "read_validations",
+            &json!({"validation":summaries[0]["id"]}),
+        )
+        .unwrap();
+    assert_eq!(one["validation"], finished["validation"]);
+    for invalid in [
+        json!({"validation":"unknown"}),
+        json!({"validation":summaries[0]["id"],"cursor":"ignored"}),
+    ] {
+        assert!(
+            core.agent_tool(
+                &conversation,
+                &reviewer,
+                &review.id,
+                "read_validations",
+                &invalid
+            )
+            .is_err()
+        );
+    }
+    let spec = &one["validation"]["spec"];
     let reused = core
         .agent_tool(
             &conversation,
             &reviewer,
             &review.id,
             "prepare_validation",
-            &request(),
+            spec,
         )
         .unwrap();
     assert_eq!(reused["action"], "reuse");
@@ -562,13 +604,197 @@ fn structured_validation_checks_raw_test_totals_and_keeps_limitations_separate()
 }
 
 #[test]
-fn a_reproduced_finding_requires_a_new_matching_validation_on_the_reviewed_tree() {
+fn inspections_and_discovery_do_not_count_as_executed_tests() {
     let (directory, core, conversation, task) = fixture();
+    let (role, turn) = start(&core, &conversation, &task, directory.path(), false);
+    for (command, exit, kind) in [
+        (
+            json!(["git", "grep", "-e", "retired", "HEAD"]),
+            1,
+            "inspection",
+        ),
+        (
+            json!(["./cargo.sh", "test", "--lib", "--", "--list"]),
+            0,
+            "discovery",
+        ),
+    ] {
+        let receipt = core.agent_tool(&conversation,&role,&turn.id,"prepare_validation",
+            &json!({"command":command,"scope":"Find retained tests or source","environment":"fixture","expected_exit_code":exit})).unwrap();
+        assert_eq!(receipt["validation"]["spec"]["kind"], kind);
+        let result = core.agent_tool(&conversation,&role,&turn.id,"complete_validation",
+            &json!({"validation":receipt["validation"]["id"],"exit_code":exit,"output":"","problems":[],"tests_executed":0})).unwrap();
+        assert_eq!(result["validation"]["status"], "passed");
+        assert!(result["validation"]["observation"]["tests_executed"].is_null());
+    }
+    let abandoned = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &turn.id,
+            "prepare_validation",
+            &json!({"command":["git","status"],"scope":"Inspect","environment":"fixture"}),
+        )
+        .unwrap();
+    core.store
+        .finish_turn(&turn.id, store::TurnStatus::Done, None)
+        .unwrap();
+    assert_eq!(
+        core.store
+            .validation(
+                &conversation,
+                abandoned["validation"]["id"].as_str().unwrap()
+            )
+            .unwrap()
+            .status,
+        "interrupted"
+    );
+}
+
+#[test]
+fn plan_witness_measures_exact_tree_and_libtest_filter() {
+    let (directory, core, conversation, task) = fixture();
+    let commit = git::head(directory.path()).unwrap();
+    let measured = core
+        .inspect_plan_witness(
+            &conversation,
+            PLANNER,
+            &json!({"witness":{"kind":"search","commit":commit,"pattern":"original|printf",
+            "paths":["source.txt","check.sh"],"expected":3,"expected_files":2}}),
+        )
+        .unwrap();
+    assert_eq!(measured["matches"], 3);
+
+    let (role, turn) = start(&core, &conversation, &task, directory.path(), false);
+    let receipt = core.agent_tool(&conversation,&role,&turn.id,"prepare_validation",
+        &json!({"command":["./cargo.sh","test","--lib","--","--list"],"scope":"All library tests","environment":"fixture"})).unwrap();
+    let discovery = &receipt["validation"]["id"];
+    core.agent_tool(&conversation,&role,&turn.id,"complete_validation",
+        &json!({"validation":discovery,"exit_code":0,"problems":[],
+            "output":"app::decision::tests::head: test\napp::decision_inbox::tests::queued: test\n\n2 tests, 0 benchmarks"})).unwrap();
+    let witness = json!({"kind":"test_filter","commit":commit,"discovery":discovery,
+        "selector":"decision::tests","expected":1});
+    assert_eq!(
+        core.inspect_plan_witness(&conversation, PLANNER, &json!({"witness":witness}))
+            .unwrap()["matches"],
+        1
+    );
+    let mut false_claim = witness;
+    false_claim["expected"] = json!(2);
+    assert!(
+        core.check_revision_witnesses(&conversation, &json!([false_claim]))
+            .unwrap_err()
+            .to_string()
+            .contains("expected 2, measured 1")
+    );
+}
+
+#[test]
+fn approved_transfer_requires_passing_evidence_at_its_destination() {
+    let (directory, core, conversation, source) = fixture();
+    let (role, first) = start(&core, &conversation, &source, directory.path(), true);
+    let failed = core.agent_tool(&conversation,&role,&first.id,"prepare_validation",
+        &json!({"command":["git","grep","missing"],"scope":"Find configuration","environment":"fixture"})).unwrap();
+    let failed_id = &failed["validation"]["id"];
+    core.agent_tool(
+        &conversation,
+        &role,
+        &first.id,
+        "complete_validation",
+        &json!({"validation":failed_id,"exit_code":1,"problems":[],"output":"No matches"}),
+    )
+    .unwrap();
+    let source_checks = checks_for(&source);
+    let review = core.agent_tool(&conversation, &role, &first.id, "review",
+        &json!({"report":"Missing configuration","checks":source_checks,"findings":[{
+            "check":"goal","severity":"medium","issue":"Configuration absent",
+            "where":"source.txt","reproduction":{"scenario":"find configuration","validation":failed_id}
+        }]})).unwrap();
+    let finding = &review["result"]["verdict"]["findings"][0]["id"];
+    core.store
+        .finish_turn(&first.id, store::TurnStatus::Done, None)
+        .unwrap();
+
+    let baseline = core.store.plan(&source.plan_id).unwrap();
+    let revision: store::PlanRevision = serde_json::from_value(json!({
+        "plan":source.plan_id,"base_revision":0,"reason":"Assign the proof to the implementing task",
+        "retire":[],"tasks":[{"id":"receiver","title":"Receive proof","goal":"Check the configured path",
+            "kind":"testing","change_kind":"none","acceptance_criteria":[{"id":"C2","text":"The configured path is found"}]}],
+        "finding_actions":[{"source_task":source.id,"source_generation":source.input_generation,
+            "review_turn":first.id,"finding":finding,"reason":"The new task owns the scenario",
+            "destination":{"task":"receiver","criterion":"C2"}}]
+    })).unwrap();
+    let candidate = revision.merge(&baseline).unwrap();
+    core.store
+        .check_finding_actions(&conversation, &revision, &baseline, &candidate)
+        .unwrap();
+    let (request, _) = core
+        .store
+        .reserve_revision_job(&conversation, "transfer-example", &revision)
+        .unwrap();
+    core.store
+        .apply_plan_revision(
+            &conversation,
+            &revision,
+            &baseline,
+            &candidate,
+            &Default::default(),
+            &store::RevisionLease {
+                accepted_scope: false,
+                request: &request,
+            },
+        )
+        .unwrap();
+    let (_, reconsider) = start(&core, &conversation, &source, directory.path(), true);
+    let reconsidered = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &reconsider.id,
+            "review",
+            &json!({"report":"Transferred by review","checks":source_checks}),
+        )
+        .unwrap();
+    assert_eq!(reconsidered["result"]["verdict"]["approved"], true);
+
+    let target = core
+        .store
+        .task_in_plan_by_id(&source.plan_id, "receiver")
+        .unwrap()
+        .unwrap();
+    let (reviewer, turn) = start(&core, &conversation, &target, directory.path(), true);
+    let mut verdict = json!({"report":"Configured path found","checks":checks_for(&target)});
+    assert!(
+        core.agent_tool(&conversation, &reviewer, &turn.id, "review", &verdict)
+            .unwrap_err()
+            .to_string()
+            .contains("checks.C2.validation")
+    );
+    let passed = core.agent_tool(&conversation,&reviewer,&turn.id,"prepare_validation",
+        &json!({"command":["git","grep","original","HEAD"],"scope":"Find configured path","environment":"fixture"})).unwrap();
+    let validation = &passed["validation"]["id"];
+    core.agent_tool(&conversation,&reviewer,&turn.id,"complete_validation",
+        &json!({"validation":validation,"exit_code":0,"problems":[],"output":"HEAD:source.txt:original"})).unwrap();
+    verdict["checks"]["C2"]["validation"] = validation.clone();
+    assert_eq!(
+        core.agent_tool(&conversation, &reviewer, &turn.id, "review", &verdict)
+            .unwrap()["result"]["verdict"]["approved"],
+        true
+    );
+}
+
+fn checks_for(task: &Task) -> serde_json::Map<String, Value> {
     let spec = serde_json::from_value(task.spec.clone()).unwrap();
-    let checks: serde_json::Map<_, _> = tasks::obligations(&spec)
+    tasks::obligations(&spec)
         .into_iter()
         .map(|(id, _)| (id, json!({"status":"ok","note":"Checked in fixture"})))
-        .collect();
+        .collect()
+}
+
+#[test]
+fn a_reproduced_finding_requires_a_new_matching_validation_on_the_reviewed_tree() {
+    let (directory, core, conversation, task) = fixture();
+    let checks = checks_for(&task);
     let (reviewer, first) = start(&core, &conversation, &task, directory.path(), true);
     let observe = |turn: &store::Turn, exit, command: Value| {
         let receipt = core
@@ -608,6 +834,18 @@ fn a_reproduced_finding_requires_a_new_matching_validation_on_the_reviewed_tree(
         )
         .unwrap();
     assert!(previous["report"].as_str().unwrap().contains(finding));
+    let carried = core.agent_tool(&conversation,&reviewer,&second.id,"review",
+        &json!({"report":"Still open","checks":checks,"carry_findings":[{"id":finding,"where":"source.txt line 2"}]})).unwrap();
+    assert_eq!(carried["result"]["verdict"]["findings"][0]["id"], finding);
+    assert_eq!(
+        carried["result"]["verdict"]["findings"][0]["where"],
+        "source.txt line 2"
+    );
+    assert_eq!(carried["result"]["verdict"]["approved"], false);
+    core.store
+        .finish_turn(&second.id, store::TurnStatus::Done, None)
+        .unwrap();
+    let (_, second) = start(&core, &conversation, &task, directory.path(), true);
     let mut verdict = json!({"report":"Fixed","checks":checks,"findings":[],"resolved":[finding]});
     assert!(
         core.agent_tool(&conversation, &reviewer, &second.id, "review", &verdict)

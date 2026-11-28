@@ -76,11 +76,19 @@ fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
-    let states = graph.iter().map(|task| json!({
+    let states = graph.iter().map(|task| {
+        let waiting_request = task.feedback.as_ref().and_then(|feedback| feedback["waiting_request"].as_str());
+        let recovery = if task.status == status::WAITING && let Some(request) = waiting_request {
+            let conversation = core.store.plan_conversation(&task.plan_id)?;
+            core.store.agent_answer_recovery(&conversation, request)?
+        } else {
+            None
+        };
+        Ok::<_, Error>(json!({
         "task":task.spec["id"], "summary":task.spec["summary"].as_str().or(task.spec["title"].as_str()), "depends_on":task.spec["depends_on"], "runtime_id":task.id, "status":task.status, "round":task.round, "input_generation":task.input_generation, "deferred":task.spec["deferred"] == true,
         "reason":task.current_reason().map(|text| tasks::bound(text, 2000)),
-        "waiting_request":task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
-    })).collect::<Vec<_>>();
+        "waiting_request":waiting_request,"answer_recovery":recovery,
+    }))}).collect::<Result<Vec<_>>>()?;
     Ok(crate::lean::prompt_context::untrusted(
         prompts::CURRENT_PLAN_INDEX_LABEL,
         &crate::lean::prompt_context::markdown(

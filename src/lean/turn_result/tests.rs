@@ -17,11 +17,16 @@ mod tests {
             user_summary: String::new(),
             alternatives: vec![],
             selected: "A".into(),
+            ranking: vec!["B".into(), "A".into()],
+            decisive_criterion: "Migration cost".into(),
+            ranking_override: Some("The leading variant cannot ship this release".into()),
             rationale: "cheapest".into(),
         };
         let shown = report_with_deliverables("prose", Some(&selection));
         assert!(shown.starts_with("prose"));
-        assert!(shown.contains("selected: A") && shown.contains("cheapest"));
+        for expected in ["selected: A", "cheapest", "Migration cost", "cannot ship this release"] {
+            assert!(shown.contains(expected), "{shown}");
+        }
         assert_eq!(report_with_deliverables("prose", None), "prose");
         let compact = report_with_deliverables(&selection.rationale, Some(&selection));
         assert_eq!(compact.matches(&selection.rationale).count(), 1);
@@ -98,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_selection_names_one_of_its_distinct_alternatives() {
-        let args = json!({"selected": "A", "rationale": "Preserves contracts", "user_summary": "Reuse preserves behavior with less flexibility", "alternatives": [
+        let args = json!({"selected": "A", "ranking":["A","B"], "decisive_criterion":"Compatibility", "rationale": "Preserves contracts", "user_summary": "Reuse preserves behavior with less flexibility", "alternatives": [
             {"id": "A", "approach": "Reuse", "tradeoffs": "Less flexibility"},
             {"id": "B", "approach": "Replace", "tradeoffs": "Changes contracts"}]});
         let TurnResult::Completed {
@@ -117,9 +122,29 @@ mod tests {
         assert!(task_tool_result("select", &duplicate).is_err());
         let mut single = args;
         single["alternatives"].as_array_mut().unwrap().pop();
+        single["ranking"] = json!(["A"]);
         assert!(task_tool_result("select", &single).is_ok());
         single["alternatives"] = json!([]);
         assert!(task_tool_result("select", &single).is_err());
+    }
+
+    #[test]
+    fn a_selection_rejects_unexplained_rank_overrides_and_incomplete_rankings() {
+        let mut args = json!({"selected":"B","ranking":["A","B"],"decisive_criterion":"Blast radius",
+            "rationale":"Keep changes local", "user_summary":"Keep changes local", "alternatives":[
+                {"id":"A","approach":"Replace the route","tradeoffs":"Global change"},
+                {"id":"B","approach":"Keep the route","tradeoffs":"Narrow change"}]});
+        assert!(task_tool_result("select", &args).unwrap_err().to_string().contains("ranking_override"));
+        args["ranking_override"] = json!("A scores better broadly, but only B preserves the public route.");
+        let TurnResult::Completed { selection: Some(selection), .. } = task_tool_result("select", &args).unwrap() else { panic!("missing selection") };
+        assert_eq!(selection.chosen().unwrap().id, "B");
+        for invalid in [json!([]), json!(["A"]), json!(["A","A"]), json!(["A","C"]), json!(["B","A"])] {
+            args["ranking"] = invalid;
+            assert!(task_tool_result("select", &args).is_err());
+        }
+        args["ranking"] = json!(["A","B"]);
+        args.as_object_mut().unwrap().remove("decisive_criterion");
+        assert!(task_tool_result("select", &args).is_err());
     }
 
     #[test]
@@ -127,8 +152,12 @@ mod tests {
         let current = json!({"alternatives":[{"id":"A","approach":"a","tradeoffs":"t"}],
             "selected":"A","rationale":"r"});
         let legacy = serde_json::from_value::<Selection>(current.clone()).unwrap();
-        assert!(legacy.user_summary.is_empty(), "stored legacy selections remain readable");
-        assert!(task_tool_result("select", &current).unwrap_err().to_string().contains("user_summary"));
+        assert!(legacy.user_summary.is_empty() && legacy.ranking.is_empty());
+        assert!(task_tool_result("select", &current).unwrap_err().to_string().contains("ranking"));
+        let mut incomplete = current.clone();
+        incomplete["ranking"] = json!(["A"]);
+        incomplete["decisive_criterion"] = json!("Compatibility");
+        assert!(task_tool_result("select", &incomplete).unwrap_err().to_string().contains("user_summary"));
         let mut outer = current.clone();
         outer["criteria"] = json!(["c"]);
         assert!(serde_json::from_value::<Selection>(outer).is_err());

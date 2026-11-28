@@ -282,9 +282,11 @@ mod role_tests {
                 "retry_task",
                 "resume_task",
                 "revise_plan",
+                "preview_plan_revision",
                 "request_replan",
                 "create_session_pr",
                 "merge_session_with_main",
+                "inspect_plan_witness",
                 "read_turn_input",
                 "prepare_validation", "complete_validation", "invalidate_validation", "read_validations",
             ]
@@ -297,12 +299,21 @@ mod role_tests {
         assert!(merge["description"].as_str().unwrap().contains("session_action_result"));
         assert_eq!(
             allowed_tools("planner"),
-            vec!["submit_plan", "consult_planning", "read_dependency_result", "read_planning_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]
+            vec!["submit_plan", "consult_planning", "read_dependency_result", "read_planning_result", "read_plan_context", "read_audit", "finish_turn", "get_images", "read_evidence", "current_turn", "read_task_contract", "inspect_plan_witness", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]
         );
         for reviewer in ["auditor", "plan-reviewer", "code-review:t1"] {
+            let mut expected = if reviewer == "auditor" {
+                vec!["review", "read_plan_context", "read_audit", "read_dependency_result", "read_planning_result", "get_images", "read_evidence", "current_turn", "read_task_contract"]
+            } else {
+                vec!["review", "get_images", "read_dependency_result", "read_planning_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit"]
+            };
+            if reviewer == "plan-reviewer" {
+                expected.push("inspect_plan_witness");
+            }
+            expected.extend(["read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]);
             assert_eq!(
                 allowed_tools(reviewer),
-                if reviewer=="auditor" {vec!["review","read_plan_context","read_audit","read_dependency_result", "read_planning_result","get_images","read_evidence","current_turn","read_task_contract", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]} else {vec!["review", "get_images", "read_dependency_result", "read_planning_result", "read_evidence", "current_turn", "read_plan_context", "read_task_contract", "read_audit", "read_turn_input", "prepare_validation", "complete_validation", "invalidate_validation", "read_validations"]},
+                expected,
                 "{reviewer}"
             );
             let review = &tool_list(reviewer)[0]["inputSchema"];

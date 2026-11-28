@@ -61,11 +61,8 @@ pub(super) fn prepare_prompt(
             .is_ok_and(|profile| profile.work_kind == WorkKind::Options)
     {
         context.section(prompts::VALIDATION_REUSE_LABEL, VALIDATION_REUSE);
-        let history = core.store.validation_index(state.conversation, None)?;
-        if !history.is_empty() {
-            let index: Vec<_> = history.iter().take(8).map(|run| json!({
-                "validation":run.id,"spec":run.spec,"status":run.status,"evidence":run.evidence,
-            })).collect();
+        let index = core.store.recent_validation_summaries(state.conversation)?;
+        if !index.is_empty() {
             context.section(
                 prompts::PRIOR_VALIDATIONS_LABEL,
                 format!(
@@ -194,6 +191,18 @@ fn append_task_context(
         ));
     }
     let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
+    let transferred = core.store.transferred_criteria(&task)?;
+    if !transferred.is_empty() {
+        text.push_str(&format!(
+            "\nTransferred proof criteria: {}. {}\n",
+            transferred.into_iter().collect::<Vec<_>>().join(", "),
+            if reviewer {
+                "Before approving, independently verify each scenario on this tree and put its passing validation ID in the criterion's checks validation field."
+            } else {
+                "Verify the named scenario for each criterion and cite its validation receipt in the report."
+            }
+        ));
+    }
     if let Some(owner) = &contract.options_for
         && let Some(owner) = core.store.task_in_plan_by_id(&task.plan_id, owner)?
     {

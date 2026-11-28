@@ -409,6 +409,14 @@ mod tests {
     fn turn_branch_is_replayed_and_cleared_when_unreported() {
         let mut view = View::default();
         view.apply(&event(
+            0,
+            Some("t"),
+            "turn_queued",
+            json!({"role":"orchestrator","provider":"pi"}),
+        ));
+        assert!(!view.agents[ORCHESTRATOR].running);
+        assert_eq!(view.agents[ORCHESTRATOR].activity, "waiting for execution");
+        view.apply(&event(
             1,
             Some("t"),
             "turn_started",

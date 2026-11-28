@@ -9,11 +9,13 @@ mod context;
 mod controls;
 mod dependencies;
 mod evidence;
+mod plan_witnesses;
 mod planning;
 mod questions;
 mod references;
 mod results;
 mod review_evidence;
+mod revision_patches;
 mod session_actions;
 pub(crate) mod turn_inputs;
 mod validations;
@@ -90,7 +92,8 @@ impl Core {
                 self.merge_session_with_main_tool(conversation, turn)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),
-            "revise_plan" | "request_replan" => {
+            "inspect_plan_witness" => self.inspect_plan_witness(conversation, role, args),
+            "revise_plan" | "preview_plan_revision" | "request_replan" => {
                 self.revision_tool(conversation, role, turn, tool, args)
             }
             _ => Err(Error::Invalid(format!("unknown agent tool {tool}"))),
@@ -132,7 +135,10 @@ impl Core {
         tool: &str,
         args: &Value,
     ) -> Result<Value> {
-        let result = turn_result::task_tool_result(tool, args)?;
+        let mut result = turn_result::task_tool_result(tool, args)?;
+        if let TurnResult::Review { verdict, .. } = &mut result {
+            self.carry_review_findings(conversation, role, turn, verdict, &args["carry_findings"])?;
+        }
         let evidence = self.completion_evidence(conversation, turn, args, &result)?;
         self.record_task_result_with_evidence(conversation, role, turn, result, &evidence)
     }

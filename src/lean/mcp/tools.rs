@@ -12,6 +12,12 @@ fn plain_reviewer(role: &str) -> bool {
 
 pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     let mut names = role_tools(role);
+    if matches!(
+        role,
+        "orchestrator" | "comment-orchestrator" | "planner" | "plan-reviewer"
+    ) {
+        names.push("inspect_plan_witness");
+    }
     if names.contains(&"current_turn") {
         names.push("read_turn_input");
     }
@@ -176,6 +182,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         "retry_task",
         "resume_task",
         "revise_plan",
+        "preview_plan_revision",
         "request_replan",
         "create_session_pr",
         "merge_session_with_main",
@@ -219,7 +226,9 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
             json!({"offset":{"type":"integer","minimum":0,"default":0}}),
             vec!["turn"],
         ),
-        "submit_plan" | "revise_plan" => plan_contract(name, orchestrator),
+        "submit_plan" | "revise_plan" | "preview_plan_revision" => {
+            plan_contract(name, orchestrator)
+        }
         "answer_agent"
         | "defer_to_user"
         | "decide_approval"
@@ -234,6 +243,11 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
+        "inspect_plan_witness" => (
+            "Measure a source inventory at an immutable commit or test selection from an exact retained --list run.".into(),
+            json!({"witness":schema::plan_witness()}),
+            vec!["turn","witness"],
+        ),
         "read_plan_context" => (
             prompts::TOOL_READ_PLAN_CONTEXT.into(),
             json!({"cursor":{"type":"string"}}),
@@ -251,7 +265,7 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         ),
         "prepare_validation" => (
             prompts::TOOL_PREPARE_VALIDATION.into(),
-            json!({"command":{"type":"array","minItems":1,"items":{"type":"string"},"description":prompts::VALIDATION_COMMAND_DESCRIPTION},"directory":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_DIRECTORY},"scope":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_SCOPE},"environment":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_ENVIRONMENT}}),
+            json!({"command":{"type":"array","minItems":1,"items":{"type":"string"},"description":prompts::VALIDATION_COMMAND_DESCRIPTION},"directory":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_DIRECTORY},"scope":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_SCOPE},"environment":{"type":"string","description":prompts::TOOL_PREPARE_VALIDATION_ENVIRONMENT},"kind":{"enum":["test","inspection","discovery"],"description":"Classify execution, inspection, or test enumeration. Cargo test infers its kind."},"expected_exit_code":{"type":"integer","description":"Inspection exit to assert, default 0. For example grep exit 1 asserts absence."}}),
             vec!["turn", "command", "scope", "environment"],
         ),
         "complete_validation" => (
@@ -266,7 +280,7 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         ),
         "read_validations" => (
             prompts::TOOL_READ_VALIDATIONS.into(),
-            json!({"cursor":{"type":"string"}}),
+            json!({"validation":{"type":"string","description":"Exact validation ID from the prompt or history."},"cursor":{"type":"string"}}),
             vec!["turn"],
         ),
         "consult_planning" => (
@@ -347,6 +361,8 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
                 "turn",
                 "alternatives",
                 "selected",
+                "ranking",
+                "decisive_criterion",
                 "rationale",
                 "user_summary",
             ],
@@ -396,9 +412,13 @@ fn plan_contract(name: &str, orchestrator: bool) -> ToolSpec {
         );
     }
     (
-        prompts::REVISE_PLAN_TOOL.into(),
+        if name == "preview_plan_revision" {
+            "Check a revision without submitting it. Inspect dependency changes, removed Options, criterion IDs, and witness failures.".into()
+        } else {
+            prompts::REVISE_PLAN_TOOL.into()
+        },
         schema::revision(),
-        vec!["turn", "reason", "tasks", "retire"],
+        vec!["turn", "reason", "retire"],
     )
 }
 
@@ -406,7 +426,7 @@ fn control_contract(name: &str) -> ToolSpec {
     match name {
         "answer_agent" => (
             prompts::TOOL_ANSWER_AGENT.into(),
-            json!({"request":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_REQUEST},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_TARGET}}),
+            json!({"request":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_REQUEST},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":prompts::TOOL_ANSWER_AGENT_TARGET},"supersede_receipt":{"type":"string","description":"Receipt from an answered question parked on a rejected revision. Required when replacing that answer."}}),
             vec!["turn", "request", "answer"],
         ),
         "defer_to_user" => (

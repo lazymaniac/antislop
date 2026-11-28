@@ -246,6 +246,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         let specs = revision.merge(&baseline).unwrap();
         let affected = BTreeSet::from([baseline[0].id.clone()]);

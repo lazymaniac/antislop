@@ -64,6 +64,12 @@ pub enum TurnResult {
 pub struct Selection {
     pub alternatives: Vec<Alternative>,
     pub selected: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranking: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub decisive_criterion: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranking_override: Option<String>,
     pub rationale: String,
     /// Short decision for the user; older stored selections have none.
     #[serde(default, skip_serializing_if = "String::is_empty")]

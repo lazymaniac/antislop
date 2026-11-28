@@ -204,10 +204,14 @@ impl Store {
     }
 
     pub fn finish_turn(&self, turn: &str, status: TurnStatus, error: Option<&str>) -> Result<()> {
-        self.db().execute(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
             "UPDATE turns SET status=?2,error=?3,finished_ms=?4 WHERE id=?1",
             params![turn, status.as_str(), error, now_ms()],
         )?;
+        super::validations::interrupt_validation_claims(&tx, Some(turn))?;
+        tx.commit()?;
         Ok(())
     }
 

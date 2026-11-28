@@ -10,7 +10,15 @@ impl Store {
         disposition: &str,
         target: &str,
     ) -> Result<Value> {
-        self.answer_agent_from_turn(conversation, request, answer, disposition, target, None)
+        self.answer_agent_from_turn(
+            conversation,
+            request,
+            answer,
+            disposition,
+            target,
+            None,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -22,6 +30,7 @@ impl Store {
         disposition: &str,
         target: &str,
         caller: Option<&str>,
+        supersede_receipt: Option<&str>,
     ) -> Result<Value> {
         crate::require(
             matches!(
@@ -49,13 +58,39 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((previous, result)) = previous {
-            crate::require(
-                previous == signature,
-                "question already has a different answer or disposition",
-            )?;
-            return Ok(serde_json::from_str(&result)?);
-        }
+        let superseding = match previous {
+            Some((previous, result)) if previous == signature => {
+                return Ok(serde_json::from_str(&result)?);
+            }
+            Some(_) => {
+                let rejected = rejected_answer_receipt(&tx, conversation, request)?;
+                let (receipt, _) = rejected.as_ref().ok_or_else(|| {
+                    crate::invalid("question already has a different answer or disposition")
+                })?;
+                crate::require(
+                    supersede_receipt == Some(receipt.as_str()),
+                    &format!(
+                        "the awaited revision was rejected; submit supersede_receipt={receipt} with the new answer"
+                    ),
+                )?;
+                tx.execute("INSERT INTO agent_answer_history(receipt,request,answer,result)
+                    SELECT ?1,q.id,q.answer,r.result FROM agent_questions q JOIN agent_answer_receipts r ON r.request=q.id WHERE q.id=?2",
+                    params![receipt, request])?;
+                tx.execute(
+                    "DELETE FROM agent_answer_receipts WHERE request=?1",
+                    [request],
+                )?;
+                tx.execute("DELETE FROM agent_answer_waits WHERE request=?1", [request])?;
+                true
+            }
+            None => {
+                crate::require(
+                    supersede_receipt.is_none(),
+                    "there is no rejected answer to supersede",
+                )?;
+                false
+            }
+        };
         if disposition == "continue" {
             let has_wait: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM agent_answer_waits WHERE request=?1)",
@@ -79,7 +114,7 @@ impl Store {
                 )?;
             } else {
                 let valid: bool = if disposition == "wait_for_revision" {
-                    tx.query_row("SELECT EXISTS(SELECT 1 FROM plan_revision_jobs WHERE id=?1 AND conversation_id=?2 AND plan_id=?3 AND status IN ('reviewing','applied'))",params![target,conversation,owner],|r|r.get(0))?
+                    tx.query_row("SELECT EXISTS(SELECT 1 FROM plan_revision_jobs WHERE id=?1 AND conversation_id=?2 AND plan_id=?3 AND status IN ('reviewing','awaiting_acceptance','applied'))",params![target,conversation,owner],|r|r.get(0))?
                 } else {
                     tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1 AND conversation_id=?2 AND plan_id=?3 AND status<>'superseded' AND id<>(SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?4)))",params![target,conversation,owner,request],|r|r.get(0))?
                 };
@@ -92,14 +127,21 @@ impl Store {
                     [request],
                     |r| r.get(0),
                 )?;
-                crate::require(!answered, "question already has a different disposition")?;
+                crate::require(
+                    !answered || superseding,
+                    "question already has a different disposition",
+                )?;
                 tx.execute(
                     "INSERT INTO agent_answer_waits(request,disposition,target) VALUES(?1,?2,?3)",
                     params![request, disposition, target],
                 )?;
             }
         }
-        super::agent_exchange::answer_question_tx(&tx, conversation, request, answer)?;
+        if superseding {
+            super::agent_exchange::settle_agent_question(&tx, conversation, request, answer)?;
+        } else {
+            super::agent_exchange::answer_question_tx(&tx, conversation, request, answer)?;
+        }
         let receipt = crate::id();
         let result = serde_json::json!({"request":request,"state":"answered","disposition":disposition,"target":target,"released":disposition=="continue","delivered":true,"receipt":receipt});
         tx.execute("INSERT INTO agent_answer_receipts(request,conversation,signature,result,resume_pending) VALUES(?1,?2,?3,?4,1)",params![request,conversation,signature,result.to_string()])?;
@@ -120,4 +162,32 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+/// A rejected target cannot release its wait. Only the exact still-parked
+/// task may supersede the receipt from that input generation.
+pub(super) fn rejected_answer_receipt(
+    db: &Connection,
+    conversation: &str,
+    request: &str,
+) -> Result<Option<(String, String)>> {
+    Ok(db
+        .query_row(
+            "SELECT json_extract(r.result,'$.receipt'),w.target
+         FROM agent_answer_receipts r
+         JOIN agent_questions q ON q.id=r.request
+         JOIN agent_answer_waits w ON w.request=q.id
+         JOIN plan_revision_jobs j ON j.id=w.target
+         JOIN turn_scopes s ON s.turn_id=q.turn_id
+         JOIN turn_inputs i ON i.turn_id=q.turn_id
+         JOIN tasks t ON t.id=s.task_id
+         JOIN task_inputs g ON g.task_id=t.id
+         WHERE r.conversation=?1 AND q.id=?2 AND q.state='answered'
+           AND w.disposition='wait_for_revision' AND w.released=0 AND j.status='rejected'
+           AND g.generation=i.generation AND t.status='waiting'
+           AND json_extract(t.feedback,'$.waiting_request')=q.id",
+            params![conversation, request],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?)
 }

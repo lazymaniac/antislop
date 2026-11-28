@@ -36,6 +36,9 @@ pub(super) fn selection() -> Value {
     json!({
         "alternatives":{"type":"array","minItems":1,"maxItems":4,"items":alternative},
         "selected":{"type":"string","description":prompts::SELECTION_SELECTED},
+        "ranking":{"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"type":"string"},"description":"Rank every alternative ID strongest first, including the only ID when one is viable."},
+        "decisive_criterion":{"type":"string","description":"The task criterion or constraint that determined the selected option."},
+        "ranking_override":{"type":"string","description":"Required when the chosen ID is below first place. Explain the concrete reason for overriding the ranking."},
         "rationale":{"type":"string","description":prompts::SELECTION_RATIONALE},
         "user_summary":{"type":"string","description":prompts::SELECTION_USER_SUMMARY}
     })
@@ -45,7 +48,7 @@ pub(super) fn selection() -> Value {
 /// derives the verdict.
 pub(super) fn review() -> Value {
     let check = object(
-        json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":prompts::REVIEW_NOTE}}),
+        json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":prompts::REVIEW_NOTE},"validation":{"type":"string","description":"Passing validation receipt required for a criterion that inherited a reproduced finding through a plan revision."}}),
         &["status", "note"],
     );
     let scenario = object(
@@ -60,6 +63,7 @@ pub(super) fn review() -> Value {
         "report":{"type":"string","description":prompts::REVIEW_REPORT},
         "checks":{"type":"object","additionalProperties":check,"description":prompts::REVIEW_CHECKS},
         "findings":{"type":"array","items":finding},
+        "carry_findings":{"type":"array","items":object(json!({"id":{"type":"string"},"where":{"type":"string"}}), &["id"]),"description":"Retain an open finding by exact ID from previous_review. An optional corrected location keeps its identity and original evidence."},
         "resolution_evidence":{"type":"object","additionalProperties":scenario,"description":"For each resolved blocking reproduction, map its finding ID to the same scenario and a newer passing validation on the reviewed tree."},
         "resolved":{"type":"array","items":{"type":"string"},"description":prompts::REVIEW_RESOLVED_DESCRIPTION}
     })
@@ -137,13 +141,42 @@ const KINDS: [&str; 18] = [
 /// the orchestrator was shown.
 pub(super) fn revision() -> Value {
     json!({
+        "base_revision":{"type":"integer","minimum":0,"description":"Accepted revision shown in task_states. Required for patches."},
         "scope":{"type":"string","description":prompts::REVISION_SCOPE},
         "reason":{"type":"string","description":prompts::REVISION_REASON},
         "tasks":{"type":"array","items":planned_task(),"description":prompts::REVISION_TASKS},
+        "patches":{"type":"array","items":object(json!({
+            "task":{"type":"string"},
+            "goal":{"type":"string"},
+            "depends_on":{"type":"array","items":{"type":"string"}},
+            "open_decisions":{"type":"array","items":{"type":"string","minLength":1},"description":"Explicitly [] to close all decisions for this task. Omit to preserve."},
+            "criteria":{"type":"object","additionalProperties":{"type":"string"},"description":"Replacement spelt by existing criterion id."},
+            "add_criteria":{"type":"array","items":object(json!({"id":{"type":"string"},"text":{"type":"string"}}), &["id","text"])}
+        }), &["task"])},
+        "witnesses":{"type":"array","items":plan_witness(),"description":"Optional quantitative assertions checked before independent review. Supply expected match counts."},
+        "finding_actions":{"type":"array","items":object(json!({
+            "task":{"type":"string"},"finding":{"type":"string"},"reason":{"type":"string"},
+            "destination":object(json!({"task":{"type":"string"},"criterion":{"type":"string"}}), &["task","criterion"])
+        }), &["task","finding","reason"]),"description":"Require independent review to supersede an invalid reproduction or transfer its proof to a named criterion on another task. Omit destination to supersede."},
         "retire":{"type":"array","items":{"type":"string"},"description":prompts::REVISION_RETIRE_DESCRIPTION},
         "replacements":{"type":"object","additionalProperties":{"type":"string"},"description":prompts::REVISION_REPLACEMENTS_DESCRIPTION},
         "redo":{"type":"array","items":{"type":"string"},"description":prompts::REVISION_REDO_DESCRIPTION}
     })
+}
+
+pub(super) fn plan_witness() -> Value {
+    let commit = json!({"type":"string","description":"Full immutable Git commit ID."});
+    let expected = json!({"type":"integer","minimum":0});
+    json!({"oneOf":[
+        object(json!({
+            "kind":{"enum":["search"]},"commit":commit,"pattern":{"type":"string"},
+            "paths":{"type":"array","items":{"type":"string"}},"expected":expected,"expected_files":expected
+        }), &["kind","commit","pattern"]),
+        object(json!({
+            "kind":{"enum":["test_filter"]},"commit":commit,"discovery":{"type":"string"},
+            "selector":{"type":"string"},"exact":{"type":"boolean"},"expected":expected
+        }), &["kind","commit","discovery","selector"])
+    ]})
 }
 
 #[cfg(test)]

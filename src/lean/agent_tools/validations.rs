@@ -1,7 +1,7 @@
 //! Agents keep execution in their own CLI; the runtime checks reuse against file state.
 use super::*;
 use crate::lean::prompts;
-use store::{ValidationObservation, ValidationRun, ValidationSpec};
+use store::{ValidationKind, ValidationObservation, ValidationRun, ValidationSpec};
 
 impl Core {
     pub(super) fn validation_tool(
@@ -12,6 +12,11 @@ impl Core {
         args: &Value,
     ) -> Result<Value> {
         if tool == "read_validations" {
+            if !args["validation"].is_null() {
+                require(args["cursor"].is_null(), "use validation or cursor")?;
+                let id = required_text(args, "validation")?;
+                return Ok(json!({"validation":self.store.validation(conversation, &id)?}));
+            }
             let runs = self
                 .store
                 .validation_index(conversation, args["cursor"].as_str())?;
@@ -62,6 +67,7 @@ impl Core {
                 directory.starts_with(&allocation) && directory.is_dir(),
                 "directory is outside the allocated checkout",
             )?;
+            let (kind, expected_exit_code) = validation_kind(args, &command)?;
             let spec = ValidationSpec {
                 command,
                 directory: directory
@@ -71,6 +77,8 @@ impl Core {
                     .into_owned(),
                 scope: required_text(args, "scope")?,
                 environment: required_text(args, "environment")?,
+                kind: Some(kind),
+                expected_exit_code,
             };
             let tree = validation_tree(&root, versioned)?;
             let (mut run, mut action) =
@@ -115,12 +123,14 @@ impl Core {
             .as_i64()
             .and_then(|code| i32::try_from(code).ok())
             .ok_or_else(|| Error::Invalid("exit_code: expected a process exit code".into()))?;
-        let output = required_text(args, "output")?;
-        let observation = observation(args, &run.spec, exit_code, &output)?;
+        let output = args["output"].as_str().ok_or_else(|| {
+            crate::invalid("output: supply the exact command output, or an empty string")
+        })?;
+        let observation = observation(args, &run.spec, exit_code, output)?;
         let problem = observation.problems.join("\n");
         let evidence_output = if run.status != "running" && run.observation.is_none() {
             // Preserve the exact evidence identity of already recorded legacy results.
-            output
+            output.to_owned()
         } else {
             format!(
                 "Observation: {}\n\n{output}",
@@ -149,7 +159,9 @@ impl Core {
             return Ok(validation_response(run, "recorded"));
         }
         let after = validation_tree(&root, versioned)?;
-        run.status = if exit_code != 0 || !problem.trim().is_empty() {
+        run.status = if exit_code != run.spec.expected_exit_code.unwrap_or(0)
+            || !problem.trim().is_empty()
+        {
             "failed"
         } else if run.tree.is_none() || after.is_none() {
             "uncacheable"
@@ -184,6 +196,61 @@ fn inline_shell(command: &[String]) -> bool {
         .any(|arg| arg == "--command" || (!arg.starts_with("--") && arg[1..].contains('c')))
 }
 
+fn cargo_test(command: &[String]) -> bool {
+    matches!(executable(command), Some("cargo" | "cargo.sh"))
+        && command[1..]
+            .iter()
+            .find(|arg| !arg.starts_with('+') && !arg.starts_with('-'))
+            .is_some_and(|arg| arg == "test")
+}
+
+fn validation_kind(args: &Value, command: &[String]) -> Result<(ValidationKind, Option<i32>)> {
+    let program = executable(command);
+    let subcommand = command.get(1).map(String::as_str);
+    let tests = cargo_test(command)
+        || matches!(program, Some("pytest" | "py.test" | "jest" | "vitest"))
+        || matches!(
+            (program, subcommand),
+            (Some("go" | "npm" | "pnpm" | "yarn" | "bun"), Some("test"))
+        )
+        || matches!(
+            (program, subcommand),
+            (Some("cargo" | "cargo.sh"), Some("nextest"))
+        )
+        || matches!((program, subcommand), (Some("node"), Some("--test")))
+        || program.is_some_and(|name| name.starts_with("python"))
+            && command
+                .windows(2)
+                .any(|args| args[0] == "-m" && matches!(args[1].as_str(), "unittest" | "pytest"));
+    let inferred = tests.then(|| {
+        if command.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "--list" | "--no-run" | "--collect-only" | "--listTests"
+            )
+        }) || matches!(
+            (program, subcommand, command.get(2).map(String::as_str)),
+            (Some("cargo" | "cargo.sh"), Some("nextest"), Some("list"))
+        ) {
+            ValidationKind::Discovery
+        } else {
+            ValidationKind::Test
+        }
+    });
+    let declared: Option<ValidationKind> = serde_json::from_value(args["kind"].clone())?;
+    require(
+        inferred.is_none() || declared.is_none() || inferred == declared,
+        "kind: use test for recognized test execution and discovery for listing tests",
+    )?;
+    let kind = inferred.or(declared).unwrap_or(ValidationKind::Inspection);
+    let expected: Option<i32> = serde_json::from_value(args["expected_exit_code"].clone())?;
+    require(
+        expected.is_none_or(|code| code == 0 || kind == ValidationKind::Inspection),
+        "expected_exit_code: only an inspection may expect a nonzero process exit",
+    )?;
+    Ok((kind, expected.filter(|code| *code != 0)))
+}
+
 fn observation(
     args: &Value,
     spec: &ValidationSpec,
@@ -208,11 +275,17 @@ fn observation(
                 .ok_or_else(|| crate::invalid("tests_executed: expected a nonnegative integer"))
         })
         .transpose()?;
-    let is_cargo_test = matches!(executable(&spec.command), Some("cargo" | "cargo.sh"))
-        && spec.command[1..]
-            .iter()
-            .find(|arg| !arg.starts_with('+') && !arg.starts_with('-'))
-            .is_some_and(|arg| arg == "test")
+    if matches!(
+        spec.kind,
+        Some(ValidationKind::Inspection | ValidationKind::Discovery)
+    ) {
+        return Ok(ValidationObservation {
+            problems,
+            limitations,
+            tests_executed: None,
+        });
+    }
+    let is_cargo_test = cargo_test(&spec.command)
         && !spec
             .command
             .iter()
@@ -253,6 +326,8 @@ fn observation(
             problems.push("The check executed zero tests.".into());
         } else if is_cargo_test && summary.is_none() {
             problems.push("Cargo test evidence requires raw libtest totals.".into());
+        } else if spec.kind == Some(ValidationKind::Test) && tests_executed.is_none() {
+            problems.push("Test evidence requires the number of executed tests.".into());
         }
     }
     Ok(ValidationObservation {

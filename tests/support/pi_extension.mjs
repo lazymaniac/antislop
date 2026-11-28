@@ -2,6 +2,7 @@
 // discovery, scoped schemas and accepted results come from the Rust Gateway.
 import assert from 'node:assert/strict';
 import { existsSync, realpathSync, writeFileSync, appendFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 const argv = process.argv.slice(2);
 if (argv.includes('--fixture-start-failure')) { console.error('Pi startup failed: missing backend'); process.exit(13); }
 const adapter = argv[argv.indexOf('--extension') + 1];
@@ -36,6 +37,7 @@ if (argv.includes('--interactive')) {
     });
 }
 const expected = JSON.parse(process.env.ANTISLOP_PI_EXPECTED);
+const token = process.env.ANTISLOP_MCP_TOKEN;
 const handlers = new Map();
 let server;
 const mode = process.env.PI_TEST_MODE;
@@ -48,13 +50,28 @@ const pi = {
     registerMcpServer(name, config) {
         assert.equal(name, expected.alias);
         assert.equal(config.exposure, 'direct');
-        if (mode === 'register-error') throw new Error(`registration failed ${process.env.ANTISLOP_MCP_TOKEN}`);
+        assert(config.headers.Authorization === `Bearer ${token}`);
+        if (mode === 'register-error') throw new Error(`registration failed ${token}`);
         server = config;
     },
 };
 if (mode === 'missing-api') delete pi.registerMcpServer;
 const { default: extension } = await import(adapter);
 extension(pi);
+assert.equal(process.env.ANTISLOP_MCP_TOKEN, undefined);
+if (mode === 'provider-activity') {
+    execFileSync('/bin/sh', ['-c', 'test "${ANTISLOP_MCP_TOKEN+x}" != x']);
+    const result = handlers.get('tool_result')({
+        content: [{type:'text', text:`runtime token ${token}`}],
+        details: {raw: token},
+        structuredContent: {unchanged: true},
+    });
+    assert.deepEqual(result, {
+        content: [{type:'text', text:'runtime token [REDACTED]'}],
+        details: {raw: '[REDACTED]'},
+        structuredContent: {unchanged: true},
+    });
+}
 const ctx = {
     isIdle: () => idle,
     hasPendingMessages: () => false,
@@ -78,7 +95,7 @@ if (mode === 'provider-activity') {
     handlers.get('agent_start')({}, ctx);
     handlers.get('message_end')({message: {role: 'toolResult', stopReason: 'error', errorMessage: 'ordinary shell failure'}}, ctx);
     handlers.get('message_end')({message: {
-        role: 'assistant', stopReason: 'error', errorMessage: `GPU timeout ${process.env.ANTISLOP_MCP_TOKEN}`,
+        role: 'assistant', stopReason: 'error', errorMessage: `GPU timeout ${token}`,
     }}, ctx);
     handlers.get('agent_start')({}, ctx);
     handlers.get('message_end')({message: {role: 'assistant', stopReason: 'stop'}}, ctx);

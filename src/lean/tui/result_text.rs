@@ -111,6 +111,18 @@ fn append_selection(text: &mut String, selection: &Selection) {
         text.push_str(&chosen.approach);
         text.push('\n');
     }
+    if !selection.ranking.is_empty() {
+        text.push_str(&format!(
+            "\nRanking\n{}\n\nDecisive criterion\n{}\n",
+            selection.ranking.join(" > "),
+            selection.decisive_criterion
+        ));
+    }
+    if let Some(reason) = &selection.ranking_override {
+        text.push_str(&format!(
+            "\nReason for departing from the ranking\n{reason}\n"
+        ));
+    }
     text.push_str(&format!(
         "\nRationale\n{}\n\nAlternatives",
         selection.rationale
@@ -175,6 +187,9 @@ mod tests {
         let selection = Selection {
             user_summary: String::new(),
             selected: "A".into(),
+            ranking: vec!["A".into()],
+            decisive_criterion: "Fits the existing system".into(),
+            ranking_override: None,
             rationale: "Why A".into(),
             alternatives: vec![crate::lean::turn_result::Alternative {
                 id: "A".into(),

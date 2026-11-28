@@ -216,7 +216,7 @@ impl App {
                     crate::lean::daemon::ConversationRequest::RevisePlan {
                         conversation: conversation.clone(),
                         operation_id: Some(crate::id()),
-                        revision: rev_for_req,
+                        revision: Box::new(rev_for_req),
                         request_ai_review,
                     },
                 ))

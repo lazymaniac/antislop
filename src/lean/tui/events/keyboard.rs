@@ -602,7 +602,7 @@ impl App {
                 revision,
                 request_ai_review,
             } => {
-                self.send_flow_revision(revision, request_ai_review, task_id, task_title);
+                self.send_flow_revision(*revision, request_ai_review, task_id, task_title);
             }
         }
         Some(true)

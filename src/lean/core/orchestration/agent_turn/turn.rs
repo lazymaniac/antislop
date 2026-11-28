@@ -77,7 +77,10 @@ impl Core {
             return Ok(None);
         };
         let events = TurnEvents::new(self, &state);
-        announce_started(&state, &events)?;
+        events.announce(
+            "turn_queued",
+            json!({"role":state.role,"provider":state.provider}),
+        );
         let outcome = execute::execute(self, state, cancel, prompt, &events);
         finish::finish(self, outcome, events, cancel)
     }
@@ -94,7 +97,7 @@ impl TurnState<'_> {
     }
 }
 
-fn announce_started(state: &TurnState<'_>, events: &TurnEvents<'_>) -> Result<()> {
+fn announce_execution_started(state: &TurnState<'_>, events: &TurnEvents<'_>) -> Result<()> {
     events.announce(
         "turn_started",
         json!({

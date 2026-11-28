@@ -79,6 +79,23 @@ in `open_decisions`. Where the selected rigor supports Options, only writers
 with such choices receive a separate selection task. Saved legacy contracts
 retain their existing Options policy.
 
+Use `preview_plan_revision` with the accepted `base_revision` and
+`patches` keyed by task. Update existing acceptance criteria by ID.
+Set `open_decisions: []` explicitly when the decision has been made. The
+preview shows which generated Options tasks will be removed. Incremental
+reviews receive the changed criteria, complete graph index, and prior findings;
+all original material remains available by reference. A scope amendment
+requires reading the original scope.
+
+`inspect_plan_witness` counts search results at an exact commit or checks a
+libtest selector against a retained passing `--list` receipt for that tree.
+Attach the expected counts under `witnesses` to check them before review.
+The search result counts matching lines and matching files separately.
+
+If `task_states` shows `answer_recovery`, use its `supersede_receipt` in
+`answer_agent`. The original answer is retained while the new answer can
+continue the task or name a replacement revision.
+
 ## Reusing builds, tests and static analysis
 
 All execution and review roles use `prepare_validation` before a validation
@@ -89,6 +106,17 @@ trees using the existing scratch-index snapshot, including uncommitted and
 nonignored untracked source. Commit IDs and worktree paths alone do not establish
 equivalence. Identical files across different commits/worktrees can share results.
 No repository contents are stored in validation rows or prompts.
+
+The prompt lists recent validation IDs, command previews and statuses. Call
+`read_validations(validation=ID)` for the full specification and evidence ID,
+or omit `validation` to page the history. Submit the exact specification to
+`prepare_validation` to check reuse on the current tree.
+
+For delivery, map each required check to a validation receipt on the final
+integrated tree and to the target and totals in its retained output. Reuse a
+full-suite receipt for covered targets under matching conditions. Run distinct
+scopes, including required ignored tests, separately. Reserve `--nocapture`
+for a targeted diagnostic rerun and keep the original failure in the report.
 
 `action=run` claims the check. The agent executes it through its existing CLI
 permissions, then calls `complete_validation` with its real exit code, decisive
@@ -101,17 +129,22 @@ owner cannot leave a reusable success or an unrecoverable claim.
 
 Use `problems: []` for a successful observation and put coverage caveats in
 `limitations`. Run each check as a direct command. Inline shell commands can
-mask an exit status and are rejected. Cargo test observations require raw
-libtest totals. For other runners include `tests_executed`. An observation
-with zero executed tests cannot establish a passing test run.
+mask an exit status and are rejected. Use `kind: test` for test execution,
+`inspection` for code or build checks, or `discovery` for listing tests.
+Cargo test infers its kind from its arguments. Its execution receipts require
+raw libtest totals; other runners supply `tests_executed`. Inspections can
+declare an `expected_exit_code`, such as grep exit 1 to assert absence.
 
 Task reviewers can attach a stable scenario name and its failing validation
 receipt to a finding as `reproduction`. Later reviews keep that finding open
 until `resolved` includes its ID with `resolution_evidence` for a newer
-passing run of the same command, directory and environment on the reviewed
-tree. The reviewer verifies that the scenario still exercises the defect.
+passing run of the same command, directory, environment and expected exit on
+the reviewed tree. Use `carry_findings` to retain an earlier ID and optionally
+correct its location. An independently reviewed plan revision can supersede
+an invalid reproduction or transfer it with `finding_actions`. For a transfer,
+the receiving review includes the passing validation in the named criterion.
 
-Only zero-exit observations with no reported errors and unchanged source are
+Only observations with the expected exit, no reported errors and unchanged source are
 reusable. A changed command, target, environment, source tree, missing/corrupt raw
 evidence, explicit invalidation or a newer failed observation prevents reuse.
 Non-Git directories and dirty submodule contents retain observations without
@@ -162,6 +195,9 @@ selection's rationale appears once, including for legacy reports that appended
 evidence references to that same rationale. MCP evidence is retained as metadata
 and read using `read_evidence`. The completion limit of 64 references counts
 both automatically recorded and explicitly retained references together.
+New Options results record the selected ID, all alternative IDs in ranked
+order, and the criterion that decided the choice. Choosing an alternative below
+first place requires an explicit `ranking_override` for the reviewer to inspect.
 Reviewer schemas require the actual obligation IDs and enumerate permitted
 `findings.check` values without copying full obligation descriptions.
 

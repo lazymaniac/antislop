@@ -54,6 +54,12 @@ impl Store {
         let mut db = self.db();
         let tx = db.transaction()?;
         apply.review_lease(&tx, Some(lease))?;
+        crate::lean::store::review_dispositions::persist_dispositions(
+            &tx,
+            conversation,
+            revision,
+            lease.request,
+        )?;
         apply.save_graph(&tx)?;
         apply.finish(&tx, lease)?;
         tx.commit()?;

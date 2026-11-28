@@ -124,6 +124,7 @@ impl Core {
                 retire: Vec::new(),
                 redo: Vec::new(),
                 replacements: Default::default(),
+                finding_actions: Vec::new(),
             };
             (baseline, revision, specs, accepted)
         };
@@ -168,7 +169,7 @@ impl Core {
         let baseline = self.store.plan(&revision.plan)?;
         require(!baseline.is_empty(), "plan has no tasks")?;
         self.normalize_user_revision_tasks(conversation, &mut revision, &baseline)?;
-        if request_ai_review || revision.scope.is_some() {
+        if request_ai_review || revision.scope.is_some() || !revision.finding_actions.is_empty() {
             return self.submit_revision(conversation, request_key, revision);
         }
         require(
@@ -454,7 +455,7 @@ impl Core {
         self.prepared_revision(conversation, request, revision, baseline, specs)
     }
 
-    fn revised_specs(
+    pub(in crate::lean) fn revised_specs(
         &self,
         revision: &PlanRevision,
         baseline: &[Task],
@@ -486,6 +487,8 @@ impl Core {
         };
         tasks::validate(&specs)?;
         let conversation = self.store.plan_conversation(&revision.plan)?;
+        self.store
+            .check_finding_actions(&conversation, revision, baseline, &specs)?;
         self.store.validate_result_inputs(&conversation, &specs)?;
         for task in &specs {
             self.check_planning_task_inputs(&conversation, PLANNER, "", task)?;
@@ -571,6 +574,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
 
         // Hold deletion's lifecycle gate until submit_revision has acquired
@@ -814,6 +818,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         let prepared = core.revised_specs(&revision, &baseline).unwrap();
         let prepared_again = core.revised_specs(&revision, &baseline).unwrap();
@@ -1162,6 +1167,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
 
         let merged = revision.merge(&baseline).unwrap();
@@ -1236,6 +1242,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         for _ in 0..2 {
             let revised = core.revised_specs(&revision, &baseline).unwrap();
@@ -1603,6 +1610,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         let revised = core.revised_specs(&revision, &baseline).unwrap();
         assert_eq!(revised, specs);
@@ -1752,6 +1760,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         for key in ["first", "second"] {
             let error = core
@@ -1805,6 +1814,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         let reply = core
             .apply_user_revision(&conversation, "ui-edit-1", revision, false)

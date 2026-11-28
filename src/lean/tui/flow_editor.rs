@@ -114,7 +114,7 @@ pub enum FlowEditorOutcome {
     None,
     Close,
     Submit {
-        revision: PlanRevision,
+        revision: Box<PlanRevision>,
         request_ai_review: bool,
     },
 }
@@ -409,7 +409,7 @@ impl FlowEditor {
                 self.error = None;
                 self.sending = true;
                 FlowEditorOutcome::Submit {
-                    revision,
+                    revision: Box::new(revision),
                     request_ai_review,
                 }
             }
@@ -440,6 +440,7 @@ impl FlowEditor {
                         retire: Vec::new(),
                         redo: Vec::new(),
                         replacements: BTreeMap::new(),
+                        finding_actions: Vec::new(),
                     },
                     self.request_ai_review,
                 ))
@@ -463,6 +464,7 @@ impl FlowEditor {
                         retire: Vec::new(),
                         redo: Vec::new(),
                         replacements: BTreeMap::new(),
+                        finding_actions: Vec::new(),
                     },
                     self.request_ai_review,
                 ))
@@ -525,6 +527,7 @@ impl FlowEditor {
                         retire: vec![original_id.clone()],
                         redo: Vec::new(),
                         replacements,
+                        finding_actions: Vec::new(),
                     },
                     self.request_ai_review,
                 ))
@@ -1004,6 +1007,7 @@ pub fn toggle_hold_revision(
             retire: Vec::new(),
             redo: Vec::new(),
             replacements: BTreeMap::new(),
+            finding_actions: Vec::new(),
         },
         false,
     ))
@@ -1059,6 +1063,7 @@ fn build_retire_revision(
             retire: vec![task_id.to_owned()],
             redo: Vec::new(),
             replacements: BTreeMap::new(),
+            finding_actions: Vec::new(),
         },
         request_ai_review,
     ))
@@ -1108,6 +1113,7 @@ pub fn toggle_dependency_edge_revision(
                 retire: Vec::new(),
                 redo: Vec::new(),
                 replacements: BTreeMap::new(),
+                finding_actions: Vec::new(),
             },
             format!("Unlinked dependency {from_id} ↛ {to_id}"),
         ));
@@ -1129,6 +1135,7 @@ pub fn toggle_dependency_edge_revision(
                 retire: Vec::new(),
                 redo: Vec::new(),
                 replacements: BTreeMap::new(),
+                finding_actions: Vec::new(),
             },
             format!("Unlinked dependency {to_id} ↛ {from_id}"),
         ));
@@ -1154,6 +1161,7 @@ pub fn toggle_dependency_edge_revision(
             retire: Vec::new(),
             redo: Vec::new(),
             replacements: BTreeMap::new(),
+            finding_actions: Vec::new(),
         },
         format!("Linked dependency {from_id} → {to_id}"),
     ))

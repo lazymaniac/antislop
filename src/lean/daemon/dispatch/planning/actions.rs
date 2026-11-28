@@ -247,7 +247,7 @@ fn revise_and_team(context: &Context<'_>, request: Request) -> Result<Route> {
                 .as_deref()
                 .filter(|id| !id.is_empty())
                 .map_or_else(crate::id, str::to_owned);
-            core.apply_user_revision(&conversation, &key, revision, request_ai_review)?
+            core.apply_user_revision(&conversation, &key, *revision, request_ai_review)?
         }),
         Request::Conversation(ConversationRequest::SelectTeam {
             conversation,

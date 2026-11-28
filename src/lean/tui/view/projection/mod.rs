@@ -66,6 +66,7 @@ const HANDLERS: &[(&str, Handler)] = &[
     ("planning_progress", conversation::on_planning_progress),
     ("workflow", conversation::on_workflow),
     ("turn_started", agents::on_turn_started),
+    ("turn_queued", agents::on_turn_queued),
     ("turn_finished", agents::on_turn_finished),
     ("provider_activity", agents::on_provider_activity),
     ("graph_task", graph_task),

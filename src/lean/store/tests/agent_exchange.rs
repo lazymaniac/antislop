@@ -587,6 +587,93 @@ fn answered_question_waits_for_its_specific_dependency_before_queueing_once() {
 }
 
 #[test]
+fn a_wait_on_a_rejected_revision_can_be_superseded_without_losing_the_answer() {
+    let (_dir, store, conversation, task, turn) = fixture();
+    let request = store
+        .ask_agent_question(&conversation, &turn.id, "revision", "Which correction?")
+        .unwrap();
+    let revision: PlanRevision = serde_json::from_value(json!({
+        "plan":task.plan_id, "base_revision":0,"reason":"Clarify scope","tasks":[],"retire":[]
+    }))
+    .unwrap();
+    let (rejected, _) = store
+        .reserve_revision_job(&conversation, "first", &revision)
+        .unwrap();
+    let first = store
+        .answer_agent_with_disposition(
+            &conversation,
+            &request,
+            "Wait for first",
+            "wait_for_revision",
+            &rejected,
+        )
+        .unwrap();
+    assert_eq!(
+        store.park_task_for_question(&task, &request).unwrap(),
+        "waiting"
+    );
+    store
+        .finish_revision_job(&rejected, &Err(crate::invalid("review rejected")))
+        .unwrap();
+    let disposition = store.agent_question(&conversation, &request, None).unwrap();
+    assert_eq!(disposition["supersede_receipt"], first["receipt"]);
+    let old_receipt: String = serde_json::from_value(first["receipt"].clone()).unwrap();
+    assert_eq!(
+        store
+            .agent_answer_recovery(&conversation, &request)
+            .unwrap(),
+        Some(json!({"supersede_receipt":old_receipt,"rejected_revision":rejected}))
+    );
+    let (replacement, _) = store
+        .reserve_revision_job(&conversation, "second", &revision)
+        .unwrap();
+    assert!(
+        store
+            .answer_agent_from_turn(
+                &conversation,
+                &request,
+                "Wait for second",
+                "wait_for_revision",
+                &replacement,
+                None,
+                Some("wrong")
+            )
+            .is_err()
+    );
+    let answer = store
+        .answer_agent_from_turn(
+            &conversation,
+            &request,
+            "Wait for second",
+            "wait_for_revision",
+            &replacement,
+            None,
+            Some(&old_receipt),
+        )
+        .unwrap();
+    assert_ne!(answer["receipt"], first["receipt"]);
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "waiting"
+    );
+    let saved: String = store
+        .db()
+        .query_row(
+            "SELECT answer FROM agent_answer_history WHERE request=?1",
+            [&request],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, "Wait for first");
+    store.finish_revision_job(&replacement, &Ok(())).unwrap();
+    store.refresh_answer_waits(&conversation).unwrap();
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "queued"
+    );
+}
+
+#[test]
 fn runtime_error_text_and_feedback_do_not_become_worker_completions() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("core.db")).unwrap();

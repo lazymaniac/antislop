@@ -19,6 +19,16 @@ pub(crate) fn render_candidate_review(
 ) -> String {
     let request = inputs.block(prompts::REQUEST_LABEL, request, ReadFor::Review);
     let contracts = plan_text(plan, inputs);
+    render_plan_review(project, &request, &contracts, plan, initial)
+}
+
+fn render_plan_review(
+    project: &str,
+    request: &str,
+    contracts: &str,
+    plan: &[TaskContract],
+    initial: bool,
+) -> String {
     let mut prompt = if initial {
         format!(
             prompts::template!(PLAN_REVIEW_PROMPT),
@@ -46,6 +56,119 @@ pub(crate) fn render_candidate_review(
     };
     append_plan_review_rules(&mut prompt, plan);
     prompt
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_revision_delta(
+    project: &str,
+    request: &str,
+    plan: &[TaskContract],
+    baseline: &[Value],
+    approved: ApprovedWork<'_>,
+    reason: &str,
+    initial: bool,
+    inputs: &mut TurnInputs,
+) -> String {
+    let request = inputs.reference(prompts::REQUEST_LABEL, request, ReadFor::Reference);
+    let baseline: Vec<_> = baseline
+        .iter()
+        .map(|entry| {
+            serde_json::from_value::<TaskContract>(entry.clone())
+                .map_or_else(|_| entry.clone(), |task| plan_entry(&task))
+        })
+        .collect();
+    let current: Vec<_> = plan.iter().map(plan_entry).collect();
+    let graph: Vec<_> = plan.iter().map(|task| serde_json::json!({
+        "id":task.id, "kind":task.kind, "depends_on":task.depends_on,
+        "options_for":task.options_for, "quality_gate":task.quality_gate, "deferred":task.deferred
+    })).collect();
+    let delta = contract_changes(&baseline, &current);
+    let changes = inputs.block(
+        "Changed contracts and criteria",
+        &crate::lean::prompt_context::markdown(&delta),
+        ReadFor::Review,
+    );
+    let earlier = inputs.reference(
+        "Earlier contracts",
+        &crate::lean::prompt_context::markdown(&baseline),
+        ReadFor::Reference,
+    );
+    let candidate = inputs.reference(
+        "Exact candidate contracts",
+        &crate::lean::prompt_context::markdown(&current),
+        ReadFor::Reference,
+    );
+    let contracts = format!(
+        "{}\n{changes}\n{earlier}\n{candidate}\nRead the exact contracts and original sources for any requirement the change can affect. Inspect removed generated dependencies in the complete graph index.\nApproved tasks kept: {}. Approved tasks being reassessed: {}.\n{reason}",
+        crate::lean::prompt_context::untrusted(
+            "Complete candidate task graph",
+            &crate::lean::prompt_context::markdown(&graph)
+        ),
+        listed(approved.kept),
+        listed(approved.redone),
+    );
+    render_plan_review(project, &request, &contracts, plan, initial)
+}
+
+fn contract_changes(baseline: &[Value], current: &[Value]) -> Vec<Value> {
+    let index = |rows: &[Value]| {
+        rows.iter()
+            .filter_map(|row| row["id"].as_str().map(|id| (id.to_owned(), row.clone())))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let before = index(baseline);
+    let after = index(current);
+    before
+        .keys()
+        .chain(after.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|id| {
+            let (Some(old), Some(new)) = (before.get(id), after.get(id)) else {
+                return Some(
+                    serde_json::json!({"task":id,"before":before.get(id),"after":after.get(id)}),
+                );
+            };
+            let old = old.as_object()?;
+            let new = new.as_object()?;
+            let changes: serde_json::Map<_, _> = old
+                .keys()
+                .chain(new.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter(|key| old.get(*key) != new.get(*key))
+                .map(|key| {
+                    let from = old.get(key);
+                    let to = new.get(key);
+                    let value = if key == "acceptance_criteria" {
+                        let from = from
+                            .and_then(Value::as_array)
+                            .map_or(&[][..], Vec::as_slice);
+                        let to = to.and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+                        serde_json::json!(contract_changes(from, to))
+                    } else {
+                        serde_json::json!({"before":from,"after":to})
+                    };
+                    (key.clone(), value)
+                })
+                .collect();
+            (!changes.is_empty()).then(|| serde_json::json!({"task":id,"changes":changes}))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn criterion_delta_omits_unchanged_contract_material() {
+    let before = serde_json::json!([{"id":"writer","goal":"retain goal","acceptance_criteria":[
+        {"id":"A","text":"old proof"},{"id":"B","text":"retained proof"}
+    ]}]);
+    let mut after = before.clone();
+    after[0]["acceptance_criteria"][0]["text"] = serde_json::json!("new proof");
+    let delta = contract_changes(before.as_array().unwrap(), after.as_array().unwrap());
+    let serialized = serde_json::to_string(&delta).unwrap();
+    assert!(serialized.contains("old proof") && serialized.contains("new proof"));
+    assert!(!serialized.contains("retain goal") && !serialized.contains("retained proof"));
 }
 
 fn append_plan_review_rules(prompt: &mut String, plan: &[TaskContract]) {

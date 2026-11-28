@@ -53,16 +53,6 @@ impl Core {
         self.store.validate_result_inputs(conversation, &specs)
     }
 
-    /// Revised tasks carry their complete task-local acceptance criteria.
-    pub(super) fn revised_tasks(
-        &self,
-        _conversation: &str,
-        _plan: &str,
-        tasks: Vec<PlannedTask>,
-    ) -> Result<Vec<TaskContract>> {
-        Ok(tasks.into_iter().map(PlannedTask::into_contract).collect())
-    }
-
     pub(super) fn await_agent_answer(
         &self,
         conversation: &str,

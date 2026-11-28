@@ -17,6 +17,23 @@ pub(super) fn on_agent_final(
     }
 }
 
+pub(super) fn on_turn_queued(view: &mut View, _: &Value, payload: &Value, _: String, turn: &str) {
+    let key = view.agent_key(payload["role"].as_str().unwrap_or_default());
+    let agent = view.agents.entry(key.clone()).or_default();
+    agent.running = false;
+    agent.started_ms = None;
+    agent.last_provider_progress_ms = None;
+    agent.provider = payload["provider"].as_str().unwrap_or_default().to_owned();
+    agent.activity = "waiting for execution".into();
+    view.roles.insert(turn.to_owned(), key.clone());
+    if matches!(
+        key.as_str(),
+        ORCHESTRATOR | crate::lean::COMMENT_ORCHESTRATOR
+    ) {
+        view.activity = Some("orchestrator is waiting for execution…".into());
+    }
+}
+
 pub(super) fn on_turn_started(
     view: &mut View,
     event: &Value,

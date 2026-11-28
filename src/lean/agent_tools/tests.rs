@@ -695,6 +695,7 @@ fn foreign_conversations_cannot_submit_bind_resume_or_revise_a_plan() {
         retire: vec![],
         redo: vec![],
         replacements: Default::default(),
+        finding_actions: Vec::new(),
     };
     assert!(
         core.submit_revision(&foreign, "foreign-key", revision)

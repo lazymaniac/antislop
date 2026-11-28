@@ -92,6 +92,22 @@ impl Core {
         );
         let scope_context =
             self.plan_scope_context(context.conversation, &context.revision.plan)?;
+        let scope_id = self
+            .store
+            .plan_scope_id(&context.revision.plan)?
+            .ok_or_else(|| crate::invalid("plan has no scope"))?;
+        let accepted_scope = self.store.scope(context.conversation, &scope_id)?;
+        let previous_findings = self
+            .store
+            .previous_revision_findings(&context.revision.plan, context.revision.base_revision)?;
+        let decisions = if context.revision.finding_actions.is_empty() {
+            String::new()
+        } else {
+            crate::lean::prompt_context::untrusted(
+                "Requested dispositions of reproduced findings",
+                &crate::lean::prompt_context::markdown(&context.revision.finding_actions),
+            )
+        };
         let team_guidance = self.store.team_guidance(context.conversation)?;
         let review = self
             .review(
@@ -101,11 +117,23 @@ impl Core {
                 &context.project,
                 context.cancel,
                 |initial, request, inputs| {
-                    let previous_scope = inputs.block("Previous accepted scope", &scope_context, ReadFor::Review);
-                    let candidate_scope = inputs.block("Candidate scope", context.revision.scope.as_deref().unwrap_or("unchanged"), ReadFor::Review);
-                    let reason = format!("Revision {} for plan {} at base {}. {reason}\n{previous_scope}\n{candidate_scope}\nReassess preserved results against the candidate scope.", data.request, context.revision.plan, context.revision.base_revision);
-
-                    let mut prompt = tasks::render_revision_review(
+                    let full_scope_review = context.revision.scope.is_some();
+                    let scope = if full_scope_review {
+                        inputs.block("Previous accepted scope", &scope_context, ReadFor::Review)
+                    } else {
+                        format!("{}\n{}", crate::lean::prompt_context::untrusted(
+                            "Accepted scope overview", &tasks::bound(&accepted_scope.summary, 3200)),
+                            inputs.reference("Accepted requirements and original sources", &scope_context, ReadFor::Reference))
+                    };
+                    let change = context.revision.scope.as_deref().map_or_else(String::new, |candidate| {
+                        inputs.block("Candidate scope", candidate, ReadFor::Review)
+                    });
+                    let findings = previous_findings.as_ref().map_or_else(String::new, |findings| {
+                        inputs.block("Latest rejected review on this base", findings, ReadFor::Review)
+                    });
+                    let reason = format!("Revision {} for plan {} at base {}. {reason}\n{scope}\n{change}\n{findings}\n{decisions}", data.request, context.revision.plan, context.revision.base_revision);
+                    let render = if full_scope_review { tasks::render_revision_review } else { tasks::render_revision_delta };
+                    let mut prompt = render(
                         &context.project.to_string_lossy(),
                         request,
                         context.specs,
@@ -534,6 +562,7 @@ mod tests {
             retire: vec![],
             redo: vec![],
             replacements: Default::default(),
+            finding_actions: Vec::new(),
         };
         for attempt in 0..5 {
             for severity in ["low", "medium", "high", "critical"] {

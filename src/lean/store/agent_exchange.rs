@@ -73,8 +73,26 @@ impl Store {
             .optional()?;
         let (disposition, target, released) =
             wait.unwrap_or(("continue".into(), String::new(), true));
+        let rejected = super::answer_waits::rejected_answer_receipt(&db, conversation, request)?
+            .map(|(receipt, _)| receipt);
         Ok(
-            serde_json::json!({"request":request,"state":state,"answer":answer,"disposition":disposition,"target":target,"released":released}),
+            serde_json::json!({"request":request,"state":state,"answer":answer,"disposition":disposition,"target":target,"released":released,"supersede_receipt":rejected}),
+        )
+    }
+
+    pub(in crate::lean) fn agent_answer_recovery(
+        &self,
+        conversation: &str,
+        request: &str,
+    ) -> Result<Option<Value>> {
+        Ok(
+            super::answer_waits::rejected_answer_receipt(&self.db(), conversation, request)?.map(
+                |(receipt, revision)| {
+                    serde_json::json!({
+                        "supersede_receipt":receipt,"rejected_revision":revision
+                    })
+                },
+            ),
         )
     }
 
@@ -142,8 +160,19 @@ impl Store {
         task: &Task,
         turn: &str,
     ) -> Result<Option<(u32, crate::lean::tasks::Verdict)>> {
-        let previous: Option<(u32, String)> = self.db().query_row(
-            "SELECT s.round,json_extract(r.result,'$.verdict') FROM agent_results r
+        Ok(self
+            .previous_task_review_record(conversation, task, turn)?
+            .map(|(_, round, verdict)| (round, verdict)))
+    }
+
+    pub(in crate::lean) fn previous_task_review_record(
+        &self,
+        conversation: &str,
+        task: &Task,
+        turn: &str,
+    ) -> Result<Option<(String, u32, crate::lean::tasks::Verdict)>> {
+        let previous: Option<(String, u32, String)> = self.db().query_row(
+            "SELECT t.id,s.round,json_extract(r.result,'$.verdict') FROM agent_results r
              JOIN turns t ON t.id=r.turn_id
              JOIN turn_scopes s ON s.turn_id=t.id
              JOIN turn_inputs i ON i.turn_id=t.id
@@ -151,10 +180,10 @@ impl Store {
                AND t.role=?4 AND t.id<>?5 AND t.status='done' AND json_extract(r.result,'$.type')='review'
              ORDER BY t.rowid DESC LIMIT 1",
             params![conversation,task.id,task.input_generation,format!("reviewer:{}",task.id),turn],
-            |row| Ok((row.get(0)?,row.get(1)?)),
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
         ).optional()?;
         previous
-            .map(|(round, verdict)| Ok((round, serde_json::from_str(&verdict)?)))
+            .map(|(id, round, verdict)| Ok((id, round, serde_json::from_str(&verdict)?)))
             .transpose()
     }
 
@@ -257,7 +286,7 @@ pub(super) fn answer_question_tx(
         )?;
         Ok(())
     } else {
-        record_question_answer(tx, conversation, request, answer)
+        settle_agent_question(tx, conversation, request, answer)
     }
 }
 
@@ -273,7 +302,7 @@ fn question_answer(
     ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID the agent's question message names".into()))
 }
 
-fn record_question_answer(
+pub(super) fn settle_agent_question(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
     request: &str,
@@ -367,7 +396,7 @@ impl Store {
         } else {
             "waiting"
         };
-        let changed = tx.execute("UPDATE tasks SET status=?2 WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?3",params![task.id,state,task.input_generation])?;
+        let changed = tx.execute("UPDATE tasks SET status=?2,feedback=json_set(coalesce(feedback,'{}'),'$.waiting_request',?4) WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?3",params![task.id,state,task.input_generation,request])?;
         crate::require(changed == 1, "task inputs changed while saving checkpoint")?;
         if state == "queued" {
             tx.execute(

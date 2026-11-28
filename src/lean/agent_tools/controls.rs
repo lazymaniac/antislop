@@ -71,6 +71,7 @@ impl Core {
             disposition,
             args["target"].as_str().unwrap_or_default(),
             Some(turn),
+            args["supersede_receipt"].as_str(),
         )?;
         self.resume_delivered_answer(conversation);
 
@@ -209,6 +210,14 @@ impl Core {
             matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR),
             "only the orchestrator may revise the plan",
         )?;
+        if tool == "preview_plan_revision" {
+            let (_, revision) = self.prepare_plan_revision(conversation, args)?;
+            let baseline = self.store.plan(&revision.plan)?;
+            let candidate = self.revised_specs(&revision, &baseline)?;
+            return Ok(super::revision_patches::preview_graph(
+                &revision, &baseline, &candidate,
+            ));
+        }
         let receipt = if tool == "request_replan" {
             self.request_replan(conversation, &required_text(args, "reason")?)?
         } else {
@@ -245,7 +254,14 @@ impl Core {
     ) -> Result<(String, super::store::PlanRevision)> {
         let (plan, base_revision) = self.revision_view(conversation)?;
         let request_key = revision_request_key(args)?;
-        let tasks = self.revised_tasks(conversation, &plan, planned_tasks(&args["tasks"])?)?;
+        let tasks = self.revision_task_changes(&plan, base_revision, args)?;
+        let finding_actions = self.revision_finding_actions(conversation, &plan, args)?;
+        let mut reason = required_text(args, "reason")?;
+        let checks = self.check_revision_witnesses(conversation, &args["witnesses"])?;
+        if !checks.is_empty() {
+            reason.push_str("\nRuntime witness preflight:\n");
+            reason.push_str(&crate::lean::prompt_context::markdown(&checks));
+        }
         Ok((
             request_key,
             super::store::PlanRevision {
@@ -256,7 +272,7 @@ impl Core {
                 },
                 plan,
                 base_revision,
-                reason: required_text(args, "reason")?,
+                reason,
                 tasks,
                 retire: serde_json::from_value(args["retire"].clone())
                     .map_err(|error| Error::Invalid(format!("retire: {error}")))?,
@@ -264,6 +280,7 @@ impl Core {
                     args.get("replacements").cloned().unwrap_or(json!({})),
                 )
                 .map_err(|error| Error::Invalid(format!("replacements: {error}")))?,
+                finding_actions,
                 redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(json!([])))
                     .map_err(|error| Error::Invalid(format!("redo: {error}")))?,
             },

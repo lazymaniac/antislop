@@ -580,7 +580,7 @@ pub(super) fn fixtures() -> Vec<Fixture> {
             request: Request::Conversation(ConversationRequest::RevisePlan {
                 conversation: "c".into(),
                 operation_id: Some("optional".into()),
-                revision: crate::lean::store::PlanRevision {
+                revision: Box::new(crate::lean::store::PlanRevision {
                     plan: "p".into(),
                     base_revision: 1,
                     reason: "revise".into(),
@@ -589,7 +589,8 @@ pub(super) fn fixtures() -> Vec<Fixture> {
                     retire: vec![],
                     redo: vec![],
                     replacements: Default::default(),
-                },
+                    finding_actions: Vec::new(),
+                }),
                 request_ai_review: true,
             }),
             expected: json!({"op":"revise_plan","conversation":"c","operation_id":"optional","revision":{"plan":"p","base_revision":1,"reason":"revise","tasks":[],"retire":[],"redo":[]},"request_ai_review":true}),

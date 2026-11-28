@@ -3,10 +3,13 @@
 import { writeFileSync, renameSync, realpathSync, readFileSync } from 'node:fs';
 
 export default function antislop(pi) {
-    const expected = JSON.parse(process.env.ANTISLOP_PI_EXPECTED);
     const token = process.env.ANTISLOP_MCP_TOKEN;
+    // Pi's shell tools inherit process.env. Keep the gateway credential in the
+    // adapter closure and the MCP client, rather than passing it to those tools.
+    delete process.env.ANTISLOP_MCP_TOKEN;
+    const expected = JSON.parse(process.env.ANTISLOP_PI_EXPECTED);
     const path = process.env.ANTISLOP_PI_STATUS_PATH;
-    const redact = (error) => String(error).split(token).join('[REDACTED]');
+    const redact = (error) => token ? String(error).split(token).join('[REDACTED]') : String(error);
     function publish(fields) {
         const temporary = `${path}.tmp`;
         writeFileSync(temporary, JSON.stringify({ version: 1, ...expected, ...fields }), { mode: 0o600 });
@@ -60,12 +63,28 @@ export default function antislop(pi) {
         }
     }
     try {
+        if (!token) throw new Error('Pi gateway credential is missing');
         if (typeof pi.registerMcpServer !== 'function')
             throw new Error('Pi lacks registerMcpServer; use a compatible Pi extension API (tested API: 1.5.2)');
         pi.registerMcpServer(expected.alias, {
             url: process.env.ANTISLOP_MCP_URL,
             headers: { Authorization: `Bearer ${token}` },
             exposure: 'direct',
+        });
+        // Tool results are also retained by Pi, independently of our event log.
+        pi.on('tool_result', (event) => {
+            const update = {};
+            if (event.content.some(part => part.type === 'text' && part.text.includes(token))) {
+                update.content = event.content.map(part =>
+                    part.type === 'text' ? { ...part, text: redact(part.text) } : part);
+            }
+            for (const key of ['details', 'structuredContent']) {
+                const encoded = JSON.stringify(event[key]);
+                if (encoded?.includes(token)) update[key] = JSON.parse(redact(encoded));
+                else if (key === 'structuredContent' && update.content && encoded !== undefined)
+                    update[key] = event[key];
+            }
+            if (Object.keys(update).length) return update;
         });
         const timer = setInterval(() => {
             if (!context) return;

@@ -8,6 +8,18 @@ pub(in crate::lean) struct ValidationSpec {
     pub directory: String,
     pub scope: String,
     pub environment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ValidationKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::lean) enum ValidationKind {
+    Test,
+    Inspection,
+    Discovery,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +59,12 @@ impl Store {
         ))?);
         let mut db = self.db();
         let tx = db.transaction()?;
+        let live: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND conversation_id=?2 AND status='running')",
+            params![turn, conversation],
+            |row| row.get(0),
+        )?;
+        crate::require(live, "validation producer turn is no longer running")?;
         let previous: Option<(String,String)> = tx.query_row(
             "SELECT v.id,t.status FROM validation_runs v JOIN turns t ON t.id=v.turn_id WHERE v.conversation=?1 AND v.identity=?2 ORDER BY v.rowid DESC LIMIT 1",
             params![conversation,identity], |row| Ok((row.get(0)?,row.get(1)?)),
@@ -222,6 +240,31 @@ impl Store {
             .collect()
     }
 
+    pub(in crate::lean) fn recent_validation_summaries(
+        &self,
+        conversation: &str,
+    ) -> Result<Vec<Value>> {
+        let db = self.db();
+        let mut query = db.prepare(
+            "SELECT id,json_extract(spec,'$.command'),status FROM validation_runs WHERE conversation=?1 ORDER BY rowid DESC LIMIT 8",
+        )?;
+        let rows = query.query_map([conversation], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, command, status) = row?;
+            let command: Vec<String> = serde_json::from_str(&command)?;
+            Ok(serde_json::json!({
+                "id":id,"command":crate::lean::tasks::bound(&command.join(" "), 160),"status":status
+            }))
+        })
+        .collect()
+    }
+
     pub(in crate::lean) fn validation_available_to_turn(
         &self,
         validation: &ValidationRun,
@@ -247,6 +290,39 @@ impl Store {
             params![current, earlier], |row| row.get(0),
         )?)
     }
+}
+
+pub(super) fn interrupt_validation_claims(
+    tx: &rusqlite::Transaction<'_>,
+    turn: Option<&str>,
+) -> Result<()> {
+    let claims = {
+        let mut statement = tx.prepare(
+            "UPDATE validation_runs SET status='interrupted',problem='producer turn ended without completing this validation'
+             WHERE status='running' AND turn_id IN (SELECT id FROM turns WHERE status<>'running' AND (?1 IS NULL OR id=?1))
+             RETURNING conversation,turn_id,id",
+        )?;
+        statement
+            .query_map([turn], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for (conversation, turn, id) in claims {
+        validation_event(
+            tx,
+            &conversation,
+            &turn,
+            &id,
+            "validation_interrupted",
+            &serde_json::json!({"reason":"producer turn ended without completing this validation"}),
+        )?;
+    }
+    Ok(())
 }
 
 fn validation_row(db: &Connection, conversation: &str, id: &str) -> Result<ValidationRun> {

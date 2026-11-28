@@ -1029,10 +1029,18 @@ fn assert_selected_input(prompt: &str) {
 
 #[test]
 fn an_independently_reviewed_local_choice_can_select_b() {
-    let (tasks, _, _) = run_with_requirement(
-        json!({"tasks":[writer("w")]}),
+    let mut owner = writer("w");
+    owner["open_decisions"] = json!(["Select the wire format for the output"]);
+    let report = json!({"type":"completed","summary":"Keep existing format","report":"Keep the compatible format",
+        "selection":{"selected":"B","ranking":["A","B"],"decisive_criterion":"Wire compatibility",
+            "ranking_override":"The existing files require format B.","rationale":"Keep the compatible format",
+            "user_summary":"Use format B for wire compatibility.","alternatives":[
+                {"id":"A","approach":"Write format A","tradeoffs":"Simpler parsing"},
+                {"id":"B","approach":"Write format B","tradeoffs":"Compatible with existing files"}]}});
+    let (tasks, calls, _) = run_with_requirement(
+        json!({"tasks":[owner]}),
         tasks::Team::SmallChange,
-        &REPORT.replace("Selected: A", "Selected: B"),
+        &report.to_string(),
         "B",
         "",
         "B",
@@ -1040,5 +1048,21 @@ fn an_independently_reviewed_local_choice_can_select_b() {
     assert_eq!(
         tasks.iter().find(|t| t.spec["id"] == "w").unwrap().status,
         "approved"
+    );
+    let option = tasks
+        .iter()
+        .find(|task| task.spec["options_for"] == "w")
+        .unwrap();
+    assert_eq!(
+        option.feedback.as_ref().unwrap()["selection"]["selected"],
+        "B"
+    );
+    assert!(
+        calls
+            .iter()
+            .filter_map(|call| call["prompt"].as_str())
+            .any(|prompt| prompt.contains("rank")
+                && prompt.contains("Wire compatibility")
+                && prompt.contains("The existing files require format B."))
     );
 }

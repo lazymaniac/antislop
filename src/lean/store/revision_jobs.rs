@@ -34,6 +34,24 @@ impl Store {
         Ok(serde_json::json!({"request":id,"state":state,"error":error}))
     }
 
+    pub(in crate::lean) fn previous_revision_findings(
+        &self,
+        plan: &str,
+        base: i64,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT error FROM plan_revision_jobs
+             WHERE plan_id=?1 AND status='rejected' AND json_extract(proposal,'$.base_revision')=?2
+               AND error LIKE 'revision review rejected%'
+             ORDER BY rowid DESC LIMIT 1",
+                params![plan, base],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     pub(in crate::lean) fn finish_revision_job(&self, id: &str, result: &Result<()>) -> Result<()> {
         self.db().execute(
             "UPDATE plan_revision_jobs SET status=?2,error=?3 WHERE id=?1 AND status='reviewing'",
