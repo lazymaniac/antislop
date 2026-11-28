@@ -34,6 +34,7 @@ fn execute_profile(
 ) -> Result<agent::Outcome> {
     let _execution = enter_execution(core, state, cancel)?;
     check_task_inputs(core, &state.role)?;
+    check_retained_inputs(core, state)?;
     let mut prepared = prepare_agent(core, state, profile)?;
     let mut inputs = TurnInputs::default();
     let text = prompt::prepare_prompt(core, state, &prepared.spec, prompt, &mut inputs)?;
@@ -200,6 +201,31 @@ fn check_task_inputs(core: &Core, role: &str) -> Result<()> {
             "task was invalidated before its process started",
         )?;
         core.store.assert_task_inputs(&task)?;
+    }
+    Ok(())
+}
+
+fn check_retained_inputs(core: &Core, state: &TurnState<'_>) -> Result<()> {
+    let Some((id, _)) = task_role(&state.role) else {
+        return Ok(());
+    };
+    let task = core
+        .store
+        .task_by_id(id)?
+        .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+    let contract: TaskContract = serde_json::from_value(task.spec)?;
+    core.check_planning_task_inputs(state.conversation, &state.role, &state.turn.id, &contract)?;
+    for input in &contract.result_inputs {
+        let result = core
+            .store
+            .historical_result(state.conversation, &input.result_ref)
+            .and_then(|reference| core.store.referenced_worker_report(&reference));
+        result.map_err(|error| {
+            Error::Invalid(format!(
+                "task {}: required input {}: {error}",
+                contract.id, input.alias
+            ))
+        })?;
     }
     Ok(())
 }

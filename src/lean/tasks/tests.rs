@@ -7,6 +7,7 @@ mod artifact_paths;
 fn verdict_with(coverage: serde_json::Map<String, serde_json::Value>) -> Verdict {
     Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved: false,
         findings: vec![],
         coverage,

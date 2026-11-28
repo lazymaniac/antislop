@@ -423,6 +423,33 @@ impl Core {
         )
     }
 
+    pub(in crate::lean) fn check_planning_task_inputs(
+        &self,
+        conversation: &str,
+        role: &str,
+        turn: &str,
+        task: &TaskContract,
+    ) -> Result<()> {
+        for reference in &task.planning_inputs {
+            let result = self
+                .read_planning_result(conversation, role, turn, &json!({"reference":reference}))
+                .map_err(|error| {
+                    Error::Invalid(format!(
+                        "task {}: planning input {reference:?}: {error}",
+                        task.id
+                    ))
+                })?;
+            require(
+                result["state"] == "done",
+                &format!(
+                    "task {}: planning input {reference:?} is {}: {}",
+                    task.id, result["state"], result["error"]
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn require_planning_inputs(&self, conversation: &str, turn: &str) -> Result<()> {
         let basis = self.planning_basis(conversation)?;
         for kind in planning_kinds() {

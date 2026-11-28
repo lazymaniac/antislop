@@ -110,6 +110,11 @@ pub struct TaskContract {
     pub integration_batch: bool,
     #[serde(default)]
     pub options_for: Option<String>,
+    /// Absent in saved legacy graphs, which retain their existing Options policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_decisions: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planning_inputs: Vec<String>,
     pub id: String,
     /// Stable lowercase ASCII label (letters, digits and hyphens, 1–48 bytes)
     /// for a writer checkout. New plans freeze a slug of the task title when
@@ -216,6 +221,15 @@ pub struct Verdict {
     /// updated work fixes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub resolution_evidence: std::collections::BTreeMap<String, ScenarioEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioEvidence {
+    pub scenario: String,
+    pub validation: String,
 }
 
 pub mod status {

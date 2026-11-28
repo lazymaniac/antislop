@@ -191,7 +191,7 @@ mod tests {
         };
         let first = planned(json!([
             {"id":"map","title":"Map","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Map the code","change_kind": "none", "kind":"context"},
-            {"id":"build","title":"Build","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"]},
+            {"id":"build","title":"Build","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Build it","change_kind": "code", "kind":"implementation","depends_on":["map"],"open_decisions":["Choose the persistence approach"]},
             {"id":"later","title":"Later","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then this","change_kind": "code", "kind":"implementation","depends_on":["build"]}
         ]));
         let first = crate::lean::core::plan::proposal::checked_team_plan(
@@ -236,7 +236,7 @@ mod tests {
         }
 
         let graph = core.submitted_graph(&id, planned(json!([
-            {"id":"after","title":"After","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then that","change_kind":"code","kind":"implementation","depends_on":["build"]}
+            {"id":"after","title":"After","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Then that","change_kind":"code","kind":"implementation","depends_on":["build"],"open_decisions":["Choose how to expose the new operation"]}
         ])), &keep).unwrap();
         let approved = graph.iter().find(|t| t.id == "build").unwrap().clone();
         let mut feature = tasks::feature_fixture(graph);

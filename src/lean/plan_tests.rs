@@ -431,7 +431,7 @@ fn small_change_rigor_adds_only_static_analysis_and_testing_gates() {
     assert!(
         tasks::Team::SmallChange
             .summary()
-            .contains("options: before each eligible code writer")
+            .contains("options: before code writers with unresolved decisions")
     );
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer",
@@ -692,7 +692,7 @@ fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
         {"id":"writer", "title":"Implement", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Implement change", "change_kind": "code", "kind":"implementation"},
         {"id":"tests-a", "title":"Test A", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
         {"id":"tests-b", "title":"Test B", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Run tests", "change_kind": "code", "kind":"testing", "depends_on":["writer"]},
-        {"id":"whole-change-validation", "title":"Validate", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Validate whole change", "change_kind": "code", "kind":"integration", "depends_on":["review-testing"]},
+        {"id":"whole-change-validation", "title":"Validate", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Validate whole change", "change_kind": "code", "kind":"integration", "depends_on":["review-testing"], "open_decisions":["Choose how to exercise the two implementations together"]},
         {"id":"final-report", "title":"Report", "acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Report checks", "change_kind": "none", "kind":"analysis", "depends_on":["integration-gate"]}
     ]);
     let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
@@ -739,7 +739,7 @@ fn a_gate_alias_cannot_hide_a_self_dependency() {
 
 #[test]
 fn deferred_future_work_keeps_its_options_and_gates_held_across_finalization() {
-    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Preserve code work","change_kind": "code", "kind":"implementation","deferred":true})).unwrap();
+    let planned: tasks::PlannedTask = serde_json::from_value(json!({"id":"future","title":"Future","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Preserve code work","change_kind": "code", "kind":"implementation","deferred":true,"open_decisions":["Choose how to retain old records"]})).unwrap();
     let writer = planned.into_contract();
     assert!(writer.deferred);
     let diagnostic: TaskContract = serde_json::from_value(json!({"id":"diagnose","title":"Diagnose","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"Read retained results","change_kind": "none", "kind":"analysis"})).unwrap();

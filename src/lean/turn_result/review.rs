@@ -1,5 +1,5 @@
 use super::types::{Selection, TurnResult};
-use crate::lean::tasks::Verdict;
+use crate::lean::tasks::{ScenarioEvidence, Verdict};
 use crate::{Result, require};
 use serde::Deserialize;
 use serde_json;
@@ -16,6 +16,8 @@ struct Finding {
     issue: String,
     #[serde(rename = "where")]
     location: String,
+    #[serde(default)]
+    reproduction: Option<ScenarioEvidence>,
 }
 
 pub fn task_tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResult> {
@@ -76,7 +78,13 @@ fn review(report: String, args: &serde_json::Value) -> Result<TurnResult> {
     let findings = review_findings(args)?;
     let recorded = record_findings(&findings)?;
     let resolved = resolved_items(args)?;
-    let approved = review_approved(&checks, &findings);
+    let resolution_evidence = if args["resolution_evidence"].is_null() {
+        Default::default()
+    } else {
+        serde_json::from_value(args["resolution_evidence"].clone())
+            .map_err(|error| crate::invalid(format!("resolution_evidence: {error}")))?
+    };
+    let approved = review_approved(&checks, &recorded);
     Ok(TurnResult::Review {
         report,
         verdict: Verdict {
@@ -84,6 +92,7 @@ fn review(report: String, args: &serde_json::Value) -> Result<TurnResult> {
             findings: recorded,
             coverage: checks,
             resolved,
+            resolution_evidence,
         },
     })
 }
@@ -165,6 +174,20 @@ fn record_finding(
     if let Some(check) = &finding.check {
         entry["check"] = check.clone().into();
     }
+    if let Some(reproduction) = &finding.reproduction {
+        require(
+            finding.check.is_some(),
+            "reproduction: requires a task check",
+        )?;
+        require(
+            !reproduction.scenario.trim().is_empty() && !reproduction.validation.trim().is_empty(),
+            "reproduction: provide a stable scenario and its failing validation receipt",
+        )?;
+        if finding.severity == "low" {
+            entry["severity"] = "medium".into();
+        }
+        entry["reproduction"] = serde_json::to_value(reproduction)?;
+    }
     Ok(entry)
 }
 
@@ -180,12 +203,10 @@ fn unique_finding_id(base: &str, ids: &mut std::collections::BTreeSet<String>) -
 
 fn review_approved(
     checks: &serde_json::Map<String, serde_json::Value>,
-    findings: &[Finding],
+    findings: &[serde_json::Value],
 ) -> bool {
     checks
         .values()
         .all(|check| matches!(check["status"].as_str(), Some("ok" | "n/a")))
-        && !findings
-            .iter()
-            .any(|finding| ["critical", "high", "medium"].contains(&finding.severity.as_str()))
+        && !findings.iter().any(crate::lean::progress::blocks)
 }

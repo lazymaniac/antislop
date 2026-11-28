@@ -86,6 +86,8 @@ impl Core {
             quality_gate: false,
             integration_batch: false,
             options_for: None,
+            open_decisions: None,
+            planning_inputs: Vec::new(),
             id: task_id.clone(),
             checkout_name: Some(tasks::checkout_slug(&title)),
 

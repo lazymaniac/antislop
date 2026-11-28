@@ -1,7 +1,7 @@
 //! Agents keep execution in their own CLI; the runtime checks reuse against file state.
 use super::*;
 use crate::lean::prompts;
-use store::{ValidationRun, ValidationSpec};
+use store::{ValidationObservation, ValidationRun, ValidationSpec};
 
 impl Core {
     pub(super) fn validation_tool(
@@ -47,6 +47,10 @@ impl Core {
                     && command.iter().all(|arg| !arg.contains('\0'))
                     && !command[0].is_empty(),
                 "command: supply the executable and exact arguments without NUL characters",
+            )?;
+            require(
+                !inline_shell(&command),
+                "command: record each check as a direct executable with arguments; an inline shell can hide the check's exit status",
             )?;
             let directory = args["directory"].as_str().unwrap_or(".");
             require(
@@ -111,10 +115,18 @@ impl Core {
             .as_i64()
             .and_then(|code| i32::try_from(code).ok())
             .ok_or_else(|| Error::Invalid("exit_code: expected a process exit code".into()))?;
-        let problem = args["problems"].as_str().ok_or_else(|| {
-            Error::Invalid("problems: describe errors, or supply an empty string if none".into())
-        })?;
         let output = required_text(args, "output")?;
+        let observation = observation(args, &run.spec, exit_code, &output)?;
+        let problem = observation.problems.join("\n");
+        let evidence_output = if run.status != "running" && run.observation.is_none() {
+            // Preserve the exact evidence identity of already recorded legacy results.
+            output
+        } else {
+            format!(
+                "Observation: {}\n\n{output}",
+                serde_json::to_string(&observation)?
+            )
+        };
         let text = format!(
             prompts::template!(VALIDATION_EVIDENCE),
             serde_json::to_string(&run.spec.command)?,
@@ -124,7 +136,7 @@ impl Core {
             run.tree,
             exit_code = exit_code,
             problem = problem,
-            output = output
+            output = evidence_output
         );
         let evidence =
             self.store
@@ -148,13 +160,116 @@ impl Core {
         }
         .into();
         run.exit_code = Some(exit_code);
-        run.problem = problem.into();
+        run.problem = problem;
+        run.observation = Some(observation);
         run.evidence = Some(evidence.id);
         Ok(validation_response(
             self.store.complete_validation(conversation, turn, &run)?,
             "recorded",
         ))
     }
+}
+
+fn executable(command: &[String]) -> Option<&str> {
+    Path::new(command.first()?).file_name()?.to_str()
+}
+
+fn inline_shell(command: &[String]) -> bool {
+    matches!(
+        executable(command),
+        Some("sh" | "bash" | "zsh" | "dash" | "ksh" | "fish")
+    ) && command[1..]
+        .iter()
+        .take_while(|arg| arg.starts_with('-') && *arg != "--")
+        .any(|arg| arg == "--command" || (!arg.starts_with("--") && arg[1..].contains('c')))
+}
+
+fn observation(
+    args: &Value,
+    spec: &ValidationSpec,
+    exit_code: i32,
+    output: &str,
+) -> Result<ValidationObservation> {
+    // Older clients may still submit the formerly documented string.
+    let mut problems = match args["problems"].as_str() {
+        Some(text) if text.trim().is_empty() => Vec::new(),
+        Some(text) => vec![text.into()],
+        None => messages(&args["problems"], "problems")?,
+    };
+    let limitations = match args.get("limitations") {
+        Some(value) => messages(value, "limitations")?,
+        None => Vec::new(),
+    };
+    let declared = args
+        .get("tests_executed")
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| crate::invalid("tests_executed: expected a nonnegative integer"))
+        })
+        .transpose()?;
+    let is_cargo_test = matches!(executable(&spec.command), Some("cargo" | "cargo.sh"))
+        && spec.command[1..]
+            .iter()
+            .find(|arg| !arg.starts_with('+') && !arg.starts_with('-'))
+            .is_some_and(|arg| arg == "test")
+        && !spec
+            .command
+            .iter()
+            .any(|arg| arg == "--no-run" || arg == "--list");
+    let mut summary = None;
+    for line in output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("test result: "))
+    {
+        let Some((_, counts)) = line.split_once(". ") else {
+            continue;
+        };
+        let mut counts = counts.split("; ");
+        if let (Some(passed), Some(failed)) = (
+            counts
+                .next()
+                .and_then(|part| part.strip_suffix(" passed"))
+                .and_then(|count| count.parse::<u64>().ok()),
+            counts
+                .next()
+                .and_then(|part| part.strip_suffix(" failed"))
+                .and_then(|count| count.parse::<u64>().ok()),
+        ) {
+            let (total, failures) = summary.get_or_insert((0_u64, 0_u64));
+            *total = total.saturating_add(passed).saturating_add(failed);
+            *failures = failures.saturating_add(failed);
+        }
+    }
+    let tests_executed = summary.map(|(total, _)| total).or(declared);
+    if exit_code == 0 {
+        if summary.is_some_and(|(total, _)| declared.is_some_and(|count| count != total)) {
+            problems.push("Declared test count differs from the raw test summary.".into());
+        }
+        if summary.is_some_and(|(_, failed)| failed != 0) {
+            problems.push("Raw test output reports a failure despite exit code 0.".into());
+        }
+        if tests_executed == Some(0) {
+            problems.push("The check executed zero tests.".into());
+        } else if is_cargo_test && summary.is_none() {
+            problems.push("Cargo test evidence requires raw libtest totals.".into());
+        }
+    }
+    Ok(ValidationObservation {
+        problems,
+        limitations,
+        tests_executed,
+    })
+}
+
+fn messages(value: &Value, field: &str) -> Result<Vec<String>> {
+    let messages: Vec<String> = serde_json::from_value(value.clone())
+        .map_err(|_| crate::invalid(format!("{field}: expected a list of messages")))?;
+    require(
+        messages.iter().all(|message| !message.trim().is_empty()),
+        &format!("{field}: use a nonempty message or an empty list"),
+    )?;
+    Ok(messages)
 }
 
 fn validation_response(run: ValidationRun, action: &str) -> Value {
@@ -167,7 +282,7 @@ fn validation_response(run: ValidationRun, action: &str) -> Value {
     json!({"action":action,"validation":run,"instruction":instruction})
 }
 
-fn validation_tree(root: &Path, versioned: bool) -> Result<Option<String>> {
+pub(super) fn validation_tree(root: &Path, versioned: bool) -> Result<Option<String>> {
     if !versioned {
         return Ok(None);
     }

@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS validation_runs(
  evidence_id TEXT REFERENCES agent_evidence(id) ON DELETE SET NULL,
  created_ms INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS validation_runs_by_identity ON validation_runs(conversation,identity);
+CREATE TABLE IF NOT EXISTS validation_observations(
+ validation_id TEXT PRIMARY KEY REFERENCES validation_runs(id) ON DELETE CASCADE,
+ observation TEXT NOT NULL CHECK(json_valid(observation))
+);
 CREATE TABLE IF NOT EXISTS validation_uses(
  turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
  validation_id TEXT NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,

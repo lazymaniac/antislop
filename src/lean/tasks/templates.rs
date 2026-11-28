@@ -185,6 +185,8 @@ pub(crate) fn finalize_no_quality_gates(mut specs: Vec<TaskContract>) -> Vec<Tas
         quality_gate: false,
         integration_batch: true,
         options_for: None,
+        open_decisions: None,
+        planning_inputs: Vec::new(),
         id,
         checkout_name: Some(super::checkout_slug(prompts::INTEGRATION_TASK_TITLE)),
         acceptance_criteria: vec![super::AcceptanceCriterion {

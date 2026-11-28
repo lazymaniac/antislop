@@ -113,6 +113,8 @@ fn plan_entry(task: &TaskContract) -> Value {
         "depends_on": task.depends_on,
         "options_for": task.options_for,
         "result_inputs": task.result_inputs,
+        "planning_inputs": task.planning_inputs,
+        "open_decisions": task.open_decisions,
         "quality_gate": task.quality_gate,
         "deferred": task.deferred,
         "added_by_runtime": true,

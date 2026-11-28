@@ -64,6 +64,21 @@ All pages contain at most 16 KiB of UTF-8 text. Access checks retain conversatio
 turn, task generation and role boundaries. A cursor is not a permission grant.
 The full history interfaces continue to retain original reports and events.
 
+At the beginning of a turn, `read_turn_input` with no input lists the indexed
+inputs, their read status and continuation cursors. Repeated calls with
+`input=next` deliver the remaining required pages until
+`all_required_complete` is true. Task roles can read their
+own current worker report or last completed review with
+`read_dependency_result(source="current_worker_report")` or
+`read_dependency_result(source="previous_review")`.
+
+Planners declare required consultation references in `planning_inputs`.
+Antislop checks that those reports exist before approving a draft and again
+before launching a task role. Declare unresolved choices for a code writer
+in `open_decisions`. Where the selected rigor supports Options, only writers
+with such choices receive a separate selection task. Saved legacy contracts
+retain their existing Options policy.
+
 ## Reusing builds, tests and static analysis
 
 All execution and review roles use `prepare_validation` before a validation
@@ -83,6 +98,18 @@ it does not mean the consuming agent executed the command. `action=wait` means
 another live turn owns this exact check; continue independent work and poll.
 There is no execution timeout or automatic termination. An interrupted/failed
 owner cannot leave a reusable success or an unrecoverable claim.
+
+Use `problems: []` for a successful observation and put coverage caveats in
+`limitations`. Run each check as a direct command. Inline shell commands can
+mask an exit status and are rejected. Cargo test observations require raw
+libtest totals. For other runners include `tests_executed`. An observation
+with zero executed tests cannot establish a passing test run.
+
+Task reviewers can attach a stable scenario name and its failing validation
+receipt to a finding as `reproduction`. Later reviews keep that finding open
+until `resolved` includes its ID with `resolution_evidence` for a newer
+passing run of the same command, directory and environment on the reviewed
+tree. The reviewer verifies that the scenario still exercises the defect.
 
 Only zero-exit observations with no reported errors and unchanged source are
 reusable. A changed command, target, environment, source tree, missing/corrupt raw

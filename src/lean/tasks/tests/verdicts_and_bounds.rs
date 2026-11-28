@@ -51,6 +51,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
     );
     let mut verdict = Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved: true,
         findings: vec![],
         coverage,
@@ -100,6 +101,7 @@ fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
     };
     let mut verdict = Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved: true,
         findings: vec![],
         coverage: coverage("issue"),
@@ -109,6 +111,7 @@ fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
     assert_eq!(verdict.findings[0]["where"], risk.as_str());
     let mut clean = Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved: true,
         findings: vec![],
         coverage: coverage("ok"),
@@ -200,6 +203,7 @@ fn findings_render_as_text() {
 fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
     Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved,
         findings: serde_json::from_value(findings).unwrap(),
         coverage: serde_json::Map::new(),

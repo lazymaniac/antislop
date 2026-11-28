@@ -233,6 +233,32 @@ fn validate_resume(path: &std::path::Path) -> Result<()> {
 }
 
 impl PiLaunchState {
+    pub(crate) fn submitted_activity(&self) -> Result<Vec<(&'static str, Value)>> {
+        let Some(status) = self.status()? else {
+            return Ok(Vec::new());
+        };
+        let submitted = self.submitted.lock().map_err(invalid)?;
+        let Some((_, generation)) = submitted.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut activity: Vec<_> = ["error", "retrying", "recovered", "progress"]
+            .into_iter()
+            .filter_map(|kind| {
+                let event = &status["activity"][kind];
+                (event["sequence"].as_u64().is_some()
+                    && event["generation"]
+                        .as_u64()
+                        .is_some_and(|value| value > *generation)
+                    && event["failure_generation"]
+                        .as_u64()
+                        .is_none_or(|value| value > *generation))
+                .then(|| (kind, event.clone()))
+            })
+            .collect();
+        activity.sort_unstable_by_key(|(_, event)| event["sequence"].as_u64());
+        Ok(activity)
+    }
+
     /// None until Pi has observed an agent start after this prompt was submitted.
     pub(crate) fn submitted_turn_idle(&self) -> Result<Option<bool>> {
         let Some(status) = self.status()? else {
@@ -307,12 +333,6 @@ impl PiLaunchState {
     pub(crate) fn check_transport(&self, screen: &str) -> Result<()> {
         let prefix = format!("{}: ", self.alias());
         for line in screen.lines().map(str::trim) {
-            if line
-                .to_ascii_lowercase()
-                .starts_with("error: no such command")
-            {
-                return Err(invalid(format!("{CONFIGURATION_ERROR} Pi command: {line}")));
-            }
             if let Some(reason) = line.strip_prefix(&prefix)
                 && (reason.starts_with("failed:") || reason.starts_with("needs sign-in"))
             {

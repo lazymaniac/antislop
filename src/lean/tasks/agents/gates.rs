@@ -216,6 +216,8 @@ fn gate_task(
         integration_batch: false,
         acceptance_criteria: Vec::new(),
         options_for: None,
+        open_decisions: None,
+        planning_inputs: Vec::new(),
         result_inputs: Vec::new(),
 
         id,

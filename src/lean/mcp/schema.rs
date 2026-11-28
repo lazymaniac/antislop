@@ -48,14 +48,19 @@ pub(super) fn review() -> Value {
         json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":prompts::REVIEW_NOTE}}),
         &["status", "note"],
     );
+    let scenario = object(
+        json!({"scenario":{"type":"string"},"validation":{"type":"string"}}),
+        &["scenario", "validation"],
+    );
     let finding = object(
-        json!({"check":{"type":"string","description":prompts::REVIEW_CHECK},"severity":{"enum":["critical","high","medium","low"],"description":prompts::REVIEW_SEVERITY},"issue":{"type":"string"},"where":{"type":"string","description":prompts::REVIEW_WHERE}}),
+        json!({"reproduction":scenario.clone(),"check":{"type":"string","description":prompts::REVIEW_CHECK},"severity":{"enum":["critical","high","medium","low"],"description":prompts::REVIEW_SEVERITY},"issue":{"type":"string"},"where":{"type":"string","description":prompts::REVIEW_WHERE}}),
         &["check", "severity", "issue", "where"],
     );
     json!({
         "report":{"type":"string","description":prompts::REVIEW_REPORT},
         "checks":{"type":"object","additionalProperties":check,"description":prompts::REVIEW_CHECKS},
         "findings":{"type":"array","items":finding},
+        "resolution_evidence":{"type":"object","additionalProperties":scenario,"description":"For each resolved blocking reproduction, map its finding ID to the same scenario and a newer passing validation on the reviewed tree."},
         "resolved":{"type":"array","items":{"type":"string"},"description":prompts::REVIEW_RESOLVED_DESCRIPTION}
     })
 }
@@ -84,6 +89,8 @@ pub(super) fn planned_task() -> Value {
             "depends_on":{"type":"array","items":{"type":"string"},"description":prompts::PLANNED_TASK_DEPENDENCIES_DESCRIPTION},
 
             "result_inputs":{"type":"array","items":object(json!({"alias":{"type":"string"},"result_ref":{"type":"string","description":prompts::PLANNED_TASK_RESULT_REF}}), &["alias","result_ref"])},
+            "planning_inputs":{"type":"array","items":{"type":"string"},"description":"Exact planning report references returned by consult_planning or the retained planning index. List reports this role must be able to read."},
+            "open_decisions":{"type":"array","items":{"type":"string","minLength":1},"description":"Unresolved task-local choices worth a separate Options turn. Omit for an already decided implementation."},
             "deferred":{"type":"boolean","description":prompts::PLANNED_TASK_DEFERRED},
             "change_kind":{"enum":["none","artifact","code"],"description":prompts::PLANNED_TASK_CHANGE_KIND},
             "outputs":{"type":"array","items":{"type":"string"},"description":prompts::PLANNED_TASK_OUTPUTS_DESCRIPTION},

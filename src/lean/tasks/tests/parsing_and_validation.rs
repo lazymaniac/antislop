@@ -36,6 +36,8 @@ fn task_ids_reject_paths_and_empty_fragments() {
             quality_gate: false,
             integration_batch: false,
             options_for: None,
+            open_decisions: None,
+            planning_inputs: Vec::new(),
             id: format!("{}-2", "x".repeat(254)),
             ..task
         },

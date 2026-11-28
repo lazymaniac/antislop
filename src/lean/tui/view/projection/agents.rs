@@ -76,6 +76,7 @@ fn record_agent_start(
     agent.effort = payload["effort"].as_str().map(str::to_owned);
     agent.running = true;
     agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
+    agent.last_provider_progress_ms = None;
     agent.activity = "starting turn".into();
     view.roles.insert(turn.to_owned(), key.to_owned());
 }
@@ -113,6 +114,38 @@ pub(super) fn on_turn_finished(
         };
     }
     finish_agent_turn(view, &key, event, payload, failed);
+}
+
+pub(super) fn on_provider_activity(
+    view: &mut View,
+    event: &Value,
+    payload: &Value,
+    key: String,
+    _turn: &str,
+) {
+    let Some(agent) = view.agents.get_mut(&key).filter(|agent| agent.running) else {
+        return;
+    };
+    if payload["state"] == "progress" {
+        agent.last_provider_progress_ms = payload["at_ms"]
+            .as_i64()
+            .or_else(|| event["created_ms"].as_i64());
+        return;
+    }
+    let Some(text) = payload["text"].as_str() else {
+        return;
+    };
+    let text = clean_line(text);
+    agent.activity = text.clone();
+    if matches!(
+        key.as_str(),
+        ORCHESTRATOR | crate::lean::COMMENT_ORCHESTRATOR
+    ) {
+        view.activity = Some(text.clone());
+    } else if let Some(row) = view.row_of(&key) {
+        row.activity = text.clone();
+    }
+    view.system_card("Pi", text, crate::lean::tui::theme::Tone::Waiting);
 }
 
 fn finish_orchestrator(view: &mut View, payload: &Value, turn: &str, failed: bool) {

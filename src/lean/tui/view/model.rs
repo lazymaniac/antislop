@@ -22,6 +22,7 @@ pub struct Agent {
     pub last_ms: Option<u64>,
     /// When the running turn started, if known.
     pub started_ms: Option<i64>,
+    pub last_provider_progress_ms: Option<i64>,
     /// Sums of what was reported; `None` while nothing was.
     pub tokens_in: Option<u64>,
     pub tokens_out: Option<u64>,

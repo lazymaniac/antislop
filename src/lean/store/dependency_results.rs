@@ -203,7 +203,8 @@ impl Store {
                         spec.id, input.alias
                     ),
                 )?;
-                self.historical_result(conversation, &input.result_ref)?;
+                let reference = self.historical_result(conversation, &input.result_ref)?;
+                self.referenced_worker_report(&reference)?;
             }
         }
         Ok(())

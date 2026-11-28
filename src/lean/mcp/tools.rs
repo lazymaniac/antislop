@@ -256,7 +256,7 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         ),
         "complete_validation" => (
             prompts::TOOL_COMPLETE_VALIDATION.into(),
-            json!({"validation":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"problems":{"type":"string"}}),
+            json!({"validation":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"problems":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"tests_executed":{"type":"integer","minimum":0}}),
             vec!["turn", "validation", "exit_code", "output", "problems"],
         ),
         "invalidate_validation" => (
@@ -277,7 +277,7 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         "read_turn_input" => (
             prompts::TOOL_READ_TURN_INPUT.into(),
             json!({"input":{"type":"string"},"cursor":{"type":"string"}}),
-            vec!["turn", "input"],
+            vec!["turn"],
         ),
         "read_planning_result" => (
             prompts::TOOL_READ_PLANNING_RESULT.into(),
@@ -307,8 +307,8 @@ fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
         ),
         "read_dependency_result" => (
             prompts::TOOL_READ_DEPENDENCY_RESULT.into(),
-            json!({"view":{"enum":["report","review"],"description":prompts::TOOL_READ_DEPENDENCY_RESULT_VIEW},"dependency":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_DEPENDENCY},"result_ref":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_RESULT_REF},"round":{"type":"integer","minimum":0,"description":prompts::TOOL_READ_DEPENDENCY_RESULT_ROUND},"cursor":{"type":"string"}}),
-            vec!["turn", "dependency"],
+            json!({"source":{"enum":["current_worker_report","previous_review"]},"view":{"enum":["report","review"],"description":prompts::TOOL_READ_DEPENDENCY_RESULT_VIEW},"dependency":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_DEPENDENCY},"result_ref":{"type":"string","description":prompts::TOOL_READ_DEPENDENCY_RESULT_RESULT_REF},"round":{"type":"integer","minimum":0,"description":prompts::TOOL_READ_DEPENDENCY_RESULT_ROUND},"cursor":{"type":"string"}}),
+            vec!["turn"],
         ),
         "finish_turn" if orchestrator => (
             format!(prompts::template!(ORCHESTRATOR_FINISH_TURN), RETRY = RETRY),

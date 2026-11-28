@@ -21,6 +21,10 @@ pub struct PlannedTask {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub result_inputs: Vec<ResultInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_decisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planning_inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred: bool,
     pub change_kind: ChangeKind,
@@ -50,6 +54,8 @@ impl PlannedTask {
             quality_gate: false,
             integration_batch: false,
             options_for: None,
+            open_decisions: Some(self.open_decisions),
+            planning_inputs: self.planning_inputs,
             checkout_name,
             acceptance_criteria: self.acceptance_criteria,
             reviewer: ReviewerSpec {
@@ -204,6 +210,16 @@ pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
             )?;
         }
         validate_change(task)?;
+        if let Some(decisions) = &task.open_decisions {
+            let unique: BTreeSet<_> = decisions.iter().map(|decision| decision.trim()).collect();
+            crate::require(
+                unique.len() == decisions.len() && !unique.contains(""),
+                &format!(
+                    "task {}: open_decisions must contain distinct nonempty choices",
+                    task.id
+                ),
+            )?;
+        }
         validate_acceptance_criteria(task)?;
         validate_dependencies(task, &seen)?;
         crate::require(

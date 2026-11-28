@@ -540,6 +540,7 @@ mod tests {
                 let review = Verdict {
                     approved: false,
                     resolved: vec![],
+                    resolution_evidence: Default::default(),
                     findings: vec![
                         json!({"severity":severity,"issue":"Explicit redo is missing","where":"revision"}),
                     ],
@@ -561,6 +562,7 @@ mod tests {
         let approved = Verdict {
             approved: true,
             resolved: vec![],
+            resolution_evidence: Default::default(),
             findings: vec![],
             coverage: serde_json::Map::new(),
         };

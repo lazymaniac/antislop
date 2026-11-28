@@ -485,8 +485,11 @@ impl Core {
             }
         };
         tasks::validate(&specs)?;
-        self.store
-            .validate_result_inputs(&self.store.plan_conversation(&revision.plan)?, &specs)?;
+        let conversation = self.store.plan_conversation(&revision.plan)?;
+        self.store.validate_result_inputs(&conversation, &specs)?;
+        for task in &specs {
+            self.check_planning_task_inputs(&conversation, PLANNER, "", task)?;
+        }
         Ok(specs)
     }
 

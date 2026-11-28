@@ -309,7 +309,12 @@ pub fn refresh_existing_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
 }
 
 fn eligible_for_options(task: &TaskContract) -> bool {
-    task.changes_code() && !task.quality_gate
+    task.changes_code()
+        && !task.quality_gate
+        && task
+            .open_decisions
+            .as_ref()
+            .is_none_or(|decisions| !decisions.is_empty())
 }
 
 fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract {
@@ -322,6 +327,8 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
         quality_gate: false,
         integration_batch: false,
         options_for: Some(task.id.clone()),
+        open_decisions: task.open_decisions.clone(),
+        planning_inputs: task.planning_inputs.clone(),
         id,
         checkout_name: None,
 

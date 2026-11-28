@@ -244,7 +244,10 @@ impl Session {
         prompt: &str,
         cancel: &AtomicBool,
     ) -> Result<agent::Outcome> {
-        self.check_alive()?;
+        // For Pi, classify exits before the first prompt in the startup path.
+        if self.pi.is_none() || self.primed.load(Ordering::SeqCst) {
+            self.check_alive()?;
+        }
         require(
             self.executing
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -336,8 +339,8 @@ impl Session {
         prompt: &str,
         cancel: &AtomicBool,
     ) -> Result<agent::Outcome> {
-        self.submit_turn(turn, prompt, cancel)?;
-        let finish = self.wait_for_result(turn, cancel)?;
+        let recorded = self.submit_turn(turn, prompt, cancel)?;
+        let finish = self.wait_for_result(turn, cancel, recorded)?;
         if self.pi.is_some() {
             *self.finished_pi_turn.lock().map_err(invalid)? = Some(turn.to_owned());
         }
@@ -356,7 +359,7 @@ impl Session {
         })
     }
 
-    fn submit_turn(&self, turn: &str, prompt: &str, cancel: &AtomicBool) -> Result<()> {
+    fn submit_turn(&self, turn: &str, prompt: &str, cancel: &AtomicBool) -> Result<bool> {
         self.wait_ready(cancel).inspect_err(|error| {
             if error.to_string() != mcp::CANCELLED {
                 self.startup_failed.store(true, Ordering::SeqCst);
@@ -364,13 +367,19 @@ impl Session {
         })?;
         self.gateway.begin(turn)?;
         let transmitted = self.turn_prompt(turn, prompt)?;
-        if let Some(core) = self.core.upgrade()
-            && core.store.db().query_row(
-                "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1)",
-                [turn],
-                |row| row.get::<_, bool>(0),
-            )?
-        {
+        let core = self.core.upgrade();
+        let recorded = core
+            .as_ref()
+            .map(|core| {
+                core.store.db().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1)",
+                    [turn],
+                    |row| row.get::<_, bool>(0),
+                )
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if let Some(core) = core.filter(|_| recorded) {
             // Pi already knows its JSONL path at launch, but a failed startup
             // must not bind a path from a process that never took the turn.
             // Persist the ready process's identity before any prompt is sent.
@@ -386,7 +395,7 @@ impl Session {
         }
         terminal::Session::submit(&self.screen, &transmitted)?;
         self.primed.store(true, Ordering::SeqCst);
-        Ok(())
+        Ok(recorded)
     }
 
     fn turn_prompt(&self, turn: &str, prompt: &str) -> Result<String> {
@@ -400,14 +409,29 @@ impl Session {
         ))
     }
 
-    fn wait_for_result(&self, turn: &str, cancel: &AtomicBool) -> Result<mcp::Finish> {
+    fn wait_for_result(
+        &self,
+        turn: &str,
+        cancel: &AtomicBool,
+        recorded: bool,
+    ) -> Result<mcp::Finish> {
         let readiness = Mutex::new(readiness::Tracker::default());
+        let activity = std::cell::Cell::new(0);
         let result = self
             .gateway
             .wait(turn, cancel, || {
+                if recorded {
+                    self.record_pi_activity(turn, &activity)?;
+                }
                 self.check_alive()?;
                 self.serve_approval(cancel)
                     .and_then(|()| self.remind_if_ready(turn, cancel, &readiness))
+            })
+            .and_then(|finish| {
+                if recorded {
+                    self.record_pi_activity(turn, &activity)?;
+                }
+                Ok(finish)
             })
             .map_err(|error| self.describe_result_error(error));
         if result
@@ -421,6 +445,39 @@ impl Session {
             }
         }
         result
+    }
+
+    fn record_pi_activity(&self, turn: &str, seen: &std::cell::Cell<u64>) -> Result<()> {
+        let (Some(pi), Some(core)) = (&self.pi, self.core.upgrade()) else {
+            return Ok(());
+        };
+        for (state, event) in pi.submitted_activity()? {
+            let Some(sequence) = event["sequence"].as_u64().filter(|seq| *seq > seen.get()) else {
+                continue;
+            };
+            let error = event["error"].as_str().map(|error| {
+                agent::persisted_error(&error.replace(self.gateway.token(), "[REDACTED]"))
+            });
+            let text = match state {
+                "error" => format!(
+                    "Pi provider error: {}",
+                    error.as_deref().unwrap_or_default()
+                ),
+                "retrying" => format!("Pi retrying: {}", error.as_deref().unwrap_or_default()),
+                "recovered" => "Pi resumed after a provider error".into(),
+                _ => "Pi reported progress".into(),
+            };
+            core.store.append_event(
+                &self.conversation,
+                Some(turn),
+                None,
+                "provider_activity",
+                &serde_json::json!({"provider":"pi","state":state,"error":error,"text":text,
+                    "generation":event["generation"],"sequence":sequence,"at_ms":event["at_ms"]}),
+            )?;
+            seen.set(sequence);
+        }
+        Ok(())
     }
 
     fn remind_if_ready(

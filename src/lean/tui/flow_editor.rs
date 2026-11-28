@@ -590,6 +590,12 @@ impl FlowEditor {
             quality_gate: meta.quality_gate,
             integration_batch: meta.integration_batch,
             options_for: meta.options_for,
+            open_decisions: if view.task_meta.contains_key(id) {
+                meta.open_decisions
+            } else {
+                Some(Vec::new())
+            },
+            planning_inputs: meta.planning_inputs,
             id: id.to_owned(),
             checkout_name: self
                 .change_kind
@@ -943,6 +949,8 @@ pub fn contract_from_view(view: &View, row: &TaskRow) -> TaskContract {
         quality_gate: meta.quality_gate,
         integration_batch: meta.integration_batch,
         options_for: meta.options_for,
+        open_decisions: meta.open_decisions,
+        planning_inputs: meta.planning_inputs,
         id: row.id.clone(),
         checkout_name: row
             .change_kind

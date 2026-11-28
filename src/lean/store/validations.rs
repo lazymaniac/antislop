@@ -10,6 +10,13 @@ pub(in crate::lean) struct ValidationSpec {
     pub environment: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(in crate::lean) struct ValidationObservation {
+    pub problems: Vec<String>,
+    pub limitations: Vec<String>,
+    pub tests_executed: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::lean) struct ValidationRun {
     pub id: String,
@@ -20,6 +27,7 @@ pub(in crate::lean) struct ValidationRun {
     pub exit_code: Option<i32>,
     pub problem: String,
     pub evidence: Option<String>,
+    pub observation: Option<ValidationObservation>,
 }
 
 impl Store {
@@ -32,6 +40,7 @@ impl Store {
     ) -> Result<(ValidationRun, &'static str)> {
         // Unversioned directories cannot prove equivalence between executions.
         let identity = crate::hash(serde_json::to_vec(&(
+            1,
             tree,
             spec,
             tree.is_none().then_some(turn),
@@ -99,6 +108,7 @@ impl Store {
             exit_code: None,
             problem: String::new(),
             evidence: None,
+            observation: None,
         };
         tx.execute("INSERT INTO validation_runs(id,conversation,turn_id,identity,tree,spec,status,created_ms) VALUES(?1,?2,?3,?4,?5,?6,'running',?7)",
             params![run.id,conversation,turn,identity,tree,serde_json::to_string(spec)?,now_ms()])?;
@@ -145,13 +155,19 @@ impl Store {
         }
         tx.execute("UPDATE validation_runs SET status=?2,exit_code=?3,problem=?4,evidence_id=?5 WHERE id=?1",
             params![completed.id,completed.status,completed.exit_code,completed.problem,completed.evidence])?;
+        if let Some(observation) = &completed.observation {
+            tx.execute(
+                "INSERT INTO validation_observations(validation_id,observation) VALUES(?1,?2)",
+                params![completed.id, serde_json::to_string(observation)?],
+            )?;
+        }
         validation_event(
             &tx,
             conversation,
             turn,
             &completed.id,
             "validation_finished",
-            &serde_json::json!({"status":completed.status,"exit_code":completed.exit_code,"evidence":completed.evidence}),
+            &serde_json::json!({"status":completed.status,"exit_code":completed.exit_code,"evidence":completed.evidence,"observation":completed.observation}),
         )?;
         tx.commit()?;
         Ok(completed.clone())
@@ -205,11 +221,37 @@ impl Store {
             .map(|id| validation_row(&db, conversation, id))
             .collect()
     }
+
+    pub(in crate::lean) fn validation_available_to_turn(
+        &self,
+        validation: &ValidationRun,
+        turn: &str,
+    ) -> Result<bool> {
+        if validation.producer_turn == turn {
+            return Ok(true);
+        }
+        Ok(self.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM validation_uses WHERE validation_id=?1 AND turn_id=?2)",
+            params![validation.id, turn],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub(in crate::lean) fn validation_is_newer(
+        &self,
+        current: &str,
+        earlier: &str,
+    ) -> Result<bool> {
+        Ok(self.db().query_row(
+            "SELECT newer.rowid>older.rowid FROM validation_runs newer JOIN validation_runs older WHERE newer.id=?1 AND older.id=?2",
+            params![current, earlier], |row| row.get(0),
+        )?)
+    }
 }
 
 fn validation_row(db: &Connection, conversation: &str, id: &str) -> Result<ValidationRun> {
     let encoded: Option<String> = db.query_row(
-        "SELECT json_object('id',id,'producer_turn',turn_id,'tree',tree,'spec',json(spec),'status',status,'exit_code',exit_code,'problem',problem,'evidence',evidence_id) FROM validation_runs WHERE conversation=?1 AND id=?2",
+        "SELECT json_object('id',id,'producer_turn',turn_id,'tree',tree,'spec',json(spec),'status',status,'exit_code',exit_code,'problem',problem,'evidence',evidence_id,'observation',json((SELECT observation FROM validation_observations WHERE validation_id=validation_runs.id))) FROM validation_runs WHERE conversation=?1 AND id=?2",
         params![conversation,id], |row|row.get(0),
     ).optional()?;
     let encoded = encoded

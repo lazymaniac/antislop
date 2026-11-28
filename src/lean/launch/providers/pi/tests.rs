@@ -451,3 +451,32 @@ fn exact_unsloth_start_profile_round_trips_and_resolves_into_launch() {
             .any(|args| args == ["--thinking", "high"])
     );
 }
+
+#[test]
+fn provider_activity_keeps_coalesced_failure_retry_and_recovery_without_shell_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let gateway = Gateway::start().unwrap();
+    let (state, output) = run_adapter(&spec(directory.path()), &gateway, Some("provider-activity"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        state
+            .check_transport("error: no such command: nextest")
+            .is_ok()
+    );
+    let mut submission = state.submitted.lock().unwrap();
+    *submission = Some(("test".into(), 0));
+    drop(submission);
+    let events = state.submitted_activity().unwrap();
+    assert_eq!(
+        events.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+        ["error", "retrying", "recovered", "progress"]
+    );
+    assert_eq!(events[0].1["error"], "GPU timeout [REDACTED]");
+    assert_eq!(events[1].1["error"], events[0].1["error"]);
+    state.track_submission("next").unwrap();
+    assert!(state.submitted_activity().unwrap().is_empty());
+}

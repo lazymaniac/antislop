@@ -73,6 +73,16 @@ if (!argv.includes('--tools-first')) {
     handlers.get('session_start')({}, ctx);
     statusPublished = true;
 }
+if (mode === 'provider-activity') {
+    idle = false;
+    handlers.get('agent_start')({}, ctx);
+    handlers.get('message_end')({message: {role: 'toolResult', stopReason: 'error', errorMessage: 'ordinary shell failure'}}, ctx);
+    handlers.get('message_end')({message: {
+        role: 'assistant', stopReason: 'error', errorMessage: `GPU timeout ${process.env.ANTISLOP_MCP_TOKEN}`,
+    }}, ctx);
+    handlers.get('agent_start')({}, ctx);
+    handlers.get('message_end')({message: {role: 'assistant', stopReason: 'stop'}}, ctx);
+}
 if (mode) process.exit(0);
 async function request(method, params) {
     const response = await fetch(server.url, {
@@ -135,22 +145,27 @@ if (lifecycle) {
             }
             const completion = {name:'complete', arguments:{turn, summary:'Completed the fixture task', report:'adapter result', commit_message:'test: lifecycle'}};
             if (prompt.includes('fixture-read-input')) {
-                assert(tools.some(t => t.name === 'read_turn_input' && t.inputSchema.required.includes('input')));
+                const inputTool = tools.find(t => t.name === 'read_turn_input');
+                assert(inputTool?.inputSchema.properties.input);
+                assert(!inputTool.inputSchema.required.includes('input'));
                 assert(prompt.includes('`mcp__antislop__read_turn_input`'));
                 assert(prompt.includes('mcp__antislop__current_turn'));
                 const before = await request('tools/call', completion);
                 assert.equal(before.isError, true);
                 assert.match(before.content[0].text, /input-1/);
+                const index = await request('tools/call', {name:'read_turn_input', arguments:{turn}});
+                assert(!index.isError, index.content[0].text);
+                assert.equal(JSON.parse(index.content[0].text).inputs[0].label, 'Fixture contract');
                 const text = [];
-                let cursor;
+                let complete;
                 do {
-                    const response = await request('tools/call', {name:'read_turn_input', arguments:{turn, input:'input-1', cursor}});
+                    const response = await request('tools/call', {name:'read_turn_input', arguments:{turn, input:'next'}});
                     assert(!response.isError, response.content[0].text);
                     const page = JSON.parse(response.content[0].text);
                     text.push(page.text);
-                    cursor = page.cursor;
-                    assert.equal(page.complete, cursor === null);
-                } while (cursor);
+                    complete = page.all_required_complete;
+                    assert.equal(page.complete, page.cursor === null);
+                } while (!complete);
                 assert(text.length > 1);
                 assert.equal(text.join(''), 'a👩‍💻é'.repeat(3000));
             }

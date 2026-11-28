@@ -377,6 +377,7 @@ mod tests {
                 })],
                 coverage: serde_json::Map::new(),
                 resolved: vec![],
+                resolution_evidence: Default::default(),
             });
 
             core.persist_plan_audit(

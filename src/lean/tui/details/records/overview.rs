@@ -190,14 +190,19 @@ fn append_list(lines: &mut Vec<(Style, String)>, label: &str, values: &[String])
 
 fn activity_record(agent: &Agent) -> Rc<DetailRecord> {
     let state = if agent.running { "working" } else { "idle" };
-    record(
-        vec![
-            plain(String::new()),
-            label("Now"),
-            plain(format!("{state} · {}", agent.activity)),
-        ],
-        " ",
-    )
+    let mut lines = vec![
+        plain(String::new()),
+        label("Now"),
+        plain(format!("{state} · {}", agent.activity)),
+    ];
+    if let (Some(start), Some(progress)) = (agent.started_ms, agent.last_provider_progress_ms) {
+        let elapsed = progress.saturating_sub(start).max(0) as u64;
+        lines.push(plain(format!(
+            "Last provider progress at {} into this turn",
+            crate::lean::tui::flow_editor::format_clock_mm_ss(elapsed)
+        )));
+    }
+    record(lines, " ")
 }
 
 fn plain(text: String) -> (Style, String) {

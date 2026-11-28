@@ -496,3 +496,25 @@ fn paged_carried_report_keeps_exact_generation_and_evidence_without_implying_acc
         status::APPROVED
     );
 }
+
+#[test]
+fn planning_input_preflight_rejects_an_unavailable_exact_reference() {
+    let (_directory, core, conversation) = core();
+    let retained = super::super::planning::prepared(&core, &conversation);
+    let mut contract: TaskContract = serde_json::from_value(json!({
+        "id":"consumer","title":"Consumer","goal":"Use retained findings","kind":"analysis","change_kind":"none",
+        "acceptance_criteria":[{"id":"C1","text":"Use the report"}],
+        "planning_inputs":[retained[0]["reference"]]
+    })).unwrap();
+    core.check_planning_task_inputs(&conversation, "worker:consumer", "turn", &contract)
+        .unwrap();
+    contract.planning_inputs[0] = "planning:unknown".into();
+    let error = core
+        .check_planning_task_inputs(&conversation, "worker:consumer", "turn", &contract)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("task consumer") && error.contains("planning:unknown"),
+        "{error}"
+    );
+}

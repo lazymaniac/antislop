@@ -440,12 +440,8 @@ fn submit_plan_preserves_a_user_selected_small_change_team() {
         .collect();
     assert_eq!(gates, [WorkKind::StaticAnalysis, WorkKind::Testing]);
     let writer = finalized.iter().find(|task| task.id == "writer").unwrap();
-    let options = finalized
-        .iter()
-        .find(|task| task.options_for.as_deref() == Some("writer"))
-        .unwrap();
-    assert!(writer.depends_on.contains(&options.id));
-    assert_eq!(options.kind, WorkKind::Options);
+    assert_eq!(writer.open_decisions, Some(Vec::new()));
+    assert!(finalized.iter().all(|task| task.options_for.is_none()));
 }
 
 #[test]

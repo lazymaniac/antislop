@@ -61,6 +61,7 @@ fn describe_status(kind: &str, payload: &Value) -> Option<String> {
             Some("⏸ paused: new steps wait, /continue resumes".into())
         }
         "paused" => Some("▶ resumed".into()),
+        "provider_activity" if payload["state"] != "progress" => Some(value(payload, "text")),
         "notice" | "runtime_activation" => Some(format!("⚠ {}", value(payload, "text"))),
         "session_cleanup_pending" => Some(format!("⚠ {}", value(payload, "text"))),
         "session_finalizing" => Some(format!(

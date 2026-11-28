@@ -194,6 +194,7 @@ mod tests {
     fn reworded_findings_against_the_same_checks_stall_the_worker() {
         let verdict = |suffix: &str| Verdict {
             resolved: Vec::new(),
+            resolution_evidence: Default::default(),
             approved: false,
             findings: vec![
                 json!({"check": "R5.1", "id": format!("R5.1:{suffix}"), "severity": "medium"}),
@@ -216,6 +217,7 @@ mod tests {
     fn open_means_issue_blocked_or_unexplained() {
         let verdict = Verdict {
             resolved: Vec::new(),
+            resolution_evidence: Default::default(),
             approved: false,
             findings: Vec::new(),
             coverage: json!({
@@ -244,6 +246,7 @@ mod tests {
                 .unwrap()
                 .clone(),
             resolved: resolved.iter().map(|id| (*id).to_owned()).collect(),
+            resolution_evidence: Default::default(),
         }
     }
 

@@ -17,6 +17,17 @@ export default function antislop(pi) {
     let settledNonce;
     let generation = 0;
     let publishedIdle;
+    let sequence = 0;
+    let pendingFailure;
+    const activity = {};
+    function mark(kind, fields = {}) {
+        activity[kind] = { generation, sequence: ++sequence, at_ms: Date.now(), ...fields };
+    }
+    function retry() {
+        if (!pendingFailure || pendingFailure.retrying) return;
+        pendingFailure.retrying = true;
+        mark('retrying', { error: pendingFailure.error, failure_generation: pendingFailure.generation });
+    }
     function inspect(_event, ctx) {
         context = ctx;
         try {
@@ -43,7 +54,7 @@ export default function antislop(pi) {
             const acknowledged = request && generation > request.after_generation && idle;
             // Keep the acknowledgement readable, but consume its abort before any later agent_start.
             if (acknowledged) settledNonce = request.nonce;
-            publish({ state: 'ready', actual, generation, idle, ack: acknowledged ? request.nonce : null });
+            publish({ state: 'ready', actual, generation, idle, ack: acknowledged ? request.nonce : null, activity });
         } catch (error) {
             publish({ state: 'error', error: redact(error) });
         }
@@ -85,6 +96,31 @@ export default function antislop(pi) {
             generation += 1;
             if (!Number.isSafeInteger(generation)) {
                 publish({state:'error', error:'Pi agent generation overflow'});
+                return;
+            }
+            retry();
+            mark('progress');
+            inspect(event, ctx);
+        });
+        pi.on('message_start', (event, ctx) => {
+            if (event.message?.role === 'assistant' && pendingFailure) {
+                retry();
+                inspect(event, ctx);
+            }
+        });
+        pi.on('message_end', (event, ctx) => {
+            const message = event.message;
+            if (message?.role === 'assistant' && message.stopReason === 'error') {
+                const error = redact(message.errorMessage || 'Pi reported a provider error');
+                pendingFailure = { error, generation };
+                mark('error', { error });
+            } else if (message?.role === 'assistant' && !['aborted', 'length'].includes(message.stopReason)) {
+                if (pendingFailure) mark('recovered', { failure_generation: pendingFailure.generation });
+                pendingFailure = undefined;
+                mark('progress');
+            } else if (message?.role === 'toolResult') {
+                mark('progress');
+            } else {
                 return;
             }
             inspect(event, ctx);

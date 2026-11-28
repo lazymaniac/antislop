@@ -203,6 +203,8 @@ mod tests {
             quality_gate: false,
             integration_batch: false,
             options_for: None,
+            open_decisions: None,
+            planning_inputs: Vec::new(),
             id: id.into(),
             checkout_name: writes.then(|| crate::lean::tasks::checkout_slug(id)),
 

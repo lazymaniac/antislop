@@ -191,8 +191,12 @@ impl Core {
             })
             .map(|t| t.id.clone())
             .collect();
-        checked_team_plan_preserving(specs, &self.config_snapshot(), team, &preserved)
-            .map_err(Error::Invalid)
+        let specs = checked_team_plan_preserving(specs, &self.config_snapshot(), team, &preserved)
+            .map_err(Error::Invalid)?;
+        for task in specs.iter().filter(|task| !preserved.contains(&task.id)) {
+            self.check_planning_task_inputs(conversation, PLANNER, "", task)?;
+        }
+        Ok(specs)
     }
 
     /// Stores the plan and has it checked. A plan the reviewer sends back

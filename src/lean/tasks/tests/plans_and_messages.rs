@@ -4,8 +4,8 @@ use serde_json::json;
 #[test]
 fn plans_that_write_get_the_required_quality_gates() {
     let tasks = submitted(json!({"tasks":[
-        {"id":"t1","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "code", "kind":"implementation"},
-        {"id":"t2","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"testing"}
+        {"id":"t1","title":"A","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","change_kind": "code", "kind":"implementation", "open_decisions":["Choose the storage approach"]},
+        {"id":"t2","title":"T","acceptance_criteria":[{"id":"C1","text":"The task goal is verified"}],"goal":"g","depends_on":["t1"],"change_kind": "code", "kind":"testing", "open_decisions":["Choose the compatibility test fixture"]}
     ]}))
     .unwrap();
     let ids: Vec<_> = missing_quality_agents(&tasks)

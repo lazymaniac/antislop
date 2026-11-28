@@ -35,6 +35,7 @@ pub(crate) struct TurnInputs {
 }
 
 struct Entry {
+    label: String,
     body: String,
     required: ReadFor,
     next: Option<String>,
@@ -64,6 +65,7 @@ impl TurnInputs {
         self.entries.insert(
             reference.clone(),
             Entry {
+                label: label.into(),
                 body: body.into(),
                 required,
                 next: None,
@@ -100,15 +102,35 @@ impl TurnInputs {
     }
 
     pub(crate) fn read(&mut self, turn: &str, args: &Value) -> Result<Value> {
-        let reference = args["input"]
-            .as_str()
-            .ok_or_else(|| invalid("input: required"))?;
-        let entry = self.entries.get_mut(reference).ok_or_else(|| {
+        let Some(requested) = args["input"].as_str() else {
+            require(
+                args["input"].is_null() && args["cursor"].is_null(),
+                "input: supply an input ID, next, or omit it for the index",
+            )?;
+            return Ok(json!({"inputs": self.index()}));
+        };
+        let reference = if requested == "next" {
+            require(
+                args["cursor"].is_null(),
+                "input=next advances its own cursor",
+            )?;
+            let Some((reference, _)) = self.entries.iter().find(|(_, entry)| entry.pending())
+            else {
+                return Ok(
+                    json!({"complete":true,"all_required_complete":true,"inputs":self.index()}),
+                );
+            };
+            reference.clone()
+        } else {
+            requested.to_owned()
+        };
+        let entry = self.entries.get_mut(&reference).ok_or_else(|| {
             invalid(format!(
-                "input {reference:?} was not registered for this turn"
+                "input {reference:?} was not registered for this turn; omit input to list available IDs"
             ))
         })?;
         let cursor = match args.get("cursor") {
+            None | Some(Value::Null) if requested == "next" => entry.next.clone(),
             None | Some(Value::Null) => None,
             Some(cursor) => Some(
                 cursor
@@ -123,13 +145,45 @@ impl TurnInputs {
             "cursor: use the next cursor returned for this input, or repeat a previously read page",
         )?;
         let binding = crate::hash(format!("{turn}:{reference}").as_bytes());
-        let (text, next) = page_text(&entry.body, &binding, args)?;
+        let (text, next) = page_text(&entry.body, &binding, &json!({"cursor":cursor}))?;
         if !replay {
             entry.served.insert(cursor);
             entry.next = next.clone();
             entry.complete = next.is_none();
         }
-        Ok(json!({"text":text,"complete":next.is_none(),"cursor":next}))
+        let mut response = json!({"text":text,"complete":next.is_none(),"cursor":next});
+        if requested == "next" {
+            response["input"] = json!(reference);
+            response["label"] = json!(entry.label);
+            response["all_required_complete"] = json!(!self.entries.values().any(Entry::pending));
+        }
+        Ok(response)
+    }
+
+    fn index(&self) -> Vec<Value> {
+        self.entries
+            .iter()
+            .map(|(id, entry)| {
+                json!({"input":id, "label":entry.label, "bytes":entry.body.len(),
+                "required":!matches!(entry.required, ReadFor::Reference),
+                "complete":entry.complete,"next_cursor":entry.next})
+            })
+            .collect()
+    }
+
+    pub(crate) fn required_read_instructions(&self) -> String {
+        if !self.entries.values().any(Entry::pending) {
+            return String::new();
+        }
+        let required: Vec<_> = self
+            .index()
+            .into_iter()
+            .filter(|entry| entry["required"] == true)
+            .collect();
+        format!(
+            "Before starting the assignment, call read_turn_input with input=next until all_required_complete=true. Omit input to see progress.\n{}",
+            untrusted("Required turn inputs", &markdown(&required))
+        )
     }
 
     pub(crate) fn require_reads(&self, tool: &str) -> Result<()> {
@@ -149,9 +203,43 @@ impl TurnInputs {
     }
 }
 
+impl Entry {
+    fn pending(&self) -> bool {
+        !self.complete && !matches!(self.required, ReadFor::Reference)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_and_next_show_and_advance_the_required_cursor() {
+        let mut inputs = TurnInputs::default();
+        let body = "ś".repeat(10_000);
+        inputs.offload("Optional reference", &body, ReadFor::Reference);
+        inputs.offload("Required task contract", &body, ReadFor::Review);
+        inputs.offload("Prior review", &body, ReadFor::Review);
+        let index = inputs.read("turn", &json!({})).unwrap();
+        assert_eq!(index["inputs"][1]["label"], "Required task contract");
+        let first = inputs.read("turn", &json!({"input":"next"})).unwrap();
+        assert_eq!(first["input"], "input-2");
+        assert!(!first["cursor"].is_null());
+        let index = inputs.read("turn", &json!({})).unwrap();
+        assert_eq!(index["inputs"][1]["next_cursor"], first["cursor"]);
+        let last = inputs.read("turn", &json!({"input":"next"})).unwrap();
+        assert_eq!(last["complete"], true);
+        assert_eq!(last["all_required_complete"], false);
+        let second = inputs.read("turn", &json!({"input":"next"})).unwrap();
+        assert_eq!(second["input"], "input-3");
+        let last = inputs.read("turn", &json!({"input":"next"})).unwrap();
+        assert_eq!(last["all_required_complete"], true);
+        inputs.require_reads("review").unwrap();
+        assert_eq!(
+            inputs.read("turn", &json!({"input":"next"})).unwrap()["complete"],
+            true
+        );
+    }
 
     #[test]
     fn threshold_order_replay_and_turn_binding_use_utf8_bytes() {

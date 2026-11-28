@@ -100,6 +100,7 @@ pub(super) fn prepare_prompt(
         inputs,
     )?;
     context.section(prompts::CONTINUATION_LABEL, handoff);
+    context.prepend_required_inputs(inputs.required_read_instructions());
     let text = context.render();
     core.store.append_event(state.conversation, Some(&state.turn.id), state.turn.plan_id.as_deref(), "prompt_sections", &json!({"body_bytes":text.len(),"sections":context.bytes(),"measurement":"UTF-8 prompt body bytes; excludes footer, provider context and tokens"}))?;
     Ok(text)
@@ -206,6 +207,13 @@ fn append_task_context(
             &label,
             &crate::lean::prompt_context::markdown(&owner.spec),
             required,
+        ));
+        text.push('\n');
+    }
+    if !contract.planning_inputs.is_empty() {
+        text.push_str("Required planning reports: call read_planning_result with each exact reference and follow its cursor.\n");
+        text.push_str(&crate::lean::prompt_context::markdown(
+            &contract.planning_inputs,
         ));
         text.push('\n');
     }

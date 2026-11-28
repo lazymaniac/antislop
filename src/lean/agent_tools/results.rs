@@ -105,8 +105,11 @@ impl Core {
                 .task_by_id(id)?
                 .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
             self.store.assert_task_inputs(&task)?;
-            let spec: TaskContract = serde_json::from_value(task.spec)?;
+            let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
             result.validate_task(&spec, reviewer)?;
+            if reviewer && let TurnResult::Review { verdict, .. } = result {
+                self.check_review_evidence(conversation, turn, &task, verdict)?;
+            }
         }
         if let TurnResult::NeedsInput { request, .. } = result {
             let question = self

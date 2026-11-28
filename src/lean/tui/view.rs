@@ -194,6 +194,8 @@ pub struct TaskMeta {
     pub result_inputs: Vec<crate::lean::tasks::ResultInput>,
     pub quality_gate: bool,
     pub options_for: Option<String>,
+    pub open_decisions: Option<Vec<String>>,
+    pub planning_inputs: Vec<String>,
 }
 
 /// One runtime agent: the orchestrator, the plan reviewer, the auditor,

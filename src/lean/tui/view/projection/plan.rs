@@ -72,6 +72,9 @@ pub(super) fn extract_task_meta(task: &Value) -> TaskMeta {
         result_inputs: serde_json::from_value(task["result_inputs"].clone()).unwrap_or_default(),
         quality_gate: task["quality_gate"].as_bool().unwrap_or(false),
         options_for: task["options_for"].as_str().map(clean_line),
+        open_decisions: serde_json::from_value(task["open_decisions"].clone()).unwrap_or_default(),
+        planning_inputs: serde_json::from_value(task["planning_inputs"].clone())
+            .unwrap_or_default(),
     }
 }
 

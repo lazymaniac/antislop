@@ -9,13 +9,66 @@ impl Core {
         turn: &str,
         args: &Value,
     ) -> Result<Value> {
-        let requested = required_text(args, "dependency")?;
-        let view = args["view"].as_str().unwrap_or("report");
+        let source = args["source"].as_str();
+        let (requested, view) = match source {
+            None => (
+                required_text(args, "dependency")?,
+                args["view"].as_str().unwrap_or("report"),
+            ),
+            Some(source) => {
+                require(
+                    args["dependency"].is_null()
+                        && args["result_ref"].is_null()
+                        && args["round"].is_null()
+                        && args["view"].is_null(),
+                    "source: use it on its own with an optional cursor",
+                )?;
+                let (id, _) = task_role(role)
+                    .ok_or_else(|| crate::invalid("source: requires a task turn"))?;
+                let view = match source {
+                    "current_worker_report" => "report",
+                    "previous_review" => {
+                        let task = self
+                            .store
+                            .task_by_id(id)?
+                            .ok_or_else(|| crate::invalid("task no longer exists"))?;
+                        let (round, verdict) = self
+                            .store
+                            .previous_task_review(conversation, &task, turn)?
+                            .ok_or_else(|| {
+                                crate::invalid(
+                                    "previous_review: no retained review on these inputs",
+                                )
+                            })?;
+                        let report = crate::lean::prompt_context::markdown(&verdict);
+                        let binding = crate::hash(serde_json::to_vec(&(
+                            turn,
+                            "previous_review",
+                            round,
+                            &verdict,
+                        ))?);
+                        let (report, cursor) = page_text(&report, &binding, args)?;
+                        return Ok(
+                            json!({"source":"previous_review","round":round,"report":report,
+                            "complete":cursor.is_none(),"cursor":cursor}),
+                        );
+                    }
+                    _ => {
+                        return Err(crate::invalid(
+                            "source: expected current_worker_report or previous_review",
+                        ));
+                    }
+                };
+                ("self".into(), view)
+            }
+        };
         require(
             matches!(view, "report" | "review"),
             "view: expected report or review",
         )?;
-        if let Some((id, _)) = task_role(role) {
+        if source.is_none()
+            && let Some((id, _)) = task_role(role)
+        {
             let task = self
                 .store
                 .task_by_id(id)?
@@ -71,6 +124,7 @@ impl Core {
             ORCHESTRATOR | COMMENT_ORCHESTRATOR | "planner" | PLAN_REVIEWER | AUDITOR
         ) || role.starts_with("code-review:");
         let task = scope.tasks.iter().rev().find(|task| {
+            if source.is_some() { return task_role(role).is_some_and(|(id, _)| id == task.id); }
             if task_role(role).is_some_and(|(id, _)| id == task.id) && requested != "self" { return false; }
             (task.id == requested || (requested == "self" && task_role(role).is_some_and(|(id, _)| id == task.id)))
                 || task.spec["id"].as_str() == Some(&requested)
@@ -127,6 +181,8 @@ impl Core {
                 .reports
                 .iter()
                 .find(|r| r.round == round && readable_default(r))
+        } else if source.is_some() {
+            history.reports.iter().find(readable_default)
         } else {
             history.reports.iter().find(readable_default).or_else(|| {
                 history

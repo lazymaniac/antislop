@@ -135,6 +135,29 @@ impl Store {
         Ok(())
     }
 
+    /// Latest completed task review on these inputs, even after a cancelled round.
+    pub(in crate::lean) fn previous_task_review(
+        &self,
+        conversation: &str,
+        task: &Task,
+        turn: &str,
+    ) -> Result<Option<(u32, crate::lean::tasks::Verdict)>> {
+        let previous: Option<(u32, String)> = self.db().query_row(
+            "SELECT s.round,json_extract(r.result,'$.verdict') FROM agent_results r
+             JOIN turns t ON t.id=r.turn_id
+             JOIN turn_scopes s ON s.turn_id=t.id
+             JOIN turn_inputs i ON i.turn_id=t.id
+             WHERE t.conversation_id=?1 AND s.task_id=?2 AND i.generation=?3
+               AND t.role=?4 AND t.id<>?5 AND t.status='done' AND json_extract(r.result,'$.type')='review'
+             ORDER BY t.rowid DESC LIMIT 1",
+            params![conversation,task.id,task.input_generation,format!("reviewer:{}",task.id),turn],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        previous
+            .map(|(round, verdict)| Ok((round, serde_json::from_str(&verdict)?)))
+            .transpose()
+    }
+
     /// The result the latest turn of `role` recorded through its tool.
     #[cfg(test)]
     pub(in crate::lean) fn latest_role_result(

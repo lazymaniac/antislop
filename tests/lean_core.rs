@@ -1508,6 +1508,7 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     coverage.insert(enormous.clone(), json!({"status": "ok", "note": "n"}));
     let verdict = tasks::Verdict {
         resolved: Vec::new(),
+        resolution_evidence: Default::default(),
         approved: true,
         findings: vec![],
         coverage,

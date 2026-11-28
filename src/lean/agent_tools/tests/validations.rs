@@ -514,3 +514,123 @@ fn dirty_submodule_contents_do_not_reuse_an_unchanged_gitlink() {
         "uncacheable"
     );
 }
+
+#[test]
+fn structured_validation_checks_raw_test_totals_and_keeps_limitations_separate() {
+    let (directory, core, conversation, task) = fixture();
+    let (role, turn) = start(&core, &conversation, &task, directory.path(), false);
+    let prepare = |command: Value| {
+        core.agent_tool(
+            &conversation,
+            &role,
+            &turn.id,
+            "prepare_validation",
+            &json!({"command":command,"scope":"targeted tests","environment":"fixture"}),
+        )
+    };
+    assert!(prepare(json!(["/bin/sh", "-lc", "cargo test | tail"])).is_err());
+    for (filter, totals, expected) in [
+        ("match", "ok. 2 passed; 0 failed; 0 ignored", "passed"),
+        ("typo", "ok. 0 passed; 0 failed; 0 ignored", "failed"),
+        ("masked", "FAILED. 1 passed; 1 failed; 0 ignored", "failed"),
+    ] {
+        let receipt = prepare(json!(["./cargo.sh", "test", "--lib", filter])).unwrap();
+        let finished = core
+            .agent_tool(
+                &conversation,
+                &role,
+                &turn.id,
+                "complete_validation",
+                &json!({"validation":receipt["validation"]["id"],"exit_code":0,
+                "output":format!("test result: {totals}; 90 filtered out"),
+                "problems":[],"limitations":["Only this filter was run"]}),
+            )
+            .unwrap();
+        let validation = &finished["validation"];
+        assert_eq!(validation["status"], expected);
+        let stored = core
+            .store
+            .validation(&conversation, validation["id"].as_str().unwrap())
+            .unwrap();
+        let observation = stored.observation.unwrap();
+        assert_eq!(observation.limitations, ["Only this filter was run"]);
+        assert_eq!(
+            observation.tests_executed,
+            Some(if filter == "typo" { 0 } else { 2 })
+        );
+    }
+}
+
+#[test]
+fn a_reproduced_finding_requires_a_new_matching_validation_on_the_reviewed_tree() {
+    let (directory, core, conversation, task) = fixture();
+    let spec = serde_json::from_value(task.spec.clone()).unwrap();
+    let checks: serde_json::Map<_, _> = tasks::obligations(&spec)
+        .into_iter()
+        .map(|(id, _)| (id, json!({"status":"ok","note":"Checked in fixture"})))
+        .collect();
+    let (reviewer, first) = start(&core, &conversation, &task, directory.path(), true);
+    let observe = |turn: &store::Turn, exit, command: Value| {
+        let receipt = core
+            .agent_tool(
+                &conversation,
+                &reviewer,
+                &turn.id,
+                "prepare_validation",
+                &json!({"command":command,"scope":"Scenario","environment":"Fixture environment"}),
+            )
+            .unwrap();
+        let result = core.agent_tool(&conversation, &reviewer, &turn.id, "complete_validation",
+            &json!({"validation":receipt["validation"]["id"],"exit_code":exit,"problems":[],"output":"Observed the fixture"})).unwrap();
+        result["validation"]["id"].as_str().unwrap().to_owned()
+    };
+    let failing = observe(&first, 101, json!(["sh", "check.sh"]));
+    let review = core.agent_tool(&conversation, &reviewer, &first.id, "review",
+        &json!({"report":"Reproduced","checks":checks,"findings":[{
+          "check":"goal","severity":"medium","issue":"Cannot resume",
+          "where":"source.txt","reproduction":{"scenario":"resume-after-error","validation":failing}
+        }]})).unwrap();
+    assert_eq!(review["result"]["verdict"]["approved"], false);
+    let finding = review["result"]["verdict"]["findings"][0]["id"]
+        .as_str()
+        .unwrap();
+    core.store
+        .finish_turn(&first.id, store::TurnStatus::Done, None)
+        .unwrap();
+    let (_, second) = start(&core, &conversation, &task, directory.path(), true);
+    let previous = core
+        .agent_tool(
+            &conversation,
+            &reviewer,
+            &second.id,
+            "read_dependency_result",
+            &json!({"source":"previous_review"}),
+        )
+        .unwrap();
+    assert!(previous["report"].as_str().unwrap().contains(finding));
+    let mut verdict = json!({"report":"Fixed","checks":checks,"findings":[],"resolved":[finding]});
+    assert!(
+        core.agent_tool(&conversation, &reviewer, &second.id, "review", &verdict)
+            .is_err()
+    );
+    let wrong_command = observe(&second, 0, json!(["sh", "different.sh"]));
+    verdict["resolution_evidence"] =
+        json!({(finding):{"scenario":"resume-after-error","validation":wrong_command}});
+    assert!(
+        core.agent_tool(&conversation, &reviewer, &second.id, "review", &verdict)
+            .is_err()
+    );
+    let wrong_tree = observe(&second, 0, json!(["sh", "check.sh"]));
+    std::fs::write(directory.path().join("source.txt"), "fixed\n").unwrap();
+    verdict["resolution_evidence"][finding]["validation"] = json!(wrong_tree);
+    assert!(
+        core.agent_tool(&conversation, &reviewer, &second.id, "review", &verdict)
+            .is_err()
+    );
+    let passing = observe(&second, 0, json!(["sh", "check.sh"]));
+    verdict["resolution_evidence"][finding]["validation"] = json!(passing);
+    let result = core
+        .agent_tool(&conversation, &reviewer, &second.id, "review", &verdict)
+        .unwrap();
+    assert_eq!(result["result"]["verdict"]["approved"], true);
+}

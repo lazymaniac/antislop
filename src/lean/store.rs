@@ -41,7 +41,7 @@ mod evidence;
 mod validations;
 pub(in crate::lean) use artifacts::ArtifactReceipt;
 pub(in crate::lean) use evidence::{EvidenceReference, MAX_RESULT_EVIDENCE};
-pub(in crate::lean) use validations::{ValidationRun, ValidationSpec};
+pub(in crate::lean) use validations::{ValidationObservation, ValidationRun, ValidationSpec};
 #[path = "store/answer_waits.rs"]
 mod answer_waits;
 #[path = "store/plan_reviews.rs"]

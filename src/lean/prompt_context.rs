@@ -45,6 +45,13 @@ impl PromptContext {
                 .push((name.into(), body.trim_end().to_owned()));
         }
     }
+    pub(crate) fn prepend_required_inputs(&mut self, body: String) {
+        if !body.is_empty() {
+            self.sections
+                .insert(0, ("Read required inputs first".into(), body));
+        }
+    }
+
     pub fn render(&self) -> String {
         self.sections
             .iter()

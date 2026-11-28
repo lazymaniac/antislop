@@ -529,3 +529,29 @@ fn refinalization_preserves_a_read_only_consumers_explicit_options_dependency() 
         }
     }
 }
+
+#[test]
+fn authored_options_follow_explicit_open_decisions() {
+    let authored: Vec<PlannedTask> = serde_json::from_value(serde_json::json!([
+        {"id":"simple","title":"Simple fix","goal":"Correct the wording","kind":"implementation",
+         "change_kind":"code","acceptance_criteria":[{"id":"C1","text":"Correct wording"}]},
+        {"id":"choose","title":"Select an implementation","goal":"Support retries","kind":"implementation",
+         "change_kind":"code","depends_on":["simple"],"acceptance_criteria":[{"id":"C1","text":"Retry succeeds"}],
+         "open_decisions":["Choose the owner of retry state"],"planning_inputs":["planning:architecture"]}
+    ])).unwrap();
+    let mut graph = with_options(planned_graph(authored).unwrap());
+    assert_eq!(
+        graph
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        ["simple", "choose-options", "choose"]
+    );
+    assert_eq!(graph[1].open_decisions, graph[2].open_decisions);
+    assert_eq!(graph[1].planning_inputs, graph[2].planning_inputs);
+    assert_eq!(graph[2].depends_on, ["simple", "choose-options"]);
+    graph[2].open_decisions = Some(Vec::new());
+    let graph = refresh_existing_options(graph);
+    assert_eq!(graph.len(), 2);
+    assert_eq!(graph[1].depends_on, ["simple"]);
+}
